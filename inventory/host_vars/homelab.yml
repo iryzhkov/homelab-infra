@@ -124,6 +124,7 @@ stacks:
       - host: garage.ryzhkov.dev
         port: 8095
   - name: miniflux
+    secrets: homelab-miniflux
     routes:
       - host: rss.ryzhkov.dev
         port: 5080
