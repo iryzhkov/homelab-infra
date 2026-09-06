@@ -34,6 +34,7 @@ Fields a route may carry beyond `host` and `port`:
 | `path_prefix` | added to the rule as `PathPrefix` |
 | `priority` | when two rules can both match the same request |
 | `middlewares` | list of middleware names |
+| `health_check` | `{path, interval, timeout}`, or `false` for none |
 | `url` | full backend URL, for a route that cannot reach its stack the ordinary way |
 
 `traefik_static_routes` in `inventory/group_vars/all.yml` covers backends that
@@ -83,12 +84,35 @@ this inventory does not describe and one is a Nebula address.
 The Authentik forward-auth middleware is generated rather than hand-written,
 because its address points at wherever the authentik stack runs.
 
+## Health checks are not cosmetic
+
+Traefik counts a 4xx answer as unhealthy and takes the backend out, so the path
+a service is probed on decides whether its router works at all.
+
+The generator's first version probed every service on `/`. Most services answer
+2xx or a redirect there and were fine. Sonarr and adguardhome-sync answer
+**401**, because they use basic authentication, so Traefik marked them down
+within one 30-second interval and `sonarr.ryzhkov.dev` started returning 503 —
+a service that was working, broken by a configuration change that looked
+equivalent.
+
+The hand-written files it replaced had known this: sonarr, radarr, lidarr and
+prowlarr were probed on `/ping`, adguardhome-sync on `/healthz`, and voice had
+no health check at all. Those are now declared per route, and `health_check:
+false` means no check rather than the default one.
+
 ## Verifying a change before applying it
 
 `scripts/compare-traefik.py` reduces a directory of dynamic YAML to the mapping
-from rule to backends, following failover chains, and diffs two of them. Router
-and service names are free to change; what must not change accidentally is
-where a hostname's traffic goes.
+from rule to backends **and health check paths**, following failover chains, and
+diffs two of them. Router and service names are free to change; what must not
+change accidentally is where a hostname's traffic goes and how the backend is
+probed.
+
+The health check was added to that comparison after it was needed: the original
+version compared backends, middlewares and priorities only, reported "41 rules
+before, 41 after, 0 differing", and the change it passed had silently replaced
+`/ping` with `/` on four services.
 
 ```sh
 scripts/compare-traefik.py /tmp/traefik-old /tmp/traefik-new

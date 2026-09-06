@@ -20,7 +20,14 @@ import yaml
 
 
 def load(directory):
-    """Return {rule_key: (backends, middlewares, priority)} for one directory."""
+    """Return {rule_key: (backends, checks, middlewares, priority)} for a directory.
+
+    The health check is part of the comparison because leaving it out is what
+    let a working configuration be replaced by a broken one: the generated file
+    probed every service on `/`, Traefik counts the 401 that Sonarr answers
+    there as unhealthy, and its router started returning 503 while this script
+    reported the change as identical.
+    """
     routers, services = {}, {}
     for path in sorted(Path(directory).glob("*.yml")):
         doc = yaml.safe_load(path.read_text()) or {}
@@ -44,11 +51,28 @@ def load(directory):
         lb = service.get("loadBalancer", {})
         return sorted(s.get("url", "") for s in lb.get("servers", []))
 
+    def checks(name, seen=()):
+        """Resolve a service to how it is health checked, following failovers."""
+        if name in seen:
+            return ["<cycle>"]
+        service = services.get(name)
+        if service is None:
+            return []
+        if "failover" in service:
+            failover = service["failover"]
+            return (
+                checks(failover["service"], seen + (name,))
+                + checks(failover["fallback"], seen + (name,))
+            )
+        check = (service.get("loadBalancer") or {}).get("healthCheck")
+        return [check.get("path", "/") if check else "none"]
+
     routed = {}
     for name, router in routers.items():
         rule = re.sub(r"\s+", "", router.get("rule", ""))
         routed[rule] = (
             backends(router.get("service", "")),
+            checks(router.get("service", "")),
             sorted(router.get("middlewares", [])),
             router.get("priority"),
         )

@@ -53,6 +53,9 @@ stacks:
     routes:
       - host: dns-sync.ryzhkov.dev
         port: 8321
+        # adguardhome-sync answers 401 on / and 200 on /healthz.
+        health_check:
+          path: /healthz
     config_templates:
       - src: adguardhome-sync.yaml.j2
         dest: adguardhome-sync.yaml
@@ -146,6 +149,10 @@ stacks:
     routes:
       - host: lidarr.ryzhkov.dev
         port: 8686
+        # / answers 401 or a redirect depending on the auth method; /ping is
+        # the endpoint these apps provide for exactly this.
+        health_check:
+          path: /ping
   - name: logging
     routes:
       - host: logs.ryzhkov.dev
@@ -174,14 +181,26 @@ stacks:
     routes:
       - host: prowlarr.ryzhkov.dev
         port: 9696
+        # / answers 401 or a redirect depending on the auth method; /ping is
+        # the endpoint these apps provide for exactly this.
+        health_check:
+          path: /ping
   - name: radarr-movie
     routes:
       - host: radarr.ryzhkov.dev
         port: 7878
+        # / answers 401 or a redirect depending on the auth method; /ping is
+        # the endpoint these apps provide for exactly this.
+        health_check:
+          path: /ping
   - name: sonarr-tv
     routes:
       - host: sonarr.ryzhkov.dev
         port: 8989
+        # / answers 401 or a redirect depending on the auth method; /ping is
+        # the endpoint these apps provide for exactly this.
+        health_check:
+          path: /ping
   - name: thelounge
     routes:
       - host: irc.ryzhkov.dev
@@ -195,6 +214,9 @@ stacks:
     routes:
       - host: voice.ryzhkov.dev
         port: 8097
+        # No health check, as before: this one has no unauthenticated endpoint
+        # that returns 200.
+        health_check: false
   - name: whisper
     # Publishes on the host's own address, so it needs HOST_IP and nothing else.
     env_extra: {}

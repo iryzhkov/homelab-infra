@@ -18,6 +18,12 @@
     path_prefix   added to the rule as PathPrefix
     priority      router priority, needed when two rules can both match
     middlewares   list of middleware names
+    health_check  a mapping with path, and optionally interval and timeout, or
+                  false for no health check at all. Defaults to
+                  traefik_health_check. This is not cosmetic: Traefik counts a
+                  4xx as unhealthy, so a service that answers 401 on / — as
+                  Sonarr and adguardhome-sync do — must be probed somewhere
+                  else or its router starts returning 503.
 #}
 {% set ns = namespace(routes=[], authentik_url='') %}
 {% for h in groups['docker_hosts'] | sort %}
@@ -71,10 +77,15 @@ http:
 {% for route in routes if route.service is not defined %}
     {{ route.name }}-service:
       loadBalancer:
+{# default() without the boolean flag, so `health_check: false` survives as
+   false and means "no check" rather than falling back to the default. #}
+{% set check = route.health_check | default(traefik_health_check) %}
+{% if check %}
         healthCheck:
-          path: {{ traefik_health_check.path }}
-          interval: {{ traefik_health_check.interval }}
-          timeout: {{ traefik_health_check.timeout }}
+          path: {{ check.path }}
+          interval: {{ check.interval | default(traefik_health_check.interval) }}
+          timeout: {{ check.timeout | default(traefik_health_check.timeout) }}
+{% endif %}
         servers:
           - url: "{{ route.url }}"
 
