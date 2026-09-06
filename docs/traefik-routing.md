@@ -102,7 +102,11 @@ but Traefik publishes its dashboard on `127.0.0.1:8080`, so nothing answered on
 the LAN address. The route now uses loopback, which Traefik reaches inside its
 own network namespace, and the dashboard responds.
 
-That dashboard has no authentication in front of it. It is LAN-only — no
-Cloudflare Tunnel hostname exists for it — but anything on the LAN can read the
-routing table. Putting it behind `authentik-forwardauth`, as `ai.ryzhkov.dev`
-already is, would be one line in `inventory/host_vars/public-api.yml`.
+That dashboard has no authentication in front of it, and by decision on
+2026-09-06 it stays that way: anything on the LAN can read the routing table.
+It is not reachable from the internet, because no Cloudflare Tunnel hostname
+exists for it and adding one is a deliberate act in the dashboard.
+
+If that ever needs to change, it is one line — `middlewares:
+[authentik-forwardauth]` on the route in `inventory/host_vars/public-api.yml`,
+the same treatment `ai.ryzhkov.dev` already has.
