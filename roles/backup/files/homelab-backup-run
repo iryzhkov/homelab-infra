@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Run one backup tier and put its result offsite.
+#
+#   homelab-backup-run hourly    the small SQLite databases
+#   homelab-backup-run daily     InfluxDB
+#
+# `rclone sync` rather than `copy` for these directories, so that pruning a
+# local snapshot prunes the offsite one too. The twice-weekly jobs use `copy`
+# on purpose — nothing there should disappear because it disappeared locally —
+# but a rolling window of snapshots is exactly the case where mirroring is what
+# you want.
+#
+# Quiet on success. A failure goes to the feed, because a backup that stopped
+# working is worth interrupting someone for, and this runs unattended every
+# hour.
+
+set -uo pipefail
+
+tier="${1:?usage: homelab-backup-run hourly|daily}"
+config_dir="$HOME/.config/homelab-backup"
+root="$HOME/app/backups"
+remote="b2:igor-offsite-backup/apps/homelab/backups"
+
+# set -a so the values reach the backup scripts this wrapper calls; sourcing
+# alone leaves them as shell variables the children never see.
+set -a
+# shellcheck source=/dev/null
+[ -r "$config_dir/env" ] && . "$config_dir/env"
+set +a
+
+output=$(mktemp)
+trap 'rm -f "$output"' EXIT
+
+case "$tier" in
+    hourly)
+        sudo -n "$HOME/.local/bin/homelab-sqlite-backup" \
+            --config "$config_dir/sqlite-sources.json" \
+            --out "$root/sqlite" >>"$output" 2>&1
+        status=$?
+        subject="sqlite"
+        local_dir="$root/sqlite"
+        remote_dir="$remote/sqlite"
+        ;;
+    daily)
+        "$HOME/.local/bin/homelab-influx-backup" "$root/influxdb" 7 >>"$output" 2>&1
+        status=$?
+        subject="influxdb"
+        local_dir="$root/influxdb"
+        remote_dir="$remote/influxdb"
+        ;;
+    *)
+        echo "unknown tier: $tier" >&2
+        exit 2
+        ;;
+esac
+
+if [ "$status" -eq 0 ]; then
+    rclone sync "$local_dir" "$remote_dir" >>"$output" 2>&1
+    status=$?
+    [ "$status" -ne 0 ] && echo "rclone sync to $remote_dir failed" >>"$output"
+fi
+
+cat "$output"
+
+if [ "$status" -ne 0 ]; then
+    feed post "$subject backup failed on $(hostname -s)" \
+        --severity fail --source backup --tag "backup infra" \
+        --body-file "$output"
+fi
+
+exit "$status"

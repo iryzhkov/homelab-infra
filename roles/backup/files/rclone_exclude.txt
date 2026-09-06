@@ -1,0 +1,18 @@
+cache/**
+*.db-shm
+*.db-wal
+embyserver-backup-full/**
+kuma/**
+logs/**
+metadata/**
+pg_wal/**
+querylog.**
+transcoding-temp/**
+_archive/shai/data/**
+
+# Backed up on their own schedules with `rclone sync`, to their own paths under
+# apps/homelab/backups. Without these two lines the twice-weekly `rclone copy`
+# of ~/app would put a second, never-pruned copy of every snapshot and every
+# 200 MB InfluxDB archive in the bucket.
+backups/sqlite/**
+backups/influxdb/**

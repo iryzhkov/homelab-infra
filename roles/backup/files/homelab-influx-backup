@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Back up InfluxDB, which until 2026-09-06 nothing backed up at all.
+#
+# Its data lives in Docker named volumes rather than under ~/app, so the rclone
+# jobs never saw it, and unlike Postgres it had no dump job. Four hundred
+# megabytes of Home Assistant history with no copy anywhere.
+#
+# `influx backup` is used rather than copying the volume, because it is the
+# only way to get a consistent picture out of a running InfluxDB. It writes
+# inside the container; the result is streamed out with docker cp and gzipped
+# here, so the host never needs a second copy of the raw files.
+#
+#   homelab-influx-backup <output-dir> <keep>
+#
+# The admin token comes from INFLUX_TOKEN in the environment, which the systemd
+# unit reads from a mode-0600 file this role deploys.
+
+set -euo pipefail
+
+out="${1:?usage: homelab-influx-backup <output-dir> <keep>}"
+keep="${2:-7}"
+container=influxdb
+scratch=/var/lib/influxdb2/influxdb-backup
+
+: "${INFLUX_TOKEN:?INFLUX_TOKEN is not set}"
+
+stamp=$(date +%Y-%m-%d_%H%M)
+mkdir -p "$out"
+
+cleanup() {
+    docker exec "$container" rm -rf "$scratch" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+docker exec "$container" rm -rf "$scratch"
+docker exec -e INFLUX_TOKEN="$INFLUX_TOKEN" "$container" \
+    influx backup "$scratch" >/dev/null
+
+# docker cp to stdout emits a tar of the directory; gzip it on the way past.
+docker cp "$container:$scratch" - | gzip >"$out/influxdb_$stamp.tar.gz"
+
+size=$(stat -c %s "$out/influxdb_$stamp.tar.gz")
+if [ "$size" -lt 100000 ]; then
+    echo "influxdb: archive is only $size bytes, treating as a failure" >&2
+    rm -f "$out/influxdb_$stamp.tar.gz"
+    exit 1
+fi
+
+removed=0
+while [ "$(ls -1 "$out"/influxdb_*.tar.gz 2>/dev/null | wc -l)" -gt "$keep" ]; do
+    oldest=$(ls -1 "$out"/influxdb_*.tar.gz | head -1)
+    rm -f "$oldest"
+    removed=$((removed + 1))
+done
+
+printf 'influxdb: %s bytes%s\n' "$size" \
+    "$([ "$removed" -gt 0 ] && printf ', %s old archive(s) removed' "$removed")"

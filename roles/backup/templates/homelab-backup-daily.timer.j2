@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily InfluxDB backup
+
+[Timer]
+# Before the twice-weekly rclone jobs, so a fresh archive is in place when they
+# run, and away from the 01:30 Postgres dumps.
+OnCalendar=*-*-* 00:40
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

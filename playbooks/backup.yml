@@ -1,0 +1,14 @@
+---
+# Backups this repository owns: hourly SQLite snapshots and a daily InfluxDB
+# archive. The twice-weekly rclone and pg_backup.sh jobs stay in cron.
+#
+#   ansible-playbook playbooks/backup.yml --check --diff
+
+- name: Configure backups
+  hosts: docker_hosts
+  gather_facts: false
+  tasks:
+    - name: Install the backup jobs
+      ansible.builtin.include_role:
+        name: backup
+      when: backup_sqlite_sources is defined

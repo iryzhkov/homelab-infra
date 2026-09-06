@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly SQLite snapshots
+
+[Timer]
+OnCalendar=hourly
+# A snapshot missed while the VM was down is worth taking on the way back up:
+# the point of this tier is that the recovery point is an hour, not three days.
+Persistent=true
+RandomizedDelaySec=2m
+
+[Install]
+WantedBy=timers.target

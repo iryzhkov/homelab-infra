@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Take consistent snapshots of the small SQLite databases.
+
+The offsite copy of Vaultwarden used to be whatever rclone happened to find:
+the database file, its write-ahead log and its shared-memory file, copied
+independently while the service was writing. The 2026-09-06 restore test pulled
+a database dated six days before its own WAL. SQLite recovered from that pair,
+but nothing had made sure it would.
+
+This uses SQLite's own online backup API instead, which produces one file that
+is consistent by construction, and gzips it. The databases are small — a few
+hundred kilobytes to a few megabytes — so an hourly snapshot is affordable in a
+way that a twice-weekly copy of the live files never needed to be.
+
+Runs as root, because the databases belong to the containers that write them.
+Output is chowned back to the invoking user so that the ordinary rclone jobs,
+and a human, can read it.
+
+    homelab-sqlite-backup --config /path/to/sources.json --out /path/to/dir
+"""
+
+import argparse
+import glob
+import gzip
+import json
+import os
+import pwd
+import shutil
+import sqlite3
+import sys
+import tempfile
+import time
+
+
+def snapshot(source, destination):
+    """Copy one live database out with the online backup API, gzipped."""
+    with tempfile.TemporaryDirectory() as scratch:
+        plain = os.path.join(scratch, "snapshot.sqlite3")
+        # Read-only on the source: a backup must never be able to write to the
+        # database it is protecting.
+        src = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=30)
+        dst = sqlite3.connect(plain)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        with open(plain, "rb") as raw, gzip.GzipFile(destination, "wb") as packed:
+            shutil.copyfileobj(raw, packed)
+    return os.path.getsize(destination)
+
+
+def prune(directory, keep):
+    """Keep the newest `keep` snapshots in a directory, remove the rest."""
+    snapshots = sorted(
+        (entry for entry in os.listdir(directory) if entry.endswith(".sqlite3.gz")),
+        reverse=True,
+    )
+    for stale in snapshots[keep:]:
+        os.unlink(os.path.join(directory, stale))
+    return len(snapshots[keep:])
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True,
+                        help="JSON: {name: {path|glob, keep}} for each database")
+    parser.add_argument("--out", required=True, help="directory to write into")
+    parser.add_argument("--owner", default=os.environ.get("SUDO_USER"),
+                        help="user to own the output (default: SUDO_USER)")
+    args = parser.parse_args()
+
+    with open(args.config) as handle:
+        sources = json.load(handle)
+
+    owner = pwd.getpwnam(args.owner) if args.owner else None
+    stamp = time.strftime("%Y-%m-%d_%H%M")
+    failures = 0
+
+    for name, spec in sorted(sources.items()):
+        # A glob rather than a path where the set of files is not fixed: Actual
+        # keeps one database per budget, named after a UUID, and a budget added
+        # later should be backed up without an inventory change.
+        if "glob" in spec:
+            matches = sorted(glob.glob(spec["glob"]))
+            if not matches:
+                print(f"{name}: FAILED, no file matches {spec['glob']}", file=sys.stderr)
+                failures += 1
+                continue
+            targets = [(f"{name}-{os.path.splitext(os.path.basename(m))[0]}", m)
+                       for m in matches]
+        else:
+            targets = [(name, spec["path"])]
+
+        for label, source in targets:
+            directory = os.path.join(args.out, label)
+            os.makedirs(directory, exist_ok=True)
+            destination = os.path.join(directory, f"{label}_{stamp}.sqlite3.gz")
+            try:
+                size = snapshot(source, destination)
+            except (sqlite3.Error, OSError) as error:
+                print(f"{label}: FAILED, {error}", file=sys.stderr)
+                failures += 1
+                continue
+            removed = prune(directory, spec.get("keep", 48))
+            if owner:
+                os.chown(directory, owner.pw_uid, owner.pw_gid)
+                os.chown(destination, owner.pw_uid, owner.pw_gid)
+            print(f"{label}: {size} bytes"
+                  + (f", {removed} old snapshot(s) removed" if removed else ""))
+
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

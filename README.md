@@ -57,6 +57,10 @@ Traefik's dynamic configuration is generated from the same inventory since
 2026-09-06, so a service's backend address follows the host it runs on; see
 [docs/traefik-routing.md](docs/traefik-routing.md).
 
+Backups are described in [docs/backups.md](docs/backups.md): hourly consistent
+SQLite snapshots and a daily InfluxDB archive are deployed from here, the
+twice-weekly rclone and Postgres jobs remain in cron.
+
 The Backblaze backups were restored from for the first time on 2026-09-06 and
 the results, including what turned out not to be backed up at all, are in
 [docs/restore-test-2026-09-06.md](docs/restore-test-2026-09-06.md).

@@ -15,6 +15,23 @@ fleet_ssh_peers:
   - normandy
   - public-api
 
+# Backups this repository owns, on top of the twice-weekly cron jobs. The
+# 2026-09-06 restore test found the SQLite databases were being copied live as
+# three separate files, and InfluxDB not at all.
+backup_root: /home/iryzhkov/app/backups
+backup_sqlite_sources:
+  vaultwarden:
+    path: /home/iryzhkov/app/vaultwarden/data/db.sqlite3
+    keep: 48
+  actual-account:
+    path: /home/iryzhkov/app/actual/server-files/account.sqlite
+    keep: 48
+  # One database per budget, named after a UUID. A glob so that a budget added
+  # later is backed up without an edit here.
+  actual-budget:
+    glob: /home/iryzhkov/app/actual/user-files/*.sqlite
+    keep: 48
+
 # public-api cannot reach the feed from its VLAN, so homelab runs its check
 # over SSH and reports for both.
 drift_check_peers:
