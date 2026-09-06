@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Backblaze version cleanup
+
+[Timer]
+# Sunday morning, after Thursday's uploads have settled and before Monday's.
+OnCalendar=Sun *-*-* 03:20
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

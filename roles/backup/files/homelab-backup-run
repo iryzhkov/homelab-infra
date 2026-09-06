@@ -10,6 +10,11 @@
 # but a rolling window of snapshots is exactly the case where mirroring is what
 # you want.
 #
+# --b2-hard-delete because B2 keeps every version of every file forever unless
+# told otherwise, and this bucket has no lifecycle rule. Without it, syncing
+# away an expired snapshot only hides it, and an hourly job would quietly add
+# about a gigabyte and a half a month of invisible history.
+#
 # Quiet on success. A failure goes to the feed, because a backup that stopped
 # working is worth interrupting someone for, and this runs unattended every
 # hour.
@@ -48,14 +53,27 @@ case "$tier" in
         local_dir="$root/influxdb"
         remote_dir="$remote/influxdb"
         ;;
+    weekly)
+        # What a bucket lifecycle rule would do server-side. The rclone
+        # application key has no writeBuckets capability, so the rule cannot be
+        # set from here; `rclone cleanup` removes the old versions with the
+        # deleteFiles capability it does have. Set the lifecycle rule in the
+        # B2 console when convenient and this tier becomes redundant.
+        rclone cleanup b2:igor-offsite-backup >>"$output" 2>&1
+        status=$?
+        echo "old versions cleaned up" >>"$output"
+        subject="backblaze version"
+        local_dir=""
+        remote_dir=""
+        ;;
     *)
         echo "unknown tier: $tier" >&2
         exit 2
         ;;
 esac
 
-if [ "$status" -eq 0 ]; then
-    rclone sync "$local_dir" "$remote_dir" >>"$output" 2>&1
+if [ "$status" -eq 0 ] && [ -n "$local_dir" ]; then
+    rclone sync --b2-hard-delete "$local_dir" "$remote_dir" >>"$output" 2>&1
     status=$?
     [ "$status" -ne 0 ] && echo "rclone sync to $remote_dir failed" >>"$output"
 fi

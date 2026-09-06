@@ -80,6 +80,8 @@
     - homelab-backup-hourly.timer
     - homelab-backup-daily.service
     - homelab-backup-daily.timer
+    - homelab-backup-weekly.service
+    - homelab-backup-weekly.timer
   register: backup_units
 
 - name: Reload the user manager when a unit changed
@@ -97,4 +99,5 @@
   loop:
     - homelab-backup-hourly.timer
     - homelab-backup-daily.timer
+    - homelab-backup-weekly.timer
   when: not ansible_check_mode
