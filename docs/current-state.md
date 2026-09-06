@@ -139,3 +139,28 @@ those are byte-identical to what was on disk, verified by hash — but a config
 hash those containers carried from an earlier Compose invocation. Everything
 else, including Traefik on the edge proxy, was adopted with no restart at all.
 All 17 public hostnames answered afterwards.
+
+## Hardcoded addresses, audited 2026-09-06
+
+An audit for LAN addresses written as literals found twenty. Most were latent;
+three were not:
+
+- `cv-site` pointed at Immich on homelab, where nothing had answered since the
+  move to normandy on 2026-08-30, and at an Ollama endpoint that had become a
+  whisper.cpp server. Both now derive from the inventory.
+- `diun` on public-api and Black Pearl posted their update notifications to
+  `webhook-batcher` on homelab:8090, a service archived in the 2026-08-30
+  cleanup. Nothing had listened there since, so both hosts' notifications were
+  discarded silently. The notifier was removed on 2026-09-06 rather than
+  repointed: `docker-update-sweep` already reports container updates into a T3
+  thread and the fleet feed. Diun now logs "No notifier available" and only
+  keeps its own state.
+
+The archived `webhook-batcher` compose file on homelab carries its Discord
+webhook URL in plaintext. It is not running, but the URL is a credential and
+anyone holding it can post to that channel.
+
+What is still written as a literal is deliberate: VLAN CIDRs in the torrent
+stack's firewall rule, the off-inventory and Nebula addresses in Traefik's
+`t3.yml`, the AdGuard instance list, the two static Traefik routes whose
+backends are not stacks, and `inventory/hosts.yml` itself.

@@ -11,9 +11,12 @@ services:
       - DIUN_WATCH_FIRSTCHECKNOTIF=true
       - DIUN_PROVIDERS_DOCKER=true
       - DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=true
-      - DIUN_NOTIF_WEBHOOK_ENDPOINT=http://192.168.70.223:8090/webhook
-      - DIUN_NOTIF_WEBHOOK_METHOD=POST
-      - DIUN_NOTIF_WEBHOOK_HEADERS_CONTENT-TYPE=application/json
+      # No notifier. This used to post to webhook-batcher on homelab:8090,
+      # which batched the notifications and forwarded them to Discord; that
+      # service was archived in the 2026-08-30 cleanup, so the notifications
+      # went nowhere from then until 2026-09-06, when the endpoint was removed.
+      # Container updates are reported by docker-update-sweep instead, into a
+      # T3 thread and the fleet feed.
     restart: unless-stopped
 
 volumes:
