@@ -1,0 +1,53 @@
+---
+# Who may log in to this host from inside the fleet, and how this host reaches
+# its peers.
+#
+# Machine-to-machine SSH used to be whatever had accumulated in each
+# authorized_keys file. Declaring it means the answer to "what can reach the
+# edge proxy" is a list in the inventory rather than a file on the proxy.
+#
+# Each name in fleet_ssh_authorized refers to an entry in fleet_ssh_keys.
+# Access is restricted with `from=`, so a key taken off one host is not a key
+# to the fleet from anywhere else.
+
+- name: Gather the facts this role needs
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - env
+
+- name: Authorise the fleet keys that may reach this host
+  ansible.posix.authorized_key:
+    user: "{{ ansible_user }}"
+    key: "{{ fleet_ssh_keys[item].key }}"
+    comment: "{{ fleet_ssh_keys[item].comment }}"
+    key_options: 'from="{{ fleet_ssh_keys[item].from }}"'
+    state: present
+    exclusive: false
+  loop: "{{ fleet_ssh_authorized | default([]) }}"
+
+# Peers are reached by name, with the right user, from a block this role owns.
+# Without it every script on the host has to remember that normandy and
+# public-api run as igor while homelab and Black Pearl run as iryzhkov — the
+# mistake that made this fleet look less connected than it was.
+- name: Describe the peers this host talks to
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.ssh/config"
+    create: true
+    mode: "0600"
+    marker: "# {mark} ANSIBLE MANAGED: fleet peers"
+    block: |
+      {% for peer in fleet_ssh_peers %}
+      Host {{ peer }}
+          HostName {{ hostvars[peer].ansible_host }}
+          User {{ hostvars[peer].ssh_user }}
+      {% endfor %}
+  when: fleet_ssh_peers | default([]) | length > 0
+
+# Host keys are deliberately not managed here. homelab hashes its known_hosts
+# (HashKnownHosts yes), and the known_hosts module cannot reconcile a hashed
+# file with a plain host parameter — it fails with "Host parameter does not
+# match hashed host field in supplied key". Both peers are already trusted
+# there, and a peer that is rebuilt should make a human look rather than have
+# its new identity accepted by a playbook.

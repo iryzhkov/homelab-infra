@@ -76,3 +76,12 @@ adguard_probe_name: vault.ryzhkov.dev
 # stack runs on; the name that reaches Traefik at all follows the host Traefik
 # runs on.
 edge_proxy_ip: "{{ hostvars[groups['edge_proxy'][0]].ansible_host }}"
+
+# Machine-to-machine SSH inside the fleet. A key listed here is authorised on
+# the hosts whose host_vars name it in fleet_ssh_authorized, restricted to the
+# address it is expected to come from.
+fleet_ssh_keys:
+  homelab:
+    comment: "homelab (ml-orchestrator)"
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDhU+leIj5YUWMbgyAD15iu4uvl7wfZaPWswPcp7Taiy"
+    from: "192.168.70.223"

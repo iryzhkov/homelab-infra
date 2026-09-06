@@ -1,0 +1,11 @@
+---
+# Machine-to-machine SSH: which fleet keys each host accepts, and which peers
+# each host knows how to reach.
+#
+#   ansible-playbook playbooks/ssh.yml --check --diff
+
+- name: Configure fleet SSH access
+  hosts: docker_hosts
+  gather_facts: false
+  roles:
+    - fleet_ssh

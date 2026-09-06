@@ -36,10 +36,21 @@ in place is caught; a password changed by hand on the host is not.
 halves are complementary: this one watches the hosts, that one watches the gap
 between the repository and the hosts.
 
-**The other three hosts.** homelab has no SSH access to public-api, normandy or
-Black Pearl, and giving it any would be a worse trade than the check is worth.
-The role is host-agnostic, so installing it on those hosts is one
-`drift_check_enabled: true` per `host_vars` file when it earns its place.
+**The other three hosts.** The check is per-host by design: each host compares
+itself against its own manifest, rather than one host reaching out to inspect
+the others. The role is host-agnostic, so covering another host is one
+`drift_check_enabled: true` in its `host_vars`.
+
+What each of them still needs first, checked 2026-09-06:
+
+| Host | Lingering | `feed` | Ready |
+|---|---|---|---|
+| normandy | yes | yes | yes |
+| public-api | no | no | needs both |
+| Black Pearl | no | no | needs both |
+
+A systemd user timer does not run without lingering, and the wrapper posts
+findings with `feed`.
 
 ## Reporting
 

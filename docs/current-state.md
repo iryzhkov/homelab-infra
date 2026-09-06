@@ -164,3 +164,19 @@ What is still written as a literal is deliberate: VLAN CIDRs in the torrent
 stack's firewall rule, the off-inventory and Nebula addresses in Traefik's
 `t3.yml`, the AdGuard instance list, the two static Traefik routes whose
 backends are not stacks, and `inventory/hosts.yml` itself.
+
+## Machine-to-machine SSH
+
+Declared since 2026-09-06 in `fleet_ssh_keys` and each host's
+`fleet_ssh_authorized`, applied by `playbooks/ssh.yml`. homelab's key is
+authorised on normandy and public-api, restricted with `from="192.168.70.223"`,
+and homelab reaches both by name through a managed block in its `~/.ssh/config`.
+
+Worth recording because it caused a wrong conclusion earlier: homelab could
+already reach normandy. The probe that said otherwise connected as `iryzhkov`,
+homelab's own username, while normandy and public-api run as `igor`. The peer
+block in `~/.ssh/config` exists so that nothing has to remember which host uses
+which user again.
+
+Black Pearl accepts no fleet key yet; nothing needs to reach it from another
+host.

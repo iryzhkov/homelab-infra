@@ -4,6 +4,11 @@
 # Every host runs its own diun with a different Compose file, so each keeps its
 # own directory under stacks/ and names it with `source`.
 
+# Added 2026-09-06 so homelab can reach the edge proxy. Restricted to
+# homelab's address by the from= option the role applies.
+fleet_ssh_authorized:
+  - homelab
+
 stacks:
   - name: traefik
     routes:

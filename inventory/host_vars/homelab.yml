@@ -9,6 +9,12 @@
 # `docker run` with no Compose labels, so the container had to be removed
 # before Compose could own the name.
 
+# homelab reaches these by name, as the right user. It already had normandy;
+# public-api was added on 2026-09-06.
+fleet_ssh_peers:
+  - normandy
+  - public-api
+
 # The drift check runs here: homelab holds most of the fleet's stacks, and the
 # feed service it reports into runs on this host too.
 drift_check_enabled: true

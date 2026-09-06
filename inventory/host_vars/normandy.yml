@@ -4,6 +4,11 @@
 # immich keeps its upstream layout: the project directory is immich-stack and
 # the Compose file reads stack.env rather than .env.
 
+# homelab's key was authorised here by hand before this repository existed;
+# declaring it means the list is somewhere other than the host itself.
+fleet_ssh_authorized:
+  - homelab
+
 stacks:
   - name: cloudflare
     secrets: normandy-cloudflare
