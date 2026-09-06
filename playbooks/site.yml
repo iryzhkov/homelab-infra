@@ -1,0 +1,26 @@
+---
+# Converge every host's Compose stacks to what this repository says they are.
+#
+# Adoption is expected to be a no-op: the repository holds a byte-identical copy
+# of the Compose file that is already running, and a .env whose values match, so
+# `docker compose up -d` finds nothing to change. A reported change on a stack
+# that has already been adopted means the host drifted, or someone edited a file
+# in place.
+#
+# Run one stack at a time while adopting:
+#   ansible-playbook playbooks/site.yml -l homelab -e 'only=vaultwarden'
+
+- name: Deploy Compose stacks
+  hosts: docker_hosts
+  gather_facts: false
+
+  tasks:
+    - name: Deploy each stack
+      ansible.builtin.include_role:
+        name: compose_stack
+      loop: >-
+        {{ (stacks | default([]) | selectattr('name', 'equalto', only) | list)
+           if only is defined else (stacks | default([])) }}
+      loop_control:
+        loop_var: stack
+        label: "{{ stack.name }}"

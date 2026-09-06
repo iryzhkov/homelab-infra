@@ -1,0 +1,14 @@
+---
+# Stacks this repository owns on homelab. The list grows as stacks are adopted;
+# a stack that is not listed here is still hand-managed on the host.
+#
+# Adopted 2026-09-06: the four services the cloud standby will need to carry.
+
+stacks:
+  - name: vaultwarden
+    secrets: homelab-vaultwarden
+  - name: authentik
+    secrets: homelab-authentik
+  - name: actual
+  - name: obsidian
+    secrets: homelab-obsidian

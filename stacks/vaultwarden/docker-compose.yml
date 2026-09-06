@@ -1,0 +1,25 @@
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    ports:
+      - "8099:80"
+    volumes:
+      - ./data:/data
+    environment:
+      - SIGNUPS_ALLOWED=false
+      - INVITATIONS_ALLOWED=false
+      - DOMAIN=https://vault.ryzhkov.dev
+      # Admin panel disabled 2026-08-31: the panel was reachable from the public internet.
+      # Re-enable temporarily by uncommenting, then comment out again when finished.
+      # - ADMIN_TOKEN=${ADMIN_TOKEN}
+      - SSO_ENABLED=true
+      - SSO_CLIENT_ID=${SSO_CLIENT_ID}
+      - SSO_CLIENT_SECRET=${SSO_CLIENT_SECRET}
+      - SSO_AUTHORITY=https://auth.ryzhkov.dev/application/o/vaultwarden/
+      - SSO_SCOPES=email profile offline_access
+      - SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION=false
+      - SSO_CLIENT_CACHE_EXPIRATION=0
+      - SSO_ONLY=false
+      - SSO_SIGNUPS_MATCH_EMAIL=true

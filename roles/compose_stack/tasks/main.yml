@@ -2,42 +2,53 @@
 # Deploy one Compose stack from stacks/<name>/ to a host, with its secrets
 # rendered into a .env beside it.
 #
-# Required variables:
-#   stack_name  directory under stacks/ and the Compose project name
-#   stack_env   dict of environment variables for the .env file (may be empty)
+# Takes one variable, `stack`, a dict:
+#   name      directory under stacks/, and the Compose project name
+#   secrets   optional; base name of a file under secrets/, without the
+#             .sops.yaml suffix. Its keys are environment variable names and
+#             become the .env verbatim.
 #
-# The stack lands in {{ stack_root }}/{{ stack_name }}, where stack_root is a
+# The stack lands in {{ stack_root }}/{{ stack.name }}, where stack_root is a
 # per-host inventory variable because the hosts disagree about ~/app vs ~/apps.
+#
+# Secrets are decrypted on the controller, never on the managed host.
 
+- name: Load the stack's secrets
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/{{ stack.secrets }}.sops.yaml"
+    name: stack_secrets
+  delegate_to: localhost
+  no_log: true
+  when: stack.secrets is defined
+
+# Neither the directory's mode nor the Compose file's is managed. The stack
+# directories predate this repository and some are root-owned (~/app/actual is,
+# for one), so asserting a mode fails on exactly the hosts we are adopting. The
+# .env below is the file whose mode matters, and Ansible creates that one.
 - name: Ensure the stack directory exists
   ansible.builtin.file:
-    path: "{{ stack_root }}/{{ stack_name }}"
+    path: "{{ stack_root }}/{{ stack.name }}"
     state: directory
-    mode: "0750"
 
 - name: Install the Compose file
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../stacks/{{ stack_name }}/docker-compose.yml"
-    dest: "{{ stack_root }}/{{ stack_name }}/docker-compose.yml"
-    mode: "0640"
-  register: compose_file
+    src: "{{ playbook_dir }}/../stacks/{{ stack.name }}/docker-compose.yml"
+    dest: "{{ stack_root }}/{{ stack.name }}/docker-compose.yml"
 
 - name: Install the environment file
   ansible.builtin.copy:
     content: |
-      # Written by Ansible from secrets/. Do not edit on the host: the next
-      # playbook run overwrites it.
-      {% for key, value in (stack_env | default({})) | dictsort %}
+      {% for key, value in stack_secrets | dictsort %}
       {{ key }}={{ value }}
       {% endfor %}
-    dest: "{{ stack_root }}/{{ stack_name }}/.env"
+    dest: "{{ stack_root }}/{{ stack.name }}/.env"
     mode: "0600"
   no_log: true
-  register: env_file
+  when: stack.secrets is defined
 
 - name: Bring the stack up
   community.docker.docker_compose_v2:
-    project_src: "{{ stack_root }}/{{ stack_name }}"
-    project_name: "{{ stack_name }}"
+    project_src: "{{ stack_root }}/{{ stack.name }}"
+    project_name: "{{ stack.name }}"
     state: present
     pull: never

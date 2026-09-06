@@ -1,0 +1,9 @@
+services:
+  actual-server:
+    image: actualbudget/actual-server:latest
+    container_name: my_actual_budget
+    restart: unless-stopped
+    ports:
+      - "5006:5006"
+    volumes:
+      - /home/iryzhkov/app/actual:/data

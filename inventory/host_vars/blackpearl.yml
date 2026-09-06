@@ -1,0 +1,7 @@
+---
+# Adopted 2026-09-06 out of the removed Portainer's volume; see
+# playbooks/adopt-torrent.yml for the one-time teardown of the old project.
+
+stacks:
+  - name: torrent
+    secrets: blackpearl-torrent

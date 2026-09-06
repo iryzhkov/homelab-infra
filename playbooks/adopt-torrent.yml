@@ -1,20 +1,19 @@
 ---
-# Adopt Black Pearl's torrent stack into this repository.
+# One-time teardown of the Portainer-era torrent stack on Black Pearl.
 #
-# The stack currently runs as Compose project "1" out of the volume of a
-# Portainer that no longer exists. This playbook re-deploys the same three
-# containers as project "torrent" from ~/apps/torrent, which is inside the
-# rclone backup path and readable by the host's own user.
+# The stack used to run as Compose project "1" out of
+# /var/lib/docker/volumes/portainer_data/_data/compose/1, left behind by the
+# Portainer removed in the 2026-08-30 cleanup. It now runs as project "torrent"
+# from ~/apps/torrent; playbooks/site.yml deploys it like any other stack.
 #
-# It is NOT a no-op: the old project must be torn down first, because two
-# Compose projects cannot both publish port 8080. Expect roughly a minute
-# during which torrents are paused and the VPN tunnel reconnects; qBittorrent
-# resumes on its own, and its state lives in bind mounts that are untouched.
+# This playbook only stops the old project, because two Compose projects cannot
+# both publish port 8080. It was run on 2026-09-06 and is a no-op since. Kept
+# because rebuilding that VM from a backup taken before that date would restore
+# the old project, and this is how it is taken out of the way again.
 #
-# The old Compose file is left in place, so rolling back means bringing project
-# "1" up again from the volume.
+# Order matters: run this first, then playbooks/site.yml -l blackpearl.
 
-- name: Adopt the torrent stack
+- name: Stop the Portainer-era torrent project
   hosts: blackpearl
   gather_facts: false
 
@@ -22,15 +21,7 @@
     old_project_dir: /var/lib/docker/volumes/portainer_data/_data/compose/1
 
   tasks:
-    - name: Load the stack's secrets
-      community.sops.load_vars:
-        file: "{{ playbook_dir }}/../secrets/blackpearl-torrent.sops.yaml"
-        name: torrent_secrets
-      delegate_to: localhost
-      run_once: true
-      no_log: true
-
-    - name: Check whether the old Portainer-era project is still running
+    - name: Check whether the old project is still running
       ansible.builtin.command:
         cmd: docker compose ls --format json
       changed_when: false
@@ -44,31 +35,3 @@
           -f {{ old_project_dir }}/docker-compose.yml down
       when: "'\"Name\":\"1\"' in (compose_ls.stdout | regex_replace('\\s', ''))"
       changed_when: true
-
-    - name: Deploy the stack from this repository
-      ansible.builtin.include_role:
-        name: compose_stack
-      vars:
-        stack_name: torrent
-        stack_env:
-          WIREGUARD_PRIVATE_KEY: "{{ torrent_secrets.wireguard_private_key }}"
-          QBITTORRENT_USER: "{{ torrent_secrets.qbittorrent_user }}"
-          QBITTORRENT_PASS: "{{ torrent_secrets.qbittorrent_pass }}"
-
-    - name: Wait for the VPN tunnel to report healthy
-      ansible.builtin.command:
-        cmd: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' torrent-gluetun-1
-      register: gluetun_health
-      until: gluetun_health.stdout == "healthy"
-      retries: 20
-      delay: 15
-      changed_when: false
-
-    - name: Check that qBittorrent answers on the published port
-      ansible.builtin.uri:
-        url: http://127.0.0.1:8080/
-        status_code: [200, 401, 403]
-      register: qb_probe
-      until: qb_probe.status is defined
-      retries: 10
-      delay: 6
