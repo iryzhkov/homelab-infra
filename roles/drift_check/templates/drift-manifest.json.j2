@@ -1,0 +1,6 @@
+{
+  "host": {{ inventory_hostname | to_json }},
+  "generated": {{ ansible_date_time.iso8601 | default(lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')) | to_json }},
+  "note": "Written by roles/drift_check at deploy time. Checksums and variable names only; this host holds no key and can decrypt nothing.",
+  "stacks": {{ drift_manifest_stacks | default([]) | sort(attribute='name') | to_nice_json(indent=2) }}
+}

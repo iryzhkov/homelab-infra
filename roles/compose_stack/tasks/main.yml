@@ -127,6 +127,34 @@
     state: present
     pull: never
 
+# The checksum of the file as it landed, rather than of the repository's copy:
+# Ansible's file lookup drops a trailing newline, so hashing what it returns
+# does not match hashing the file on either side.
+- name: Checksum the Compose file as deployed
+  ansible.builtin.stat:
+    path: "{{ stack_dir }}/docker-compose.yml"
+    checksum_algorithm: sha256
+  register: deployed_compose
+  changed_when: false
+
+# What was deployed, recorded for the drift check. Key names only, never
+# values: the manifest lives on the managed host, which has no age key.
+- name: Record this stack in the drift manifest
+  ansible.builtin.set_fact:
+    drift_manifest_stacks: >-
+      {{ (drift_manifest_stacks | default([])) + [{
+           'name': stack.name,
+           'dir': stack_dir,
+           'compose_sha256': deployed_compose.stat.checksum | default(''),
+           'env_file': (stack.env_file | default('.env'))
+                       if (stack.secrets is defined or stack.env_extra is defined)
+                          and (stack.write_env | default(true)) else none,
+           'env_keys': (stack_env | default({}) | list | sort)
+                       if (stack.secrets is defined or stack.env_extra is defined)
+                          and (stack.write_env | default(true)) else [],
+           'config_files': stack.config_templates | default([]) | map(attribute='dest') | list,
+         }] }}
+
 - name: Restart the stack when a mounted configuration file changed
   community.docker.docker_compose_v2:
     project_src: "{{ stack_dir }}"

@@ -1,0 +1,67 @@
+---
+# Install the drift check on a managed host: the manifest of what was just
+# deployed, the checker, and a daily timer that reports into the fleet feed.
+#
+# Runs at the end of the same play that deploys the stacks, so the manifest
+# always describes the deploy that produced it.
+
+# site.yml does not gather facts, and this role needs two of them: the home
+# directory to install into, and the time to stamp the manifest with.
+- name: Gather the facts this role needs
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - env
+      - date_time
+
+- name: Ensure the local directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ansible_env.HOME }}/.local/bin"
+    - "{{ ansible_env.HOME }}/.local/share/homelab-infra"
+    - "{{ ansible_env.HOME }}/.config/systemd/user"
+
+- name: Write the manifest of what was deployed
+  ansible.builtin.template:
+    src: drift-manifest.json.j2
+    dest: "{{ ansible_env.HOME }}/.local/share/homelab-infra/drift-manifest.json"
+    mode: "0644"
+
+- name: Install the checker and its reporting wrapper
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ ansible_env.HOME }}/.local/bin/{{ item }}"
+    mode: "0755"
+  loop:
+    - homelab-drift-check
+    - homelab-drift-report
+
+- name: Install the systemd user units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ ansible_env.HOME }}/.config/systemd/user/{{ item }}"
+    mode: "0644"
+  loop:
+    - homelab-drift-check.service
+    - homelab-drift-check.timer
+  register: drift_units
+
+- name: Reload the user manager when a unit changed
+  ansible.builtin.systemd_service:
+    scope: user
+    daemon_reload: true
+  when: drift_units is changed
+
+- name: Enable the timer
+  ansible.builtin.systemd_service:
+    scope: user
+    name: homelab-drift-check.timer
+    enabled: true
+    state: started
+  # In check mode the unit files were never written, so systemd would be asked
+  # about a timer that does not exist yet.
+  when: not ansible_check_mode

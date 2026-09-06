@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily drift check against what homelab-infra last deployed
+
+[Timer]
+# Morning, after the overnight backup and update jobs have had their say.
+OnCalendar=*-*-* 08:30
+# The host is a VM that occasionally reboots; run a missed check on the way up.
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

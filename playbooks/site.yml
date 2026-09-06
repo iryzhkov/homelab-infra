@@ -24,3 +24,13 @@
       loop_control:
         loop_var: stack
         label: "{{ stack.name }}"
+
+    # After the stacks, so the manifest describes the deploy that just ran.
+    # Skipped when the run was limited to one stack with `only`, because the
+    # manifest would then describe that stack alone.
+    - name: Install the drift check
+      ansible.builtin.include_role:
+        name: drift_check
+      when:
+        - drift_check_enabled | default(false)
+        - only is not defined

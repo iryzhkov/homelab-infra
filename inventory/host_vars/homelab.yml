@@ -9,6 +9,10 @@
 # `docker run` with no Compose labels, so the container had to be removed
 # before Compose could own the name.
 
+# The drift check runs here: homelab holds most of the fleet's stacks, and the
+# feed service it reports into runs on this host too.
+drift_check_enabled: true
+
 stacks:
   - name: actual
     routes:

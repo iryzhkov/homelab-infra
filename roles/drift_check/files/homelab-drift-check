@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Report where this host no longer matches what was deployed to it.
+
+Reads the manifest that Ansible wrote at deploy time and checks the host
+against it: Compose files unchanged, env files present with the expected
+variables, mounted configuration files present, and every project running.
+
+The manifest carries checksums and variable names, never values, because this
+host holds no age key and cannot decrypt anything. That bounds what can be
+checked here: a Compose file edited in place is caught, a secret changed on the
+host is not.
+
+It also compares the manifest against what the repository last deployed, not
+against the repository as it is now. A change committed but never applied is
+the laptop's job to catch, with `ansible-playbook playbooks/site.yml --check`.
+
+Exit status: 0 clean, 1 drift found, 2 the check itself could not run.
+"""
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+MANIFEST = os.path.expanduser("~/.local/share/homelab-infra/drift-manifest.json")
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compose_projects():
+    """Names of the Compose projects docker currently reports as running."""
+    out = subprocess.run(
+        ["docker", "compose", "ls", "--format", "json"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return {p["Name"]: p.get("Status", "") for p in json.loads(out)}
+
+
+def env_keys(path):
+    keys = []
+    with open(path) as handle:
+        for line in handle:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                keys.append(line.split("=", 1)[0])
+    return sorted(keys)
+
+
+def check_stack(stack, running):
+    """Yield one string per way this stack differs from the manifest."""
+    directory = stack["dir"]
+    compose = os.path.join(directory, "docker-compose.yml")
+
+    if not os.path.isdir(directory):
+        yield f"{stack['name']}: directory {directory} is gone"
+        return
+
+    if not os.path.isfile(compose):
+        yield f"{stack['name']}: {compose} is missing"
+    elif sha256(compose) != stack["compose_sha256"]:
+        yield f"{stack['name']}: docker-compose.yml edited on the host"
+
+    if stack["env_file"]:
+        env_path = os.path.join(directory, stack["env_file"])
+        if not os.path.isfile(env_path):
+            yield f"{stack['name']}: {stack['env_file']} is missing"
+        else:
+            mode = oct(os.stat(env_path).st_mode & 0o777)
+            if mode != "0o600":
+                yield f"{stack['name']}: {stack['env_file']} is mode {mode}, expected 0o600"
+            found = env_keys(env_path)
+            if found != stack["env_keys"]:
+                missing = sorted(set(stack["env_keys"]) - set(found))
+                extra = sorted(set(found) - set(stack["env_keys"]))
+                detail = ", ".join(
+                    part for part in (
+                        f"missing {missing}" if missing else "",
+                        f"unexpected {extra}" if extra else "",
+                    ) if part
+                )
+                yield f"{stack['name']}: {stack['env_file']} variables differ ({detail})"
+
+    for config in stack["config_files"]:
+        if not os.path.isfile(os.path.join(directory, config)):
+            yield f"{stack['name']}: mounted config {config} is missing"
+
+    if stack["name"] not in running:
+        yield f"{stack['name']}: project is not running"
+    elif "running" not in running[stack["name"]]:
+        yield f"{stack['name']}: project status is '{running[stack['name']]}'"
+
+
+def main():
+    try:
+        with open(MANIFEST) as handle:
+            manifest = json.load(handle)
+    except OSError as error:
+        print(f"cannot read the manifest: {error}", file=sys.stderr)
+        return 2
+
+    try:
+        running = compose_projects()
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        print(f"cannot ask docker what is running: {error}", file=sys.stderr)
+        return 2
+
+    findings = []
+    for stack in manifest["stacks"]:
+        findings.extend(check_stack(stack, running))
+
+    # Projects running here that the manifest does not describe. Not drift in
+    # the strict sense, but it is how an unmanaged stack appears.
+    unmanaged = sorted(set(running) - {s["name"] for s in manifest["stacks"]})
+    for name in unmanaged:
+        findings.append(f"{name}: running but not deployed from the repository")
+
+    stacks = len(manifest["stacks"])
+    if not findings:
+        print(f"{stacks} stacks match what was deployed on {manifest['generated']}")
+        return 0
+
+    print(f"{len(findings)} finding(s) across {stacks} stacks, "
+          f"deployed {manifest['generated']}:")
+    for finding in findings:
+        print(f"  - {finding}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

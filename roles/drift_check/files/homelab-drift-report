@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Run the drift check and put the result where it will be seen.
+#
+# Quiet when the host matches what was deployed: a daily "nothing changed" entry
+# would train the reader to skip the feed. Drift is posted as a warning, and a
+# check that could not run at all is posted as a failure, because silence from
+# a broken checker looks exactly like silence from a clean host.
+
+set -uo pipefail
+
+output=$(mktemp)
+trap 'rm -f "$output"' EXIT
+
+homelab-drift-check >"$output" 2>&1
+status=$?
+
+case "$status" in
+    0)
+        cat "$output"
+        ;;
+    1)
+        cat "$output"
+        feed post "configuration drift on $(hostname -s)" \
+            --severity warn --source drift-check --tag "drift infra" \
+            --body-file "$output"
+        ;;
+    *)
+        cat "$output" >&2
+        feed post "drift check could not run on $(hostname -s)" \
+            --severity fail --source drift-check --tag "drift infra" \
+            --body-file "$output"
+        ;;
+esac
+
+exit "$status"

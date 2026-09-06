@@ -1,0 +1,14 @@
+[Unit]
+Description=Check this host against what homelab-infra last deployed
+Documentation=https://github.com/iryzhkov/homelab-infra
+
+[Service]
+Type=oneshot
+# The checker and `feed` both live in ~/.local/bin, which a systemd user unit
+# does not inherit from a login shell.
+Environment=PATH={{ ansible_env.HOME }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart={{ ansible_env.HOME }}/.local/bin/homelab-drift-report
+# Drift is reported to the feed by the wrapper; failing the unit as well would
+# put the same finding in two places and turn `systemctl --user --failed` into
+# a second thing to remember to look at.
+SuccessExitStatus=0 1

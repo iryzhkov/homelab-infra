@@ -57,6 +57,10 @@ Traefik's dynamic configuration is generated from the same inventory since
 2026-09-06, so a service's backend address follows the host it runs on; see
 [docs/traefik-routing.md](docs/traefik-routing.md).
 
+homelab runs a daily drift check since 2026-09-06, comparing itself against
+what was last deployed to it and reporting into the fleet feed when it does
+not match; see [docs/drift-check.md](docs/drift-check.md).
+
 AdGuard Home joined on 2026-09-06 as well. It is not a Compose stack — three
 LXCs, one managed and two kept in step by adguardhome-sync — so it has its own
 role and its own guard rails; see [docs/adguard.md](docs/adguard.md).
