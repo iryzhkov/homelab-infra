@@ -17,6 +17,7 @@ the laptop's job to catch, with `ansible-playbook playbooks/site.yml --check`.
 Exit status: 0 clean, 1 drift found, 2 the check itself could not run.
 """
 
+import datetime
 import hashlib
 import json
 import os
@@ -111,6 +112,10 @@ def main():
         print(f"cannot ask docker what is running: {error}", file=sys.stderr)
         return 2
 
+    deployed = datetime.datetime.fromtimestamp(
+        os.path.getmtime(MANIFEST)
+    ).strftime("%Y-%m-%d %H:%M")
+
     findings = []
     for stack in manifest["stacks"]:
         findings.extend(check_stack(stack, running))
@@ -123,11 +128,11 @@ def main():
 
     stacks = len(manifest["stacks"])
     if not findings:
-        print(f"{stacks} stacks match what was deployed on {manifest['generated']}")
+        print(f"{stacks} stacks match what was deployed on {deployed}")
         return 0
 
     print(f"{len(findings)} finding(s) across {stacks} stacks, "
-          f"deployed {manifest['generated']}:")
+          f"deployed {deployed}:")
     for finding in findings:
         print(f"  - {finding}")
     return 1

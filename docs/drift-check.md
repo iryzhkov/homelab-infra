@@ -69,9 +69,14 @@ ssh homelab 'homelab-drift-check'       # 32 stacks match
 The timer runs at 08:30 with a ten-minute jitter, `Persistent=true` so a check
 missed while the VM was down runs on the way back up.
 
-## One trap worth knowing
+## Two traps worth knowing
 
 The manifest's checksum is taken from the file **as deployed**, with a `stat`
 on the host, not from the repository's copy. Ansible's `file` lookup strips a
 trailing newline, so hashing what it returns matches neither side, and the
 first version of this check cheerfully reported all 31 stacks as edited.
+
+The manifest carries no timestamp either. Embedding one made every converge
+report a change, which is exactly the kind of permanent noise that teaches
+people to stop reading `changed=`. The file's mtime is the deploy time, and it
+only moves when the deployed shape actually moves.

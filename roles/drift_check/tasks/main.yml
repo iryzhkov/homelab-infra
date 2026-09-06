@@ -5,15 +5,14 @@
 # Runs at the end of the same play that deploys the stacks, so the manifest
 # always describes the deploy that produced it.
 
-# site.yml does not gather facts, and this role needs two of them: the home
-# directory to install into, and the time to stamp the manifest with.
+# site.yml does not gather facts, and this role needs one: the home directory
+# to install into.
 - name: Gather the facts this role needs
   ansible.builtin.setup:
     gather_subset:
       - "!all"
       - "!min"
       - env
-      - date_time
 
 - name: Ensure the local directories exist
   ansible.builtin.file:
