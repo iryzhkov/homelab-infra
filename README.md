@@ -57,6 +57,10 @@ Traefik's dynamic configuration is generated from the same inventory since
 2026-09-06, so a service's backend address follows the host it runs on; see
 [docs/traefik-routing.md](docs/traefik-routing.md).
 
+The Backblaze backups were restored from for the first time on 2026-09-06 and
+the results, including what turned out not to be backed up at all, are in
+[docs/restore-test-2026-09-06.md](docs/restore-test-2026-09-06.md).
+
 homelab runs a daily drift check since 2026-09-06, comparing itself against
 what was last deployed to it and reporting into the fleet feed when it does
 not match; see [docs/drift-check.md](docs/drift-check.md).
