@@ -77,7 +77,11 @@ def check_stack(stack, running):
             if mode != "0o600":
                 yield f"{stack['name']}: {stack['env_file']} is mode {mode}, expected 0o600"
             found = env_keys(env_path)
-            if found != stack["env_keys"]:
+            # Compared as sets: the order a variable sits in an env file means
+            # nothing, and Jinja's sort filter is case-insensitive while
+            # Python's is not, so the two lists disagree on DB_DATA_LOCATION
+            # against DB_DATABASE_NAME while describing the same file.
+            if set(found) != set(stack["env_keys"]):
                 missing = sorted(set(stack["env_keys"]) - set(found))
                 extra = sorted(set(found) - set(stack["env_keys"]))
                 detail = ", ".join(
@@ -87,6 +91,10 @@ def check_stack(stack, running):
                     ) if part
                 )
                 yield f"{stack['name']}: {stack['env_file']} variables differ ({detail})"
+
+            duplicates = sorted({k for k in found if found.count(k) > 1})
+            if duplicates:
+                yield f"{stack['name']}: {stack['env_file']} defines {duplicates} more than once"
 
     for config in stack["config_files"]:
         if not os.path.isfile(os.path.join(directory, config)):

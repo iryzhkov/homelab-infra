@@ -9,6 +9,10 @@
 fleet_ssh_authorized:
   - homelab
 
+# The drift check runs here too: three stacks, and the feed client was
+# already installed.
+drift_check_enabled: true
+
 stacks:
   - name: cloudflare
     secrets: normandy-cloudflare

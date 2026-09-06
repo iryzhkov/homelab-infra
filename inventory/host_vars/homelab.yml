@@ -15,6 +15,11 @@ fleet_ssh_peers:
   - normandy
   - public-api
 
+# public-api cannot reach the feed from its VLAN, so homelab runs its check
+# over SSH and reports for both.
+drift_check_peers:
+  - public-api
+
 # The drift check runs here: homelab holds most of the fleet's stacks, and the
 # feed service it reports into runs on this host too.
 drift_check_enabled: true

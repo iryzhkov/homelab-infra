@@ -85,3 +85,9 @@ fleet_ssh_keys:
     comment: "homelab (ml-orchestrator)"
     key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDhU+leIj5YUWMbgyAD15iu4uvl7wfZaPWswPcp7Taiy"
     from: "192.168.70.223"
+
+# The fleet activity feed, which the drift check reports into. It runs as a
+# systemd service on homelab rather than as a Compose stack, so its address is
+# taken from the host rather than from a stack.
+feed_host: homelab
+feed_url: "http://{{ hostvars[feed_host].ansible_host }}:1934"

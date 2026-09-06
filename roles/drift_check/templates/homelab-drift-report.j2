@@ -14,19 +14,35 @@ trap 'rm -f "$output"' EXIT
 homelab-drift-check >"$output" 2>&1
 status=$?
 
+{% if drift_check_peers | default([]) %}
+# Hosts that cannot reach the feed themselves are checked from here over SSH.
+# public-api sits on the Public API VLAN, which is not permitted to reach the
+# feed on homelab, and opening that path so the edge proxy could write into a
+# LAN service would be a worse trade than pulling the answer from here.
+for peer in {{ drift_check_peers | join(' ') }}; do
+    peer_output=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$peer" \
+        '.local/bin/homelab-drift-check' 2>&1)
+    peer_status=$?
+    printf '\n%s:\n%s\n' "$peer" "$peer_output" >>"$output"
+    if [ "$peer_status" -ne 0 ] && [ "$status" -eq 0 ]; then
+        status=$peer_status
+    fi
+done
+{% endif %}
+
 case "$status" in
     0)
         cat "$output"
         ;;
     1)
         cat "$output"
-        feed post "configuration drift on $(hostname -s)" \
+        feed post "configuration drift on {{ drift_check_scope }}" \
             --severity warn --source drift-check --tag "drift infra" \
             --body-file "$output"
         ;;
     *)
         cat "$output" >&2
-        feed post "drift check could not run on $(hostname -s)" \
+        feed post "drift check could not run on {{ drift_check_scope }}" \
             --severity fail --source drift-check --tag "drift infra" \
             --body-file "$output"
         ;;

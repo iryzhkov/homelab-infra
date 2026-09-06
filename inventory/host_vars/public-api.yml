@@ -9,6 +9,15 @@
 fleet_ssh_authorized:
   - homelab
 
+# The drift check runs here as well. This host needed lingering enabled and
+# homelab-cli installed first, on 2026-09-06.
+drift_check_enabled: true
+# Checked, but not reporting: the Public API VLAN is not permitted to reach the
+# feed on homelab, and opening that path so the edge proxy could write into a
+# LAN service would be the wrong trade. homelab runs this host's check over SSH
+# and posts the result.
+drift_check_reports: false
+
 stacks:
   - name: traefik
     routes:

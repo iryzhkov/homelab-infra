@@ -41,16 +41,23 @@ itself against its own manifest, rather than one host reaching out to inspect
 the others. The role is host-agnostic, so covering another host is one
 `drift_check_enabled: true` in its `host_vars`.
 
-What each of them still needs first, checked 2026-09-06:
+Coverage as of 2026-09-06:
 
-| Host | Lingering | `feed` | Ready |
-|---|---|---|---|
-| normandy | yes | yes | yes |
-| public-api | no | no | needs both |
-| Black Pearl | no | no | needs both |
+| Host | Checked | Reports |
+|---|---|---|
+| homelab | itself, 32 stacks | its own findings and public-api's |
+| normandy | itself, 3 stacks | its own timer, its own feed post |
+| public-api | itself, 2 stacks | via homelab over SSH |
+| Black Pearl | not yet | — |
 
-A systemd user timer does not run without lingering, and the wrapper posts
-findings with `feed`.
+public-api does not report for itself on purpose. Its VLAN is not permitted to
+reach the feed on homelab, and opening that path so the edge proxy could write
+into a LAN service would be a worse trade than having homelab pull the answer.
+It therefore has the checker and its manifest but no timer, no feed token, and
+no feed configuration; `drift_check_reports: false` in its host_vars says so.
+
+Black Pearl needs `loginctl enable-linger` and homelab-cli before it can join,
+and homelab holds no key to it.
 
 ## Reporting
 
