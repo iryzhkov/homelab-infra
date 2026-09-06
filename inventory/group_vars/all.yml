@@ -37,17 +37,38 @@ traefik_static_files:
   - catchall.yml
 
 # AdGuard Home runs in three LXCs rather than as containers on a Docker host.
-# Only the origin is managed here: adguardhome-sync, a Compose stack on
-# homelab, propagates its configuration to the two replicas
-# (CT107 192.168.20.106 on proxmox-a, CT201 192.168.20.83 on proxmox-b, the
-# latter Alpine). Reference copies of both replicas' configurations are kept in
+# All three are listed because adguardhome-sync's configuration is generated
+# from this list, but only the origin's AdGuard configuration is deployed:
+# the sync propagates it to the replicas, and pushing to them here would fight
+# it. Reference copies of the replicas' configurations are kept in
 # roles/adguard/files/reference/ for a rebuild from scratch.
-adguard_origin:
-  node: proxmox-a
-  ctid: 100
-  ip: 192.168.20.154
+adguard_instances:
+  - name: ct100
+    role: origin
+    node: proxmox-a
+    ctid: 100
+    ip: 192.168.20.154
+  - name: ct107
+    role: replica
+    node: proxmox-a
+    ctid: 107
+    ip: 192.168.20.106
+  - name: ct201
+    role: replica
+    node: proxmox-b
+    ctid: 201
+    ip: 192.168.20.83     # Alpine, unlike the other two
+adguard_origin: "{{ adguard_instances | selectattr('role', 'equalto', 'origin') | first }}"
+adguard_replicas: "{{ adguard_instances | selectattr('role', 'equalto', 'replica') | list }}"
+adguard_web_port: 3000
 adguard_config_path: /opt/AdGuardHome/AdGuardHome.yaml
 adguard_binary: /opt/AdGuardHome/AdGuardHome
 # Resolved through the origin after a restart to prove it is still answering.
 # A name from the wildcard rewrite, so it also proves the rewrite survived.
 adguard_probe_name: vault.ryzhkov.dev
+
+# Where AdGuard's *.ryzhkov.dev wildcard points: whichever host runs Traefik.
+# This is the other half of the DNS story. Traefik's routing follows the host a
+# stack runs on; the name that reaches Traefik at all follows the host Traefik
+# runs on.
+edge_proxy_ip: "{{ hostvars[groups['edge_proxy'][0]].ansible_host }}"

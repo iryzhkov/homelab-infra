@@ -1,0 +1,55 @@
+{#
+  adguardhome-sync's configuration, generated from adguard_instances in
+  inventory/group_vars/all.yml.
+
+  The addresses of the origin and the replicas therefore come from the same
+  list the AdGuard role deploys from, rather than being written out twice.
+  Adding a fourth AdGuard instance is an entry in that list.
+
+  Credentials come from secrets/homelab-adguard-sync.sops.yaml. They are the
+  AdGuard admin login, used to read the origin's configuration and write it to
+  each replica.
+#}
+# Ansible managed, from stacks/adguard/templates/adguardhome-sync.yaml.j2.
+# Do not edit on the host: the next playbook run overwrites it.
+
+# Sync every two hours, and once at startup.
+cron: "0 */2 * * *"
+runOnStart: true
+continueOnError: false
+
+origin:
+  url: http://{{ adguard_origin.ip }}:{{ adguard_web_port }}
+  username: {{ stack_secrets.adguard_username }}
+  password: {{ stack_secrets.adguard_password }}
+
+replicas:
+{% for replica in adguard_replicas %}
+  # {{ replica.name }}, CT{{ replica.ctid }} on {{ replica.node }}
+  - url: http://{{ replica.ip }}:{{ adguard_web_port }}
+    username: {{ stack_secrets.adguard_username }}
+    password: {{ stack_secrets.adguard_password }}
+{% endfor %}
+
+api:
+  port: 8080
+  username: {{ stack_secrets.sync_api_username }}
+  password: {{ stack_secrets.sync_api_password }}
+  darkMode: true
+
+# Everything is synchronised, including the DNS rewrites that point
+# *.ryzhkov.dev at Traefik.
+features:
+  generalSettings: true
+  queryLogConfig: true
+  statsConfig: true
+  clientSettings: true
+  services: true
+  filters: true
+  dhcp:
+    serverConfig: true
+    staticLeases: true
+  dns:
+    serverConfig: true
+    accessLists: true
+    rewrites: true

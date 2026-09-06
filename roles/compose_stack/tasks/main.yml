@@ -10,6 +10,12 @@
 #   dir       optional; absolute deployment directory. Defaults to
 #             {{ stack_root }}/{{ name }}, and is spelled out where the running
 #             stack sits somewhere else, as hugo and immich do.
+#   write_env optional; set false for a stack whose secrets are used only by a
+#             config_template, so that no .env is written beside it.
+#   config_templates  optional; files the Compose file mounts, rendered from
+#             stacks/<source>/templates/. Each is {src, dest, mode}, and a
+#             change to one restarts the stack, because a bind-mounted file
+#             changing on disk does not.
 #   env_file  optional; the file the Compose file reads its variables from.
 #             Defaults to .env; immich reads stack.env.
 #   secrets   optional; base name of a file under secrets/, without the
@@ -29,6 +35,20 @@
   no_log: true
   when: stack.secrets is defined
 
+# Some stack directories are owned by root or by a container's own uid, from
+# before this repository existed. Writing into those needs sudo, which is
+# detected rather than declared per stack: a copy into a directory we cannot
+# write would otherwise fail only on the day the file actually changes.
+- name: Check whether the stack directory is ours to write
+  ansible.builtin.stat:
+    path: "{{ stack_dir }}"
+  register: stack_dir_stat
+  changed_when: false
+
+- name: Decide whether this stack needs sudo for its files
+  ansible.builtin.set_fact:
+    stack_needs_root: "{{ stack_dir_stat.stat.exists and not (stack_dir_stat.stat.writeable | default(true)) }}"
+
 # Neither the directory's mode nor the Compose file's is managed. The stack
 # directories predate this repository and some are root-owned (~/app/actual is,
 # for one), so asserting a mode fails on exactly the hosts we are adopting. The
@@ -42,6 +62,7 @@
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../stacks/{{ stack.source | default(stack.name) }}/docker-compose.yml"
     dest: "{{ stack_dir }}/docker-compose.yml"
+  become: "{{ stack_needs_root }}"
 
 - name: Install the environment file
   ansible.builtin.copy:
@@ -51,8 +72,30 @@
       {% endfor %}
     dest: "{{ stack_dir }}/{{ stack.env_file | default('.env') }}"
     mode: "0600"
+    # Written as root where the directory demands it, but owned by the user
+    # that runs docker compose, which has to read it.
+    owner: "{{ ansible_user }}"
+  become: "{{ stack_needs_root }}"
   no_log: true
-  when: stack.secrets is defined
+  when:
+    - stack.secrets is defined
+    - stack.write_env | default(true)
+
+# Configuration the Compose file mounts into a container. Kept separate from
+# the Compose file because a change here does not recreate anything: the
+# container has to be restarted for it to be re-read.
+- name: Install mounted configuration files
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../stacks/{{ stack.source | default(stack.name) }}/templates/{{ item.src }}"
+    dest: "{{ stack_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode | default('0644') }}"
+  become: "{{ stack_needs_root }}"
+  # These render secrets; a --diff run would otherwise print them.
+  no_log: true
+  loop: "{{ stack.config_templates | default([]) }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  register: stack_config_files
 
 # Compose reads .env for interpolation on its own, but a stack that keeps its
 # variables somewhere else needs --env-file, or every ${VAR} in the Compose
@@ -64,3 +107,11 @@
     env_files: "{{ [stack.env_file] if stack.env_file | default('.env') != '.env' else omit }}"
     state: present
     pull: never
+
+- name: Restart the stack when a mounted configuration file changed
+  community.docker.docker_compose_v2:
+    project_src: "{{ stack_dir }}"
+    project_name: "{{ stack.name }}"
+    env_files: "{{ [stack.env_file] if stack.env_file | default('.env') != '.env' else omit }}"
+    state: restarted
+  when: stack_config_files is changed

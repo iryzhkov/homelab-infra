@@ -15,9 +15,24 @@ stacks:
       - host: budget.ryzhkov.dev
         port: 5006
   - name: adguard
+    # adguardhome-sync, not AdGuard itself: it copies the origin LXC's
+    # configuration to the two replicas. Its config file names all three, and
+    # is generated from adguard_instances so the addresses are stated once.
     routes:
       - host: dns-sync.ryzhkov.dev
         port: 8321
+    config_templates:
+      - src: adguardhome-sync.yaml.j2
+        dest: adguardhome-sync.yaml
+        # World-readable because the container runs as uid 1001 and has to read
+        # it; it was mode 777 before this repository took it over. The
+        # credentials in it are the reason to move them to environment
+        # variables one day.
+        mode: "0644"
+    secrets: homelab-adguard-sync
+    # The credentials are used by the template above, not by Compose, so there
+    # is no reason to write them a second time into a .env.
+    write_env: false
   - name: authentik
     routes:
       - host: auth.ryzhkov.dev

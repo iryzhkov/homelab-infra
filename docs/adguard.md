@@ -53,6 +53,29 @@ change went through steps 5 to 7 and was reverted the same way.
 Step 6 earns its wait: without it the probe hit a connection refused a second
 after the restart and rolled back a change that was perfectly good.
 
+## The two addresses that are derived, not written twice
+
+DNS and routing point at each other, and both directions now come from the
+inventory rather than from a literal typed into a file:
+
+- **AdGuard's `*.ryzhkov.dev` rewrite** answers with the address of whichever
+  host is in the `edge_proxy` group — Traefik's host. If Traefik moves, the
+  name that reaches it moves with it. Rendering this from the inventory
+  reproduced the live configuration byte for byte, which is how the derivation
+  was checked.
+- **adguardhome-sync's origin and replica URLs** come from `adguard_instances`,
+  the same list the AdGuard role deploys from. Adding a fourth AdGuard instance
+  is one entry in that list rather than an edit in two places.
+
+The sync configuration is a `config_templates` entry on the `adguard` stack.
+Compose does not notice a bind-mounted file changing, so `compose_stack`
+restarts the project when one of these files changes, which the sync log
+confirms with a full run to both replicas on startup.
+
+That log also explains a difference noted earlier between origin and replicas:
+the sync itself disables `use_private_ptr_resolvers` on a replica, because no
+private reverse DNS servers are configured there.
+
 ## The secret
 
 The file's only secret is the admin password hash, which lives in
@@ -60,6 +83,16 @@ The file's only secret is the admin password hash, which lives in
 else — upstreams, blocklists, the `*.ryzhkov.dev` rewrite, the allowlist rules —
 stays readable in git, which is the point: those are the lines worth seeing in a
 diff.
+
+## Still worth fixing
+
+`adguardhome-sync.yaml` holds the AdGuard admin credentials in a file the
+container has to read as uid 1001, so it is world-readable — mode 0644, down
+from the 0777 it had before. adguardhome-sync can take those credentials from
+environment variables instead, which would let them live in a `.env` at mode
+0600 like every other stack's secrets. That change was not made blind: the
+image's help output does not document the variable names, and guessing them
+would break DNS synchronisation silently.
 
 ## What this does not cover
 
