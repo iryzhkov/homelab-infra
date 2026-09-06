@@ -115,3 +115,27 @@ a `.env` beside it. There are 8 such files: `dsh`, `authentik`, `obsidian`,
   place, so that they are only ever written to this repository encrypted.
 - **UniFi, AdGuard LXCs, Home Assistant.** Out of scope for the first pass. Home
   Assistant's `/config` is already its own git repository.
+
+## Adoption, completed 2026-09-06
+
+Every stack listed above is now deployed from this repository, and the findings
+that described missing or hidden definitions are resolved:
+
+- Black Pearl's torrent stack came out of the Portainer volume and runs from
+  `~/apps/torrent`.
+- flaresolverr, the last container with no Compose project, was removed and
+  recreated as one.
+- Each host's `diun` keeps its own copy under `stacks/`, because the three
+  hosts' files genuinely differ.
+- immich on normandy keeps its upstream layout: project directory
+  `immich-stack`, variables in `stack.env`. Compose needs `--env-file` for
+  that, or every `${VAR}` in its Compose file resolves to an empty string.
+
+Adopting 38 projects recreated 15 containers once each, a few seconds apiece:
+adguardhome-sync, Autobrr, cv-site, dsh, Emby, forgejo, Kiwix, komga, Kuma,
+Lidarr, miniflux-db, openviking, Radarr, and earlier authentik's server and
+worker with obsidian-livesync. The cause was not this repository's copies —
+those are byte-identical to what was on disk, verified by hash — but a config
+hash those containers carried from an earlier Compose invocation. Everything
+else, including Traefik on the edge proxy, was adopted with no restart at all.
+All 17 public hostnames answered afterwards.

@@ -1,0 +1,27 @@
+services:
+  frigate:
+    container_name: frigate
+    image: ghcr.io/blakeblackshear/frigate:stable
+    restart: unless-stopped
+    stop_grace_period: 30s
+    shm_size: "512mb"
+    env_file: .env
+    environment:
+      # Frigate polls vainfo on the default render node, which is the virtio-gpu
+      # in this VM; point its libva at the Intel driver and the right device.
+      LIBVA_DRIVER_NAME: iHD
+      LIBVA_DEVICE: /dev/dri/igpu-render
+    volumes:
+      - ./config:/config
+      - /mnt/data/frigate/media:/media/frigate
+      - /etc/localtime:/etc/localtime:ro
+      # Bind-mounted so the /dev/dri/igpu-render symlink survives into the
+      # container; libva rejects a render node renamed to a different minor.
+      - /dev/dri:/dev/dri
+    device_cgroup_rules:
+      - 'c 226:* rmw'
+    tmpfs:
+      - /tmp/cache:size=1000000000
+    ports:
+      - '192.168.70.234:5000:5000'    # unauthenticated API, for the HA integration
+      - '192.168.70.234:8971:8971'    # authenticated web UI

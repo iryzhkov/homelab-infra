@@ -1,7 +1,9 @@
 ---
-# Adopted 2026-09-06 out of the removed Portainer's volume; see
-# playbooks/adopt-torrent.yml for the one-time teardown of the old project.
+# Adopted 2026-09-06; the torrent stack came out of the removed Portainer's
+# volume, see playbooks/adopt-torrent.yml for the one-time teardown.
 
 stacks:
   - name: torrent
     secrets: blackpearl-torrent
+  - name: diun
+    source: diun-blackpearl

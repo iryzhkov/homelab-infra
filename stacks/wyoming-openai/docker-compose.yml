@@ -1,0 +1,21 @@
+# Wyoming-to-OpenAI proxy for Home Assistant Assist speech-to-text.
+#
+# Replaces the old wyoming-whisper container (still in ~/app/wyoming-whisper
+# for rollback). Instead of running its own CPU whisper model, this forwards
+# audio to https://whisper.ryzhkov.dev/v1/audio/transcriptions, which Traefik
+# rewrites to whisper.cpp /inference and routes to the gaming-pc RTX 4090
+# (large-v3-turbo), falling back to the CPU whisper-server on this host when
+# that box is off. Same host:port as before, so Home Assistant needed no
+# reconfiguration. The backends are unauthenticated; the key is a placeholder
+# the OpenAI client library requires.
+services:
+  wyoming-openai:
+    image: ghcr.io/roryeckel/wyoming_openai:latest
+    container_name: wyoming-openai
+    restart: unless-stopped
+    environment:
+      STT_OPENAI_KEY: unused
+      STT_OPENAI_URL: https://whisper.ryzhkov.dev/v1
+      STT_MODELS: whisper-1
+    ports:
+      - "192.168.70.223:10300:10300"

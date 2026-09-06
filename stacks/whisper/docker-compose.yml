@@ -1,0 +1,42 @@
+# Fallback transcription server.
+#
+# gaming-pc (RTX 4090, CUDA) is the primary and answers in about 90ms; Traefik
+# fails over here when it is asleep or rebooting. This box has no usable GPU for
+# whisper -- the passed-through UHD 770 would need a Vulkan or SYCL build -- so
+# it runs on four CPU cores. That is why the model is small.en rather than the
+# large-v3-turbo used on gaming-pc: large would be roughly realtime here, which
+# is too slow to dictate against. Accuracy drops on the fallback path; speed is
+# what makes it usable at all.
+#
+# Same /inference API as gaming-pc, so Traefik can swap between them without the
+# client noticing anything except latency.
+
+services:
+  whisper:
+    # Built here rather than pulled. Upstream's ghcr.io/ggml-org/whisper.cpp:main
+    # is compiled with GGML_NATIVE=ON on a CI machine that has AVX-512 and AMX, so
+    # its libggml-cpu carries AVX-512 instructions in ordinary code and dies with
+    # SIGILL on this VM's Alder Lake CPU, which has neither. The Dockerfile next to
+    # this file turns GGML_NATIVE off and builds one CPU backend per instruction-set
+    # level, which ggml picks between at startup.
+    #
+    # Rebuild against current upstream with:
+    #   docker compose build --no-cache && docker compose up -d
+    image: whisper-cpp-dispatch:local
+    build:
+      context: .
+      args:
+        WHISPER_REF: master
+    container_name: whisper-server
+    restart: unless-stopped
+    entrypoint: ["bash", "-c"]
+    command:
+      - /app/build/bin/whisper-server
+        --model /models/ggml-small.en.bin
+        --host 0.0.0.0
+        --port 8080
+        --threads 4
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "192.168.70.223:8080:8080"

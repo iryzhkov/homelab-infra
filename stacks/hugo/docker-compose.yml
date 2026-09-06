@@ -1,0 +1,18 @@
+# Serves the built site. The public directory is produced by build.sh, which
+# syncs into it rather than replacing it so that this bind mount stays valid.
+#
+# The project name is pinned because this file moved into the blog repository
+# from ~/app/hugo, and Compose would otherwise derive a new project name from
+# the new directory and lose track of the running container.
+name: hugo
+
+services:
+  hugo-frontend:
+    image: nginx:latest
+    container_name: hugo-frontend
+    restart: unless-stopped
+    ports:
+      - "4580:80"
+    volumes:
+      - /home/iryzhkov/app/hugo/blog/public:/usr/share/nginx/html:ro
+      - /home/iryzhkov/app/hugo/blog/deploy/nginx-gzip.conf:/etc/nginx/conf.d/00-gzip.conf:ro

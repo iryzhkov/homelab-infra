@@ -3,13 +3,21 @@
 # rendered into a .env beside it.
 #
 # Takes one variable, `stack`, a dict:
-#   name      directory under stacks/, and the Compose project name
+#   name      the Compose project name
+#   source    optional; directory under stacks/ holding the Compose file.
+#             Defaults to name, and is spelled out where one project name is
+#             used by several hosts with different files, as `diun` is.
+#   dir       optional; absolute deployment directory. Defaults to
+#             {{ stack_root }}/{{ name }}, and is spelled out where the running
+#             stack sits somewhere else, as hugo and immich do.
+#   env_file  optional; the file the Compose file reads its variables from.
+#             Defaults to .env; immich reads stack.env.
 #   secrets   optional; base name of a file under secrets/, without the
 #             .sops.yaml suffix. Its keys are environment variable names and
 #             become the .env verbatim.
 #
-# The stack lands in {{ stack_root }}/{{ stack.name }}, where stack_root is a
-# per-host inventory variable because the hosts disagree about ~/app vs ~/apps.
+# stack_root is a per-host inventory variable because the hosts disagree about
+# ~/app and ~/apps.
 #
 # Secrets are decrypted on the controller, never on the managed host.
 
@@ -27,13 +35,13 @@
 # .env below is the file whose mode matters, and Ansible creates that one.
 - name: Ensure the stack directory exists
   ansible.builtin.file:
-    path: "{{ stack_root }}/{{ stack.name }}"
+    path: "{{ stack_dir }}"
     state: directory
 
 - name: Install the Compose file
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../stacks/{{ stack.name }}/docker-compose.yml"
-    dest: "{{ stack_root }}/{{ stack.name }}/docker-compose.yml"
+    src: "{{ playbook_dir }}/../stacks/{{ stack.source | default(stack.name) }}/docker-compose.yml"
+    dest: "{{ stack_dir }}/docker-compose.yml"
 
 - name: Install the environment file
   ansible.builtin.copy:
@@ -41,14 +49,18 @@
       {% for key, value in stack_secrets | dictsort %}
       {{ key }}={{ value }}
       {% endfor %}
-    dest: "{{ stack_root }}/{{ stack.name }}/.env"
+    dest: "{{ stack_dir }}/{{ stack.env_file | default('.env') }}"
     mode: "0600"
   no_log: true
   when: stack.secrets is defined
 
+# Compose reads .env for interpolation on its own, but a stack that keeps its
+# variables somewhere else needs --env-file, or every ${VAR} in the Compose
+# file resolves to an empty string. immich is the one that does.
 - name: Bring the stack up
   community.docker.docker_compose_v2:
-    project_src: "{{ stack_root }}/{{ stack.name }}"
+    project_src: "{{ stack_dir }}"
     project_name: "{{ stack.name }}"
+    env_files: "{{ [stack.env_file] if stack.env_file | default('.env') != '.env' else omit }}"
     state: present
     pull: never

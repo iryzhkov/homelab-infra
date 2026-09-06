@@ -1,0 +1,11 @@
+services:
+  lidarr:
+    image: linuxserver/lidarr:latest
+    container_name: Lidarr
+    restart: always
+    ports:
+      - "8686:8686"
+    volumes:
+      - /home/iryzhkov/app/lidarr-music:/config
+      - /mnt/shared:/mnt/shared
+      - /mnt/shared/media/music:/music

@@ -1,0 +1,5 @@
+---
+# Where the stack is deployed. A stack overrides it with `dir` when the running
+# project sits outside the host's usual stack root, as hugo
+# (~/app/hugo/blog/deploy) and cv-site (~/cv-site) do.
+stack_dir: "{{ stack.dir | default(stack_root ~ '/' ~ stack.name) }}"

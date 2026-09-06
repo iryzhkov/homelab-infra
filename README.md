@@ -28,20 +28,29 @@ docs/                 findings and decisions
 
 ## Status
 
-Phase 0 is done: every host answers, the current state is captured in
+Every container on every Docker host is now deployed from this repository.
+As of 2026-09-06: 38 containers on homelab, 6 on normandy, 4 on Black Pearl and
+2 on public-api, across 38 Compose projects, all of them Compose-managed and
+all of them listed in `inventory/host_vars/`. `ansible-playbook
+playbooks/site.yml` reports no changes on a converged fleet.
+
+The current state at the moment of adoption is captured in
 [docs/current-state.md](docs/current-state.md), and the Cloudflare tunnel
-configuration — which existed nowhere but the dashboard — is in
+configuration — which existed nowhere but the dashboard — in
 [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md).
 
-First stack adopted, 2026-09-06: Black Pearl's torrent stack, which had been
-running as Compose project `1` out of a deleted Portainer's volume. It now runs
-as project `torrent` from `~/apps/torrent`, deployed by
-`playbooks/adopt-torrent.yml`, with its credentials in
-`secrets/blackpearl-torrent.sops.yaml`. A second run reports no changes.
+Two stacks needed a one-time playbook before Compose could own them, and both
+are kept because a restore from an older backup would need them again:
 
-Next: the remaining stacks, host by host. Those already have Compose files on
-disk, so each adoption should be a pure no-op — the repository copy simply
-takes over a file that already matches.
+- `playbooks/adopt-torrent.yml` — Black Pearl's torrent stack ran as project
+  `1` out of a deleted Portainer's volume, and had to be torn down before it
+  could come back as `torrent` from `~/apps/torrent`.
+- `playbooks/adopt-flaresolverr.yml` — flaresolverr ran from `docker run` with
+  no Compose labels, so Compose could not take the container name over until it
+  was removed.
+
+Next: generate Traefik's dynamic configuration from the same inventory, so that
+moving a service between hosts changes one line rather than a routing file.
 
 ## Secrets
 

@@ -1,0 +1,10 @@
+services:
+  komga:
+    image: gotson/komga
+    container_name: komga
+    restart: unless-stopped
+    ports:
+      - "25600:25600"
+    volumes:
+      - /home/iryzhkov/app/komga:/config
+      - /mnt/shared/media/manga:/data

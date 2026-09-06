@@ -1,0 +1,35 @@
+---
+# One-time adoption of flaresolverr on homelab.
+#
+# It was started with `docker run` and carries no Compose labels, so Compose
+# cannot take it over: `up -d` would try to create a second container with the
+# same name and fail. The container has to be removed first. Nothing is lost —
+# flaresolverr holds no state, and its Compose file was reconstructed from this
+# very container on 2026-08-30 and verified byte-identical since.
+#
+# Prowlarr calls it as an indexer proxy on port 8191 and will see a few seconds
+# of connection failures, which it retries.
+#
+# Run this once, then playbooks/site.yml -l homelab -e only=flaresolverr.
+
+- name: Remove the label-less flaresolverr container
+  hosts: homelab
+  gather_facts: false
+
+  tasks:
+    - name: List the containers Compose already manages
+      # Asking docker inspect for one label needs quotes inside the --format
+      # argument, which the command module's shlex parsing strips; filtering on
+      # the label instead keeps the argument quote-free.
+      ansible.builtin.command:
+        cmd: >-
+          docker ps -a --filter label=com.docker.compose.project
+          --format {{ '{{' }}.Names{{ '}}' }}
+      register: compose_managed
+      changed_when: false
+
+    - name: Remove the container when it predates Compose
+      ansible.builtin.command:
+        cmd: docker rm -f flaresolverr
+      when: "'flaresolverr' not in compose_managed.stdout_lines"
+      changed_when: true

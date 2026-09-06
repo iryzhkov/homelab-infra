@@ -1,0 +1,37 @@
+services:
+  dsh:
+    build: .
+    container_name: dsh
+    restart: unless-stopped
+    ports:
+      # Bound to all interfaces so Traefik on public-api (192.168.20.33)
+      # can route ai.ryzhkov.dev -> 192.168.70.223:7100 (same route shai used).
+      - "7100:7100"
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?missing}
+      # OV CLI config — written into /root/.openviking/ovcli.conf at boot
+      # (same pattern the opencode container used).
+      OV_URL: ${OV_URL:-http://192.168.70.223:1933}
+      OV_API_KEY: ${OV_API_KEY:-}
+      DSH_HOME: /root/.dsh
+      npm_config_cache: /data/npm-cache
+    volumes:
+      # /root/.dsh holds profiles (plugins, cordis config) and storages
+      # (sessions/workspaces). Bind-mounted so state survives image bumps.
+      - ./data/dsh-home:/root/.dsh
+      - ./data:/data
+      # Agent workspace on the NAS (dedicated subdir of the ml share —
+      # deliberately NOT the whole share; this is the only NAS path the
+      # agent can touch). Overlays the local ./data/workspace.
+      - /mnt/nas/ml/dsh-workspace:/data/workspace
+      # Docker control of sibling containers. NOTE: the socket is
+      # root-equivalent on this host — with it, the container boundary is
+      # convenience, not a security boundary.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # App compose files at the SAME path as on the host: compose resolves
+      # relative bind paths ("./data") CLI-side, so path parity is required
+      # for in-container `docker compose up -d` to recreate services with
+      # correct mounts.
+      - /home/iryzhkov/app:/home/iryzhkov/app
+      - ./start.sh:/start.sh:ro
+    command: bash /start.sh

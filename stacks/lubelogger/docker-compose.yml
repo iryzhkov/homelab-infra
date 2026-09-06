@@ -1,0 +1,19 @@
+services:
+  lubelogger:
+    image: ghcr.io/hargata/lubelogger:latest
+    container_name: lubelogger
+    restart: unless-stopped
+    ports:
+      - "8095:8080"
+    environment:
+      - TZ=US/Pacific
+      - LC_ALL=en_US.UTF-8
+    volumes:
+      - ./config:/App/config
+      - ./data:/App/data
+      - ./documents:/App/wwwroot/documents
+      - ./images:/App/wwwroot/images
+      - ./temp:/App/wwwroot/temp
+      - ./translations:/App/wwwroot/translations
+      - ./log:/App/log
+      - ./keys:/root/.aspnet/DataProtection-Keys

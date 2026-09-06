@@ -1,0 +1,11 @@
+services:
+  sonarr:
+    image: linuxserver/sonarr:latest
+    container_name: Sonarr
+    restart: always
+    ports:
+      - "8989:8989"
+    volumes:
+      - /home/iryzhkov/app/sonarr-tv:/config
+      - /mnt/shared:/mnt/shared
+      - "/mnt/shared/media/tv shows:/tv"

@@ -1,0 +1,11 @@
+services:
+  radarr:
+    image: linuxserver/radarr:latest
+    container_name: Radarr
+    restart: always
+    ports:
+      - "7878:7878"
+    volumes:
+      - /home/iryzhkov/app/radarr-movie:/config
+      - /mnt/shared:/mnt/shared
+      - /mnt/shared/media/movies:/movies

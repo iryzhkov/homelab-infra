@@ -1,0 +1,17 @@
+services:
+  emby:
+    image: emby/embyserver:latest
+    container_name: Emby
+    restart: always
+    devices:
+      - /dev/dri:/dev/dri
+    ports:
+      - "8096:8096"
+      - "8920:8920"
+    volumes:
+      - /home/iryzhkov/app/emby:/config
+      - /mnt/shared:/mnt/shared
+    environment:
+      - UID=1000
+      - GID=1000
+      - GIDLIST=1000,105,44

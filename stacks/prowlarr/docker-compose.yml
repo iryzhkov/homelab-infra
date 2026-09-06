@@ -1,0 +1,10 @@
+services:
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: Prowlarr
+    restart: always
+    ports:
+      - "9696:9696"
+    volumes:
+      - /home/iryzhkov/app/prowlarr:/config
+      - /mnt/shared:/mnt/shared

@@ -1,0 +1,26 @@
+# Reconstructed on 2026-08-30 from the running container, which had been started
+# with `docker run` and had no compose file. Kept faithful to the running config:
+# `network_mode: bridge` preserves the default bridge the container is on rather
+# than letting Compose create a `traefik_default` network.
+#
+# Secrets live in .env (mode 600) next to this file, not here.
+
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: unless-stopped
+    network_mode: bridge
+    environment:
+      TZ: America/Los_Angeles
+      CF_API_EMAIL: ${CF_API_EMAIL:?set CF_API_EMAIL in .env}
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN:?set CF_DNS_API_TOKEN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/traefik.yml:ro
+      - ./file_provider:/file_provider:ro
+      - ./certs:/certs

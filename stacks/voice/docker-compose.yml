@@ -1,0 +1,13 @@
+# voice.ryzhkov.dev — browser voice transcription front end.
+# Static single-page site plus Caddy proxies to whisper.ryzhkov.dev and
+# gaming-pc's ollama; routed by Traefik on public-api (voice.yml).
+services:
+  voice:
+    image: caddy:2-alpine
+    container_name: voice
+    restart: unless-stopped
+    ports:
+      - "8097:8097"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./site:/srv:ro

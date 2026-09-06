@@ -1,0 +1,12 @@
+services:
+  bazarr:
+    image: linuxserver/bazarr:latest
+    container_name: Bazarr
+    restart: always
+    ports:
+      - "6767:6767"
+    volumes:
+      - /home/iryzhkov/app/bazarr:/config
+      - /mnt/shared:/mnt/shared
+      - "/mnt/shared/media/tv shows:/tv"
+      - /mnt/shared/media/movies:/movies

@@ -1,0 +1,24 @@
+# Reconstructed on 2026-08-30 from the running container, which had been started
+# with `docker run` and had no compose file or directory of its own.
+#
+# `network_mode: bridge` preserves the default bridge the container sits on, rather
+# than letting Compose create a new flaresolverr_default network.
+#
+# Only LOG_LEVEL and TZ were set by hand. Every other variable in the running
+# container comes from the image itself and is deliberately not repeated here.
+#
+# Prowlarr uses this as an indexer proxy at http://<host>:8191. That is configured
+# inside the Prowlarr database, not by environment variable, so nothing in the
+# other compose files refers to it.
+
+services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    network_mode: bridge
+    environment:
+      LOG_LEVEL: info
+      TZ: America/Los_Angeles
+    ports:
+      - "8191:8191"

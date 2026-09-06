@@ -1,0 +1,11 @@
+---
+# Adopted 2026-09-06.
+#
+# Every host runs its own diun with a different Compose file, so each keeps its
+# own directory under stacks/ and names it with `source`.
+
+stacks:
+  - name: traefik
+    secrets: public-api-traefik
+  - name: diun
+    source: diun-public-api

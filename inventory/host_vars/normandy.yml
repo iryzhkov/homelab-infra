@@ -1,0 +1,15 @@
+---
+# Adopted 2026-09-06.
+#
+# immich keeps its upstream layout: the project directory is immich-stack and
+# the Compose file reads stack.env rather than .env.
+
+stacks:
+  - name: cloudflare
+    secrets: normandy-cloudflare
+  - name: frigate
+    secrets: normandy-frigate
+  - name: immich
+    dir: /home/igor/app/immich-stack
+    env_file: stack.env
+    secrets: normandy-immich

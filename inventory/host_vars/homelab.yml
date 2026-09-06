@@ -1,14 +1,53 @@
 ---
-# Stacks this repository owns on homelab. The list grows as stacks are adopted;
-# a stack that is not listed here is still hand-managed on the host.
+# Every Compose project running on homelab, adopted 2026-09-06.
 #
-# Adopted 2026-09-06: the four services the cloud standby will need to carry.
+# `dir` appears where the running project is not at stack_root/<name>:
+# cv-site lives outside ~/app entirely, and hugo's project directory is the
+# deploy subdirectory of the blog checkout.
+#
+# flaresolverr needed playbooks/adopt-flaresolverr.yml first: it ran from
+# `docker run` with no Compose labels, so the container had to be removed
+# before Compose could own the name.
 
 stacks:
-  - name: vaultwarden
-    secrets: homelab-vaultwarden
+  - name: actual
+  - name: adguard
   - name: authentik
     secrets: homelab-authentik
-  - name: actual
+  - name: autobrr
+  - name: bazarr
+  - name: cloudflare
+    secrets: homelab-cloudflare
+  - name: cv-site
+    dir: /home/iryzhkov/cv-site
+    secrets: homelab-cv-site
+  - name: dsh
+    secrets: homelab-dsh
+  - name: emby
+  - name: excalidraw
+  - name: flaresolverr
+  - name: forgejo
+  - name: hugo
+    dir: /home/iryzhkov/app/hugo/blog/deploy
+  - name: kiwix
+  - name: komga
+  - name: kuma
+  - name: librespeed
+  - name: lidarr-music
+  - name: logging
+    secrets: homelab-logging
+  - name: lubelogger
+  - name: miniflux
   - name: obsidian
     secrets: homelab-obsidian
+  - name: ombi
+  - name: openviking
+  - name: prowlarr
+  - name: radarr-movie
+  - name: sonarr-tv
+  - name: thelounge
+  - name: vaultwarden
+    secrets: homelab-vaultwarden
+  - name: voice
+  - name: whisper
+  - name: wyoming-openai

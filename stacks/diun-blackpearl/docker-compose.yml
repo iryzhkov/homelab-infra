@@ -1,0 +1,20 @@
+services:
+  diun:
+    image: crazymax/diun:latest
+    container_name: diun
+    hostname: blackpearl
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - diun-data:/data
+    environment:
+      - DIUN_WATCH_SCHEDULE=0 9 * * 1
+      - DIUN_WATCH_FIRSTCHECKNOTIF=true
+      - DIUN_PROVIDERS_DOCKER=true
+      - DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=true
+      - DIUN_NOTIF_WEBHOOK_ENDPOINT=http://192.168.70.223:8090/webhook
+      - DIUN_NOTIF_WEBHOOK_METHOD=POST
+      - DIUN_NOTIF_WEBHOOK_HEADERS_CONTENT-TYPE=application/json
+    restart: unless-stopped
+
+volumes:
+  diun-data:

@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    container_name: cv-site
+    ports:
+      - "8091:8091"
+    environment:
+      - PORT=8091
+      - OLLAMA_URL=http://192.168.70.223:8080
+      - ADMIN_KEY=${ADMIN_KEY:-changeme}
+      - DISCORD_WEBHOOK=${DISCORD_WEBHOOK}
+      - IMMICH_URL=${IMMICH_URL}
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+      - IMMICH_ALBUM_ID=${IMMICH_ALBUM_ID}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
