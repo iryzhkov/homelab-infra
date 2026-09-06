@@ -1,0 +1,16 @@
+---
+# Connectivity and interpreter check. Run this first after touching the
+# inventory: it proves SSH, sudo and the Python interpreter on every host
+# before any playbook tries to change something.
+- name: Check that every managed host answers
+  hosts: docker_hosts:hypervisors:cloud
+  gather_facts: true
+  tasks:
+    - name: Report identity
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ ansible_distribution }} {{ ansible_distribution_version }},
+          python {{ ansible_python_version }},
+          {{ ansible_processor_vcpus }} vcpu,
+          {{ ansible_memtotal_mb }} MB

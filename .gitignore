@@ -1,0 +1,4 @@
+snapshot/
+secrets/*.env
+*.decrypted
+.venv/
