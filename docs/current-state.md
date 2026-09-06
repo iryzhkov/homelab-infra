@@ -41,13 +41,22 @@ the only stack directory that is a git repository. Every other Compose file,
 Traefik route and helper script exists in exactly one place, on the host that
 runs it.
 
-**Black Pearl's torrent stack has no Compose file on disk.** `gt-qb`,
-`1-gluetun-1` and `1-gluetun-qbittorrent-port-manager-1` run from
+**Black Pearl's torrent stack is Compose-managed, but its Compose file is not
+where anyone would look for it.** `gt-qb`, `1-gluetun-1` and
+`1-gluetun-qbittorrent-port-manager-1` run from
 `/var/lib/docker/volumes/portainer_data/_data/compose/1/docker-compose.yml`,
-which is root-owned, inside a volume belonging to a Portainer that was removed
-in the 2026-08-30 cleanup. An ordinary sweep of the home directory does not see
-it, and a rebuild of that VM would lose it. `scripts/snapshot.sh` now captures
-it explicitly.
+inside a volume belonging to a Portainer that was removed in the 2026-08-30
+cleanup. The directory is mode 700 and root-owned, so the file cannot even be
+read as `iryzhkov`. Consequences: the home directory holds only the stack's
+bind-mounted data (`~/app/gluetun`, `~/app/qbittorrent`), the definition is
+outside every backup job, and the VPN credentials sit inline in
+`environment:` rather than in a `.env`. `scripts/snapshot.sh` now captures the
+file explicitly over sudo.
+
+Every other container on every other host does trace to a Compose file in a
+normal home directory. Verified 2026-09-06 by resolving each container's
+`com.docker.compose.project.working_dir` label and checking for a Compose file
+there: 31 projects on homelab, 2 on public-api, 3 on normandy, all present.
 
 **The same is true, less urgently, on public-api.** Its Portainer volume still
 holds the pre-2026-08-30 Traefik Compose file. It differs from what runs today:
