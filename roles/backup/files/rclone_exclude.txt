@@ -36,3 +36,12 @@ encoded-video/**
 # Immich's own database dumps. pg_backup.sh on normandy covers that database,
 # Immich prunes these to 14 locally, and rclone copy had kept 371 of them.
 immich-db-backup-*
+# The old Immich Postgres data directory, kept on the host as a rollback path
+# for the 2026-08-30 move to normandy. 1.6 GB of a database that has been
+# running somewhere else for a week, and that normandy dumps properly.
+# Matches ~/app/immich only: the Immich data job's root is the library itself,
+# whose paths start with library/, upload/ and so on.
+immich/**
+immich-stack/**
+# Left from the abandoned 2026-05 cloud failover project.
+cloud-sync-stage/**
