@@ -16,3 +16,23 @@ _archive/shai/data/**
 # 200 MB InfluxDB archive in the bucket.
 backups/sqlite/**
 backups/influxdb/**
+
+# Regenerable or duplicated data, excluded after the 2026-09-06 audit of what
+# the bucket actually holds. Patterns match at any depth, and are chosen so
+# they cannot collide with another job's root: this one file is used by the
+# ~/app, ~/apps, ~/cv-site and /mnt/shared/immich jobs.
+#
+# rclone has no trailing comments in a filter file, so every note here is on a
+# line of its own. A pattern with a comment after it becomes part of the
+# pattern and silently matches nothing.
+#
+# dsh's npm cache: 31k files, about 1 GB, rebuilt on demand.
+**/npm-cache/**
+# Emby sync conversions: 5.9 GB of transcodes of files we already hold.
+emby/sync/**
+# Immich thumbnails and transcodes, both regenerated from the originals.
+thumbs/**
+encoded-video/**
+# Immich's own database dumps. pg_backup.sh on normandy covers that database,
+# Immich prunes these to 14 locally, and rclone copy had kept 371 of them.
+immich-db-backup-*
