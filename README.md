@@ -28,13 +28,37 @@ docs/                 findings and decisions
 
 ## Status
 
-Phase 0 is done: every host answers, and the current state is captured and
-written up in [docs/current-state.md](docs/current-state.md). No host has been
-changed by this repository yet.
+Phase 0 is done: every host answers, the current state is captured in
+[docs/current-state.md](docs/current-state.md), and the Cloudflare tunnel
+configuration — which existed nowhere but the dashboard — is in
+[docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md).
 
-Next: adopt the Compose stacks one at a time, proving each with
-`--check` and a no-op `docker compose up -d`, starting with the ones that have
-no Compose file on disk at all.
+First stack adopted, 2026-09-06: Black Pearl's torrent stack, which had been
+running as Compose project `1` out of a deleted Portainer's volume. It now runs
+as project `torrent` from `~/apps/torrent`, deployed by
+`playbooks/adopt-torrent.yml`, with its credentials in
+`secrets/blackpearl-torrent.sops.yaml`. A second run reports no changes.
+
+Next: the remaining stacks, host by host. Those already have Compose files on
+disk, so each adoption should be a pure no-op — the repository copy simply
+takes over a file that already matches.
+
+## Secrets
+
+Encrypted with [SOPS](https://github.com/getsops/sops) to an age key, one file
+per stack under `secrets/`. The recipient is in `.sops.yaml`; the private key is
+at `~/.config/sops/age/keys.txt` on the laptop, with a copy in the GNOME keyring
+under `service=sops-age, account=homelab-infra`.
+
+```sh
+sops secrets/blackpearl-torrent.sops.yaml     # edit, re-encrypting on save
+sops -d secrets/blackpearl-torrent.sops.yaml  # read
+```
+
+Playbooks decrypt on the controller with `community.sops.load_vars` and render
+the values into a `.env` beside the stack's Compose file, mode 0600. Nothing is
+decrypted on a managed host, and no plaintext secret is ever written into this
+repository.
 
 ## Running it
 
@@ -55,7 +79,7 @@ ansible-playbook playbooks/ping.yml          # connectivity and interpreter chec
 
 Note for agent sessions: Ansible refuses to start when stdout or stderr is
 non-blocking, which is how most agent harnesses pipe a command. Redirect stderr
-to a file (`ansible-playbook ... 2>/tmp/ansible.err`) and it runs normally.
+to a file (`ansible-playbook ... >/tmp/ansible.out 2>&1`) and it runs normally.
 
 ## Conventions
 

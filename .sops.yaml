@@ -1,0 +1,9 @@
+# Every file under secrets/ is encrypted to the laptop's age key. The private
+# half is at ~/.config/sops/age/keys.txt and copied into the GNOME keyring
+# (service=sops-age, account=homelab-infra); losing both makes every secret in
+# this repository unrecoverable, so a third copy belongs somewhere offline.
+#
+# Add a recipient here and run `sops updatekeys secrets/<file>` to re-encrypt.
+creation_rules:
+  - path_regex: secrets/.*\.sops\.ya?ml$
+    age: age1xeymhxrgeq9tn5u0al2tq8fhnz76zxg8gasm7wfw59qmyhs62fmsxhxspg

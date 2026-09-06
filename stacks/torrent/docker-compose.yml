@@ -1,0 +1,94 @@
+# qBittorrent behind a ProtonVPN WireGuard tunnel, with a port manager that
+# feeds gluetun's forwarded port back into qBittorrent.
+#
+# Adopted on 2026-09-06 from
+# /var/lib/docker/volumes/portainer_data/_data/compose/1/docker-compose.yml on
+# Black Pearl, where it had been left behind by the Portainer removed in the
+# 2026-08-30 cleanup: root-owned, unreadable to the host's own user, and
+# outside every backup job.
+#
+# Kept faithful to what was running, with three changes:
+#   - credentials moved out to .env, rendered from secrets/blackpearl-torrent.sops.yaml
+#   - a dead OpenVPN block removed, which carried a live password in a comment
+#   - the obsolete `version:` key dropped
+#
+# Every container joins gluetun's network namespace, so all published ports
+# belong to the gluetun service.
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun
+    restart: always
+    stdin_open: true
+    tty: true
+    ports:
+      - 8778:8888/tcp  # HTTP proxy
+      - 8001:8000/tcp  # gluetun control server
+      - 8080:8080      # qBittorrent web UI
+      - 6881:6881      # qBittorrent
+      - 6881:6881/udp  # qBittorrent
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: 1
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - /home/iryzhkov/app/gluetun:/tmp/gluetun
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:?set in .env}
+      - PORT_FORWARD_ONLY=on
+      - VPN_PORT_FORWARDING=on
+      - VPN_PORT_FORWARDING_PROVIDER=protonvpn
+      - VPN_PORT_FORWARDING_STATUS_FILE=/tmp/gluetun/forwarded_port
+      - TZ=UTC/UTC
+      - UPDATER_PERIOD=24h
+      - FIREWALL_OUTBOUND_SUBNETS=192.168.1.0/24,192.168.20.0/24,10.0.0.0/16,172.21.0.0/16
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://google.com"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: gt-qb
+    network_mode: "service:gluetun"
+    restart: always
+    depends_on:
+      gluetun:
+        condition: service_started
+        restart: true
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC/UTC
+      - WEBUI_PORT=8080
+    volumes:
+      - /home/iryzhkov/app/gluetun:/gluetun
+      - /home/iryzhkov/app/qbittorrent:/config
+      - /mnt/shared:/mnt/shared
+      - /mnt/tmp:/mnt/tmp
+    ulimits:
+      nofile:
+        soft: 32768
+        hard: 65536
+
+  gluetun-qbittorrent-port-manager:
+    image: jopiermeier/gluetun-qbittorrent-port-manager:latest
+    network_mode: "service:gluetun"
+    restart: always
+    depends_on:
+      gluetun:
+        condition: service_started
+        restart: true
+      qbittorrent:
+        condition: service_started
+        restart: true
+    environment:
+      - QBITTORRENT_USER=${QBITTORRENT_USER:?set in .env}
+      - QBITTORRENT_PASS=${QBITTORRENT_PASS:?set in .env}
+    volumes:
+      - /home/iryzhkov/app/gluetun:/tmp/gluetun
