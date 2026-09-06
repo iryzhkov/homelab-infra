@@ -91,3 +91,9 @@ fleet_ssh_keys:
 # taken from the host rather than from a stack.
 feed_host: homelab
 feed_url: "http://{{ hostvars[feed_host].ansible_host }}:1934"
+
+# Pinged over the mesh after a Nebula restart, to prove the tunnel came back
+# before the change is accepted: the lighthouse, and a peer that is not it.
+nebula_probe_hosts:
+  - 10.42.0.1
+  - 10.42.0.2

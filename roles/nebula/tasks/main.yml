@@ -1,0 +1,104 @@
+---
+# Nebula's configuration on this host.
+#
+# The mesh carries Traefik's route to the laptop, the phone's DNS, and the SSH
+# path used when a machine is off the LAN, so this role treats a config change
+# the way the AdGuard role treats a DNS change: validate the candidate with the
+# daemon's own checker, keep the file it replaces, restart, and prove the mesh
+# still works before calling it done.
+
+- name: Gather the facts this role needs
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - env
+
+- name: Render the candidate configuration
+  ansible.builtin.template:
+    src: "{{ inventory_hostname }}.yml.j2"
+    dest: /etc/nebula/config.yml.new
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  changed_when: false
+
+- name: Compare it with the running configuration
+  ansible.builtin.command:
+    cmd: cmp -s /etc/nebula/config.yml /etc/nebula/config.yml.new
+  become: true
+  register: nebula_diff
+  changed_when: false
+  failed_when: false
+
+- name: Install the configuration
+  when: nebula_diff.rc != 0
+  become: true
+  block:
+    - name: Ask Nebula whether it would accept it
+      ansible.builtin.command:
+        cmd: nebula -test -config /etc/nebula/config.yml.new
+      changed_when: false
+
+    - name: Keep the configuration being replaced
+      ansible.builtin.copy:
+        src: /etc/nebula/config.yml
+        dest: /etc/nebula/config.yml.ansible-bak
+        remote_src: true
+        mode: "0644"
+
+    - name: Move the new configuration into place
+      ansible.builtin.command:
+        cmd: mv /etc/nebula/config.yml.new /etc/nebula/config.yml
+      changed_when: true
+
+    - name: Restart Nebula
+      ansible.builtin.systemd_service:
+        name: nebula
+        state: restarted
+
+    - name: Wait for the mesh interface to come back
+      ansible.builtin.command:
+        cmd: ip -4 addr show nebula1
+      register: nebula_iface
+      until: "'inet ' in nebula_iface.stdout"
+      retries: 10
+      delay: 2
+      changed_when: false
+
+    - name: Reach the lighthouse and a peer over the mesh
+      ansible.builtin.command:
+        cmd: ping -c2 -W3 {{ item }}
+      loop: "{{ nebula_probe_hosts }}"
+      register: nebula_ping
+      until: nebula_ping.rc == 0
+      retries: 5
+      delay: 3
+      changed_when: false
+
+  rescue:
+    - name: Restore the previous configuration
+      ansible.builtin.command:
+        cmd: >-
+          sh -c 'rm -f /etc/nebula/config.yml.new;
+          if [ -f /etc/nebula/config.yml.ansible-bak ]; then
+          mv /etc/nebula/config.yml.ansible-bak /etc/nebula/config.yml;
+          systemctl restart nebula; echo restored;
+          else echo "nothing to restore"; fi'
+      register: nebula_rollback
+      changed_when: "'restored' in nebula_rollback.stdout"
+
+    - name: Report that the change was rolled back
+      ansible.builtin.fail:
+        msg: >-
+          Nebula rejected the configuration or the mesh did not come back, so
+          the change was rolled back ({{ nebula_rollback.stdout | trim }}).
+          Check `journalctl -u nebula -n 50` on {{ inventory_hostname }}.
+
+- name: Remove the candidate when nothing changed
+  ansible.builtin.file:
+    path: /etc/nebula/config.yml.new
+    state: absent
+  become: true
+  changed_when: false

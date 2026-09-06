@@ -1,0 +1,63 @@
+# Ansible managed, from roles/nebula/templates/public-api.yml.j2.
+# Do not edit on the host: the next playbook run overwrites it.
+#
+# Adopted 2026-09-06 byte-for-byte from what was running, with the punchy block
+# added.
+
+pki:
+  ca: /etc/nebula/ca.crt
+  cert: /etc/nebula/public-api.crt
+  key: /etc/nebula/public-api.key
+
+static_host_map:
+  "10.42.0.1": ["150.230.40.9:4242"]
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+    - "10.42.0.1"
+
+# NAT hole punching. Without it a peer whose NAT mapping has expired — the
+# phone on mobile data, in practice — cannot re-establish the tunnel from its
+# own side, and its first DNS query to this host after an idle period goes
+# nowhere until something pokes it from here. That is what was diagnosed on
+# 2026-09-06: the mesh DNS server was healthy, the tunnel worked in both
+# directions once nudged, and no query ever arrived until it was.
+#
+# The phone's own config needs the same block for the other half of the punch.
+# The lighthouse on OCI already runs as a relay (am_relay: true). Advertising
+# it here means a peer that cannot punch a direct path to this host — a phone
+# on carrier-grade NAT, which is the case that started this — reaches it
+# through the lighthouse instead of not at all. Relayed DNS pays one hop to
+# OCI and back, which for a 60-byte query nobody will notice.
+relay:
+  relays:
+    - 10.42.0.1
+  am_relay: false
+  use_relays: true
+
+punchy:
+  punch: true
+  respond: true
+  delay: 1s
+
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+tun:
+  dev: nebula1
+  drop_local_broadcast: false
+  drop_multicast: false
+
+firewall:
+  outbound:
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    - port: any
+      proto: any
+      host: any

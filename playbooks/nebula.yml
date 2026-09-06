@@ -1,0 +1,14 @@
+---
+# Nebula's configuration, for the hosts whose config this repository holds.
+#
+# Restarting Nebula briefly drops mesh routing, including Traefik's failover
+# backend for the laptop, so the role validates first and rolls back if the
+# mesh does not come back.
+#
+#   ansible-playbook playbooks/nebula.yml --check --diff
+
+- name: Configure the Nebula mesh
+  hosts: nebula_managed
+  gather_facts: false
+  roles:
+    - nebula
