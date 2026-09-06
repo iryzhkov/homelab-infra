@@ -49,8 +49,13 @@ are kept because a restore from an older backup would need them again:
   no Compose labels, so Compose could not take the container name over until it
   was removed.
 
-Next: generate Traefik's dynamic configuration from the same inventory, so that
-moving a service between hosts changes one line rather than a routing file.
+Traefik's dynamic configuration is generated from the same inventory since
+2026-09-06, so a service's backend address follows the host it runs on; see
+[docs/traefik-routing.md](docs/traefik-routing.md).
+
+Next: the cloud standby. The pieces it needs are now in place — the stack list
+is data, the routing is generated from it, and the tunnel configuration is
+captured.
 
 ## Secrets
 

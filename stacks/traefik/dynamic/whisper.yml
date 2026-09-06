@@ -1,0 +1,58 @@
+# Speech-to-text with automatic failover.
+#
+# whisper-gpu is gaming-pc (RTX 4090, CUDA, large-v3-turbo): about 90ms for a
+# ten-second utterance. whisper-cpu is homelab (four CPU cores, small.en):
+# about 3s for the same clip, with lower accuracy. Traefik's failover service
+# is strict primary/backup rather than round-robin, so the fallback is only
+# used while gaming-pc is unreachable -- asleep, rebooting, or off.
+#
+# Note: the fallback is roughly 22x slower. If dictation suddenly feels sluggish
+# it most likely means gaming-pc is down and this is serving from homelab; the
+# Traefik access log shows which back end handled each request.
+
+http:
+  middlewares:
+    # whisper.cpp's server exposes /health, /inference and /load -- it has no
+    # OpenAI-compatible route. Voxtype's remote mode posts to the OpenAI path,
+    # so translate it here instead of patching every back end. Clients may also
+    # call /inference directly; that path is left untouched.
+    whisper-openai-path:
+      replacePathRegex:
+        regex: "^/v1/audio/transcriptions/?$"
+        replacement: "/inference"
+
+  routers:
+    whisper-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`whisper.ryzhkov.dev`)"
+      service: whisper-service
+      middlewares:
+        - whisper-openai-path
+      tls:
+        certResolver: "letencrypt"
+
+  services:
+    whisper-service:
+      failover:
+        service: whisper-gpu
+        fallback: whisper-cpu
+        healthCheck: {}
+
+    whisper-gpu:
+      loadBalancer:
+        healthCheck:
+          path: /health
+          interval: 10s
+          timeout: 3s
+        servers:
+          - url: "http://192.168.90.212:8080"
+
+    whisper-cpu:
+      loadBalancer:
+        healthCheck:
+          path: /health
+          interval: 10s
+          timeout: 3s
+        servers:
+          - url: "http://192.168.70.223:8080"

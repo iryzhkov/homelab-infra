@@ -1,0 +1,15 @@
+---
+# Generate Traefik's dynamic configuration from the inventory and install it.
+#
+# Check what would change without touching the edge proxy:
+#   ansible-playbook playbooks/traefik.yml --check --diff
+#
+# scripts/compare-traefik.py compares the rendered routes against the
+# hand-written files they replace, host by host, and is the thing to run before
+# applying a change to routing.
+
+- name: Configure Traefik routing
+  hosts: edge_proxy
+  gather_facts: false
+  roles:
+    - traefik

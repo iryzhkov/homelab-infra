@@ -11,43 +11,131 @@
 
 stacks:
   - name: actual
+    routes:
+      - host: budget.ryzhkov.dev
+        port: 5006
   - name: adguard
+    routes:
+      - host: dns-sync.ryzhkov.dev
+        port: 8321
   - name: authentik
+    routes:
+      - host: auth.ryzhkov.dev
+        port: 4080
     secrets: homelab-authentik
   - name: autobrr
+    routes:
+      - host: autobrr.ryzhkov.dev
+        port: 7474
   - name: bazarr
+    routes:
+      - host: bazarr.ryzhkov.dev
+        port: 6767
   - name: cloudflare
     secrets: homelab-cloudflare
   - name: cv-site
+    routes:
+      - host: igor.ryzhkov.dev
+        port: 8091
     dir: /home/iryzhkov/cv-site
     secrets: homelab-cv-site
   - name: dsh
+    routes:
+      - host: ai.ryzhkov.dev
+        port: 7100
+        middlewares:
+          - authentik-forwardauth
+      - host: ai.ryzhkov.dev
+        name: ai-outpost
+        path_prefix: /outpost.goauthentik.io/
+        priority: 100
+        service: auth
     secrets: homelab-dsh
   - name: emby
+    routes:
+      - host: emby.ryzhkov.dev
+        port: 8096
   - name: excalidraw
+    routes:
+      - host: draw.ryzhkov.dev
+        port: 5090
   - name: flaresolverr
   - name: forgejo
+    routes:
+      - host: git.ryzhkov.dev
+        port: 3500
   - name: hugo
+    routes:
+      - host: blog.ryzhkov.dev
+        port: 4580
     dir: /home/iryzhkov/app/hugo/blog/deploy
   - name: kiwix
+    routes:
+      - host: wiki.ryzhkov.dev
+        port: 3151
   - name: komga
+    routes:
+      - host: manga.ryzhkov.dev
+        port: 25600
   - name: kuma
+    routes:
+      - host: uptime.ryzhkov.dev
+        port: 3001
   - name: librespeed
+    routes:
+      - host: speed.ryzhkov.dev
+        port: 7080
   - name: lidarr-music
+    routes:
+      - host: lidarr.ryzhkov.dev
+        port: 8686
   - name: logging
+    routes:
+      - host: logs.ryzhkov.dev
+        port: 3200
     secrets: homelab-logging
   - name: lubelogger
+    routes:
+      - host: garage.ryzhkov.dev
+        port: 8095
   - name: miniflux
+    routes:
+      - host: rss.ryzhkov.dev
+        port: 5080
   - name: obsidian
+    routes:
+      - host: obsidian.ryzhkov.dev
+        port: 5984
     secrets: homelab-obsidian
   - name: ombi
+    routes:
+      - host: request.ryzhkov.dev
+        port: 3579
   - name: openviking
   - name: prowlarr
+    routes:
+      - host: prowlarr.ryzhkov.dev
+        port: 9696
   - name: radarr-movie
+    routes:
+      - host: radarr.ryzhkov.dev
+        port: 7878
   - name: sonarr-tv
+    routes:
+      - host: sonarr.ryzhkov.dev
+        port: 8989
   - name: thelounge
+    routes:
+      - host: irc.ryzhkov.dev
+        port: 9009
   - name: vaultwarden
+    routes:
+      - host: vault.ryzhkov.dev
+        port: 8099
     secrets: homelab-vaultwarden
   - name: voice
+    routes:
+      - host: voice.ryzhkov.dev
+        port: 8097
   - name: whisper
   - name: wyoming-openai

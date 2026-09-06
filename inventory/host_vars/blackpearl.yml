@@ -4,6 +4,9 @@
 
 stacks:
   - name: torrent
+    routes:
+      - host: torrent.ryzhkov.dev
+        port: 8080
     secrets: blackpearl-torrent
   - name: diun
     source: diun-blackpearl

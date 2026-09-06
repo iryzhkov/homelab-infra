@@ -6,6 +6,13 @@
 
 stacks:
   - name: traefik
+    routes:
+      # Traefik's own dashboard, proxied through itself. The published port is
+      # bound to 127.0.0.1 on the host, so routing to public-api's LAN address
+      # returned 502; from inside Traefik's own network namespace the API is on
+      # loopback, which is what it reaches here.
+      - host: proxy.ryzhkov.dev
+        url: http://127.0.0.1:8080
     secrets: public-api-traefik
   - name: diun
     source: diun-public-api

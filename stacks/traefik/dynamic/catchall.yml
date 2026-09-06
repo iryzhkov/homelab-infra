@@ -1,0 +1,33 @@
+# Catch-all for hostnames that no other router claims.
+#
+# Without this, an unknown *.ryzhkov.dev name still resolves to this host, so
+# Traefik answers the TLS handshake with its self-signed default certificate
+# and the browser shows a certificate error instead of a page. The router below
+# terminates TLS with a real wildcard certificate and redirects to the 404 page
+# on the CV site.
+#
+# priority 1 keeps it below every Host() router (their default priority is the
+# rule length, which is always greater).
+http:
+  routers:
+    catchall-router:
+      entryPoints:
+        - websecure
+      rule: "HostRegexp(`^(.+\\.)?ryzhkov\\.dev$`)"
+      priority: 1
+      service: noop@internal
+      middlewares:
+        - catchall-404
+      tls:
+        certResolver: "letencrypt"
+        domains:
+          - main: "ryzhkov.dev"
+            sans:
+              - "*.ryzhkov.dev"
+
+  middlewares:
+    catchall-404:
+      redirectRegex:
+        regex: ".*"
+        replacement: "https://igor.ryzhkov.dev/404"
+        permanent: false

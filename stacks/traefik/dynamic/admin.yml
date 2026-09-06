@@ -1,0 +1,25 @@
+http:
+  routers:
+    proxmox-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`proxmox.ryzhkov.dev`)"
+      service: proxmox-service
+      tls:
+        certResolver: "letencrypt"
+
+  services:
+   proxmox-service:
+      loadBalancer:
+        sticky:
+          cookie:
+            name: proxmox_node
+            secure: true
+            httpOnly: true
+        healthCheck:
+          path: /
+          interval: 30s
+          timeout: 5s
+        servers:
+          - url: "https://192.168.1.5:8006"
+          - url: "https://192.168.1.29:8006"

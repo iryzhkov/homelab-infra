@@ -1,0 +1,48 @@
+---
+# Render Traefik's dynamic configuration and install it on the edge proxy.
+#
+# Traefik's file provider watches the directory and reloads within a second, so
+# nothing here restarts the container: the edge proxy keeps serving while its
+# routing changes.
+
+- name: Install the hand-written dynamic configuration
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../stacks/traefik/dynamic/{{ item }}"
+    dest: "{{ traefik_dynamic_dir }}/{{ item }}"
+    mode: "0644"
+  loop: "{{ traefik_static_files }}"
+
+- name: Render the generated dynamic configuration
+  ansible.builtin.template:
+    src: generated.yml.j2
+    dest: "{{ traefik_dynamic_dir }}/generated.yml"
+    mode: "0644"
+
+# The files these replaced. Traefik would happily load both, and two routers
+# with the same rule and priority make which one wins undefined.
+- name: Remove the superseded hand-written files
+  ansible.builtin.file:
+    path: "{{ traefik_dynamic_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - homelab.yml
+    - blackpearl.yml
+    - voice.yml
+
+# Traefik reports a router it could not load rather than refusing to start, so
+# the check that matters is what it holds after the reload, not whether the
+# YAML parsed. The API listens on loopback only.
+- name: Check that Traefik loaded every router
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/http/routers
+    return_content: true
+  register: traefik_routers
+  until: traefik_routers.json | rejectattr('status', 'equalto', 'enabled') | list | length == 0
+  retries: 5
+  delay: 2
+  changed_when: false
+
+- name: Report how many routers are live
+  ansible.builtin.debug:
+    msg: >-
+      {{ traefik_routers.json | length }} routers loaded, all enabled

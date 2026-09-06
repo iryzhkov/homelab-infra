@@ -1,0 +1,37 @@
+---
+# Traefik's dynamic configuration is generated from the stack lists in
+# host_vars, so a service's backend address follows the host it runs on. Moving
+# a stack between machines is an edit to one `stacks:` entry.
+
+# Where the generated file is written on the edge_proxy host. Traefik's file
+# provider watches this directory and hot-reloads, so no restart is needed.
+traefik_dynamic_dir: /home/igor/apps/traefik/file_provider
+
+# Defaults every generated router and service inherits.
+traefik_entrypoint: websecure
+traefik_cert_resolver: letencrypt   # the misspelling is the resolver's real name
+traefik_health_check:
+  path: /
+  interval: 30s
+  timeout: 5s
+
+# Routes whose backend is not a Compose stack this repository deploys: Home
+# Assistant runs as its own VM, Zigbee2MQTT in an LXC.
+traefik_static_routes:
+  - host: home.ryzhkov.dev
+    url: http://192.168.70.93:8123
+  - host: zigbee.ryzhkov.dev
+    url: http://192.168.70.235:8080
+
+# Dynamic configuration that stays hand-written, deployed verbatim from
+# stacks/traefik/dynamic/. These express things the generator has no shape for,
+# and each is a single instance rather than a pattern:
+#   admin.yml     Proxmox, load-balanced across both nodes with a sticky cookie
+#   t3.yml        T3 Code, including the laptop's LAN-to-mesh failover pair
+#   whisper.yml   the whisper failover pair and its path-rewriting middleware
+#   catchall.yml  the wildcard-certificate 404 for unclaimed hostnames
+traefik_static_files:
+  - admin.yml
+  - t3.yml
+  - whisper.yml
+  - catchall.yml

@@ -1,0 +1,99 @@
+{#
+  Traefik's dynamic configuration, generated from the `routes` entries in
+  inventory/host_vars/.
+
+  A route's backend address is resolved from the host its stack runs on, so
+  moving a stack between machines moves its routing with it. Routes with no
+  stack behind them (Home Assistant, Zigbee2MQTT) are listed as
+  traefik_static_routes with an explicit url.
+
+  Fields a route may carry:
+    host          the hostname to match; required
+    port          port on the stack's host; required unless url is given
+    url           full backend URL, for the rare route that does not reach its
+                  own stack over the network
+    scheme        http (default) or https
+    name          router and service name; defaults to the first label of host
+    service       route to another route's service instead of its own
+    path_prefix   added to the rule as PathPrefix
+    priority      router priority, needed when two rules can both match
+    middlewares   list of middleware names
+#}
+{% set ns = namespace(routes=[], authentik_url='') %}
+{% for h in groups['docker_hosts'] | sort %}
+{%   for stack in hostvars[h].stacks | default([]) %}
+{%     for route in stack.routes | default([]) %}
+{#       A route that borrows another route's service carries no port of its
+         own; the Authentik outpost path is the one that does this. #}
+{%       set url = route.url | default(((route.scheme | default('http')) ~ '://' ~ hostvars[h].ansible_host ~ ':' ~ route.port) if route.port is defined else '') %}
+{%       set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]), url=url)) %}
+{%       if stack.name == 'authentik' %}
+{%         set ns.authentik_url = url %}
+{%       endif %}
+{%     endfor %}
+{%   endfor %}
+{% endfor %}
+{% for route in traefik_static_routes | default([]) %}
+{%   set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]))) %}
+{% endfor %}
+{% set routes = ns.routes | sort(attribute='name') %}
+# {{ ansible_managed }}
+#
+# Generated from the `routes` entries in inventory/host_vars/ by
+# roles/traefik. Do not edit on the host: the next playbook run overwrites it.
+#
+# {{ routes | length }} routers, from {{ groups['docker_hosts'] | length }} hosts.
+# Hand-written dynamic configuration lives beside this file, one YAML per
+# subject; see traefik_static_files.
+
+http:
+  routers:
+{% for route in routes %}
+    {{ route.name }}-router:
+      entryPoints:
+        - {{ traefik_entrypoint }}
+      rule: "Host(`{{ route.host }}`){% if route.path_prefix is defined %} && PathPrefix(`{{ route.path_prefix }}`){% endif %}"
+{% if route.priority is defined %}
+      priority: {{ route.priority }}
+{% endif %}
+      service: {{ route.service | default(route.name) }}-service
+{% if route.middlewares is defined %}
+      middlewares:
+{% for middleware in route.middlewares %}
+        - {{ middleware }}
+{% endfor %}
+{% endif %}
+      tls:
+        certResolver: "{{ traefik_cert_resolver }}"
+
+{% endfor %}
+  services:
+{% for route in routes if route.service is not defined %}
+    {{ route.name }}-service:
+      loadBalancer:
+        healthCheck:
+          path: {{ traefik_health_check.path }}
+          interval: {{ traefik_health_check.interval }}
+          timeout: {{ traefik_health_check.timeout }}
+        servers:
+          - url: "{{ route.url }}"
+
+{% endfor %}
+  middlewares:
+    # Authentik's forward auth, pointed at wherever the authentik stack runs.
+    authentik-forwardauth:
+      forwardAuth:
+        address: "{{ ns.authentik_url }}/outpost.goauthentik.io/auth/traefik"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-authentik-username
+          - X-authentik-groups
+          - X-authentik-email
+          - X-authentik-name
+          - X-authentik-uid
+          - X-authentik-jwt
+          - X-authentik-meta-jwks
+          - X-authentik-meta-outpost
+          - X-authentik-meta-provider
+          - X-authentik-meta-app
+          - X-authentik-meta-version

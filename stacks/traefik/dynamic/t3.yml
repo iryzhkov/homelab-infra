@@ -1,0 +1,105 @@
+# T3 Code control surfaces, one per machine.
+#
+# Each T3 Code server speaks plain HTTP, which means a browser opening it
+# directly gets a non-secure context: navigator.clipboard is absent there, so
+# every copy action in the T3 UI fails with "Clipboard API unavailable".
+# Terminating TLS here fixes that for every client at once, including the phone
+# and the iPad, because an https:// origin is a secure context.
+#
+# The certificates come from Let's Encrypt over DNS-01, so these names are
+# valid without being reachable from the internet. Name resolution is already
+# handled in both directions: AdGuard's *.ryzhkov.dev wildcard points LAN
+# clients at 192.168.20.33, and dnsmasq on this host answers mesh clients with
+# 10.42.0.3, so a phone on Nebula off-LAN reaches Traefik over the mesh.
+#
+# Backends use each machine's LAN address rather than its Nebula address
+# (changed 2026-09-05). Traefik and all four servers sit on the same physical
+# network, so the mesh hop was encrypting and re-routing traffic that never
+# needed to leave it. The servers now bind 0.0.0.0 and each host's ufw admits
+# port 7391 from 192.168.20.0/24 only; homelab runs no host firewall, matching
+# how its other services are exposed. The UDM policies that permit this are
+# "public-api -> homelab (Traefik backends)", "public-api -> normandy",
+# "public-api -> gaming-pc" and "public-api -> laptop (t3code)", the first
+# three through port groups that now include 7391.
+#
+# The laptop is the exception, because it is the one machine that leaves the
+# LAN. Its service is a failover pair: the LAN address while it is home, the
+# Nebula address once the LAN backend stops answering the health check. The
+# laptop still reaches its own server through a loopback proxy on
+# http://localhost:7391 rather than this route, to avoid a round trip out to
+# this host and back to itself.
+
+http:
+  routers:
+    t3-laptop-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`t3-laptop.ryzhkov.dev`)"
+      service: t3-laptop-service
+      tls:
+        certResolver: "letencrypt"
+
+    t3-homelab-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`t3-homelab.ryzhkov.dev`)"
+      service: t3-homelab-service
+      tls:
+        certResolver: "letencrypt"
+
+    t3-gaming-pc-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`t3-gaming-pc.ryzhkov.dev`)"
+      service: t3-gaming-pc-service
+      tls:
+        certResolver: "letencrypt"
+
+    t3-normandy-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`t3-normandy.ryzhkov.dev`)"
+      service: t3-normandy-service
+      tls:
+        certResolver: "letencrypt"
+
+  services:
+    # LAN first, Nebula once the laptop is off the LAN.
+    t3-laptop-service:
+      failover:
+        service: t3-laptop-lan
+        fallback: t3-laptop-mesh
+        healthCheck: {}
+
+    t3-laptop-lan:
+      loadBalancer:
+        healthCheck:
+          path: /
+          interval: 10s
+          timeout: 3s
+        servers:
+          - url: "http://192.168.90.163:7391"
+
+    t3-laptop-mesh:
+      loadBalancer:
+        healthCheck:
+          path: /
+          interval: 10s
+          timeout: 3s
+        servers:
+          - url: "http://10.42.0.5:7391"
+
+    t3-homelab-service:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.70.223:7391"
+
+    t3-gaming-pc-service:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.90.212:7391"
+
+    t3-normandy-service:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.70.234:7391"

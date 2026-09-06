@@ -8,8 +8,17 @@ stacks:
   - name: cloudflare
     secrets: normandy-cloudflare
   - name: frigate
+    routes:
+      # Frigate's authenticated UI. Port 5000 has no login and is deliberately
+      # not routed.
+      - host: cctv.ryzhkov.dev
+        port: 8971
+        scheme: https
     secrets: normandy-frigate
   - name: immich
+    routes:
+      - host: photos.ryzhkov.dev
+        port: 2283
     dir: /home/igor/app/immich-stack
     env_file: stack.env
     secrets: normandy-immich
