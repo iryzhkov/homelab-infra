@@ -1,0 +1,14 @@
+---
+# Deploy the AdGuard Home configuration to the origin instance.
+#
+# This changes DNS for every VLAN, so it validates with AdGuard's own
+# --check-config before replacing anything, and rolls back if the service stops
+# resolving afterwards. See roles/adguard/tasks/main.yml.
+#
+#   ansible-playbook playbooks/adguard.yml --check --diff
+
+- name: Configure AdGuard Home
+  hosts: adguard_origin_node
+  gather_facts: false
+  roles:
+    - adguard

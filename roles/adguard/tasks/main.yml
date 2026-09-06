@@ -1,0 +1,150 @@
+---
+# Deploy the AdGuard Home configuration to the origin instance.
+#
+# AdGuard runs in an LXC that accepts no SSH, so this role runs on the Proxmox
+# node hosting it and works through `pct push` and `pct exec`.
+#
+# DNS for the whole house depends on this, so the order is: render, validate
+# with AdGuard's own --check-config against a copy, only then move it into
+# place, restart, and resolve a name to prove it. Any failure after the file
+# moves restores the backup and restarts again.
+#
+# Only the origin is managed. adguardhome-sync, a Compose stack on homelab,
+# propagates to the two replicas; pushing to them here would fight it.
+
+- name: Load the admin password hash
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/adguard-origin.sops.yaml"
+    name: adguard_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Render the configuration on the node
+  ansible.builtin.template:
+    src: AdGuardHome.yaml.j2
+    dest: /tmp/adguard-{{ adguard_origin.ctid }}.yaml
+    mode: "0600"
+  vars:
+    adguard_admin_password_hash: "{{ adguard_secrets.adguard_admin_password_hash }}"
+  no_log: true
+  # Rendered even in check mode: it is a temporary file on the node, and
+  # without it a dry run cannot tell whether the configuration would change.
+  check_mode: false
+  # Writing the candidate to the node is not itself a change to anything the
+  # container runs, so it should not colour the run's summary.
+  changed_when: false
+  register: rendered
+
+- name: Read the configuration the container is running
+  ansible.builtin.command:
+    cmd: pct exec {{ adguard_origin.ctid }} -- sha256sum {{ adguard_config_path }}
+  changed_when: false
+  check_mode: false
+  register: current_config
+
+- name: Compare it with the rendered one
+  ansible.builtin.stat:
+    path: /tmp/adguard-{{ adguard_origin.ctid }}.yaml
+    checksum_algorithm: sha256
+  check_mode: false
+  # Writing the candidate to the node is not itself a change to anything the
+  # container runs, so it should not colour the run's summary.
+  changed_when: false
+  register: rendered_stat
+
+- name: Install the configuration
+  when: rendered_stat.stat.checksum | default('') != current_config.stdout.split()[0]
+  block:
+    - name: Copy the new configuration into the container, beside the live one
+      ansible.builtin.command:
+        cmd: >-
+          pct push {{ adguard_origin.ctid }}
+          /tmp/adguard-{{ adguard_origin.ctid }}.yaml
+          {{ adguard_config_path }}.new --perms 0600
+      changed_when: true
+
+    - name: Ask AdGuard whether it would accept it
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ adguard_origin.ctid }} --
+          {{ adguard_binary }} --check-config -c {{ adguard_config_path }}.new
+      changed_when: false
+
+    - name: Keep a copy of the configuration being replaced
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ adguard_origin.ctid }} --
+          cp {{ adguard_config_path }} {{ adguard_config_path }}.ansible-bak
+      changed_when: true
+
+    - name: Move the new configuration into place
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ adguard_origin.ctid }} --
+          mv {{ adguard_config_path }}.new {{ adguard_config_path }}
+      changed_when: true
+
+    - name: Restart AdGuard Home
+      ansible.builtin.command:
+        cmd: pct exec {{ adguard_origin.ctid }} -- systemctl restart AdGuardHome
+      changed_when: true
+
+    # AdGuard takes a second or two to bind port 53 after a restart. Without
+    # this wait the probe below runs into a connection refused and the whole
+    # change is rolled back for no reason.
+    - name: Wait for it to listen on port 53 again
+      ansible.builtin.wait_for:
+        host: "{{ adguard_origin.ip }}"
+        port: 53
+        timeout: 60
+        delay: 2
+
+    - name: Resolve a name through it
+      ansible.builtin.command:
+        cmd: dig +short +timeout=3 +tries=2 @{{ adguard_origin.ip }} {{ adguard_probe_name }}
+      register: dns_probe
+      until: dns_probe.rc == 0 and (dns_probe.stdout | trim | length > 0)
+      retries: 5
+      delay: 3
+      failed_when: false
+      changed_when: false
+
+    - name: Fail if it never answered
+      ansible.builtin.assert:
+        that:
+          - dns_probe.rc == 0
+          - dns_probe.stdout | trim | length > 0
+        fail_msg: >-
+          {{ adguard_probe_name }} did not resolve through {{ adguard_origin.ip }}
+          after the restart: {{ dns_probe.stdout | trim }}{{ dns_probe.stderr | trim }}
+
+  rescue:
+    # There may be nothing to restore: a configuration rejected by
+    # --check-config never reached the live file, and the candidate is simply
+    # discarded. Either way this must not fail, or it masks the real error.
+    - name: Restore the previous configuration if one was taken
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ adguard_origin.ctid }} --
+          sh -c 'rm -f {{ adguard_config_path }}.new;
+          if [ -f {{ adguard_config_path }}.ansible-bak ]; then
+          mv {{ adguard_config_path }}.ansible-bak {{ adguard_config_path }};
+          systemctl restart AdGuardHome;
+          echo restored; else echo "nothing to restore"; fi'
+      register: adguard_rollback
+      changed_when: "'restored' in adguard_rollback.stdout"
+
+    - name: Report that the change was rolled back
+      ansible.builtin.fail:
+        msg: >-
+          AdGuard rejected the configuration or stopped resolving, so the
+          change was rolled back ({{ adguard_rollback.stdout | trim }}).
+          Check `pct exec {{ adguard_origin.ctid }} -- journalctl -u AdGuardHome -n 50`
+          on {{ inventory_hostname }}.
+
+- name: Remove the rendered copy from the node
+  ansible.builtin.file:
+    path: /tmp/adguard-{{ adguard_origin.ctid }}.yaml
+    state: absent
+  check_mode: false
+  changed_when: false

@@ -35,3 +35,19 @@ traefik_static_files:
   - t3.yml
   - whisper.yml
   - catchall.yml
+
+# AdGuard Home runs in three LXCs rather than as containers on a Docker host.
+# Only the origin is managed here: adguardhome-sync, a Compose stack on
+# homelab, propagates its configuration to the two replicas
+# (CT107 192.168.20.106 on proxmox-a, CT201 192.168.20.83 on proxmox-b, the
+# latter Alpine). Reference copies of both replicas' configurations are kept in
+# roles/adguard/files/reference/ for a rebuild from scratch.
+adguard_origin:
+  node: proxmox-a
+  ctid: 100
+  ip: 192.168.20.154
+adguard_config_path: /opt/AdGuardHome/AdGuardHome.yaml
+adguard_binary: /opt/AdGuardHome/AdGuardHome
+# Resolved through the origin after a restart to prove it is still answering.
+# A name from the wildcard rewrite, so it also proves the rewrite survived.
+adguard_probe_name: vault.ryzhkov.dev

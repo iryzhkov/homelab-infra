@@ -53,6 +53,10 @@ Traefik's dynamic configuration is generated from the same inventory since
 2026-09-06, so a service's backend address follows the host it runs on; see
 [docs/traefik-routing.md](docs/traefik-routing.md).
 
+AdGuard Home joined on 2026-09-06 as well. It is not a Compose stack — three
+LXCs, one managed and two kept in step by adguardhome-sync — so it has its own
+role and its own guard rails; see [docs/adguard.md](docs/adguard.md).
+
 Next: the cloud standby. The pieces it needs are now in place — the stack list
 is data, the routing is generated from it, and the tunnel configuration is
 captured.
