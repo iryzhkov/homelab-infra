@@ -10,8 +10,13 @@
 #   dir       optional; absolute deployment directory. Defaults to
 #             {{ stack_root }}/{{ name }}, and is spelled out where the running
 #             stack sits somewhere else, as hugo and immich do.
+#   env_extra optional; plain (non-secret) variables for the env file, for
+#             addresses derived from the inventory rather than written twice.
 #   write_env optional; set false for a stack whose secrets are used only by a
 #             config_template, so that no .env is written beside it.
+#
+# Every env file also gets HOST_IP, the address of the host the stack runs on,
+# so a Compose file can publish a port on its own host without naming it.
 #   config_templates  optional; files the Compose file mounts, rendered from
 #             stacks/<source>/templates/. Each is {src, dest, mode}, and a
 #             change to one restarts the stack, because a bind-mounted file
@@ -64,10 +69,21 @@
     dest: "{{ stack_dir }}/docker-compose.yml"
   become: "{{ stack_needs_root }}"
 
+# community.sops.load_vars sets play vars, which set_fact outranks, so the
+# reset cannot be a set_fact. A stack that declares no secrets therefore ignores
+# whatever the previous stack in the loop left in stack_secrets.
+- name: Assemble the environment file's contents
+  ansible.builtin.set_fact:
+    stack_env: >-
+      {{ {'HOST_IP': ansible_host}
+         | combine(stack.env_extra | default({}))
+         | combine(stack.secrets is defined | ternary(stack_secrets | default({}), {})) }}
+  no_log: true
+
 - name: Install the environment file
   ansible.builtin.copy:
     content: |
-      {% for key, value in stack_secrets | dictsort %}
+      {% for key, value in stack_env | dictsort %}
       {{ key }}={{ value }}
       {% endfor %}
     dest: "{{ stack_dir }}/{{ stack.env_file | default('.env') }}"
@@ -77,8 +93,11 @@
     owner: "{{ ansible_user }}"
   become: "{{ stack_needs_root }}"
   no_log: true
+  # A stack gets an env file when it has secrets, or when it asks for one with
+  # env_extra — including `env_extra: {}`, which is how a stack says it wants
+  # nothing but HOST_IP.
   when:
-    - stack.secrets is defined
+    - stack.secrets is defined or stack.env_extra is defined
     - stack.write_env | default(true)
 
 # Configuration the Compose file mounts into a container. Kept separate from

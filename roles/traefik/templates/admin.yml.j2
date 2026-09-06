@@ -1,3 +1,6 @@
+# Ansible managed, rendered from roles/traefik/templates/admin.yml.j2.
+# The Proxmox nodes come from the hypervisors group in the inventory.
+#
 http:
   routers:
     proxmox-router:
@@ -21,5 +24,6 @@ http:
           interval: 30s
           timeout: 5s
         servers:
-          - url: "https://192.168.1.5:8006"
-          - url: "https://192.168.1.29:8006"
+{% for node in groups['hypervisors'] | sort %}
+          - url: "https://{{ hostvars[node].ansible_host }}:8006"
+{% endfor %}

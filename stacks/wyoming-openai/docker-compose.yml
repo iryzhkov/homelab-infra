@@ -18,4 +18,4 @@ services:
       STT_OPENAI_URL: https://whisper.ryzhkov.dev/v1
       STT_MODELS: whisper-1
     ports:
-      - "192.168.70.223:10300:10300"
+      - "${HOST_IP}:10300:10300"

@@ -4,14 +4,14 @@ services:
     container_name: dsh
     restart: unless-stopped
     ports:
-      # Bound to all interfaces so Traefik on public-api (192.168.20.33)
-      # can route ai.ryzhkov.dev -> 192.168.70.223:7100 (same route shai used).
+      # Bound to all interfaces so Traefik on the edge proxy can route
+      # ai.ryzhkov.dev to this host's port 7100 (the route shai used).
       - "7100:7100"
     environment:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?missing}
       # OV CLI config — written into /root/.openviking/ovcli.conf at boot
       # (same pattern the opencode container used).
-      OV_URL: ${OV_URL:-http://192.168.70.223:1933}
+      OV_URL: ${OV_URL:?set in .env}
       OV_API_KEY: ${OV_API_KEY:-}
       DSH_HOME: /root/.dsh
       npm_config_cache: /data/npm-cache

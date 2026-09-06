@@ -64,15 +64,21 @@ Three things do **not** follow the stack, and are worth stating plainly:
 
 ## What stays hand-written
 
-Four files in `stacks/traefik/dynamic/` are deployed verbatim, because each is
-a single instance rather than a pattern the generator should learn:
+Four files express things the generator has no shape for, each being a single
+instance rather than a pattern:
 
-| File | Why |
-|---|---|
-| `admin.yml` | Proxmox across both nodes with a sticky cookie, which the noVNC console needs |
-| `t3.yml` | T3 Code, including the laptop's LAN-to-mesh failover pair |
-| `whisper.yml` | the whisper failover pair and its path-rewriting middleware |
-| `catchall.yml` | the wildcard-certificate 404 for hostnames no router claims |
+| File | Why | Where |
+|---|---|---|
+| `admin.yml` | Proxmox across both nodes with a sticky cookie, which the noVNC console needs | rendered, `roles/traefik/templates/` |
+| `whisper.yml` | the whisper failover pair and its path-rewriting middleware | rendered, `roles/traefik/templates/` |
+| `t3.yml` | T3 Code, including the laptop's LAN-to-mesh failover pair | verbatim, `stacks/traefik/dynamic/` |
+| `catchall.yml` | the wildcard-certificate 404 for hostnames no router claims | verbatim, `stacks/traefik/dynamic/` |
+
+The first two are templates rather than fixed files because they name
+addresses: the Proxmox pair comes from the `hypervisors` group, and whisper's
+GPU and CPU backends from gaming-pc and from whichever host runs the whisper
+stack. `t3.yml` stays verbatim because two of its four backends are machines
+this inventory does not describe and one is a Nebula address.
 
 The Authentik forward-auth middleware is generated rather than hand-written,
 because its address points at wherever the authentik stack runs.

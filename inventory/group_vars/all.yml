@@ -23,17 +23,21 @@ traefik_static_routes:
   - host: zigbee.ryzhkov.dev
     url: http://192.168.70.235:8080
 
-# Dynamic configuration that stays hand-written, deployed verbatim from
-# stacks/traefik/dynamic/. These express things the generator has no shape for,
-# and each is a single instance rather than a pattern:
-#   admin.yml     Proxmox, load-balanced across both nodes with a sticky cookie
-#   t3.yml        T3 Code, including the laptop's LAN-to-mesh failover pair
+# Dynamic configuration the generator has no shape for, because each is a
+# single instance rather than a pattern. Those with addresses in them are
+# rendered so the addresses still come from the inventory; the other two have
+# none to speak of.
+#   admin.yml     Proxmox across both nodes with a sticky cookie
 #   whisper.yml   the whisper failover pair and its path-rewriting middleware
+traefik_rendered_files:
+  - admin.yml
+  - whisper.yml
+#   t3.yml        T3 Code, including the laptop's LAN-to-mesh failover pair.
+#                 Left verbatim: two of its four backends are machines this
+#                 inventory does not describe, and one is a Nebula address.
 #   catchall.yml  the wildcard-certificate 404 for unclaimed hostnames
 traefik_static_files:
-  - admin.yml
   - t3.yml
-  - whisper.yml
   - catchall.yml
 
 # AdGuard Home runs in three LXCs rather than as containers on a Docker host.

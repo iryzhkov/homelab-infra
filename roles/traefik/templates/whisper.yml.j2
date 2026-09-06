@@ -1,3 +1,7 @@
+# Ansible managed, rendered from roles/traefik/templates/whisper.yml.j2.
+# The GPU backend is gaming-pc from the inventory; the CPU fallback follows
+# the host running the whisper stack.
+#
 # Speech-to-text with automatic failover.
 #
 # whisper-gpu is gaming-pc (RTX 4090, CUDA, large-v3-turbo): about 90ms for a
@@ -46,7 +50,7 @@ http:
           interval: 10s
           timeout: 3s
         servers:
-          - url: "http://192.168.90.212:8080"
+          - url: "http://{{ hostvars['gaming-pc'].ansible_host }}:8080"
 
     whisper-cpu:
       loadBalancer:
@@ -55,4 +59,4 @@ http:
           interval: 10s
           timeout: 3s
         servers:
-          - url: "http://192.168.70.223:8080"
+          - url: "http://{{ hostvars | stack_host_ip(groups, 'whisper') }}:8080"

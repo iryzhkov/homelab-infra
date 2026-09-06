@@ -27,7 +27,7 @@ services:
     env_file:
       - stack.env
     ports:
-      - '192.168.70.234:2283:2283'   # VLAN 70 only; VLAN 60 side stays closed
+      - '${HOST_IP}:2283:2283'   # VLAN 70 only; VLAN 60 side stays closed
     depends_on:
       - redis
       - database

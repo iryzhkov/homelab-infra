@@ -108,3 +108,28 @@ to a file (`ansible-playbook ... >/tmp/ansible.out 2>&1`) and it runs normally.
 - The stack roots differ per host (`~/app`, `~/apps`, and two exceptions on
   homelab). The inventory records each host's `stack_root` rather than assuming
   one convention.
+
+## Addresses are declared once
+
+An address that appears in two places will eventually disagree with itself.
+cv-site pointed at Immich on homelab for a week after Immich moved to normandy,
+and nothing complained.
+
+So: `inventory/hosts.yml` is the only place a host's address is written. Every
+other reference derives from it.
+
+- A Compose file publishing a port on its own host uses `${HOST_IP}`, which
+  `compose_stack` writes into the stack's env file.
+- A service pointing at another service uses `env_extra` with the
+  `stack_host_ip` filter: `http://{{ hostvars | stack_host_ip(groups, 'immich')
+  }}:2283` follows the immich stack wherever it is deployed.
+- Traefik's routers and services are generated the same way, and the two
+  hand-written files that carry addresses are templates rather than fixed
+  files.
+- AdGuard's `*.ryzhkov.dev` rewrite answers with the `edge_proxy` host's
+  address, and adguardhome-sync's origin and replicas come from
+  `adguard_instances`.
+
+What remains hardcoded is deliberate: VLAN CIDRs in the torrent stack's
+firewall rule, the Nebula and off-inventory addresses in `t3.yml`, and the
+addresses in `docs/` and in the AdGuard replica reference copies.

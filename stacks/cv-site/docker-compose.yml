@@ -6,7 +6,7 @@ services:
       - "8091:8091"
     environment:
       - PORT=8091
-      - OLLAMA_URL=http://192.168.70.223:8080
+      - OLLAMA_URL=${OLLAMA_URL:?set in .env}
       - ADMIN_KEY=${ADMIN_KEY:-changeme}
       - DISCORD_WEBHOOK=${DISCORD_WEBHOOK}
       - IMMICH_URL=${IMMICH_URL}

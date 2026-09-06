@@ -23,5 +23,5 @@ services:
     tmpfs:
       - /tmp/cache:size=1000000000
     ports:
-      - '192.168.70.234:5000:5000'    # unauthenticated API, for the HA integration
-      - '192.168.70.234:8971:8971'    # authenticated web UI
+      - '${HOST_IP}:5000:5000'    # unauthenticated API, for the HA integration
+      - '${HOST_IP}:8971:8971'    # authenticated web UI

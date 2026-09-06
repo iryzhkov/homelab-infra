@@ -12,6 +12,13 @@
     mode: "0644"
   loop: "{{ traefik_static_files }}"
 
+- name: Render the hand-written files that carry addresses
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ traefik_dynamic_dir }}/{{ item }}"
+    mode: "0644"
+  loop: "{{ traefik_rendered_files }}"
+
 - name: Render the generated dynamic configuration
   ansible.builtin.template:
     src: generated.yml.j2
@@ -37,6 +44,9 @@
     url: http://127.0.0.1:8080/api/http/routers
     return_content: true
   register: traefik_routers
+  # A read, so it runs in check mode too, where it reports what Traefik is
+  # serving right now rather than what the run would have changed.
+  check_mode: false
   until: traefik_routers.json | rejectattr('status', 'equalto', 'enabled') | list | length == 0
   retries: 5
   delay: 2
@@ -45,4 +55,4 @@
 - name: Report how many routers are live
   ansible.builtin.debug:
     msg: >-
-      {{ traefik_routers.json | length }} routers loaded, all enabled
+      {{ traefik_routers.json | default([]) | length }} routers loaded, all enabled

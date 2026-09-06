@@ -53,8 +53,18 @@ stacks:
       - host: igor.ryzhkov.dev
         port: 8091
     dir: /home/iryzhkov/cv-site
+    env_extra:
+      # Immich moved to normandy on 2026-08-30 and this kept pointing at
+      # homelab, where nothing has answered on 2283 since. It now follows the
+      # stack.
+      IMMICH_URL: "http://{{ hostvars | stack_host_ip(groups, 'immich') }}:2283"
+      # The port this used to name serves whisper.cpp now, not Ollama, so the
+      # site was talking to a live server that does not speak the API.
+      OLLAMA_URL: "http://{{ hostvars['gaming-pc'].ansible_host }}:11434"
     secrets: homelab-cv-site
   - name: dsh
+    env_extra:
+      OV_URL: "http://{{ hostvars | stack_host_ip(groups, 'openviking') }}:1933"
     routes:
       - host: ai.ryzhkov.dev
         port: 7100
@@ -153,4 +163,8 @@ stacks:
       - host: voice.ryzhkov.dev
         port: 8097
   - name: whisper
+    # Publishes on the host's own address, so it needs HOST_IP and nothing else.
+    env_extra: {}
   - name: wyoming-openai
+    # Publishes on the host's own address, so it needs HOST_IP and nothing else.
+    env_extra: {}
