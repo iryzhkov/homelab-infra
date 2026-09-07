@@ -1,0 +1,52 @@
+# Ansible managed, from roles/nebula/templates/proxmox-a.yml.j2.
+# Do not edit on the host: the next playbook run overwrites it.
+#
+# The hypervisors joined the mesh on 2026-09-06 so that corosync's QDevice
+# could reach the arbiter on the OCI lighthouse without opening a port to the
+# internet. Nothing else here depends on it yet, but remote hypervisor access
+# from off the LAN comes free with it.
+
+pki:
+  ca: /etc/nebula/ca.crt
+  cert: /etc/nebula/proxmox-a.crt
+  key: /etc/nebula/proxmox-a.key
+
+static_host_map:
+  "10.42.0.1": ["150.230.40.9:4242"]
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+    - "10.42.0.1"
+
+listen:
+  host: 0.0.0.0
+  port: 0
+
+# The lighthouse relays for peers that cannot punch a direct path.
+relay:
+  relays:
+    - 10.42.0.1
+  am_relay: false
+  use_relays: true
+
+punchy:
+  punch: true
+  respond: true
+  delay: 1s
+
+tun:
+  dev: nebula1
+  drop_local_broadcast: false
+  drop_multicast: false
+
+firewall:
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  inbound:
+    - port: any
+      proto: any
+      host: any

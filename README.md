@@ -70,6 +70,10 @@ The Backblaze backups were restored from for the first time on 2026-09-06 and
 the results, including what turned out not to be backed up at all, are in
 [docs/restore-test-2026-09-06.md](docs/restore-test-2026-09-06.md).
 
+The two-node cluster gained a third quorum vote on 2026-09-06, from a QDevice
+on the OCI lighthouse reached over Nebula rather than through an opened port;
+see [docs/cluster-quorum.md](docs/cluster-quorum.md).
+
 homelab runs a daily drift check since 2026-09-06, comparing itself against
 what was last deployed to it and reporting into the fleet feed when it does
 not match; see [docs/drift-check.md](docs/drift-check.md).
