@@ -12,10 +12,11 @@
 # but a rolling window of snapshots is exactly the case where mirroring is what
 # you want.
 #
-# --b2-hard-delete because B2 keeps every version of every file forever unless
-# told otherwise, and this bucket has no lifecycle rule. Without it, syncing
-# away an expired snapshot only hides it, and an hourly job would quietly add
-# about a gigabyte and a half a month of invisible history.
+# Deliberately NOT --b2-hard-delete since 2026-09-06, when the bucket gained a
+# lifecycle rule that removes superseded versions after 30 days. Syncing away
+# an expired snapshot now hides it for a month before Backblaze collects it,
+# which turns a mistaken prune into something recoverable. The steady-state
+# cost of that window is about a gigabyte and a half, or a cent a month.
 #
 # Quiet on success, except for the verification tier, whose whole purpose is to
 # say out loud that the backups still restore. A failure goes to the feed and
@@ -64,15 +65,14 @@ case "$tier" in
         remote_dir=""
         ;;
     weekly)
-        # What a bucket lifecycle rule would do server-side. The rclone
-        # application key has no writeBuckets capability, so the rule cannot be
-        # set from here; `rclone cleanup` removes the old versions with the
-        # deleteFiles capability it does have. Set the lifecycle rule in the
-        # B2 console when convenient and this tier becomes redundant.
-        rclone cleanup b2:igor-offsite-backup >>"$output" 2>&1
+        # This used to run `rclone cleanup`, standing in for a lifecycle rule
+        # the bucket did not have. It has one now, so the job changed from
+        # doing the work to checking that the rule still does it: a rule that
+        # quietly disappears would take months to notice, and a rule with
+        # daysFromUploadingToHiding set would start expiring live backups.
+        "$HOME/.local/bin/homelab-b2-guard" >>"$output" 2>&1
         status=$?
-        echo "old versions cleaned up" >>"$output"
-        subject="backblaze version"
+        subject="backblaze lifecycle rule"
         local_dir=""
         remote_dir=""
         ;;
@@ -83,7 +83,7 @@ case "$tier" in
 esac
 
 if [ "$status" -eq 0 ] && [ -n "$local_dir" ]; then
-    rclone sync --b2-hard-delete "$local_dir" "$remote_dir" >>"$output" 2>&1
+    rclone sync "$local_dir" "$remote_dir" >>"$output" 2>&1
     status=$?
     [ "$status" -ne 0 ] && echo "rclone sync to $remote_dir failed" >>"$output"
 fi

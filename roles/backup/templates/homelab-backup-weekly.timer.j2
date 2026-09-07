@@ -1,8 +1,8 @@
 [Unit]
-Description=Weekly Backblaze version cleanup
+Description=Weekly Backblaze lifecycle rule check
 
 [Timer]
-# Sunday morning, after Thursday's uploads have settled and before Monday's.
+# Sunday morning. One API call; the hour does not matter much.
 OnCalendar=Sun *-*-* 03:20
 Persistent=true
 RandomizedDelaySec=15m

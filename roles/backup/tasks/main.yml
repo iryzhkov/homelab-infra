@@ -75,6 +75,7 @@
     - homelab-influx-backup
     - homelab-backup-run
     - homelab-restore-verify
+    - homelab-b2-guard
 
 - name: Install the systemd user units
   ansible.builtin.template:

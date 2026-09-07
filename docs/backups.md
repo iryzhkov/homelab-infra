@@ -6,6 +6,7 @@ Three tiers, two of which this repository owns.
 |---|---|---|---|
 | Hourly | Vaultwarden and Actual Budget, one consistent snapshot per database | every hour | `apps/homelab/backups/sqlite`, `rclone sync` |
 | Daily | InfluxDB, a full `influx backup` archive | 00:40 | `apps/homelab/backups/influxdb`, `rclone sync` |
+| Weekly | a check that the bucket's lifecycle rule is still sane | Sunday 03:20 | one API call |
 | Twice weekly | everything else: `~/app`, `~/apps`, `~/cv-site`, the NAS trees, the Postgres dumps | Mon and Thu, 01:30–06:40 | various, `rclone copy`, still in cron |
 
 The first two are `roles/backup`, deployed by `playbooks/backup.yml`. The third

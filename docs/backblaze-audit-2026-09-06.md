@@ -12,6 +12,12 @@ held things nobody had looked at in a while.
 | **current versions** | **206,684** | **193.3 GiB** |
 | **including superseded versions** | **347,382** | **289.3 GiB** |
 
+## After
+
+131,481 objects, 135.8 GiB — and `rclone size` and `rclone size --b2-versions`
+now report the same number, meaning nothing is hidden behind what is stored.
+153.5 GiB removed, 53% of the bucket.
+
 A third of the bytes were versions of files that had since changed. The bucket
 has no lifecycle rule, so B2 had kept every one of them since 2026-03.
 Vaultwarden's directory was the clearest case: 4 MB of current files, 90 MB
@@ -63,12 +69,19 @@ npm caches, `emby/sync`, Immich's `thumbs` and `encoded-video`, and
 removed rather than hidden. Without it the hourly tier would have added about a
 gigabyte and a half of invisible history every month.
 
-**A weekly `rclone cleanup`**, which removes superseded versions across the
-bucket. This is what a lifecycle rule would do server-side, and it exists
-because the rclone application key has `deleteFiles` but not `writeBuckets`, so
-the rule cannot be set from the host. Setting "keep prior versions for 30 days"
-in the B2 console would be better — it needs no client to run — and would make
-this tier redundant.
+**A bucket lifecycle rule**, set in the B2 console the same day:
+`daysFromHidingToDeleting: 30`, `daysFromUploadingToHiding: null`, whole
+bucket. Superseded versions are collected after a month; current files are
+never hidden by age, which is the half that matters — the other setting would
+expire live backups on a timer.
+
+The weekly tier that used to run `rclone cleanup` now checks that rule instead
+of standing in for it. A rule that quietly disappeared would take months to
+notice, and by then the bucket would be back where this audit found it.
+
+With the rule in place the syncs no longer pass `--b2-hard-delete`: a pruned
+snapshot is hidden for thirty days before Backblaze collects it, so a mistaken
+prune is recoverable. The window costs about a gigabyte and a half.
 
 ## What was deliberately kept
 

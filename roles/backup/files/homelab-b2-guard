@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Check that the Backblaze bucket's lifecycle rule is still what we think.
+
+The bucket keeps every version of every file unless a lifecycle rule collects
+them. Between 2026-03 and 2026-09 there was no rule, and a third of the bucket
+turned out to be superseded copies nobody could see. A rule now exists, which
+means the weekly `rclone cleanup` that stood in for it is no longer needed —
+and means the rule itself is now the thing worth watching.
+
+Two properties matter, and the second one more:
+
+  daysFromHidingToDeleting  set, so superseded versions are eventually removed
+  daysFromUploadingToHiding null, so current files are NEVER hidden by age
+
+If the second were ever set, Backblaze would start hiding live backups on a
+timer. That is the failure this exists to catch.
+
+Exit 0 when the rule is sane, 1 when it is not.
+"""
+
+import base64
+import configparser
+import json
+import os
+import sys
+import urllib.request
+
+BUCKET = "igor-offsite-backup"
+
+
+def api_call(url, token):
+    return json.load(urllib.request.urlopen(
+        urllib.request.Request(url, headers={"Authorization": token})))
+
+
+def main():
+    config = configparser.ConfigParser()
+    config.read(os.path.expanduser("~/.config/rclone/rclone.conf"))
+    if "b2" not in config:
+        print("no b2 remote in the rclone configuration", file=sys.stderr)
+        return 1
+
+    auth = base64.b64encode(
+        f'{config["b2"]["account"]}:{config["b2"]["key"]}'.encode()).decode()
+    account = json.load(urllib.request.urlopen(urllib.request.Request(
+        "https://api.backblazeb2.com/b2api/v3/b2_authorize_account",
+        headers={"Authorization": "Basic " + auth})))
+
+    storage = account["apiInfo"]["storageApi"]
+    buckets = api_call(
+        f'{storage["apiUrl"]}/b2api/v3/b2_list_buckets'
+        f'?accountId={account["accountId"]}&bucketName={BUCKET}',
+        account["authorizationToken"])
+    rules = buckets["buckets"][0]["lifecycleRules"]
+
+    if not rules:
+        print(f"{BUCKET} has no lifecycle rule: superseded versions will "
+              "accumulate forever, as they did until 2026-09-06", file=sys.stderr)
+        return 1
+
+    problems = []
+    for rule in rules:
+        if rule.get("daysFromUploadingToHiding") is not None:
+            problems.append(
+                f'prefix {rule["fileNamePrefix"]!r} hides files '
+                f'{rule["daysFromUploadingToHiding"]} days after upload, which '
+                "would expire live backups on a timer")
+        if rule.get("daysFromHidingToDeleting") is None:
+            problems.append(
+                f'prefix {rule["fileNamePrefix"]!r} never deletes hidden '
+                "versions, so they accumulate")
+
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        return 1
+
+    for rule in rules:
+        print(f'ok  prefix {rule["fileNamePrefix"] or "(whole bucket)"}: '
+              f'current files never expire, superseded versions removed after '
+              f'{rule["daysFromHidingToDeleting"]} days')
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
