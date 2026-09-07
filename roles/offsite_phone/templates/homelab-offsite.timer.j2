@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily offsite bundle to the phone
+
+[Timer]
+# Twice a day rather than once: the phone is only reachable when it is on the
+# mesh or the home network, and two attempts at different hours catch it more
+# often than one.
+OnCalendar=*-*-* 07:15
+OnCalendar=*-*-* 21:15
+Persistent=true
+RandomizedDelaySec=20m
+
+[Install]
+WantedBy=timers.target

@@ -57,6 +57,11 @@ Traefik's dynamic configuration is generated from the same inventory since
 2026-09-06, so a service's backend address follows the host it runs on; see
 [docs/traefik-routing.md](docs/traefik-routing.md).
 
+An 11 MB encrypted bundle — the SOPS key, the Backblaze credentials, the
+newest small-database snapshots and a git bundle of this repository — is
+carried out of the house by the phone twice a day; see
+[docs/offsite-bundle.md](docs/offsite-bundle.md).
+
 Backups are described in [docs/backups.md](docs/backups.md): hourly consistent
 SQLite snapshots and a daily InfluxDB archive are deployed from here, the
 twice-weekly rclone and Postgres jobs remain in cron.

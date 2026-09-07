@@ -1,0 +1,13 @@
+---
+# The encrypted offsite bundle carried by the phone.
+#
+#   ansible-playbook playbooks/offsite.yml --check --diff
+
+- name: Configure the offsite bundle
+  hosts: docker_hosts
+  gather_facts: false
+  tasks:
+    - name: Install the bundle job
+      ansible.builtin.include_role:
+        name: offsite_phone
+      when: offsite_enabled | default(false)

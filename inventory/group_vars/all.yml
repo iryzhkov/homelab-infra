@@ -101,3 +101,19 @@ nebula_probe_hosts:
 # notify-relay runs as a systemd service on homelab and pushes to the phone
 # over Nebula. Failures and drift go there as well as to the feed.
 notify_relay_host: homelab
+
+# The offsite bundle. Small, encrypted, and carried out of the house by the
+# phone; see docs/offsite-bundle.md.
+offsite_stage: /mnt/backup/offsite
+offsite_phone_hosts:
+  # The alias fleet_ssh writes into the sending host's ssh config, which
+  # carries the phone's mesh address, user and non-standard port.
+  - phone
+offsite_phone_path: homelab-offsite
+offsite_keep: 7
+# Where the controller prepares the items it contributes to the bundle.
+offsite_local_work: "{{ lookup('env', 'HOME') }}/.cache/homelab-offsite"
+# The recovery key's private half is in Vaultwarden and on paper, and is on no
+# machine in this house by design. Losing it means the bundle is unreadable;
+# that is the trade for a stolen phone yielding nothing.
+offsite_recipient: age1us6n6ky6yf6fz084hhw35rzd3xnsra5fazt9dgmc7lqsfhvwqupqpu74ju

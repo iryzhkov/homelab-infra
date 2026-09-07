@@ -42,6 +42,9 @@
       Host {{ peer }}
           HostName {{ hostvars[peer].ansible_host }}
           User {{ hostvars[peer].ssh_user }}
+      {% if hostvars[peer].ssh_port is defined %}
+          Port {{ hostvars[peer].ssh_port }}
+      {% endif %}
       {% endfor %}
   when: fleet_ssh_peers | default([]) | length > 0
 

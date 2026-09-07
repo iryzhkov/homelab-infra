@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Build the small offsite bundle and put a copy on the phone.
+#
+# Every other copy of the things that matter most is inside the house: the SOPS
+# age key is on the laptop and on omarchy-pc, the rclone credentials that reach
+# Backblaze are on this host, and the newest database snapshots are here and in
+# a bucket that needs those credentials to open. A fire takes all of it at once.
+#
+# The phone leaves the house every day, which makes it the only genuinely
+# offsite thing in the estate. The bundle is a few megabytes, so the phone
+# neither notices nor cares.
+#
+# Everything in it is encrypted to a recovery age key whose private half is not
+# on the phone and not on any machine here — it belongs in Vaultwarden and on
+# paper. A stolen phone therefore yields ciphertext.
+#
+#   homelab-offsite-bundle [--stage-only]
+#
+# Exit 0 on success, 1 if the bundle could not be built, 2 if it was built and
+# staged but no copy reached the phone.
+
+set -uo pipefail
+
+config="${HOMELAB_OFFSITE_CONFIG:-$HOME/.config/homelab-offsite/env}"
+# shellcheck source=/dev/null
+[ -r "$config" ] && . "$config"
+
+: "${OFFSITE_STAGE:?OFFSITE_STAGE is not set}"
+: "${OFFSITE_RECIPIENT:?OFFSITE_RECIPIENT is not set}"
+: "${OFFSITE_PHONE_HOSTS:?OFFSITE_PHONE_HOSTS is not set}"
+: "${OFFSITE_PHONE_PATH:=homelab-offsite}"
+: "${OFFSITE_KEEP:=7}"
+
+stage_only=""
+[ "${1:-}" = "--stage-only" ] && stage_only=yes
+
+stamp=$(date +%Y-%m-%d_%H%M)
+work=$(mktemp -d)
+bundle="$OFFSITE_STAGE/homelab-offsite_$stamp.tar.gz.age"
+trap 'rm -rf "$work"' EXIT
+
+collect() {
+    # collect <source> <name-in-bundle>; a missing source is a failure, because
+    # a bundle that is quietly missing the age key is worse than no bundle.
+    local src="$1" name="$2"
+    if [ ! -e "$src" ]; then
+        echo "missing: $src" >&2
+        return 1
+    fi
+    mkdir -p "$work/$(dirname "$name")"
+    cp -a "$src" "$work/$name"
+}
+
+fail=0
+
+# Items the controller contributes, because this host does not have them and
+# should not: the SOPS age key, encrypted to the recovery recipient before it
+# ever leaves the laptop, and a git bundle of the infrastructure repository.
+# They arrive already encrypted and go into the bundle as they are.
+if [ -d "$OFFSITE_STAGE/contributed" ] && [ -n "$(ls -A "$OFFSITE_STAGE/contributed" 2>/dev/null)" ]; then
+    cp -a "$OFFSITE_STAGE/contributed/." "$work/"
+else
+    echo "missing: nothing in $OFFSITE_STAGE/contributed" >&2
+    fail=1
+fi
+
+# The credentials that reach the Backblaze bucket, without which the offsite
+# backups are unreadable even though they exist.
+collect "$HOME/.config/rclone/rclone.conf" "rclone.conf" || fail=1
+# The feed and notify tokens are not worth carrying; these are.
+collect "$HOME/.config/homelab-backup/env" "homelab-backup-env" || fail=1
+
+# The newest snapshot of each small database, taken from the local copies
+# rather than from Backblaze: this bundle is what you use when Backblaze is
+# reachable but its credentials are not, or when nothing here survived.
+for db in "$HOME"/app/backups/sqlite/*/; do
+    [ -d "$db" ] || continue
+    name=$(basename "$db")
+    newest=$(ls -1 "$db" 2>/dev/null | sort | tail -1)
+    [ -n "$newest" ] && collect "$db$newest" "databases/$newest"
+done
+for prefix in authentik miniflux; do
+    newest=$(ls -1 "$HOME"/app/backups/postgres/${prefix}_*.sql.gz 2>/dev/null | sort | tail -1)
+    [ -n "$newest" ] && collect "$newest" "databases/$(basename "$newest")"
+done
+
+cat >"$work/README.txt" <<EOF
+homelab offsite bundle, $stamp
+
+Decrypt with the recovery key, which is in Vaultwarden and on paper, and is
+deliberately not on this phone:
+
+    age -d -i homelab-recovery.key homelab-offsite_$stamp.tar.gz.age | tar -xz
+
+Contents:
+  sops-age-key.txt.age  unlocks every secret in the homelab-infra repository.
+                        Encrypted a second time, to the same recovery key, on
+                        the laptop: the host that builds this bundle never
+                        holds the plaintext key.
+  rclone.conf           Backblaze credentials, to reach the rest of the backups
+  homelab-backup-env    InfluxDB admin token used by the backup jobs
+  databases/            newest snapshot of each small database
+  homelab-infra.bundle  git clone <file> restores the whole repository
+
+Restore order after losing the house:
+  1. age -d -i homelab-recovery.key sops-age-key.txt.age > ~/.config/sops/age/keys.txt
+  2. git clone homelab-infra.bundle homelab-infra
+  3. put rclone.conf at ~/.config/rclone/rclone.conf
+Everything else follows from those three: the repository describes the fleet,
+the SOPS key opens its secrets, and rclone reaches the rest of the backups.
+EOF
+
+if [ "$fail" -ne 0 ]; then
+    echo "bundle not built: something required was missing" >&2
+    exit 1
+fi
+
+command -v age >/dev/null || { echo "age is not installed on this host" >&2; exit 1; }
+
+mkdir -p "$OFFSITE_STAGE"
+if ! tar -czf - -C "$work" . | age -r "$OFFSITE_RECIPIENT" -o "$bundle"; then
+    rm -f "$bundle"
+    echo "encryption failed" >&2
+    exit 1
+fi
+chmod 600 "$bundle"
+size=$(stat -c %s "$bundle" 2>/dev/null || echo 0)
+# A bundle this small cannot contain the key, the credentials and a repository.
+if [ "$size" -lt 50000 ]; then
+    rm -f "$bundle"
+    echo "bundle is only $size bytes, refusing to keep it" >&2
+    exit 1
+fi
+echo "staged $(basename "$bundle"), $size bytes"
+
+# Keep the staging directory to the same depth as the phone.
+while [ "$(ls -1 "$OFFSITE_STAGE"/homelab-offsite_*.tar.gz.age 2>/dev/null | wc -l)" -gt "$OFFSITE_KEEP" ]; do
+    rm -f "$(ls -1 "$OFFSITE_STAGE"/homelab-offsite_*.tar.gz.age | head -1)"
+done
+
+[ -n "$stage_only" ] && exit 0
+
+# The phone is reachable on the LAN when it is home and over Nebula when it is
+# not, and quite often on neither. Try both, and let the caller decide what a
+# run of failures means.
+for host in $OFFSITE_PHONE_HOSTS; do
+    if ! timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" \
+        "mkdir -p '$OFFSITE_PHONE_PATH'" >/dev/null 2>&1; then
+        echo "phone not reachable as $host"
+        continue
+    fi
+    if timeout 300 scp -q -o BatchMode=yes "$bundle" "$host:$OFFSITE_PHONE_PATH/" 2>/dev/null; then
+        kept=$(timeout 30 ssh -o BatchMode=yes "$host" \
+            "cd '$OFFSITE_PHONE_PATH' && ls -1 homelab-offsite_*.tar.gz.age | sort | head -n -$OFFSITE_KEEP | xargs -r rm -f; ls -1 homelab-offsite_*.tar.gz.age | wc -l" 2>/dev/null)
+        echo "copied to $host, $(echo "$kept" | tr -d ' ') bundle(s) on the phone"
+        date +%s >"$OFFSITE_STAGE/.last-delivery"
+        exit 0
+    fi
+    echo "copy to $host failed"
+done
+
+echo "bundle staged but not delivered to the phone" >&2
+exit 2

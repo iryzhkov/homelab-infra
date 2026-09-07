@@ -1,0 +1,9 @@
+[Unit]
+Description=Build the offsite bundle and copy it to the phone
+Documentation=https://github.com/iryzhkov/homelab-infra
+
+[Service]
+Type=oneshot
+Environment=PATH={{ ansible_env.HOME }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart={{ ansible_env.HOME }}/.local/bin/homelab-offsite-run
+TimeoutStartSec=10min

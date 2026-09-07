@@ -1,0 +1,114 @@
+---
+# The offsite bundle: a few megabytes of the things whose every other copy is
+# inside this house, encrypted and pushed to the phone.
+#
+# The phone is the only piece of the estate that leaves the building daily. It
+# holds ciphertext only: the recovery key that opens the bundle is in
+# Vaultwarden and on paper, deliberately not on the phone and not on any
+# machine here.
+
+- name: Install the notification client
+  ansible.builtin.include_role:
+    name: notify
+
+- name: Gather the facts this role needs
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - env
+
+- name: Ensure the controller's working directory exists
+  ansible.builtin.file:
+    path: "{{ offsite_local_work }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+
+- name: Ensure the directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ ansible_env.HOME }}/.config/homelab-offsite"
+    - "{{ offsite_stage }}"
+
+- name: Configure the bundle
+  ansible.builtin.copy:
+    content: |
+      OFFSITE_STAGE={{ offsite_stage }}
+      OFFSITE_RECIPIENT={{ offsite_recipient }}
+      OFFSITE_PHONE_HOSTS="{{ offsite_phone_hosts | join(' ') }}"
+      OFFSITE_PHONE_PATH={{ offsite_phone_path }}
+      OFFSITE_KEEP={{ offsite_keep }}
+      OFFSITE_REPO={{ offsite_repo | default('') }}
+    dest: "{{ ansible_env.HOME }}/.config/homelab-offsite/env"
+    mode: "0600"
+
+# Contributed from the controller, which is the only machine that holds the
+# SOPS key and the repository. The key is encrypted to the recovery recipient
+# here, before it travels, so homelab only ever handles ciphertext.
+- name: Ensure the contributed directory exists
+  ansible.builtin.file:
+    path: "{{ offsite_stage }}/contributed"
+    state: directory
+    mode: "0700"
+
+- name: Encrypt the SOPS key to the recovery recipient
+  ansible.builtin.command:
+    cmd: >-
+      age -r {{ offsite_recipient }}
+      -o {{ offsite_local_work }}/sops-age-key.txt.age
+      {{ lookup('env', 'HOME') }}/.config/sops/age/keys.txt
+    creates: "{{ offsite_local_work }}/sops-age-key.txt.age"
+  delegate_to: localhost
+
+- name: Bundle the repository
+  ansible.builtin.command:
+    cmd: git bundle create {{ offsite_local_work }}/homelab-infra.bundle --all
+    chdir: "{{ playbook_dir }}/.."
+  changed_when: true
+  delegate_to: localhost
+
+- name: Deliver the contributed items
+  ansible.builtin.copy:
+    src: "{{ offsite_local_work }}/{{ item }}"
+    dest: "{{ offsite_stage }}/contributed/{{ item }}"
+    mode: "0600"
+  loop:
+    - sops-age-key.txt.age
+    - homelab-infra.bundle
+
+- name: Install the bundle scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ ansible_env.HOME }}/.local/bin/{{ item }}"
+    mode: "0755"
+  loop:
+    - homelab-offsite-bundle
+    - homelab-offsite-run
+
+- name: Install the systemd user units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ ansible_env.HOME }}/.config/systemd/user/{{ item }}"
+    mode: "0644"
+  loop:
+    - homelab-offsite.service
+    - homelab-offsite.timer
+  register: offsite_units
+
+- name: Reload the user manager when a unit changed
+  ansible.builtin.systemd_service:
+    scope: user
+    daemon_reload: true
+  when: offsite_units is changed
+
+- name: Enable the timer
+  ansible.builtin.systemd_service:
+    scope: user
+    name: homelab-offsite.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode

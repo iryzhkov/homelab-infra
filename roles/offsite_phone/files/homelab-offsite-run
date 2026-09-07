@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Build and deliver the offsite bundle, and decide what a failure means.
+#
+# The phone is off the mesh often enough that a single missed delivery is
+# normal and not worth a notification. A bundle that has not reached it for
+# days is worth one: at that point the only offsite copy of the keys is
+# whatever is in the bucket, which those very keys are needed to open.
+
+set -uo pipefail
+
+config="$HOME/.config/homelab-offsite/env"
+# shellcheck source=/dev/null
+[ -r "$config" ] && . "$config"
+
+: "${OFFSITE_STALE_DAYS:=3}"
+
+output=$(mktemp)
+trap 'rm -f "$output"' EXIT
+
+homelab-offsite-bundle >"$output" 2>&1
+status=$?
+cat "$output"
+
+case "$status" in
+    0)
+        exit 0
+        ;;
+    2)
+        # Staged but not delivered. How long that has been true is the thing
+        # that matters, not this one attempt.
+        last="$OFFSITE_STAGE/.last-delivery"
+        if [ -r "$last" ]; then
+            days=$(( ( $(date +%s) - $(cat "$last") ) / 86400 ))
+        else
+            days=999
+        fi
+        if [ "$days" -ge "$OFFSITE_STALE_DAYS" ]; then
+            printf '\nno bundle has reached the phone in %s day(s)\n' "$days" >>"$output"
+            feed post "offsite bundle has not reached the phone in ${days}d" \
+                --severity warn --source offsite --tag "backup infra" \
+                --body-file "$output"
+            homelab-notify -t "offsite bundle stale (${days}d)" -i offsite-phone - <"$output" || true
+        fi
+        exit 0
+        ;;
+    *)
+        feed post "offsite bundle could not be built on $(hostname -s)" \
+            --severity fail --source offsite --tag "backup infra" \
+            --body-file "$output"
+        homelab-notify -t "offsite bundle failed" -p high -i offsite-phone - <"$output" || true
+        exit "$status"
+        ;;
+esac
