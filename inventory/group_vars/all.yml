@@ -105,11 +105,29 @@ notify_relay_host: homelab
 # The offsite bundle. Small, encrypted, and carried out of the house by the
 # phone; see docs/offsite-bundle.md.
 offsite_stage: /mnt/backup/offsite
-offsite_phone_hosts:
-  # The alias fleet_ssh writes into the sending host's ssh config, which
-  # carries the phone's mesh address, user and non-standard port.
-  - phone
-offsite_phone_path: homelab-offsite
+# Where the bundle is copied. Every reachable target gets a copy on every run;
+# a target that is asleep or away is skipped and tried again next time.
+#
+# The names are the aliases fleet_ssh writes into the sending host's ssh
+# config, so each carries its own address, user and port.
+offsite_targets:
+  # Always online and genuinely offsite, in San Jose. The reliable one.
+  - name: oci
+    host: oci
+    path: homelab-offsite
+    keep: 7
+  # Leaves the house daily, but only reachable when it is awake and on the
+  # mesh.
+  - name: phone
+    host: phone
+    path: homelab-offsite
+    keep: 7
+  # 126 MB of internal flash on a router whose NAND is not meant for this, so
+  # two bundles and no more. Offsite only while travelling.
+  - name: travel-router
+    host: travel-router
+    path: /root/offsite
+    keep: 2
 offsite_keep: 7
 # Where the controller prepares the items it contributes to the bundle.
 offsite_local_work: "{{ lookup('env', 'HOME') }}/.cache/homelab-offsite"

@@ -39,8 +39,7 @@
     content: |
       OFFSITE_STAGE={{ offsite_stage }}
       OFFSITE_RECIPIENT={{ offsite_recipient }}
-      OFFSITE_PHONE_HOSTS="{{ offsite_phone_hosts | join(' ') }}"
-      OFFSITE_PHONE_PATH={{ offsite_phone_path }}
+      OFFSITE_TARGETS="{{ offsite_targets | map('to_target') | join(' ') }}"
       OFFSITE_KEEP={{ offsite_keep }}
       OFFSITE_REPO={{ offsite_repo | default('') }}
     dest: "{{ ansible_env.HOME }}/.config/homelab-offsite/env"
@@ -64,6 +63,17 @@
     creates: "{{ offsite_local_work }}/sops-age-key.txt.age"
   delegate_to: localhost
 
+# The Nebula certificate authority. Without it the mesh cannot be rebuilt: new
+# nodes cannot be issued certificates, and every existing certificate is signed
+# by a key that exists in exactly one place today.
+- name: Pack the Nebula certificate authority
+  ansible.builtin.shell:
+    cmd: >-
+      tar -czf - -C {{ lookup('env', 'HOME') }}/.nebula ca.crt ca.key ca-new.crt ca-new.key
+      | age -r {{ offsite_recipient }} -o {{ offsite_local_work }}/nebula-ca.tar.gz.age
+    creates: "{{ offsite_local_work }}/nebula-ca.tar.gz.age"
+  delegate_to: localhost
+
 - name: Bundle the repository
   ansible.builtin.command:
     cmd: git bundle create {{ offsite_local_work }}/homelab-infra.bundle --all
@@ -78,6 +88,7 @@
     mode: "0600"
   loop:
     - sops-age-key.txt.age
+    - nebula-ca.tar.gz.age
     - homelab-infra.bundle
 
 - name: Install the bundle scripts

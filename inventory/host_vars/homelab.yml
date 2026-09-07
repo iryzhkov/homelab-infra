@@ -14,6 +14,9 @@
 fleet_ssh_peers:
   - normandy
   - public-api
+  # Offsite bundle targets.
+  - oci
+  - travel-router
   # The phone, for the offsite bundle. Reached over the mesh; its key on the
   # phone is restricted to homelab's mesh address.
   - phone

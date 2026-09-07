@@ -18,7 +18,8 @@ thing in the estate. The bundle is 11 MB. The phone has 70 GB free.
 | `homelab-backup-env` | the InfluxDB admin token the backup jobs use |
 | `databases/` | newest snapshot of each small database, and the newest Authentik and Miniflux dumps |
 | `homelab-infra.bundle` | a git bundle of this repository, so a rebuild does not depend on reaching GitHub with credentials that are themselves in here |
-| `README.txt` | the restore order, written for someone who has lost everything else |
+| `nebula-ca.tar.gz.age` | the Nebula certificate authority, current and rotated: without it no new mesh node can be issued a certificate |
+| `RECOVERY.md` | the restore order, written for whoever or whatever is doing the rebuilding |
 
 Deliberately not in it: anything large. Immich's library, the media, the Emby
 metadata. This is the set that makes the rest recoverable, not a copy of the
@@ -40,9 +41,20 @@ Recipient: `age1us6n6ky6yf6fz084hhw35rzd3xnsra5fazt9dgmc7lqsfhvwqupqpu74ju`.
 ## How it gets there
 
 `homelab-offsite-bundle` on homelab, twice a day at 07:15 and 21:15. It stages
-into `/mnt/backup/offsite` on the NAS, then copies to the phone over SSH,
-trying the home network first and the Nebula mesh second — the phone is on one
-or the other, and often on neither. Seven bundles are kept in both places.
+into `/mnt/backup/offsite` on the NAS, then copies to **every** target that
+answers rather than the first one — they fail independently and for different
+reasons:
+
+| Target | Where | Keeps | Reachable |
+|---|---|---|---|
+| `oci` | the lighthouse VM in San Jose | 7 | always |
+| `phone` | S25 Ultra, over the mesh | 7 | when awake and on the mesh |
+| `travel-router` | GL-MT3000, over the mesh | 2 | when travelling and powered |
+
+OCI is the dependable one: always online and genuinely elsewhere. The phone is
+the one that leaves the house daily. The travel router keeps two rather than
+seven because it has 126 MB of internal flash and its NAND is not meant for
+this.
 
 homelab reaches the phone as `phone`, an alias the `fleet_ssh` role writes into
 its SSH config from the inventory. The key it uses is authorised on the phone
@@ -69,6 +81,14 @@ Two failures found on the way, both now guarded: `age` was not installed on
 homelab, and the script happily reported "staged 0 bytes" when encryption had
 failed. It now checks for `age` up front and refuses to keep a bundle under
 50 KB, which cannot possibly hold a key, credentials and a repository.
+
+## The runbook inside
+
+`RECOVERY.md` is generated with each bundle and lists its own contents. It is
+written for someone — or an agent — starting from nothing: how to decrypt,
+which order to restore in, and where the parts that are deliberately absent
+live. Its restore order is SOPS key, then repository, then Backblaze access,
+then the mesh if hosts are being rebuilt, then the services.
 
 ## What this does not replace
 

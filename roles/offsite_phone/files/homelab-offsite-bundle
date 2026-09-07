@@ -6,9 +6,10 @@
 # Backblaze are on this host, and the newest database snapshots are here and in
 # a bucket that needs those credentials to open. A fire takes all of it at once.
 #
-# The phone leaves the house every day, which makes it the only genuinely
-# offsite thing in the estate. The bundle is a few megabytes, so the phone
-# neither notices nor cares.
+# It goes to every mesh node that can hold it: the OCI VM, which is always
+# online and genuinely elsewhere; the phone, which leaves the house daily; and
+# the travel router, which is only away when travelling and has 126 MB of flash
+# to spare. Different failure modes, so one copy is usually available.
 #
 # Everything in it is encrypted to a recovery age key whose private half is not
 # on the phone and not on any machine here — it belongs in Vaultwarden and on
@@ -27,8 +28,7 @@ config="${HOMELAB_OFFSITE_CONFIG:-$HOME/.config/homelab-offsite/env}"
 
 : "${OFFSITE_STAGE:?OFFSITE_STAGE is not set}"
 : "${OFFSITE_RECIPIENT:?OFFSITE_RECIPIENT is not set}"
-: "${OFFSITE_PHONE_HOSTS:?OFFSITE_PHONE_HOSTS is not set}"
-: "${OFFSITE_PHONE_PATH:=homelab-offsite}"
+: "${OFFSITE_TARGETS:?OFFSITE_TARGETS is not set}"
 : "${OFFSITE_KEEP:=7}"
 
 stage_only=""
@@ -84,31 +84,108 @@ for prefix in authentik miniflux; do
     [ -n "$newest" ] && collect "$newest" "databases/$(basename "$newest")"
 done
 
-cat >"$work/README.txt" <<EOF
-homelab offsite bundle, $stamp
+cat >"$work/RECOVERY.md" <<'MARKDOWN'
+# Homelab recovery payload, @STAMP@
 
-Decrypt with the recovery key, which is in Vaultwarden and on paper, and is
-deliberately not on this phone:
+You are holding everything needed to rebuild the homelab from nothing, except
+the bulk data. This file is written for whoever — or whatever — is doing the
+rebuilding, and assumes nothing survives except this bundle and the recovery
+key.
 
-    age -d -i homelab-recovery.key homelab-offsite_$stamp.tar.gz.age | tar -xz
+## What this is
 
-Contents:
-  sops-age-key.txt.age  unlocks every secret in the homelab-infra repository.
-                        Encrypted a second time, to the same recovery key, on
-                        the laptop: the host that builds this bundle never
-                        holds the plaintext key.
-  rclone.conf           Backblaze credentials, to reach the rest of the backups
-  homelab-backup-env    InfluxDB admin token used by the backup jobs
-  databases/            newest snapshot of each small database
-  homelab-infra.bundle  git clone <file> restores the whole repository
+An encrypted archive built twice a day on homelab and copied to every mesh node
+that can hold it: the OCI VM, the phone, and the travel router. It contains the
+keys and the descriptions, not the data. The data is in Backblaze B2, and the
+credentials to reach it are in here.
 
-Restore order after losing the house:
-  1. age -d -i homelab-recovery.key sops-age-key.txt.age > ~/.config/sops/age/keys.txt
-  2. git clone homelab-infra.bundle homelab-infra
-  3. put rclone.conf at ~/.config/rclone/rclone.conf
-Everything else follows from those three: the repository describes the fleet,
-the SOPS key opens its secrets, and rclone reaches the rest of the backups.
-EOF
+## Opening it
+
+The recovery age key is in Vaultwarden and on paper. It is deliberately on no
+machine in the house, so if you are reading this from a running system, you
+still need to fetch it from one of those two places.
+
+```
+@CONTENTS@
+```
+
+Its public half is @RECIPIENT@ — check that first if decryption fails.
+
+## What is inside
+
+```
+@CONTENTS@
+```
+
+| Item | What it is |
+|---|---|
+| sops-age-key.txt.age | The SOPS key, encrypted again to the same recovery key. Unlocks every secret in the infrastructure repository. |
+| nebula-ca.tar.gz.age | The Nebula certificate authority, current and rotated. Without it no new mesh node can be issued a certificate. |
+| homelab-infra.bundle | A git bundle of the infrastructure repository: inventory, roles, playbooks and documentation for the whole estate. |
+| rclone.conf | Backblaze credentials. Everything else is in that bucket. |
+| homelab-backup-env | The InfluxDB admin token used by the backup jobs. |
+| databases/ | The newest snapshot of each small database, and the newest Authentik and Miniflux dumps. |
+
+## Restore order
+
+Do these in order. Each step depends on the one before it.
+
+1. **Open the SOPS key.**
+   ```sh
+   age -d -i homelab-recovery.key sops-age-key.txt.age > ~/.config/sops/age/keys.txt
+   chmod 600 ~/.config/sops/age/keys.txt
+   ```
+
+2. **Recover the repository.** It describes every host, stack, route and backup
+   job. Read its README first; the docs/ directory explains each subsystem.
+   ```sh
+   git clone homelab-infra.bundle homelab-infra
+   cd homelab-infra && less README.md
+   ```
+
+3. **Restore Backblaze access**, which is where everything else lives.
+   ```sh
+   mkdir -p ~/.config/rclone && cp rclone.conf ~/.config/rclone/
+   rclone lsd b2:igor-offsite-backup/apps/homelab
+   ```
+
+4. **Rebuild the mesh only if the hosts are being rebuilt too.**
+   ```sh
+   age -d -i homelab-recovery.key nebula-ca.tar.gz.age | tar -xz
+   nebula-cert sign -ca-crt ca.crt -ca-key ca.key -name <host> -ip 10.42.0.N/24
+   ```
+
+5. **Bring services back.** The repository's playbooks deploy the stacks; the
+   databases in this payload seed the small ones, and the rest come from B2:
+
+   | Service | Where its data is |
+   |---|---|
+   | Vaultwarden, Actual | databases/ here, at most an hour old; attachments from B2 apps/homelab |
+   | Authentik, Miniflux | databases/ here, at most a few days old |
+   | Immich | B2 data/immich for the library, apps/normandy/postgres for the database |
+   | Everything else | B2 apps/homelab, which mirrors ~/app |
+
+## What is not in here, on purpose
+
+The bulk: photographs, media, container images, the Emby and *arr libraries.
+This payload is a few megabytes so that it can live on a phone and a travel
+router. Restoring the bulk means Backblaze and a long afternoon, and step 3 is
+what makes that possible.
+
+Also absent: SSH host and user keys. Issue new ones; nothing here depends on
+the old ones except the authorised_keys entries the repository will rewrite.
+MARKDOWN
+
+# The markdown above is written with no shell expansion, so its code fences and
+# backslashes survive intact; the handful of real values go in here.
+(cd "$work" && find . -type f | sed 's|^\./||' | sort > /tmp/offsite-contents.$$)
+sed -i -e "s|@STAMP@|$stamp|g" \
+       -e "s|@BUNDLE@|$(basename "$bundle")|g" \
+       -e "s|@RECIPIENT@|$OFFSITE_RECIPIENT|g" \
+       -e "/@CONTENTS@/r /tmp/offsite-contents.$$" \
+       -e "/@CONTENTS@/d" \
+       "$work/RECOVERY.md"
+rm -f /tmp/offsite-contents.$$
 
 if [ "$fail" -ne 0 ]; then
     echo "bundle not built: something required was missing" >&2
@@ -140,24 +217,39 @@ done
 
 [ -n "$stage_only" ] && exit 0
 
-# The phone is reachable on the LAN when it is home and over Nebula when it is
-# not, and quite often on neither. Try both, and let the caller decide what a
-# run of failures means.
-for host in $OFFSITE_PHONE_HOSTS; do
+# Every target gets a copy on every run, rather than the first one that
+# answers: they fail independently and for different reasons. The phone is
+# asleep, the travel router is in a bag, the cloud VM is always there. One
+# success is enough for the run to have done its job, and which one succeeded
+# is what the staleness check reads later.
+#
+# Each target is name:host:path:keep.
+delivered=0
+for target in $OFFSITE_TARGETS; do
+    name=${target%%:*}; rest=${target#*:}
+    host=${rest%%:*}; rest=${rest#*:}
+    path=${rest%%:*}; keep=${rest##*:}
+
     if ! timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" \
-        "mkdir -p '$OFFSITE_PHONE_PATH'" >/dev/null 2>&1; then
-        echo "phone not reachable as $host"
+        "mkdir -p '$path'" >/dev/null 2>&1; then
+        echo "$name: not reachable"
         continue
     fi
-    if timeout 300 scp -q -o BatchMode=yes "$bundle" "$host:$OFFSITE_PHONE_PATH/" 2>/dev/null; then
-        kept=$(timeout 30 ssh -o BatchMode=yes "$host" \
-            "cd '$OFFSITE_PHONE_PATH' && ls -1 homelab-offsite_*.tar.gz.age | sort | head -n -$OFFSITE_KEEP | xargs -r rm -f; ls -1 homelab-offsite_*.tar.gz.age | wc -l" 2>/dev/null)
-        echo "copied to $host, $(echo "$kept" | tr -d ' ') bundle(s) on the phone"
-        date +%s >"$OFFSITE_STAGE/.last-delivery"
-        exit 0
+    if ! timeout 600 scp -q -o BatchMode=yes "$bundle" "$host:$path/" 2>/dev/null; then
+        echo "$name: copy failed"
+        continue
     fi
-    echo "copy to $host failed"
+    # Prune on the target, oldest first. `head -n -N` keeps the newest N.
+    kept=$(timeout 30 ssh -o BatchMode=yes "$host" \
+        "cd '$path' && ls -1 homelab-offsite_*.tar.gz.age | sort | head -n -$keep | xargs -r rm -f; ls -1 homelab-offsite_*.tar.gz.age | wc -l" 2>/dev/null | tr -d ' \r')
+    echo "$name: copied, ${kept:-?} bundle(s) held"
+    date +%s >"$OFFSITE_STAGE/.last-delivery-$name"
+    delivered=$((delivered + 1))
 done
 
-echo "bundle staged but not delivered to the phone" >&2
-exit 2
+if [ "$delivered" -eq 0 ]; then
+    echo "bundle staged but reached no target" >&2
+    exit 2
+fi
+date +%s >"$OFFSITE_STAGE/.last-delivery"
+exit 0

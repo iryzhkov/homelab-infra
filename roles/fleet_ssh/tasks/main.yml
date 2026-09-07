@@ -40,7 +40,7 @@
     block: |
       {% for peer in fleet_ssh_peers %}
       Host {{ peer }}
-          HostName {{ hostvars[peer].ansible_host }}
+          HostName {{ hostvars[peer].mesh_host | default(hostvars[peer].ansible_host) }}
           User {{ hostvars[peer].ssh_user }}
       {% if hostvars[peer].ssh_port is defined %}
           Port {{ hostvars[peer].ssh_port }}
