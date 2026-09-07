@@ -8,7 +8,7 @@ being used well. It was, and the storage around it was not.
 | Node | Device | Size | Proxmox storage | Holds |
 |---|---|---|---|---|
 | proxmox-a | nvme0n1, CT500P3 | 466 GB | `local`, `local-lvm` (LVM-thin) | every VM's system disk, all the LXC volumes |
-| proxmox-a | nvme1n1, CT2000P3 | 1.8 TB | `local2tb` (dir, qcow2) | Black Pearl's download scratch, and now homelab's root |
+| proxmox-a | nvme1n1, CT2000P3 | 1.8 TB | `local2tb` (dir, qcow2) | Black Pearl's download scratch |
 | proxmox-b | nvme0n1, WD SN810 | 239 GB | `local`, `local-lvm` | normandy's system disk |
 | proxmox-b | sda, CT1000BX500 | 932 GB | `ssd1tb` (dir, qcow2) | normandy's 900 GB data disk |
 | NAS | UniFi Drive | 44 TB | `nas-backup` (NFS) | media, backups, machine learning |
@@ -46,21 +46,42 @@ returned the space immediately: the qcow2 went from 58 GB to 1.5 GB, and it
 reported 1.7 TiB trimmed.
 
 homelab, public-api and Black Pearl's system disk had no `discard=on` at all.
-They have it now. It is a pending change on each: a disk option like this
-applies when the VM next stops and starts, not on a guest reboot.
+They have it now, along with `cache=none` in place of `cache=writethrough`,
+which is both faster and equally safe. These are pending changes: a disk option
+applies when the VM next stops and starts, not on a guest reboot. Black Pearl
+was restarted the same day and has them; homelab and Home Assistant are
+waiting for a convenient moment.
 
 normandy's disks on proxmox-b were already `discard=on,ssd=1`, which is why its
 900 GB data disk occupies 3.9 GB.
 
-## Rebalancing
+## Rebalancing, attempted and abandoned
 
-The 500 GB NVMe was 73% full while the 1.8 TB NVMe held 1.5 GB. homelab's root
-disk — the largest single consumer at 192 GB — was moved to `local2tb` online,
-with the VM running.
+The 500 GB NVMe was 73% full while the 1.8 TB NVMe held 1.5 GB, so homelab's
+192 GB root — the largest single consumer — was moved to `local2tb` online.
+The move was cancelled at 17% after measuring what it was actually doing.
 
-After the pending `discard=on` takes effect and an `fstrim` runs inside
-homelab, that qcow2 should fall from roughly 190 GB to about 67 GB, which is
-what the guest actually uses.
+**The CT2000P3 cannot sustain writes.** With nothing else competing the mirror
+managed 14 MB/s, decaying from 104 MB/s at the start, which put the remaining
+160 GB at over three hours. The obvious explanations were all ruled out:
+
+| Suspect | Measurement |
+|---|---|
+| Thermal throttling | 66 °C against an 85 °C warning threshold, and `Warning Comp. Temperature Time: 0` |
+| PCIe link | negotiated x4 at 8 GT/s, full width and speed |
+| Drive health | 6% used, spare 100%, zero media errors |
+| qcow2 overhead | a plain `dd` with `O_DIRECT` to the same filesystem was also under 10 MB/s |
+
+What is left is the drive: the P3 is DRAM-less QLC. It is fine for the bursty
+writes of a torrent scratch, which is what it already does, and poor at bulk
+sequential ingest. That is a characteristic to design around rather than a
+fault to fix.
+
+So homelab's root stays on `local-lvm`, and the capacity problem is solved by
+discard instead: reclaiming its stranded blocks takes the pool from 73% to
+roughly 37% without moving anything. Cancelling a drive-mirror is safe — the VM
+keeps running on its original disk throughout, which it did, and Proxmox
+removed the partial destination file itself.
 
 ## What to check when a disk looks full
 
