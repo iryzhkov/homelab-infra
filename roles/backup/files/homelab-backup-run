@@ -3,6 +3,8 @@
 #
 #   homelab-backup-run hourly    the small SQLite databases
 #   homelab-backup-run daily     InfluxDB
+#   homelab-backup-run weekly    remove superseded Backblaze versions
+#   homelab-backup-run verify    restore the offsite copies and check them
 #
 # `rclone sync` rather than `copy` for these directories, so that pruning a
 # local snapshot prunes the offsite one too. The twice-weekly jobs use `copy`
@@ -15,13 +17,14 @@
 # away an expired snapshot only hides it, and an hourly job would quietly add
 # about a gigabyte and a half a month of invisible history.
 #
-# Quiet on success. A failure goes to the feed, because a backup that stopped
-# working is worth interrupting someone for, and this runs unattended every
-# hour.
+# Quiet on success, except for the verification tier, whose whole purpose is to
+# say out loud that the backups still restore. A failure goes to the feed and
+# to the phone: a backup that stopped working is worth interrupting someone
+# for, and the alternative is finding out during the next audit.
 
 set -uo pipefail
 
-tier="${1:?usage: homelab-backup-run hourly|daily}"
+tier="${1:?usage: homelab-backup-run hourly|daily|weekly|verify}"
 config_dir="$HOME/.config/homelab-backup"
 root="$HOME/app/backups"
 remote="b2:igor-offsite-backup/apps/homelab/backups"
@@ -53,6 +56,13 @@ case "$tier" in
         local_dir="$root/influxdb"
         remote_dir="$remote/influxdb"
         ;;
+    verify)
+        "$HOME/.local/bin/homelab-restore-verify" >>"$output" 2>&1
+        status=$?
+        subject="restore verification"
+        local_dir=""
+        remote_dir=""
+        ;;
     weekly)
         # What a bucket lifecycle rule would do server-side. The rclone
         # application key has no writeBuckets capability, so the rule cannot be
@@ -81,8 +91,16 @@ fi
 cat "$output"
 
 if [ "$status" -ne 0 ]; then
-    feed post "$subject backup failed on $(hostname -s)" \
+    feed post "$subject failed on $(hostname -s)" \
         --severity fail --source backup --tag "backup infra" \
+        --body-file "$output"
+    homelab-notify -t "$subject failed" -p high -i "backup-$tier" - <"$output" || true
+elif [ "$tier" = "verify" ]; then
+    # The one tier that reports success: a monthly line in the feed saying the
+    # offsite copies were fetched and restored is the evidence the backups are
+    # working, and silence cannot say that.
+    feed post "offsite restore verified on $(hostname -s)" \
+        --severity info --source backup --tag "backup infra" \
         --body-file "$output"
 fi
 

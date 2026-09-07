@@ -7,6 +7,11 @@
 # 2026-09-06 restore test showed they covered badly or not at all — SQLite
 # files copied live, and InfluxDB's named volumes copied by nothing.
 
+# Failures are pushed to the phone, not only posted to the feed.
+- name: Install the notification client
+  ansible.builtin.include_role:
+    name: notify
+
 - name: Gather the facts this role needs
   ansible.builtin.setup:
     gather_subset:
@@ -69,6 +74,7 @@
     - homelab-sqlite-backup
     - homelab-influx-backup
     - homelab-backup-run
+    - homelab-restore-verify
 
 - name: Install the systemd user units
   ansible.builtin.template:
@@ -82,6 +88,8 @@
     - homelab-backup-daily.timer
     - homelab-backup-weekly.service
     - homelab-backup-weekly.timer
+    - homelab-backup-verify.service
+    - homelab-backup-verify.timer
   register: backup_units
 
 - name: Reload the user manager when a unit changed
@@ -100,4 +108,5 @@
     - homelab-backup-hourly.timer
     - homelab-backup-daily.timer
     - homelab-backup-weekly.timer
+    - homelab-backup-verify.timer
   when: not ansible_check_mode

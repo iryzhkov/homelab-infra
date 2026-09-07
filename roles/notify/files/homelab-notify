@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Push a notification to the phone through notify-relay.
+#
+#   homelab-notify [-t TITLE] [-p PRIORITY] [-i ID] "message"
+#   some-command 2>&1 | homelab-notify -t "backup failed" -
+#
+# The fleet feed is the record of what happened; this is for the subset that
+# should interrupt someone. A backup that stopped working, a restore that no
+# longer restores, configuration drift on a host — things whose cost grows
+# while nobody looks at a dashboard.
+#
+# The relay spools to disk and retries, so a notification raised while the
+# phone is off the mesh arrives when it comes back. Failing to reach the relay
+# is therefore worth reporting but never worth failing a job over: the caller's
+# own result matters more than whether the phone heard about it.
+
+set -uo pipefail
+
+config="${HOMELAB_NOTIFY_CONFIG:-$HOME/.config/homelab-notify/env}"
+# shellcheck source=/dev/null
+[ -r "$config" ] && . "$config"
+
+: "${NOTIFY_URL:=http://127.0.0.1:8399}"
+
+title="homelab"
+priority="default"
+id=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -t) title="$2"; shift 2 ;;
+        -p) priority="$2"; shift 2 ;;
+        -i) id="$2"; shift 2 ;;
+        *) break ;;
+    esac
+done
+
+content="${1:?usage: homelab-notify [-t title] [-p priority] [-i id] <message|->}"
+[ "$content" = "-" ] && content=$(cat)
+
+if [ -z "${NOTIFY_TOKEN:-}" ]; then
+    echo "homelab-notify: no NOTIFY_TOKEN in $config" >&2
+    exit 1
+fi
+
+# jq builds the body so that quotes and newlines in a message cannot break it.
+body=$(jq -nc --arg t "$title" --arg c "$content" --arg p "$priority" --arg i "$id" \
+    '{title: $t, content: $c, priority: $p} + (if $i == "" then {} else {id: $i} end)')
+
+code=$(curl -sS -m 10 -o /tmp/homelab-notify.$$ -w '%{http_code}' \
+    -X POST "$NOTIFY_URL/notify" \
+    -H "Authorization: Bearer $NOTIFY_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$body" 2>/dev/null)
+result=$(cat /tmp/homelab-notify.$$ 2>/dev/null)
+rm -f /tmp/homelab-notify.$$
+
+case "$code" in
+    202|200) echo "notified: $result" ;;
+    *) echo "homelab-notify: relay answered $code $result" >&2; exit 1 ;;
+esac

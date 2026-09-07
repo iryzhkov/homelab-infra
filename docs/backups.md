@@ -65,10 +65,40 @@ docker cp influxdb-backup influxdb:/var/lib/influxdb2/
 docker exec -e INFLUX_TOKEN=... influxdb influx restore /var/lib/influxdb2/influxdb-backup --full
 ```
 
+## Monthly restore verification
+
+A backup that was restored once in September proves something about September.
+`homelab-restore-verify` runs on the first of each month and proves it again:
+
+- fetches the newest Vaultwarden snapshot **from Backblaze**, not from the
+  local copy, because what is being tested is whether the offsite copy is
+  fetchable, intact and current
+- fails if that snapshot is more than six hours old, which catches an hourly
+  timer that has quietly stopped
+- checks its integrity, compares its cipher count against the live database,
+  and starts a Vaultwarden container against it on port 8198 to prove the
+  restored file actually serves
+- restores the newest Authentik dump into a scratch Postgres and counts users
+- removes both containers and the scratch directory afterwards
+
+First run, 2026-09-06: `vaultwarden: 309 ciphers, served from the restored
+copy, 0h old` and `authentik: 9 users`, in eleven seconds.
+
+This is the one tier that reports success. A monthly line in the feed saying
+the offsite copies were fetched and restored is the evidence that the backups
+work; silence cannot say that.
+
 ## Failure reporting
 
-Both tiers run through `homelab-backup-run`, which is quiet on success and
-posts to the fleet feed as a `fail` when a tier or its upload does not work.
+Every tier runs through `homelab-backup-run`, which is quiet on success and,
+when a tier or its upload does not work, posts to the fleet feed as a `fail`
+**and pushes to the phone** through notify-relay. Configuration drift does the
+same at a lower priority.
+
+The feed is the record; the push is for the subset that should interrupt
+someone. A backup that stopped working costs more the longer it goes unnoticed,
+and the alternative is finding out during the next audit — which is exactly how
+the InfluxDB gap and the stale cv-site URLs survived for weeks.
 That path was exercised the first time the daily tier ran: the wrapper sourced
 its environment file without exporting, `INFLUX_TOKEN` never reached the backup
 script, and the failure arrived in the feed as entry 21.

@@ -1,0 +1,49 @@
+---
+# The notification client: a small wrapper that pushes to notify-relay, and the
+# token it needs.
+#
+# Split out of the backup and drift roles because both want it and neither owns
+# it. notify-relay itself runs on homelab as a systemd service and is not
+# managed by this repository; see the OpenViking note of the same name.
+
+- name: Gather the facts this role needs
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - env
+
+- name: Load the relay token
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/notify-relay.sops.yaml"
+    name: notify_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Ensure the directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ansible_env.HOME }}/.local/bin"
+    - "{{ ansible_env.HOME }}/.config/homelab-notify"
+
+- name: Install the notification client
+  ansible.builtin.copy:
+    src: homelab-notify
+    dest: "{{ ansible_env.HOME }}/.local/bin/homelab-notify"
+    mode: "0755"
+
+# The relay listens on 0.0.0.0:8399 so both LAN and mesh clients reach it. A
+# host that runs it talks to itself over loopback; anything else uses the LAN
+# address of the host that does.
+- name: Install the relay configuration
+  ansible.builtin.copy:
+    content: |
+      NOTIFY_URL={{ 'http://127.0.0.1:8399' if inventory_hostname == notify_relay_host
+                    else 'http://' ~ hostvars[notify_relay_host].ansible_host ~ ':8399' }}
+      NOTIFY_TOKEN={{ notify_secrets.NOTIFY_TOKEN }}
+    dest: "{{ ansible_env.HOME }}/.config/homelab-notify/env"
+    mode: "0600"
+  no_log: true

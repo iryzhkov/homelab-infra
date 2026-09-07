@@ -97,3 +97,7 @@ feed_url: "http://{{ hostvars[feed_host].ansible_host }}:1934"
 nebula_probe_hosts:
   - 10.42.0.1
   - 10.42.0.2
+
+# notify-relay runs as a systemd service on homelab and pushes to the phone
+# over Nebula. Failures and drift go there as well as to the feed.
+notify_relay_host: homelab

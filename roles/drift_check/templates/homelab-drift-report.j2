@@ -39,12 +39,14 @@ case "$status" in
         feed post "configuration drift on {{ drift_check_scope }}" \
             --severity warn --source drift-check --tag "drift infra" \
             --body-file "$output"
+        homelab-notify -t "drift on {{ drift_check_scope }}" -i drift-check - <"$output" || true
         ;;
     *)
         cat "$output" >&2
         feed post "drift check could not run on {{ drift_check_scope }}" \
             --severity fail --source drift-check --tag "drift infra" \
             --body-file "$output"
+        homelab-notify -t "drift check broken" -p high -i drift-check - <"$output" || true
         ;;
 esac
 

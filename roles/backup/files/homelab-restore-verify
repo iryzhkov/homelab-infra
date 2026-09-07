@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Prove that the offsite backups still restore, without anyone having to
+# remember to try.
+#
+# The 2026-09-06 restore test was done by hand and answered the question for
+# that day only. This does the same thing on a schedule and says so out loud:
+# it pulls the newest Vaultwarden snapshot and the newest Authentik dump *from
+# Backblaze*, not from the local copies, restores both into scratch containers,
+# and checks that what comes back looks like the live data.
+#
+# Deliberately restores from B2 rather than from ~/app/backups: a local file
+# proves the snapshot was written, and this is meant to prove the offsite copy
+# is fetchable, intact and current.
+#
+#   homelab-restore-verify [max-age-hours]
+#
+# Exit 0 when everything restored and matched, 1 when it did not.
+
+set -uo pipefail
+
+max_age_hours="${1:-6}"
+remote=b2:igor-offsite-backup/apps/homelab/backups
+scratch=$(mktemp -d)
+vw_container=vw-restore-verify
+pg_container=pg-restore-verify
+findings=()
+
+cleanup() {
+    docker rm -f "$vw_container" "$pg_container" >/dev/null 2>&1 || true
+    rm -rf "$scratch"
+}
+trap cleanup EXIT
+
+note() { findings+=("$1"); echo "$1"; }
+
+# --- Vaultwarden: newest hourly snapshot ------------------------------------
+
+newest=$(rclone lsf --files-only "$remote/sqlite/vaultwarden" 2>/dev/null | sort | tail -1)
+if [ -z "$newest" ]; then
+    note "FAIL vaultwarden: no snapshot in $remote/sqlite/vaultwarden"
+else
+    rclone copyto "$remote/sqlite/vaultwarden/$newest" "$scratch/vw.sqlite3.gz" 2>/dev/null
+
+    # The snapshot's name carries the hour it was taken, which is the only
+    # honest measure of how far behind the offsite copy is.
+    stamp=${newest##*_}; stamp=${stamp%%.*}
+    taken=$(date -d "$(echo "$newest" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{4}' | tr '_' ' ' | sed -E 's/([0-9]{2})([0-9]{2})$/\1:\2/')" +%s 2>/dev/null || echo 0)
+    age_hours=$(( ( $(date +%s) - taken ) / 3600 ))
+    if [ "$taken" -eq 0 ]; then
+        note "WARN vaultwarden: cannot read a timestamp out of $newest"
+    elif [ "$age_hours" -gt "$max_age_hours" ]; then
+        note "FAIL vaultwarden: newest offsite snapshot is ${age_hours}h old, expected under ${max_age_hours}h"
+    fi
+
+    gunzip -c "$scratch/vw.sqlite3.gz" > "$scratch/vw.sqlite3" 2>/dev/null
+    restored=$(python3 - "$scratch/vw.sqlite3" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+    print("integrity-failed"); raise SystemExit
+print(con.execute("select count(*) from ciphers").fetchone()[0])
+PY
+)
+    live=$(sudo -n python3 - <<'PY'
+import sqlite3, tempfile, os
+src = "/home/iryzhkov/app/vaultwarden/data/db.sqlite3"
+con = sqlite3.connect("file:" + src + "?mode=ro", uri=True)
+dst = sqlite3.connect(os.path.join(tempfile.mkdtemp(), "live.sqlite3"))
+con.backup(dst)
+print(dst.execute("select count(*) from ciphers").fetchone()[0])
+PY
+)
+    if [ "$restored" = "integrity-failed" ]; then
+        note "FAIL vaultwarden: restored database fails its integrity check"
+    elif [ -z "$restored" ] || [ "$restored" -eq 0 ] 2>/dev/null; then
+        note "FAIL vaultwarden: restored database has no ciphers"
+    else
+        # A snapshot is up to an hour behind the live database, so it may hold
+        # slightly fewer rows. Many fewer means something is wrong.
+        floor=$(( live - live / 10 - 1 ))
+        if [ "$restored" -lt "$floor" ]; then
+            note "FAIL vaultwarden: restored $restored ciphers against $live live"
+        else
+            docker run -d --name "$vw_container" -p 127.0.0.1:8198:80 \
+                -v "$scratch:/data" vaultwarden/server:latest >/dev/null 2>&1
+            ok=""
+            for _ in $(seq 20); do
+                code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:8198/alive)
+                [ "$code" = "200" ] && { ok=yes; break; }
+                sleep 1
+            done
+            if [ -n "$ok" ]; then
+                note "ok   vaultwarden: $restored ciphers, served from the restored copy, ${age_hours}h old"
+            else
+                note "FAIL vaultwarden: restored database does not serve"
+            fi
+        fi
+    fi
+fi
+
+# --- Authentik: newest Postgres dump ----------------------------------------
+
+dump=$(rclone lsf --files-only --include "authentik_*" "$remote/postgres" 2>/dev/null | sort | tail -1)
+if [ -z "$dump" ]; then
+    note "FAIL authentik: no dump in $remote/postgres"
+else
+    rclone copyto "$remote/postgres/$dump" "$scratch/authentik.sql.gz" 2>/dev/null
+    docker run -d --name "$pg_container" -e POSTGRES_PASSWORD=verify \
+        -e POSTGRES_USER=authentik -e POSTGRES_DB=authentik postgres:16-alpine >/dev/null 2>&1
+    ready=""
+    for _ in $(seq 30); do
+        docker exec "$pg_container" pg_isready -U authentik >/dev/null 2>&1 && { ready=yes; break; }
+        sleep 1
+    done
+    if [ -z "$ready" ]; then
+        note "FAIL authentik: scratch Postgres never became ready"
+    else
+        zcat "$scratch/authentik.sql.gz" \
+            | docker exec -i "$pg_container" psql -q -U authentik -d authentik >/dev/null 2>&1
+        users=$(docker exec "$pg_container" psql -tAU authentik -d authentik \
+            -c "select count(*) from authentik_core_user" 2>/dev/null | tr -d ' \r\n')
+        if [ -z "$users" ] || [ "$users" -eq 0 ] 2>/dev/null; then
+            note "FAIL authentik: restored database has no users ($dump)"
+        else
+            note "ok   authentik: $users users restored from $dump"
+        fi
+    fi
+fi
+
+# --- Verdict ----------------------------------------------------------------
+
+printf '%s\n' "${findings[@]}" | grep -q '^FAIL' && exit 1
+exit 0

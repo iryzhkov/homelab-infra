@@ -1,0 +1,14 @@
+[Unit]
+Description=Monthly offsite restore verification
+
+[Timer]
+# Early on the first of the month, after the nightly jobs. Monthly rather than
+# weekly because it downloads from Backblaze and starts containers, and because
+# the failure it catches — an archive that no longer restores — does not appear
+# overnight.
+OnCalendar=*-*-01 04:30
+Persistent=true
+RandomizedDelaySec=20m
+
+[Install]
+WantedBy=timers.target

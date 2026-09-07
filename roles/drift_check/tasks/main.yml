@@ -7,6 +7,13 @@
 
 # site.yml does not gather facts, and this role needs one: the home directory
 # to install into.
+# Drift is pushed to the phone as well as posted to the feed: a host that no
+# longer matches the repository is worth knowing about the same day.
+- name: Install the notification client
+  ansible.builtin.include_role:
+    name: notify
+  when: drift_check_reports | default(true)
+
 - name: Gather the facts this role needs
   ansible.builtin.setup:
     gather_subset:

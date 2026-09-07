@@ -1,0 +1,11 @@
+[Unit]
+Description=Restore the offsite backups into scratch containers and check them
+Documentation=https://github.com/iryzhkov/homelab-infra
+
+[Service]
+Type=oneshot
+Environment=PATH={{ ansible_env.HOME }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart={{ ansible_env.HOME }}/.local/bin/homelab-backup-run verify
+# Fetching from Backblaze and starting two containers takes a couple of
+# minutes; the default 90s would kill it mid-restore.
+TimeoutStartSec=15min
