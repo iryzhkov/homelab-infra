@@ -94,6 +94,11 @@ forgejo_ssh_domain: git.ryzhkov.dev
 forgejo_ssh_port: 2222
 forgejo_ssh_host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICXpj9s8hjZwEREUJl27+OmioPhzFrLi6djUcCsDthmQ"
 
+# Where Forgejo's system webhook posts, and where the handlers live on that
+# host. 4581 is the port the retired hugo-webhook binary used.
+forgejo_webhooks_port: 4581
+forgejo_webhooks_dir: "/home/iryzhkov/app/webhook"
+
 # The fleet activity feed, which the drift check reports into. It runs as a
 # systemd service on homelab rather than as a Compose stack, so its address is
 # taken from the host rather than from a stack.

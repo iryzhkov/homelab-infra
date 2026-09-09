@@ -1,0 +1,23 @@
+# Rendered by roles/forgejo_webhooks; do not edit on the host.
+#
+# One hook for all of Forgejo. The signature check rejects anything that was
+# not signed with the secret registered on the Forgejo system webhook, and the
+# dispatcher decides from the repository name whether anything runs.
+- id: forgejo
+  execute-command: {{ forgejo_webhooks_dir }}/dispatch.sh
+  command-working-directory: {{ forgejo_webhooks_dir }}
+  include-command-output-in-response: false
+  pass-arguments-to-command:
+    - source: header
+      name: X-Forgejo-Event
+    - source: payload
+      name: repository.full_name
+    - source: payload
+      name: ref
+  trigger-rule:
+    match:
+      type: payload-hmac-sha256
+      secret: {{ forgejo_webhooks_secrets.webhook_secret }}
+      parameter:
+        source: header
+        name: X-Forgejo-Signature

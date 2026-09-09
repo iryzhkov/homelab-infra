@@ -1,0 +1,106 @@
+---
+# One receiver for every Forgejo webhook, with a handler script per repository.
+#
+# Forgejo posts every push (a system webhook, so a new repository needs no hook
+# of its own) to the `webhook` daemon from Debian, which checks the HMAC
+# signature and runs dispatch.sh with the event, the repository and the ref.
+# The dispatcher looks for files/handlers/<owner>/<repo>.sh and runs it, or
+# does nothing. Adding an integration is adding one script there; the blog
+# rebuild is the first.
+#
+# The daemon runs as a system unit under the deploy user, because the handlers
+# pull repositories in that user's home and run Docker as that user, exactly as
+# the hugo-webhook binary this replaces did.
+
+- name: Gather the facts this role needs
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - env
+
+- name: Load the webhook secret
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/forgejo-webhooks.sops.yaml"
+    name: forgejo_webhooks_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Install the webhook daemon
+  ansible.builtin.apt:
+    name: webhook
+    state: present
+  become: true
+
+- name: Ensure the directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ forgejo_webhooks_dir }}"
+    - "{{ forgejo_webhooks_dir }}/handlers"
+
+- name: Install the dispatcher
+  ansible.builtin.copy:
+    src: dispatch.sh
+    dest: "{{ forgejo_webhooks_dir }}/dispatch.sh"
+    mode: "0755"
+
+# The whole tree is copied so that a handler removed from the repository is
+# removed from the host too.
+- name: Install the handlers
+  ansible.posix.synchronize:
+    src: handlers/
+    dest: "{{ forgejo_webhooks_dir }}/handlers/"
+    delete: true
+    rsync_opts:
+      - "--chmod=F755"
+
+- name: Write the hook definition
+  ansible.builtin.template:
+    src: hooks.yaml.j2
+    dest: "{{ forgejo_webhooks_dir }}/hooks.yaml"
+    mode: "0600"
+  no_log: true
+  register: forgejo_webhooks_hooks
+
+# The receiver takes over the port of the hugo-webhook binary it replaces.
+- name: Look for the retired hugo-webhook unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/hugo-webhook.service
+  register: forgejo_webhooks_old_unit
+
+- name: Stop the retired hugo-webhook
+  ansible.builtin.systemd:
+    name: hugo-webhook
+    state: stopped
+    enabled: false
+  become: true
+  when: forgejo_webhooks_old_unit.stat.exists
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: forgejo-webhooks.service.j2
+    dest: /etc/systemd/system/forgejo-webhooks.service
+    mode: "0644"
+  become: true
+  register: forgejo_webhooks_unit
+
+- name: Start the receiver
+  ansible.builtin.systemd:
+    name: forgejo-webhooks
+    enabled: true
+    state: "{{ 'restarted' if (forgejo_webhooks_unit.changed or forgejo_webhooks_hooks.changed) else 'started' }}"
+    daemon_reload: "{{ forgejo_webhooks_unit.changed }}"
+  become: true
+
+- name: Wait for it to answer
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ forgejo_webhooks_port }}/hooks/forgejo"
+    method: GET
+    status_code: [200, 405]
+  register: forgejo_webhooks_up
+  until: forgejo_webhooks_up.status in [200, 405]
+  retries: 5
+  delay: 1

@@ -1,0 +1,18 @@
+[Unit]
+Description=Forgejo webhook receiver and dispatcher
+Documentation=https://github.com/iryzhkov/homelab-infra
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ ansible_user }}
+# Handlers run git and docker as this user, with the same PATH a login shell
+# would give them.
+Environment=PATH={{ ansible_env.HOME }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/webhook -hooks {{ forgejo_webhooks_dir }}/hooks.yaml -ip 0.0.0.0 -port {{ forgejo_webhooks_port }} -hotreload -verbose
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+---
+# The Forgejo webhook receiver on the host that runs the handlers.
+#
+# The Forgejo side is a system webhook pointing at
+# http://<host>:<forgejo_webhooks_port>/hooks/forgejo with the secret from
+# secrets/forgejo-webhooks.sops.yaml, registered once on 2026-09-08. Note that
+# POST /api/v1/admin/hooks creates a *default* webhook (a template copied into
+# new repositories), not a system one; the row had to be promoted afterwards
+# with `update webhook set is_system_webhook=1` in Forgejo's SQLite database.
+# Site administration > System webhooks in the UI does the right thing.
+#
+#   ansible-playbook playbooks/forgejo-webhooks.yml --check --diff
+
+- name: Install the Forgejo webhook receiver
+  hosts: forgejo_webhook_host
+  gather_facts: false
+  roles:
+    - forgejo_webhooks
