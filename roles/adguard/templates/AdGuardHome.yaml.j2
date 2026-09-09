@@ -187,6 +187,8 @@ user_rules:
   - '@@||www.pinterestcareers.com^$important'
   - '@@||alpaca.markets^$important'
   - '@@||tslilyarchive.store^$important'
+  # The abused-TLDs list blocks all of .computer; pierre.computer is wanted.
+  - '@@||pierre.computer^$important'
   - ""
 dhcp:
   enabled: false
