@@ -15,6 +15,11 @@ services:
       - FORGEJO__server__SSH_DOMAIN=git.ryzhkov.dev
       - FORGEJO__server__SSH_PORT=2222
       - FORGEJO__server__SSH_LISTEN_PORT=22
+      # A push to a repository that does not exist creates it, so a new
+      # project needs no token and no visit to the web UI: `git push` to
+      # git@git.ryzhkov.dev:igor/<name>.git is enough. Created private.
+      - FORGEJO__repository__ENABLE_PUSH_CREATE_USER=true
+      - FORGEJO__repository__DEFAULT_PUSH_CREATE_PRIVATE=true
     restart: unless-stopped
     networks:
       - forgejo
