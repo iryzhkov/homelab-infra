@@ -9,6 +9,12 @@ services:
     environment:
       - USER_UID=1000
       - USER_GID=1000
+      # Git over SSH. The container's sshd listens on 22; the host publishes
+      # it as 2222, and SSH_PORT is what Forgejo prints in clone URLs.
+      - FORGEJO__server__DISABLE_SSH=false
+      - FORGEJO__server__SSH_DOMAIN=git.ryzhkov.dev
+      - FORGEJO__server__SSH_PORT=2222
+      - FORGEJO__server__SSH_LISTEN_PORT=22
     restart: unless-stopped
     networks:
       - forgejo
@@ -18,3 +24,4 @@ services:
       - /etc/localtime:/etc/localtime:ro
     ports:
       - '3500:3000'
+      - '2222:22'
