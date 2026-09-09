@@ -1,0 +1,66 @@
+---
+# Let a host reach Forgejo over SSH as a git client.
+#
+# git.ryzhkov.dev resolves to the edge proxy on the LAN and to the Cloudflare
+# tunnel elsewhere, and neither carries TCP 22, so the name is mapped here to
+# the host Forgejo runs on and the port the stack publishes. Every host
+# managed by this role sits on the LAN, so the LAN address is enough; the
+# laptop, which travels, carries a hand-written block with a mesh fallback.
+#
+# Each host gets its own key, separate from the one that grants shell access
+# to its peers, following the same rule as the GitHub keys: a key registered
+# with a service is not also a key to the fleet. Registering the public key
+# on the Forgejo account is not done here — the API needs a user token, and a
+# throwaway one is generated with `forgejo admin user generate-access-token`
+# when a host is added. The play prints the public key for that step.
+
+- name: Gather the facts this role needs
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - env
+
+- name: Generate the Forgejo key if the host has none
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -t ed25519 -N '' -q
+      -C '{{ ansible_user }}@{{ inventory_hostname }} forgejo'
+      -f {{ ansible_env.HOME }}/.ssh/id_ed25519_forgejo
+    creates: "{{ ansible_env.HOME }}/.ssh/id_ed25519_forgejo"
+
+- name: Read the public key
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.ssh/id_ed25519_forgejo.pub"
+  register: forgejo_client_pubkey
+  # A check-mode run on a fresh host has no key to read yet.
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Show the public key, to register on the Forgejo account
+  ansible.builtin.debug:
+    msg: "{{ forgejo_client_pubkey.content | b64decode | trim }}"
+  when: forgejo_client_pubkey.content is defined
+
+- name: Reach Forgejo by its public name over SSH
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.ssh/config"
+    create: true
+    mode: "0600"
+    marker: "# {mark} ANSIBLE MANAGED: forgejo"
+    block: |
+      Host {{ forgejo_ssh_domain }}
+          HostName {{ hostvars[forgejo_host].ansible_host }}
+          Port {{ forgejo_ssh_port }}
+          User git
+          IdentityFile ~/.ssh/id_ed25519_forgejo
+          IdentitiesOnly yes
+
+# The host key is pinned rather than accepted on first use. It is the same
+# key over the LAN and the mesh, checked from the laptop on 2026-09-08.
+- name: Trust Forgejo's host key
+  ansible.builtin.known_hosts:
+    path: "{{ ansible_env.HOME }}/.ssh/known_hosts"
+    name: "[{{ hostvars[forgejo_host].ansible_host }}]:{{ forgejo_ssh_port }}"
+    key: "[{{ hostvars[forgejo_host].ansible_host }}]:{{ forgejo_ssh_port }} {{ forgejo_ssh_host_key }}"
+    hash_host: "{{ forgejo_client_hash_known_hosts | default(false) }}"
+    state: present

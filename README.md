@@ -117,6 +117,7 @@ Then, from the repository root:
 
 ```sh
 ansible-playbook playbooks/ping.yml          # connectivity and interpreter check
+ansible-playbook playbooks/forgejo-client.yml # git over SSH to Forgejo, T3 agent hosts
 ./scripts/snapshot.sh                        # refresh snapshot/
 ```
 

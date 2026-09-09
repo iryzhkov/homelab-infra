@@ -21,6 +21,10 @@ fleet_ssh_peers:
   # phone is restricted to homelab's mesh address.
   - phone
 
+# homelab hashes its known_hosts (HashKnownHosts yes in /etc/ssh/ssh_config),
+# so the Forgejo host key is written hashed to match.
+forgejo_client_hash_known_hosts: true
+
 # homelab builds the offsite bundle: it holds the snapshots, the rclone
 # credentials and the SOPS key that go into it.
 offsite_enabled: true

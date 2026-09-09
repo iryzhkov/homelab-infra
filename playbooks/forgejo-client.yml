@@ -1,0 +1,12 @@
+---
+# Git over SSH to Forgejo from the hosts that clone from it: the T3 agent
+# hosts. Prints each host's public key; register a new one on the account
+# with a throwaway token, see roles/forgejo_client.
+#
+#   ansible-playbook playbooks/forgejo-client.yml --check --diff
+
+- name: Configure Forgejo SSH clients
+  hosts: forgejo_clients
+  gather_facts: false
+  roles:
+    - forgejo_client

@@ -86,6 +86,14 @@ fleet_ssh_keys:
     key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDhU+leIj5YUWMbgyAD15iu4uvl7wfZaPWswPcp7Taiy"
     from: "192.168.70.223"
 
+# Forgejo, reached over SSH by the forgejo_clients group. The port is the one
+# stacks/forgejo publishes; the host key was read from the running container
+# on 2026-09-08 and is pinned on every client.
+forgejo_host: homelab
+forgejo_ssh_domain: git.ryzhkov.dev
+forgejo_ssh_port: 2222
+forgejo_ssh_host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICXpj9s8hjZwEREUJl27+OmioPhzFrLi6djUcCsDthmQ"
+
 # The fleet activity feed, which the drift check reports into. It runs as a
 # systemd service on homelab rather than as a Compose stack, so its address is
 # taken from the host rather than from a stack.
