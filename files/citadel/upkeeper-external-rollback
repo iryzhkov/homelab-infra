@@ -1,0 +1,97 @@
+#!/usr/bin/python3
+"""Fenced, idempotent external rollback for Citadel foundation binaries."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+ALLOWED = {
+    "t3-steward": Path("/home/igor/.local/bin/t3-steward"),
+    "upkeeper": Path("/home/igor/.local/libexec/upkeeper"),
+}
+
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def restore(source: Path, expected: str, destination: Path) -> None:
+    if digest(source) != expected:
+        raise SystemExit("rollback source digest mismatch")
+    if destination.is_file() and digest(destination) == expected:
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".upkeeper-rollback-", dir=destination.parent)
+    try:
+        with os.fdopen(fd, "wb") as target, source.open("rb") as origin:
+            shutil.copyfileobj(origin, target)
+            target.flush()
+            os.fsync(target.fileno())
+        os.chmod(temporary, source.stat().st_mode & 0o777)
+        os.replace(temporary, destination)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--component", choices=sorted(ALLOWED), required=True)
+    parser.add_argument("--effect-id", required=True)
+    parser.add_argument("--desired-revision", required=True)
+    parser.add_argument("--previous-revision", required=True)
+    parser.add_argument("--install-path", type=Path, required=True)
+    parser.add_argument("--artifact", required=True)
+    parser.add_argument("--artifact-sha256", required=True)
+    parser.add_argument("--configuration", required=True)
+    parser.add_argument("--configuration-sha256", required=True)
+    parser.add_argument("--configuration-destination", required=True)
+    args = parser.parse_args()
+
+    if args.install_path != ALLOWED[args.component]:
+        raise SystemExit("install path is outside the component fence")
+    if not args.effect_id.startswith("effect-") or len(args.effect_id) != 71:
+        raise SystemExit("invalid effect identity")
+    if len(args.desired_revision) != 40:
+        raise SystemExit("invalid desired revision")
+
+    marker = args.install_path.with_name(args.install_path.name + ".upkeeper-revision")
+    if args.previous_revision == "ABSENT":
+        args.install_path.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
+    else:
+        if len(args.previous_revision) != 40 or args.artifact == "ABSENT":
+            raise SystemExit("previous revision requires a rollback artifact")
+        restore(Path(args.artifact), args.artifact_sha256, args.install_path)
+        marker.write_text(args.previous_revision + "\n", encoding="utf-8")
+
+    if args.configuration != "ABSENT":
+        if args.configuration_destination == "ABSENT":
+            raise SystemExit("configuration rollback destination is missing")
+        restore(
+            Path(args.configuration),
+            args.configuration_sha256,
+            Path(args.configuration_destination),
+        )
+
+    if args.component == "t3-steward":
+        subprocess.run(
+            ["systemctl", "--user", "restart", "t3-steward.service"], check=True
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

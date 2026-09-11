@@ -1,0 +1,122 @@
+---
+- name: Apply one revision-fenced Citadel foundation effect
+  hosts: citadel_foundation_controllers
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    adoption: "{{ upkeeper_adoption }}"
+    installed_path: "{{ upkeeper_adoption.install_path }}"
+    revision_marker: "{{ upkeeper_adoption.install_path }}.upkeeper-revision"
+  pre_tasks:
+    - name: Prove the bounded controller and immutable intent
+      ansible.builtin.assert:
+        that:
+          - ansible_hostname == citadel_expected_hostname
+          - upkeeper_component in ["t3-steward", "upkeeper"]
+          - adoption.schema_version | int == 1
+          - adoption.mode in ["adopt-running", "bootstrap-absent", "upgrade"]
+          - upkeeper_desired_revision is match("^[0-9a-f]{40}$")
+          - adoption.source_revision == upkeeper_desired_revision
+          - adoption.artifact.path is match("^/")
+          - adoption.install_path is match("^/")
+          - adoption.rollback.executor.path is match("^/")
+          - adoption.rollback.runbook.path is match("^/")
+      tags: [always]
+
+    - name: Inspect frozen files
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop: >-
+        {{ [adoption.artifact, adoption.rollback.executor, adoption.rollback.runbook]
+           + ([adoption.configuration] if adoption.configuration is not none else [])
+           + ([adoption.rollback.artifact] if adoption.rollback.artifact is not none else [])
+           + ([adoption.rollback.configuration] if adoption.rollback.configuration is not none else []) }}
+      register: frozen_files
+      tags: [always]
+
+    - name: Prove every frozen file identity before an effect
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.checksum == item.item.sha256
+          - item.stat.size | int == item.item.size_bytes | int
+      loop: "{{ frozen_files.results }}"
+      no_log: true
+      tags: [always]
+
+    - name: Inspect current installed artifact
+      ansible.builtin.stat:
+        path: "{{ installed_path }}"
+        checksum_algorithm: sha256
+      register: installed_before
+      tags: [always]
+
+  tasks:
+    - name: Prove mode-specific starting state
+      ansible.builtin.assert:
+        that:
+          - >-
+            (adoption.mode == "bootstrap-absent" and not installed_before.stat.exists)
+            or (adoption.mode == "adopt-running" and installed_before.stat.exists
+                and installed_before.stat.checksum == adoption.artifact.sha256)
+            or (adoption.mode == "upgrade" and installed_before.stat.exists
+                and adoption.rollback.artifact is not none
+                and installed_before.stat.checksum == adoption.rollback.artifact.sha256)
+          - >-
+            (adoption.mode == "bootstrap-absent" and upkeeper_previous_revision is none)
+            or (adoption.mode == "adopt-running"
+                and upkeeper_previous_revision == upkeeper_desired_revision)
+            or (adoption.mode == "upgrade"
+                and upkeeper_previous_revision is match("^[0-9a-f]{40}$")
+                and upkeeper_previous_revision != upkeeper_desired_revision)
+      tags: [upkeeper_check, upkeeper_install]
+
+    - name: Install exact staged artifact
+      ansible.builtin.copy:
+        src: "{{ adoption.artifact.path }}"
+        dest: "{{ installed_path }}"
+        remote_src: true
+        mode: "0755"
+      tags: [upkeeper_install]
+
+    - name: Activate exact revision marker
+      ansible.builtin.copy:
+        content: "{{ upkeeper_desired_revision }}\n"
+        dest: "{{ revision_marker }}"
+        mode: "0644"
+      tags: [upkeeper_activate]
+
+    - name: Run foundation health command
+      ansible.builtin.command:
+        argv: "{{ adoption.health_command }}"
+      changed_when: false
+      tags: [upkeeper_run, upkeeper_observe]
+
+    - name: Invoke external rollback unit
+      ansible.builtin.command:
+        argv:
+          - "{{ adoption.rollback.executor.path }}"
+          - "--component"
+          - "{{ upkeeper_component }}"
+          - "--effect-id"
+          - "{{ upkeeper_effect_id }}"
+          - "--desired-revision"
+          - "{{ upkeeper_desired_revision }}"
+          - "--previous-revision"
+          - "{{ upkeeper_previous_revision | default('ABSENT', true) }}"
+          - "--install-path"
+          - "{{ installed_path }}"
+          - "--artifact"
+          - "{{ adoption.rollback.artifact.path | default('ABSENT', true) }}"
+          - "--artifact-sha256"
+          - "{{ adoption.rollback.artifact.sha256 | default('ABSENT', true) }}"
+          - "--configuration"
+          - "{{ adoption.rollback.configuration.path | default('ABSENT', true) }}"
+          - "--configuration-sha256"
+          - "{{ adoption.rollback.configuration.sha256 | default('ABSENT', true) }}"
+          - "--configuration-destination"
+          - "{{ adoption.configuration.path | default('ABSENT', true) }}"
+      changed_when: true
+      tags: [upkeeper_rollback]
