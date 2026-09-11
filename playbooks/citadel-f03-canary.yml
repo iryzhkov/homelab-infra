@@ -1,0 +1,238 @@
+---
+- name: Citadel F03 disposable UpKeeper mutation canary
+  hosts: normandy
+  gather_facts: true
+  vars:
+    canary_root: "{{ ansible_user_dir }}/.local/state/citadel-f03-canary"
+    canary_unit_dir: "{{ ansible_user_dir }}/.config/systemd/user"
+    canary_unit: citadel-f03-canary.service
+    canary_port: 19463
+    canary_environment:
+      XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
+
+  tasks:
+    - name: Validate fenced canary revisions
+      ansible.builtin.assert:
+        that:
+          - upkeeper_desired_revision is match('^[0-9a-f]{40}$')
+          - upkeeper_previous_revision is match('^[0-9a-f]{40}$')
+          - upkeeper_desired_revision != upkeeper_previous_revision
+      tags:
+        - upkeeper_baseline
+        - upkeeper_check
+        - upkeeper_install
+        - upkeeper_activate
+        - upkeeper_run
+        - upkeeper_observe
+        - upkeeper_rollback
+        - upkeeper_cleanup
+
+    - name: Create disposable canary directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ canary_root }}"
+        - "{{ canary_unit_dir }}"
+      tags: upkeeper_baseline
+
+    - name: Install disposable loopback HTTP canary
+      ansible.builtin.copy:
+        dest: "{{ canary_root }}/service.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/python3
+          import json
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+          from pathlib import Path
+
+          root = Path.home() / ".local/state/citadel-f03-canary"
+          revision = (root / "activated").read_text(encoding="utf-8").strip()
+          previous = (root / "previous").read_text(encoding="utf-8").strip()
+          (root / "running").write_text(revision + "\n", encoding="utf-8")
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  healthy = revision == previous
+                  body = json.dumps({"healthy": healthy, "revision": revision}).encode()
+                  self.send_response(200 if healthy else 503)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def log_message(self, format, *args):
+                  return
+
+          HTTPServer(("127.0.0.1", {{ canary_port }}), Handler).serve_forever()
+      tags: upkeeper_baseline
+
+    - name: Install disposable user service unit
+      ansible.builtin.copy:
+        dest: "{{ canary_unit_dir }}/{{ canary_unit }}"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Citadel F03 disposable mutation canary
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/python3 %h/.local/state/citadel-f03-canary/service.py
+          Restart=no
+
+          [Install]
+          WantedBy=default.target
+      tags: upkeeper_baseline
+
+    - name: Establish healthy previous revision markers
+      ansible.builtin.copy:
+        dest: "{{ canary_root }}/{{ item }}"
+        mode: "0644"
+        content: "{{ upkeeper_previous_revision }}\n"
+      loop:
+        - previous
+        - installed
+        - activated
+      tags: upkeeper_baseline
+
+    - name: Reload and start baseline canary
+      ansible.builtin.systemd_service:
+        name: "{{ canary_unit }}"
+        scope: user
+        daemon_reload: true
+        state: restarted
+      environment: "{{ canary_environment }}"
+      tags: upkeeper_baseline
+
+    - name: Verify healthy baseline
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ canary_port }}/"
+        status_code: 200
+        return_content: true
+      register: baseline_health
+      retries: 10
+      delay: 1
+      until: baseline_health.status == 200
+      tags: upkeeper_baseline
+
+    - name: Read baseline canary markers
+      ansible.builtin.slurp:
+        src: "{{ canary_root }}/{{ item }}"
+      loop:
+        - installed
+        - activated
+        - running
+      register: check_markers
+      changed_when: false
+      tags: upkeeper_check
+
+    - name: Assert baseline is fenced and healthy
+      ansible.builtin.assert:
+        that:
+          - (check_markers.results[0].content | b64decode | trim) == upkeeper_previous_revision
+          - (check_markers.results[1].content | b64decode | trim) == upkeeper_previous_revision
+          - (check_markers.results[2].content | b64decode | trim) == upkeeper_previous_revision
+      tags: upkeeper_check
+
+    - name: Probe baseline health without mutation
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ canary_port }}/"
+        status_code: 200
+      changed_when: false
+      tags: upkeeper_check
+
+    - name: Install desired canary revision
+      ansible.builtin.copy:
+        dest: "{{ canary_root }}/installed"
+        mode: "0644"
+        content: "{{ upkeeper_desired_revision }}\n"
+      tags: upkeeper_install
+
+    - name: Activate desired canary revision
+      ansible.builtin.copy:
+        dest: "{{ canary_root }}/activated"
+        mode: "0644"
+        content: "{{ upkeeper_desired_revision }}\n"
+      tags: upkeeper_activate
+
+    - name: Run desired canary revision
+      ansible.builtin.systemd_service:
+        name: "{{ canary_unit }}"
+        scope: user
+        state: restarted
+      environment: "{{ canary_environment }}"
+      tags: upkeeper_run
+
+    - name: Wait for desired canary listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ canary_port }}"
+        timeout: 10
+      tags: upkeeper_run
+
+    - name: Observe deliberate desired-revision failure
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ canary_port }}/"
+        status_code:
+          - 200
+          - 503
+        return_content: true
+      changed_when: false
+      tags: upkeeper_observe
+
+    - name: Restore previous installed and activated revisions
+      ansible.builtin.copy:
+        dest: "{{ canary_root }}/{{ item }}"
+        mode: "0644"
+        content: "{{ upkeeper_previous_revision }}\n"
+      loop:
+        - installed
+        - activated
+      tags: upkeeper_rollback
+
+    - name: Restart rolled-back canary revision
+      ansible.builtin.systemd_service:
+        name: "{{ canary_unit }}"
+        scope: user
+        state: restarted
+      environment: "{{ canary_environment }}"
+      tags: upkeeper_rollback
+
+    - name: Verify rollback health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ canary_port }}/"
+        status_code: 200
+      register: rollback_health
+      retries: 10
+      delay: 1
+      until: rollback_health.status == 200
+      tags: upkeeper_rollback
+
+    - name: Stop disposable canary service
+      ansible.builtin.systemd_service:
+        name: "{{ canary_unit }}"
+        scope: user
+        state: stopped
+      environment: "{{ canary_environment }}"
+      tags: upkeeper_cleanup
+
+    - name: Remove disposable user service unit
+      ansible.builtin.file:
+        path: "{{ canary_unit_dir }}/{{ canary_unit }}"
+        state: absent
+      tags: upkeeper_cleanup
+
+    - name: Reload user service manager after cleanup
+      ansible.builtin.systemd_service:
+        scope: user
+        daemon_reload: true
+      environment: "{{ canary_environment }}"
+      tags: upkeeper_cleanup
+
+    - name: Remove disposable canary state
+      ansible.builtin.file:
+        path: "{{ canary_root }}"
+        state: absent
+      tags: upkeeper_cleanup
