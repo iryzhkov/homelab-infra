@@ -88,6 +88,14 @@
         mode: "0644"
       tags: [upkeeper_activate]
 
+    - name: Restart the managed steward before observing its health
+      ansible.builtin.systemd_service:
+        name: t3-steward.service
+        scope: user
+        state: restarted
+      when: upkeeper_component == "t3-steward"
+      tags: [upkeeper_run]
+
     - name: Run foundation health command
       ansible.builtin.command:
         argv: "{{ adoption.health_command }}"
