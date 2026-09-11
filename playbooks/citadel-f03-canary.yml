@@ -1,6 +1,7 @@
 ---
 - name: Citadel F03 disposable UpKeeper mutation canary
   hosts: normandy
+  connection: local
   gather_facts: true
   vars:
     canary_root: "{{ ansible_user_dir }}/.local/state/citadel-f03-canary"
@@ -11,6 +12,22 @@
       XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
 
   tasks:
+    - name: Fence local execution to Normandy
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'normandy'
+          - ansible_facts.hostname == 'omarchy-normandy'
+        fail_msg: This disposable playbook may run only on the Normandy controller.
+      tags:
+        - upkeeper_baseline
+        - upkeeper_check
+        - upkeeper_install
+        - upkeeper_activate
+        - upkeeper_run
+        - upkeeper_observe
+        - upkeeper_rollback
+        - upkeeper_cleanup
+
     - name: Validate fenced canary revisions
       ansible.builtin.assert:
         that:
