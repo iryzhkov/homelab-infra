@@ -1,0 +1,21 @@
+---
+# Narrow U3 deployment: no Compose, secret or timer changes.
+- name: Integrate UpKeeper into the existing Normandy drift report
+  hosts: normandy
+  gather_facts: true
+  tasks:
+    - name: Install the drift checker
+      ansible.builtin.copy:
+        src: ../roles/drift_check/files/homelab-drift-check
+        dest: "{{ ansible_env.HOME }}/.local/bin/homelab-drift-check"
+        mode: "0755"
+    - name: Ensure the drift integration directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.config/homelab-infra"
+        state: directory
+        mode: "0755"
+    - name: Enable UpKeeper fleet drift
+      ansible.builtin.copy:
+        content: "UpKeeper fleet drift is enabled.\n"
+        dest: "{{ ansible_env.HOME }}/.config/homelab-infra/upkeeper-drift"
+        mode: "0644"

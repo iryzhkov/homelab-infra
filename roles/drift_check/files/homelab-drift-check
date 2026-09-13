@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import subprocess
+import shutil
 import sys
 
 MANIFEST = os.path.expanduser("~/.local/share/homelab-infra/drift-manifest.json")
@@ -106,6 +107,48 @@ def check_stack(stack, running):
         yield f"{stack['name']}: project status is '{running[stack['name']]}'"
 
 
+def upkeeper_findings():
+    """Normandy's optional integration marker selects the fleet controller only."""
+    marker = os.path.expanduser("~/.config/homelab-infra/upkeeper-drift")
+    if not os.path.isfile(marker):
+        return [], False
+    command = shutil.which("upkeeper")
+    if command is None:
+        return ["UpKeeper: command unavailable"], True
+    try:
+        result = subprocess.run(
+            [command, "pull", "--all", "--skip-unreachable", "--dry-run", "--json"],
+            capture_output=True, text=True, timeout=900, check=False,
+        )
+        report = json.loads(result.stdout)
+        if not isinstance(report.get("hosts"), list):
+            raise ValueError("missing host results")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return ["UpKeeper: drift observation failed or returned invalid output"], True
+    findings = []
+    broken = result.returncode not in (0, 10)
+    for host in report["hosts"]:
+        if host.get("skipped_unreachable"):
+            continue
+        if not host.get("reachable"):
+            findings.append(f"UpKeeper {host['host']}: observation failed")
+            broken = True
+            continue
+        entries = list(host.get("components", []))
+        if host.get("legacy_updater"):
+            entries.append(dict(host["legacy_updater"], name="legacy-updater"))
+        for entry in entries:
+            if entry.get("state") not in ("converged", "skipped"):
+                findings.append(
+                    f"UpKeeper {host['host']}/{entry['name']}: {entry.get('state', 'unknown')}"
+                )
+        if host.get("result") not in ("converged", "updated", "ahead"):
+            findings.append(f"UpKeeper {host['host']}: {host.get('result', 'unknown')}")
+    if broken and not findings:
+        findings.append("UpKeeper: drift observation failed")
+    return findings, broken
+
+
 def main():
     try:
         with open(MANIFEST) as handle:
@@ -124,7 +167,7 @@ def main():
         os.path.getmtime(MANIFEST)
     ).strftime("%Y-%m-%d %H:%M")
 
-    findings = []
+    findings, upkeeper_broken = upkeeper_findings()
     for stack in manifest["stacks"]:
         findings.extend(check_stack(stack, running))
 
@@ -143,7 +186,7 @@ def main():
           f"deployed {deployed}:")
     for finding in findings:
         print(f"  - {finding}")
-    return 1
+    return 2 if upkeeper_broken else 1
 
 
 if __name__ == "__main__":

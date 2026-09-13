@@ -86,6 +86,20 @@
     dest: "{{ ansible_env.HOME }}/.local/bin/homelab-drift-check"
     mode: "0755"
 
+- name: Ensure the drift integration directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.config/homelab-infra"
+    state: directory
+    mode: "0755"
+  when: upkeeper_drift_enabled | default(false)
+
+- name: Enable UpKeeper fleet drift in this controller's report
+  ansible.builtin.copy:
+    content: "UpKeeper fleet drift is enabled.\n"
+    dest: "{{ ansible_env.HOME }}/.config/homelab-infra/upkeeper-drift"
+    mode: "0644"
+  when: upkeeper_drift_enabled | default(false)
+
 # The wrapper knows which peers this host checks on their behalf, so it is a
 # template rather than a fixed file.
 - name: Install the reporting wrapper

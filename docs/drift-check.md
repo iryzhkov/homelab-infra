@@ -24,6 +24,23 @@ deploy time, and for every stack on that host verifies:
 It also lists projects that are running but appear in no manifest, which is how
 an unmanaged stack looks from here.
 
+## UpKeeper fleet drift on Normandy
+
+Citadel U3 enables `upkeeper_drift_enabled: true` on Normandy. The role installs
+`~/.config/homelab-infra/upkeeper-drift`; that marker makes the existing checker
+also run `upkeeper pull --all --skip-unreachable --dry-run --json`. The narrow
+`playbooks/upkeeper-drift.yml` installs just the checker and marker, without
+redeploying stacks, reading secrets or replacing the existing reporting timer.
+
+Component changes become findings even when UpKeeper's dry run exits zero.
+Authentication failures and failed observations make the checker exit 2.
+Network-unreachable hosts are skipped before dispatch. Unconfigured Docker hosts
+continue to check only their Compose deployment and need no UpKeeper checkout.
+The existing wrapper carries the combined report to the feed.
+
+Run `python3 scripts/test-upkeeper-drift.py` for the projection tests.
+The daily mutating pull is a separate UpKeeper-owned timer on Normandy.
+
 ## What it deliberately cannot check
 
 **Values.** The manifest carries checksums and variable names, never values,
