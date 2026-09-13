@@ -128,7 +128,7 @@ def upkeeper_findings():
     findings = []
     broken = result.returncode not in (0, 10)
     for host in report["hosts"]:
-        if host.get("skipped_unreachable"):
+        if host.get("skipped_unreachable") or host.get("self_managed"):
             continue
         if not host.get("reachable"):
             findings.append(f"UpKeeper {host['host']}: observation failed")

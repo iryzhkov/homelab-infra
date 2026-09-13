@@ -35,6 +35,7 @@ class DriftTest(unittest.TestCase):
             {"host": "normandy", "reachable": True, "result": "converged",
              "components": [{"name": "huyang", "state": "converged"}]},
             {"host": "laptop", "skipped_unreachable": True},
+            {"host": "laptop", "reachable": False, "self_managed": True},
         ]), ([], False))
 
     def test_dry_run_updated_is_drift_even_with_exit_zero(self):
