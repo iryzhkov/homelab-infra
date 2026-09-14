@@ -1,4 +1,7 @@
 cache/**
+# Navidrome cache is regenerable; its database has consistent hourly snapshots.
+navidrome/cache/**
+navidrome/data/navidrome.db
 *.db-shm
 *.db-wal
 embyserver-backup-full/**

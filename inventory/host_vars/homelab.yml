@@ -37,6 +37,9 @@ backup_sqlite_sources:
   vaultwarden:
     path: /home/iryzhkov/app/vaultwarden/data/db.sqlite3
     keep: 48
+  navidrome:
+    path: /home/iryzhkov/app/navidrome/data/navidrome.db
+    keep: 48
   actual-account:
     path: /home/iryzhkov/app/actual/server-files/account.sqlite
     keep: 48
@@ -181,6 +184,18 @@ stacks:
     routes:
       - host: rss.ryzhkov.dev
         port: 5080
+  - name: navidrome
+    prepare_tasks: prepare.yml
+    pull: missing
+    env_extra:
+      MUSIC_PATH: /mnt/shared/media/music
+      NAVIDROME_UID: "1000"
+      NAVIDROME_GID: "988"
+    routes:
+      - host: music.ryzhkov.dev
+        port: 4533
+        health_check:
+          path: /ping
   - name: obsidian
     routes:
       - host: obsidian.ryzhkov.dev

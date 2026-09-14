@@ -12,6 +12,8 @@
 #             stack sits somewhere else, as hugo and immich do.
 #   env_extra optional; plain (non-secret) variables for the env file, for
 #             addresses derived from the inventory rather than written twice.
+#   prepare_tasks optional; prerequisite task file under stacks/<source>/.
+#   pull      optional; Compose pull policy, default never for adopted stacks.
 #   write_env optional; set false for a stack whose secrets are used only by a
 #             config_template, so that no .env is written beside it.
 #
@@ -62,6 +64,12 @@
   ansible.builtin.file:
     path: "{{ stack_dir }}"
     state: directory
+
+# Optional stack-specific prerequisites, also run by a normal site converge.
+- name: Prepare stack-specific storage
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/../stacks/{{ stack.source | default(stack.name) }}/{{ stack.prepare_tasks }}"
+  when: stack.prepare_tasks is defined
 
 - name: Install the Compose file
   ansible.builtin.copy:
@@ -125,7 +133,7 @@
     project_name: "{{ stack.name }}"
     env_files: "{{ [stack.env_file] if stack.env_file | default('.env') != '.env' else omit }}"
     state: present
-    pull: never
+    pull: "{{ stack.pull | default('never') }}"
 
 # The checksum of the file as it landed, rather than of the repository's copy:
 # Ansible's file lookup drops a trailing newline, so hashing what it returns

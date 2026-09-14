@@ -1,0 +1,34 @@
+---
+# Fail before Docker starts if the NAS is absent: never create a shadow local
+# library or let a scan interpret an unavailable NAS as an emptied collection.
+- name: Verify the music folder is on an NFS mount
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --output
+      - FSTYPE
+      - --target
+      - "{{ stack.env_extra.MUSIC_PATH | dirname }}"
+  register: navidrome_music_mount
+  changed_when: false
+  check_mode: false
+  failed_when: navidrome_music_mount.stdout | trim not in ['nfs', 'nfs4']
+
+- name: Ensure the NAS music directory exists
+  ansible.builtin.file:
+    path: "{{ stack.env_extra.MUSIC_PATH }}"
+    state: directory
+    mode: "0770"
+
+- name: Prepare local Navidrome data and cache directories
+  ansible.builtin.file:
+    path: "{{ stack_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ stack.env_extra.NAVIDROME_UID }}"
+    group: "{{ ansible_user }}"
+    mode: "0750"
+  become: true
+  loop:
+    - data
+    - cache

@@ -1,0 +1,39 @@
+services:
+  navidrome:
+    image: deluan/navidrome:0.64.0
+    container_name: navidrome
+    user: "${NAVIDROME_UID}:${NAVIDROME_GID}"
+    restart: unless-stopped
+    ports:
+      - "${HOST_IP}:4533:4533"
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_CACHEFOLDER: /cache
+      ND_SCANNER_SCHEDULE: "@every 5m"
+      ND_LOGLEVEL: info
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      ND_ENABLESHARING: "false"
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./cache
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MUSIC_PATH}
+        target: /music
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4533/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

@@ -25,6 +25,38 @@
         loop_var: stack
         label: "{{ stack.name }}"
 
+    # A targeted deploy updates only its entry in an existing complete manifest.
+    # This avoids reconverging unrelated stacks merely to register a new service.
+    - name: Update the existing manifest after a targeted deployment
+      when:
+        - only is defined
+        - drift_check_enabled | default(false)
+        - drift_manifest_stacks | default([]) | length > 0
+      block:
+        - name: Locate the existing drift manifest
+          ansible.builtin.stat:
+            path: "{{ stack_root | dirname }}/.local/share/homelab-infra/drift-manifest.json"
+          register: targeted_manifest_stat
+
+        - name: Read the existing drift manifest
+          ansible.builtin.slurp:
+            src: "{{ targeted_manifest_stat.stat.path }}"
+          register: targeted_manifest_file
+          when: targeted_manifest_stat.stat.exists
+
+        - name: Preserve other stacks and update the deployed entry
+          ansible.builtin.copy:
+            content: >-
+              {{ (targeted_manifest_file.content | b64decode | from_json)
+                 | combine({'stacks':
+                   (((targeted_manifest_file.content | b64decode | from_json).stacks
+                     | rejectattr('name', 'equalto', only) | list)
+                    + drift_manifest_stacks) | sort(attribute='name')})
+                 | to_nice_json }}
+            dest: "{{ targeted_manifest_stat.stat.path }}"
+            mode: "0644"
+          when: targeted_manifest_stat.stat.exists
+
     # After the stacks, so the manifest describes the deploy that just ran.
     # Skipped when the run was limited to one stack with `only`, because the
     # manifest would then describe that stack alone.
