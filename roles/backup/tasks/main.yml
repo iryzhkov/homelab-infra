@@ -65,6 +65,14 @@
     mode: "0644"
     backup: true
 
+- name: Own the bulk snapshot root as the backup user
+  ansible.builtin.file:
+    path: "{{ backup_root }}/bulk-sqlite"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0700"
+  become: true
+
 - name: Configure consistent bulk SQLite snapshots
   ansible.builtin.copy:
     src: bulk-sqlite-sources.json

@@ -35,6 +35,7 @@ else
     [ "$privileged" = no ] || runner=(sudo -n)
     status=0
     if [ "$job" = app ]; then
+        mkdir -p "$base/app/backups/bulk-sqlite"
         # Keep the log owned by the invoking user; only database access needs root.
         # shellcheck disable=SC2024
         sudo -n "$base/.local/bin/homelab-sqlite-backup" \

@@ -15,6 +15,14 @@
         - {src: roles/backup/files/homelab-restore-verify, name: homelab-restore-verify}
         - {src: roles/offsite_phone/files/homelab-offsite-bundle, name: homelab-offsite-bundle}
         - {src: roles/offsite_phone/files/homelab-offsite-run, name: homelab-offsite-run}
+    - name: Own the bulk snapshot root as the backup user
+      ansible.builtin.file:
+        path: /home/iryzhkov/app/backups/bulk-sqlite
+        state: directory
+        owner: iryzhkov
+        group: iryzhkov
+        mode: "0700"
+      become: true
     - name: Configure consistent bulk SQLite snapshots
       ansible.builtin.copy:
         src: ../roles/backup/files/bulk-sqlite-sources.json
