@@ -34,6 +34,21 @@
     - "{{ ansible_env.HOME }}/.config/homelab-offsite"
     - "{{ offsite_stage }}"
 
+- name: Ensure the infrastructure mirror parent exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.local/share/homelab-offsite"
+    state: directory
+    mode: "0700"
+
+- name: Maintain a dedicated mirror of the infrastructure source
+  ansible.builtin.git:
+    repo: git@github.com:iryzhkov/homelab-infra.git
+    dest: "{{ ansible_env.HOME }}/.local/share/homelab-offsite/infra.git"
+    bare: true
+    clone: true
+    update: true
+    refspec: "+refs/heads/*:refs/heads/*"
+
 - name: Configure the bundle
   ansible.builtin.copy:
     content: |
@@ -41,7 +56,8 @@
       OFFSITE_RECIPIENT={{ offsite_recipient }}
       OFFSITE_TARGETS="{{ offsite_targets | map('to_target') | join(' ') }}"
       OFFSITE_KEEP={{ offsite_keep }}
-      OFFSITE_REPO={{ offsite_repo | default('') }}
+      OFFSITE_REPO={{ ansible_env.HOME }}/.local/share/homelab-offsite/infra.git
+      OFFSITE_REQUIRED_TARGETS="oci phone"
     dest: "{{ ansible_env.HOME }}/.config/homelab-offsite/env"
     mode: "0600"
 

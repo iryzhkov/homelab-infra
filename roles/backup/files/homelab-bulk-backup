@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Fixed backup destinations, one lock/log/receipt per scheduled copy.
+set -euo pipefail
+umask 077
+job="${1:?usage: homelab-bulk-backup app|apps|cv-site|immich|blackpearl|normandy}"
+base="$HOME"
+remote=b2:igor-offsite-backup
+privileged=no
+case "$job" in
+    app) source_dir="$base/app"; destination="$remote/apps/homelab"; privileged=yes ;;
+    apps) source_dir="$base/apps"; destination="$remote/apps/homelab-apps" ;;
+    cv-site) source_dir="$base/cv-site"; destination="$remote/apps/cv-site" ;;
+    immich) source_dir=/mnt/shared/immich; destination="$remote/data/immich" ;;
+    blackpearl) source_dir=/mnt/backup/blackpearl; destination="$remote/apps/blackpearl" ;;
+    normandy) source_dir=/mnt/backup/normandy; destination="$remote/apps/normandy" ;;
+    *) echo "unknown backup job: $job" >&2; exit 2 ;;
+esac
+state="$base/.local/state/homelab-backup"
+mkdir -p "$state"
+exec 9>"$state/bulk-$job.lock"
+flock -n 9 || exit 0
+log="$state/bulk-$job.log"
+# The NAS paths must be mounted, never an empty directory beneath a lost mount.
+if [[ "$source_dir" == /mnt/* ]] && ! findmnt -n -t nfs,nfs4 -T "$source_dir" >/dev/null; then
+    echo "backup source is not mounted: $source_dir" >"$log"
+    status=1
+elif [ ! -d "$source_dir" ]; then
+    echo "backup source is missing: $source_dir" >"$log"
+    status=1
+else
+    runner=()
+    [ "$privileged" = no ] || runner=(sudo -n)
+    status=0
+    "${runner[@]}" /usr/bin/rclone copy "$source_dir" "$destination" \
+        --config "$base/.config/rclone/rclone.conf" \
+        --exclude-from "$base/app/rclone_exclude.txt" \
+        --stats 1m --stats-one-line >"$log" 2>&1 || status=$?
+fi
+cat "$log"
+printf '%s exit=%s\n' "$(date -Is)" "$status" >"$state/bulk-$job.last-run"
+if [ "$status" -eq 0 ]; then
+    date -Is >"$state/bulk-$job.last-success"
+else
+    feed post "bulk backup $job failed on $(hostname -s)" --severity fail \
+        --source backup --tag "backup infra" --body-file "$log" || true
+    homelab-notify -t "bulk backup $job failed" -p high -i "backup-bulk-$job" - <"$log" || true
+fi
+exit "$status"

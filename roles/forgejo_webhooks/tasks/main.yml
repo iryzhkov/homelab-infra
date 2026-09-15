@@ -79,6 +79,13 @@
   become: true
   when: forgejo_webhooks_old_unit.stat.exists
 
+- name: Disable the unused package-default webhook service
+  ansible.builtin.systemd:
+    name: webhook
+    state: stopped
+    enabled: false
+  become: true
+
 - name: Install the systemd unit
   ansible.builtin.template:
     src: forgejo-webhooks.service.j2

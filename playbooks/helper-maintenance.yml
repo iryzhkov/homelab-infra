@@ -1,0 +1,148 @@
+---
+# Targeted maintenance, independent of application-stack convergence.
+- name: Repair Homelab backups and retire old webhook services
+  hosts: homelab
+  gather_facts: false
+  tasks:
+    - name: Install maintained backup helpers
+      ansible.builtin.copy:
+        src: "../{{ item.src }}"
+        dest: "/home/iryzhkov/.local/bin/{{ item.name }}"
+        mode: "0755"
+        backup: true
+      loop:
+        - {src: roles/backup/files/homelab-bulk-backup, name: homelab-bulk-backup}
+        - {src: roles/backup/files/homelab-restore-verify, name: homelab-restore-verify}
+        - {src: roles/offsite_phone/files/homelab-offsite-bundle, name: homelab-offsite-bundle}
+        - {src: roles/offsite_phone/files/homelab-offsite-run, name: homelab-offsite-run}
+    - name: Install backup filters
+      ansible.builtin.copy:
+        src: ../roles/backup/files/rclone_exclude.txt
+        dest: /home/iryzhkov/app/rclone_exclude.txt
+        mode: "0644"
+        backup: true
+    - name: Replace legacy bulk commands without changing schedules
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          saved=$(mktemp)
+          crontab -l >"$saved"
+          trap 'rm -f "$saved"' EXIT
+          python3 - "$saved" <<'PY'
+          import pathlib, subprocess, sys
+          p = pathlib.Path(sys.argv[1])
+          old = p.read_text()
+          sources = {
+              '/home/iryzhkov/app': 'app',
+              '/home/iryzhkov/apps': 'apps',
+              '/home/iryzhkov/cv-site': 'cv-site',
+              '/mnt/shared/immich': 'immich',
+              '/mnt/backup/blackpearl': 'blackpearl',
+              '/mnt/backup/normandy': 'normandy',
+          }
+          lines = []
+          changed = False
+          for line in old.splitlines():
+              if line.strip() and not line.lstrip().startswith('#'):
+                  parts = line.split(None, 5)
+                  if len(parts) == 6 and parts[5].startswith('rclone copy '):
+                      source = parts[5].split()[2]
+                      if source in sources:
+                          line = ' '.join(parts[:5]) + ' /home/iryzhkov/.local/bin/homelab-bulk-backup ' + sources[source]
+                          changed = True
+              lines.append(line)
+          if changed:
+              backup = pathlib.Path.home() / 'crontab.before-bulk-wrapper-20260915'
+              if not backup.exists():
+                  backup.write_text(old)
+                  backup.chmod(0o600)
+              subprocess.run(['crontab', '-'], input='\n'.join(lines)+'\n', text=True, check=True)
+              print('changed')
+          PY
+      register: bulk_cron
+      changed_when: "'changed' in bulk_cron.stdout"
+    - name: Set cron PATH for backup notifications and executables
+      ansible.builtin.cron:
+        name: PATH
+        env: true
+        job: /home/iryzhkov/.local/bin:/usr/local/bin:/usr/bin:/bin
+    - name: Ensure mirror directory exists
+      ansible.builtin.file:
+        path: /home/iryzhkov/.local/share/homelab-offsite
+        state: directory
+        mode: "0700"
+    - name: Clone the recovery source mirror
+      ansible.builtin.git:
+        repo: git@github.com:iryzhkov/homelab-infra.git
+        dest: /home/iryzhkov/.local/share/homelab-offsite/infra.git
+        bare: true
+        refspec: "+refs/heads/*:refs/heads/*"
+    - name: Configure automatic source refresh
+      ansible.builtin.lineinfile:
+        path: /home/iryzhkov/.config/homelab-offsite/env
+        regexp: '^OFFSITE_REPO='
+        line: OFFSITE_REPO=/home/iryzhkov/.local/share/homelab-offsite/infra.git
+    - name: Keep optional travel-router absence quiet
+      ansible.builtin.lineinfile:
+        path: /home/iryzhkov/.config/homelab-offsite/env
+        regexp: '^OFFSITE_REQUIRED_TARGETS='
+        line: OFFSITE_REQUIRED_TARGETS="oci phone"
+    - name: Disable obsolete webhook units
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      become: true
+      loop: [webhook.service, hugo-webhook.service]
+
+- name: Retire stale Blackpearl helpers and cover stack definitions
+  hosts: blackpearl
+  gather_facts: false
+  tasks:
+    - name: Disable the unused host VPN daemon
+      ansible.builtin.systemd_service:
+        name: piavpn.service
+        state: stopped
+        enabled: false
+      become: true
+    - name: Back up current Compose definitions alongside live application data
+      ansible.builtin.cron:
+        name: stack definitions to NAS
+        minute: "10"
+        hour: "1"
+        job: "findmnt -n -t nfs,nfs4 -T /mnt/apps/blackpearl >/dev/null && rsync -a --no-owner --no-group /home/iryzhkov/apps/ /mnt/apps/blackpearl/stack-definitions"
+
+- name: Fix coordinator inspection and retire unsafe hypervisor recovery
+  hosts: proxmox-a
+  gather_facts: false
+  tasks:
+    - name: Install the guarded coordinator watchdog
+      ansible.builtin.copy:
+        src: ../roles/fleet_helpers/files/zigbee-watchdog.sh
+        dest: /usr/local/bin/zigbee-watchdog.sh
+        mode: "0755"
+        backup: true
+    - name: Retire the reboot escalation loop while retaining healthcheck monitoring
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          saved=$(mktemp)
+          crontab -l >"$saved"
+          trap 'rm -f "$saved"' EXIT
+          python3 - "$saved" <<'PY'
+          import pathlib, subprocess, sys
+          old = pathlib.Path(sys.argv[1]).read_text()
+          lines = [l for l in old.splitlines() if l.lstrip().startswith('#') or '/usr/local/bin/self-heal.sh' not in l]
+          new = '\n'.join(lines) + '\n'
+          if new != old:
+              backup = pathlib.Path('/root/crontab.before-helper-cleanup-20260915')
+              if not backup.exists():
+                  backup.write_text(old)
+                  backup.chmod(0o600)
+              subprocess.run(['crontab', '-'], input=new, text=True, check=True)
+              print('changed')
+          PY
+      register: recovery_cron
+      changed_when: "'changed' in recovery_cron.stdout"

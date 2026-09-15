@@ -53,12 +53,23 @@ collect() {
 
 fail=0
 
+# Keep the infrastructure description current without moving controller keys.
+# OFFSITE_REPO is a dedicated bare mirror, never an interactive checkout.
+if [ -n "${OFFSITE_REPO:-}" ]; then
+    if ! git -C "$OFFSITE_REPO" fetch --prune origin "+refs/heads/*:refs/heads/*" ||
+       ! git -C "$OFFSITE_REPO" bundle create "$work/infra.bundle" --all ||
+       ! mv "$work/infra.bundle" "$OFFSITE_STAGE/contributed/homelab-infra.bundle"; then
+        echo "could not refresh the infrastructure repository bundle" >&2
+        exit 1
+    fi
+fi
+
 # Items the controller contributes, because this host does not have them and
 # should not: the SOPS age key, encrypted to the recovery recipient before it
 # ever leaves the laptop, and a git bundle of the infrastructure repository.
 # They arrive already encrypted and go into the bundle as they are.
 if [ -d "$OFFSITE_STAGE/contributed" ] && [ -n "$(ls -A "$OFFSITE_STAGE/contributed" 2>/dev/null)" ]; then
-    cp -a "$OFFSITE_STAGE/contributed/." "$work/"
+    cp -a "$OFFSITE_STAGE/contributed/." "$work/" || fail=1
 else
     echo "missing: nothing in $OFFSITE_STAGE/contributed" >&2
     fail=1
@@ -77,11 +88,11 @@ for db in "$HOME"/app/backups/sqlite/*/; do
     [ -d "$db" ] || continue
     name=$(basename "$db")
     newest=$(ls -1 "$db" 2>/dev/null | sort | tail -1)
-    [ -n "$newest" ] && collect "$db$newest" "databases/$newest"
+    [ -z "$newest" ] || collect "$db$newest" "databases/$newest" || fail=1
 done
 for prefix in authentik miniflux; do
     newest=$(ls -1 "$HOME"/app/backups/postgres/${prefix}_*.sql.gz 2>/dev/null | sort | tail -1)
-    [ -n "$newest" ] && collect "$newest" "databases/$(basename "$newest")"
+    [ -z "$newest" ] || collect "$newest" "databases/$(basename "$newest")" || fail=1
 done
 
 cat >"$work/RECOVERY.md" <<'MARKDOWN'

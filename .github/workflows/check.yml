@@ -12,4 +12,6 @@ jobs:
         with:
           python-version: '3.11'
       - run: python3 scripts/test-upkeeper-drift.py
+      - run: python3 scripts/test-helper-backups.py
+      - run: shellcheck -S warning roles/backup/files/homelab-bulk-backup roles/backup/files/homelab-restore-verify roles/offsite_phone/files/homelab-offsite-run roles/offsite_phone/files/homelab-offsite-bundle roles/fleet_helpers/files/zigbee-watchdog.sh
       - run: python3 -m py_compile roles/drift_check/files/homelab-drift-check

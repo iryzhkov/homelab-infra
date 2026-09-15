@@ -1,3 +1,8 @@
+# Backup logs change during the copy; database dumps cover live PostgreSQL.
+backups/*.log
+miniflux/data/**
+# Dependencies are rebuilt from the backed-up lockfiles.
+**/node_modules/**
 cache/**
 # Navidrome cache is regenerable; its database has consistent hourly snapshots.
 navidrome/cache/**

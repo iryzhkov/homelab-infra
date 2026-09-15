@@ -61,10 +61,14 @@ its SSH config from the inventory. The key it uses is authorised on the phone
 with `restrict,from="10.42.0.2"`, so it cannot be used from anywhere else and
 cannot open a shell beyond the copy.
 
-A single missed delivery is normal and silent: the phone is asleep, or off the
-mesh. Three days without one is reported to the feed and pushed to the phone,
-because at that point the only offsite copy of the keys is in a bucket those
-keys are needed to open.
+A single missed delivery is normal and silent. Each required destination (OCI
+and phone) has its own delivery timestamp. Three days without a copy produces
+a feed warning, a notification, and a failed service result even when the other
+destination succeeds. The travel router is optional while powered off.
+
+Before each bundle, Homelab fetches the infrastructure repository into a
+dedicated bare mirror and regenerates its Git bundle. Encrypted controller key
+contributions stay separate; refreshing the source never exposes their plaintext.
 
 ## Verified, not assumed
 

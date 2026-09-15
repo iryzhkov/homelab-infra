@@ -74,6 +74,7 @@
     - homelab-sqlite-backup
     - homelab-influx-backup
     - homelab-backup-run
+    - homelab-bulk-backup
     - homelab-restore-verify
     - homelab-b2-guard
 
