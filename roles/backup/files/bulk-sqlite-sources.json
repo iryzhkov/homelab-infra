@@ -1,0 +1,42 @@
+{
+  "emby": {"glob": "/home/iryzhkov/app/emby/data/*.db", "keep": 7},
+  "emby-intro": {"path": "/home/iryzhkov/app/emby/data/theintrodb/segments.db", "keep": 7},
+  "ombi": {"glob": "/home/iryzhkov/app/ombi/*.db", "keep": 7},
+  "komga-tasks": {"path": "/home/iryzhkov/app/komga/tasks.sqlite", "keep": 7},
+  "sonarr": {
+    "path": "/home/iryzhkov/app/sonarr-tv/sonarr.db",
+    "keep": 7
+  },
+  "radarr": {
+    "path": "/home/iryzhkov/app/radarr-movie/radarr.db",
+    "keep": 7
+  },
+  "lidarr": {
+    "path": "/home/iryzhkov/app/lidarr-music/lidarr.db",
+    "keep": 7
+  },
+  "prowlarr": {
+    "path": "/home/iryzhkov/app/prowlarr/prowlarr.db",
+    "keep": 7
+  },
+  "bazarr": {
+    "path": "/home/iryzhkov/app/bazarr/db/bazarr.db",
+    "keep": 7
+  },
+  "forgejo": {
+    "path": "/home/iryzhkov/app/forgejo/gitea/gitea.db",
+    "keep": 7
+  },
+  "lubelogger": {
+    "path": "/home/iryzhkov/app/lubelogger/data/cartracker.db",
+    "keep": 7
+  },
+  "autobrr": {
+    "path": "/home/iryzhkov/app/autobrr/autobrr.db",
+    "keep": 7
+  },
+  "komga": {
+    "path": "/home/iryzhkov/app/komga/database.sqlite",
+    "keep": 7
+  }
+}

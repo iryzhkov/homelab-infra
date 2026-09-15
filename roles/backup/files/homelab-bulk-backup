@@ -21,7 +21,10 @@ exec 9>"$state/bulk-$job.lock"
 flock -n 9 || exit 0
 log="$state/bulk-$job.log"
 # The NAS paths must be mounted, never an empty directory beneath a lost mount.
-if [[ "$source_dir" == /mnt/* ]] && ! findmnt -n -t nfs,nfs4 -T "$source_dir" >/dev/null; then
+if [[ "$source_dir" == /mnt/* ]] && ! stat "$source_dir" >/dev/null 2>&1; then
+    echo "backup source cannot be accessed: $source_dir" >"$log"
+    status=1
+elif [[ "$source_dir" == /mnt/* ]] && ! findmnt -n -t nfs,nfs4 -T "$source_dir" >/dev/null; then
     echo "backup source is not mounted: $source_dir" >"$log"
     status=1
 elif [ ! -d "$source_dir" ]; then
@@ -31,10 +34,23 @@ else
     runner=()
     [ "$privileged" = no ] || runner=(sudo -n)
     status=0
+    if [ "$job" = app ]; then
+        sudo -n "$base/.local/bin/homelab-sqlite-backup" \
+            --config "$base/.config/homelab-backup/bulk-sqlite-sources.json" \
+            --out "$base/app/backups/bulk-sqlite" >"$log" 2>&1 || status=$?
+        if [ "$status" -eq 0 ]; then
+            /usr/bin/rclone sync "$base/app/backups/bulk-sqlite" \
+                "$remote/apps/homelab/backups/bulk-sqlite" >>"$log" 2>&1 || status=$?
+        fi
+    else
+        : >"$log"
+    fi
+    if [ "$status" -eq 0 ]; then
     "${runner[@]}" /usr/bin/rclone copy "$source_dir" "$destination" \
         --config "$base/.config/rclone/rclone.conf" \
         --exclude-from "$base/app/rclone_exclude.txt" \
-        --stats 1m --stats-one-line >"$log" 2>&1 || status=$?
+        --stats 1m --stats-one-line --stats-log-level NOTICE >>"$log" 2>&1 || status=$?
+    fi
 fi
 cat "$log"
 printf '%s exit=%s\n' "$(date -Is)" "$status" >"$state/bulk-$job.last-run"

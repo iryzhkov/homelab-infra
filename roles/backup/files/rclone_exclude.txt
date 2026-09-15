@@ -1,3 +1,24 @@
+# Existing hourly snapshots cover Vaultwarden and Actual.
+vaultwarden/data/db.sqlite3
+actual/server-files/account.sqlite
+actual/user-files/*.sqlite
+# Consistent SQLite snapshots replace raw copies of these active databases.
+emby/data/*.db
+emby/data/theintrodb/segments.db
+ombi/*.db
+komga/tasks.sqlite
+sonarr-tv/sonarr.db
+radarr-movie/radarr.db
+lidarr-music/lidarr.db
+prowlarr/prowlarr.db
+bazarr/db/bazarr.db
+forgejo/gitea/gitea.db
+lubelogger/data/cartracker.db
+autobrr/autobrr.db
+komga/database.sqlite
+**/logs.db
+# Pruned and synced separately by the bulk wrapper.
+backups/bulk-sqlite/**
 # Backup logs change during the copy; database dumps cover live PostgreSQL.
 backups/*.log
 miniflux/data/**

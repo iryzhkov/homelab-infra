@@ -65,6 +65,12 @@
     mode: "0644"
     backup: true
 
+- name: Configure consistent bulk SQLite snapshots
+  ansible.builtin.copy:
+    src: bulk-sqlite-sources.json
+    dest: "{{ ansible_env.HOME }}/.config/homelab-backup/bulk-sqlite-sources.json"
+    mode: "0644"
+
 - name: Install the backup scripts
   ansible.builtin.copy:
     src: "{{ item }}"
