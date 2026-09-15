@@ -27,10 +27,6 @@
     "path": "/home/iryzhkov/app/forgejo/gitea/gitea.db",
     "keep": 7
   },
-  "lubelogger": {
-    "path": "/home/iryzhkov/app/lubelogger/data/cartracker.db",
-    "keep": 7
-  },
   "autobrr": {
     "path": "/home/iryzhkov/app/autobrr/autobrr.db",
     "keep": 7

@@ -13,7 +13,6 @@ lidarr-music/lidarr.db
 prowlarr/prowlarr.db
 bazarr/db/bazarr.db
 forgejo/gitea/gitea.db
-lubelogger/data/cartracker.db
 autobrr/autobrr.db
 komga/database.sqlite
 **/logs.db
