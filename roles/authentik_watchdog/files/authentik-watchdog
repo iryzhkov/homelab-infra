@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -u
+
+readonly state_file=/run/authentik-watchdog.failures
+readonly ready_url=http://127.0.0.1:4080/-/health/ready/
+
+if curl --fail --silent --show-error --output /dev/null   --connect-timeout 2 --max-time 8 "$ready_url"; then
+  rm -f "$state_file"
+  exit 0
+fi
+
+failures=0
+if [[ -r "$state_file" ]]; then
+  read -r failures < "$state_file" || failures=0
+fi
+((failures += 1))
+printf '%s\n' "$failures" > "$state_file"
+
+if (( failures < 3 )); then
+  logger -t authentik-watchdog "readiness check failed ($failures/3)"
+  exit 0
+fi
+
+logger -t authentik-watchdog "readiness failed three times; restarting Authentik server and worker"
+rm -f "$state_file"
+if ! timeout 45 docker restart --timeout 15 authentik-server-1 authentik-worker-1 >/dev/null; then
+  logger -p daemon.err -t authentik-watchdog "container restart failed or timed out"
+  exit 1
+fi
+
+for _ in {1..12}; do
+  if curl --fail --silent --show-error --output /dev/null     --connect-timeout 2 --max-time 8 "$ready_url"; then
+    logger -t authentik-watchdog "Authentik recovered after restart"
+    exit 0
+  fi
+  sleep 5
+done
+
+logger -p daemon.err -t authentik-watchdog "Authentik did not recover within 60 seconds"
+exit 1

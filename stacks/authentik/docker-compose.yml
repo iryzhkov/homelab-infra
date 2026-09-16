@@ -1,5 +1,13 @@
+# Keep Authentik controllable when the central Loki service or NAS is down.
+x-local-logging: &local-logging
+  driver: local
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   postgresql:
+    command: ["postgres", "-c", "max_connections=200"]
     env_file:
     - .env
     environment:
@@ -15,6 +23,7 @@ services:
       - pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}
       timeout: 5s
     image: docker.io/library/postgres:16-alpine
+    logging: *local-logging
     restart: unless-stopped
     volumes:
     - database:/var/lib/postgresql/data
@@ -29,6 +38,7 @@ services:
       - redis-cli ping | grep PONG
       timeout: 3s
     image: docker.io/library/redis:alpine
+    logging: *local-logging
     restart: unless-stopped
     volumes:
     - redis:/data
@@ -48,7 +58,18 @@ services:
       AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
       AUTHENTIK_REDIS__HOST: redis
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?secret key required}
-    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2025.8.1}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:9000/-/health/ready/", timeout=5)
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2025.8.6}
+    logging: *local-logging
     ports:
     - ${COMPOSE_PORT_HTTP:-9000}:9000
     - ${COMPOSE_PORT_HTTPS:-9443}:9443
@@ -72,7 +93,8 @@ services:
       AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
       AUTHENTIK_REDIS__HOST: redis
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?secret key required}
-    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2025.8.1}
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2025.8.6}
+    logging: *local-logging
     restart: unless-stopped
     user: root
     volumes:

@@ -1,0 +1,30 @@
+---
+- name: Install the Authentik watchdog
+  ansible.builtin.copy:
+    src: authentik-watchdog
+    dest: /usr/local/sbin/authentik-watchdog
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install the Authentik watchdog units
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - authentik-watchdog.service
+    - authentik-watchdog.timer
+  register: authentik_watchdog_units
+  become: true
+
+- name: Enable the Authentik watchdog timer
+  ansible.builtin.systemd_service:
+    name: authentik-watchdog.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ authentik_watchdog_units is changed }}"
+  become: true

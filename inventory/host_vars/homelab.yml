@@ -57,6 +57,7 @@ drift_check_peers:
 # The drift check runs here: homelab holds most of the fleet's stacks, and the
 # feed service it reports into runs on this host too.
 drift_check_enabled: true
+authentik_watchdog_enabled: true
 
 # Built from the exact source commit validated by Jocasta CI.
 jocasta_image: jocasta:8403174ead5c0c7c4680a5173a48fb310b1e7021

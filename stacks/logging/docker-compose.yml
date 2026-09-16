@@ -3,10 +3,17 @@ services:
     image: grafana/loki:latest
     container_name: loki
     restart: unless-stopped
+    # Loki must not use the Loki logging driver itself. If it is down, Docker
+    # otherwise cannot start it, which blocks every container lifecycle action.
+    logging:
+      driver: local
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports:
       - "3100:3100"
     volumes:
-      - /mnt/backup/loki:/loki
+      - ./loki-data:/loki
       - ./loki-config.yml:/etc/loki/local-config.yaml:ro
     command: -config.file=/etc/loki/local-config.yaml
 

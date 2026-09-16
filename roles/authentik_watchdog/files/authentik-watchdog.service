@@ -1,0 +1,8 @@
+[Unit]
+Description=Restart Authentik after repeated readiness failures
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/authentik-watchdog

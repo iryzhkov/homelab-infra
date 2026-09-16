@@ -57,6 +57,11 @@
             mode: "0644"
           when: targeted_manifest_stat.stat.exists
 
+    - name: Install the Authentik watchdog
+      ansible.builtin.include_role:
+        name: authentik_watchdog
+      when: authentik_watchdog_enabled | default(false)
+
     # After the stacks, so the manifest describes the deploy that just ran.
     # Skipped when the run was limited to one stack with `only`, because the
     # manifest would then describe that stack alone.
