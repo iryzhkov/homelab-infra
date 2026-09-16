@@ -1,0 +1,16 @@
+#!/bin/sh
+# Only this service's destination is filtered; preserve all unrelated rules.
+set -eu
+host_ip="$1"
+ingress_ip="$2"
+previous_lan_ip="$3"
+# Remove only the superseded Jocasta LAN-port rule when adopting mesh ingress.
+if iptables -w -C DOCKER-USER -p tcp -m conntrack --ctorigdst "$previous_lan_ip" --ctorigdstport 1935 --ctdir ORIGINAL -j JOCASTA 2>/dev/null; then
+    iptables -w -D DOCKER-USER -p tcp -m conntrack --ctorigdst "$previous_lan_ip" --ctorigdstport 1935 --ctdir ORIGINAL -j JOCASTA
+fi
+iptables -w -N JOCASTA 2>/dev/null || true
+iptables -w -F JOCASTA
+iptables -w -A JOCASTA -s "$ingress_ip" -j RETURN
+iptables -w -A JOCASTA -j DROP
+iptables -w -C DOCKER-USER -p tcp -m conntrack --ctorigdst "$host_ip" --ctorigdstport 1935 --ctdir ORIGINAL -j JOCASTA 2>/dev/null ||
+    iptables -w -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdst "$host_ip" --ctorigdstport 1935 --ctdir ORIGINAL -j JOCASTA

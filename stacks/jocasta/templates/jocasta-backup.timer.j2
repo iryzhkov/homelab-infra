@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly Jocasta NAS recovery points
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

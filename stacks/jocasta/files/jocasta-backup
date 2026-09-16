@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Online SQLite snapshots: local scratch, integrity check, atomic NAS publication."""
+import argparse
+import datetime
+import fcntl
+import gzip
+import json
+import os
+from pathlib import Path
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+import time
+
+
+def require_nas(mount, destination):
+    mount = Path(mount).resolve()
+    destination = Path(destination).resolve()
+    if mount not in destination.parents:
+        raise RuntimeError("backup destination is outside required NAS mount")
+    result = subprocess.run(
+        ["findmnt", "--json", "--mountpoint", str(mount)],
+        check=True, capture_output=True, text=True,
+    )
+    filesystems = json.loads(result.stdout)["filesystems"]
+    if len(filesystems) != 1 or filesystems[0]["fstype"] not in ("nfs", "nfs4"):
+        raise RuntimeError("required NAS mount is absent or not NFS")
+    if shutil.disk_usage(mount).free < 10 * 1024**3:
+        raise RuntimeError("NAS has less than 10 GiB reserve")
+
+
+def snapshot(database, plain):
+    # Reads every page through SQLite's online backup API, never copies WAL files.
+    source = sqlite3.connect(Path(database).resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+    target = sqlite3.connect(plain)
+    deadline = time.monotonic() + 1800
+    def progress(status, remaining, total):
+        if time.monotonic() > deadline:
+            raise TimeoutError("online backup exceeded 30 minutes")
+    try:
+        source.backup(target, pages=256, progress=progress, sleep=0.1)
+        if target.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+            raise RuntimeError("snapshot failed integrity check")
+    finally:
+        target.close()
+        source.close()
+
+
+def publish(plain, directory, name):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    partial = directory / (name + ".partial")
+    try:
+        with open(plain, "rb") as source, open(partial, "wb") as output:
+            os.chmod(partial, 0o600)
+            with gzip.GzipFile(fileobj=output, mode="wb") as packed:
+                shutil.copyfileobj(source, packed)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(partial, directory / name)
+        descriptor = os.open(directory, os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def prune(directory, keep):
+    for stale in sorted(directory.glob("*.sqlite3.gz"), reverse=True)[keep:]:
+        stale.unlink()
+
+
+def check_freshness(destination):
+    snapshots = list((Path(destination) / "hourly").glob("*.sqlite3.gz"))
+    if not snapshots or time.time() - max(p.stat().st_mtime for p in snapshots) > 7200:
+        raise RuntimeError("Jocasta NAS recovery point is missing or older than two hours")
+
+
+def run(args):
+    require_nas(args.mount, args.destination)
+    if args.check_freshness:
+        check_freshness(args.destination)
+        print("Jocasta NAS recovery point is fresh")
+        return
+    database = Path(args.database)
+    if not database.is_file():
+        raise RuntimeError("source database does not exist")
+    if shutil.disk_usage(tempfile.gettempdir()).free < database.stat().st_size + 1024**3:
+        raise RuntimeError("insufficient local scratch space")
+    destination = Path(args.destination)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    with tempfile.TemporaryDirectory(prefix="jocasta-backup-") as scratch:
+        plain = Path(scratch) / "jocasta.sqlite3"
+        snapshot(database, plain)
+        # Recheck immediately before touching the destination.
+        require_nas(args.mount, args.destination)
+        publish(plain, destination / "hourly", now.strftime("%Y-%m-%dT%H%M%SZ.sqlite3.gz"))
+        daily = now.strftime("%Y-%m-%d.sqlite3.gz")
+        if not (destination / "daily" / daily).exists():
+            publish(plain, destination / "daily", daily)
+        prune(destination / "hourly", 48)
+        prune(destination / "daily", 30)
+    print("Jocasta backup verified and published to NAS at " + now.isoformat())
+
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--database", required=True)
+    parser.add_argument("--destination", required=True)
+    parser.add_argument("--mount", required=True)
+    parser.add_argument("--check-freshness", action="store_true")
+    args = parser.parse_args()
+    # System service is single-instance; also serialize operator invocations.
+    with open("/run/lock/jocasta-backup.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            run(args)
+        except Exception:
+            # Do not send database content, credentials or arbitrary error bodies.
+            subprocess.run(["runuser", "-u", "iryzhkov", "--",
+                            "/home/iryzhkov/.local/bin/homelab-notify",
+                            "-t", "Jocasta NAS backup failed", "-p", "high",
+                            "-i", "jocasta-backup", "Check jocasta-backup.service on homelab"],
+                           check=False)
+            raise
+
+
+if __name__ == "__main__":
+    main()

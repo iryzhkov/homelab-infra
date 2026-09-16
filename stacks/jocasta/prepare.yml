@@ -1,0 +1,84 @@
+---
+- name: Require an immutable Jocasta image reference
+  ansible.builtin.assert:
+    that:
+      - "'@sha256:' in stack.env_extra.JOCASTA_IMAGE or stack.env_extra.JOCASTA_IMAGE is match('.*:[0-9a-f]{40}$')"
+    fail_msg: Set jocasta_image to a validated immutable image digest or full source commit tag.
+
+- name: Verify the database filesystem supports SQLite WAL
+  ansible.builtin.command:
+    argv: [findmnt, --noheadings, --output, FSTYPE, --target, "{{ stack_dir if stack_dir_stat.stat.exists else stack_root }}"]
+  register: jocasta_data_mount
+  check_mode: false
+  changed_when: false
+  failed_when: jocasta_data_mount.stdout | trim not in ['ext4', 'xfs', 'btrfs']
+
+- name: Prepare private Jocasta storage and credentials
+  ansible.builtin.file:
+    path: "{{ stack_dir }}/{{ item }}"
+    state: directory
+    owner: "10001"
+    group: "10001"
+    mode: "0700"
+  become: true
+  loop: [data, secrets]
+
+- name: Render the non-secret Compose environment
+  ansible.builtin.copy:
+    content: |
+      HOST_IP={{ mesh_host }}
+      JOCASTA_IMAGE={{ stack.env_extra.JOCASTA_IMAGE }}
+    dest: "{{ stack_dir }}/.env"
+    mode: "0600"
+
+- name: Render reloadable host credentials
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../stacks/jocasta/templates/tokens.json.j2"
+    dest: "{{ stack_dir }}/secrets/jocasta-tokens.json"
+    owner: "10001"
+    group: "10001"
+    mode: "0600"
+  become: true
+  no_log: true
+
+- name: Install Jocasta operational tools
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../stacks/jocasta/files/{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    mode: "0755"
+  become: true
+  loop: [jocasta-firewall, jocasta-backup]
+
+- name: Install Jocasta system units
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../stacks/jocasta/templates/{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  become: true
+  loop: [jocasta-firewall.service, jocasta-container.service, jocasta-backup.service, jocasta-backup.timer, jocasta-backup-watch.service, jocasta-backup-watch.timer]
+  register: jocasta_units
+
+- name: Apply backend restriction before publishing the container port
+  ansible.builtin.systemd_service:
+    name: jocasta-firewall.service
+    state: "{{ 'restarted' if jocasta_units is changed else 'started' }}"
+    enabled: true
+    daemon_reload: true
+  become: true
+  when: not ansible_check_mode
+
+- name: Enable mesh-ordered container startup on subsequent boots
+  ansible.builtin.systemd_service:
+    name: jocasta-container.service
+    enabled: true
+  become: true
+  when: not ansible_check_mode
+
+- name: Enable hourly NAS recovery points
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  become: true
+  loop: [jocasta-backup.timer, jocasta-backup-watch.timer]
+  when: not ansible_check_mode

@@ -1,0 +1,39 @@
+services:
+  jocasta:
+    image: ${JOCASTA_IMAGE:?set immutable JOCASTA_IMAGE}
+    container_name: jocasta
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2
+    ports:
+      - "${HOST_IP}:1935:8080"
+    environment:
+      JOCASTA_LISTEN: ":8080"
+      JOCASTA_DB: /data/jocasta.db
+      JOCASTA_TOKENS_FILE: /run/secrets/jocasta-tokens.json
+      JOCASTA_MAX_STORAGE_BYTES: "10737418240"
+      JOCASTA_MIN_FREE_BYTES: "5368709120"
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./secrets
+        target: /run/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

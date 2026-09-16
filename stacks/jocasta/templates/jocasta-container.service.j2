@@ -1,0 +1,20 @@
+[Unit]
+Description=Start Jocasta after its private mesh ingress is ready
+Requires=docker.service nebula.service jocasta-firewall.service
+After=docker.service nebula.service jocasta-firewall.service
+PartOf=docker.service nebula.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory={{ stack_dir }}
+ExecStartPre=/usr/sbin/ip address show dev nebula1
+ExecStart=/usr/bin/docker compose --project-name jocasta up -d --pull never
+ExecStop=/usr/bin/docker compose --project-name jocasta stop
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

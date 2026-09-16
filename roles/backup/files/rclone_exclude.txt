@@ -1,3 +1,6 @@
+# Jocasta is snapshotted consistently to NAS; never copy its live DB or host tokens.
+jocasta/data/**
+jocasta/secrets/**
 # Existing hourly snapshots cover Vaultwarden and Actual.
 vaultwarden/data/db.sqlite3
 actual/server-files/account.sqlite

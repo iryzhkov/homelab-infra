@@ -1,0 +1,9 @@
+[Unit]
+Description=Detect stale Jocasta NAS recovery points
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+TimeoutStartSec=2min
+ExecStart=/usr/local/sbin/jocasta-backup --database {{ stack_dir }}/data/jocasta.db --destination /mnt/backup/jocasta --mount /mnt/backup --check-freshness

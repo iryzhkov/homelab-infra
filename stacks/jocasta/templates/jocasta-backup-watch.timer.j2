@@ -1,0 +1,10 @@
+[Unit]
+Description=Independent hourly Jocasta backup freshness check
+
+[Timer]
+OnCalendar=*-*-* *:45:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Consistent Jocasta backup to NAS
+After=docker.service
+RequiresMountsFor=/mnt/backup
+
+[Service]
+Type=oneshot
+UMask=0077
+TimeoutStartSec=45min
+ExecStart=/usr/local/sbin/jocasta-backup --database {{ stack_dir }}/data/jocasta.db --destination /mnt/backup/jocasta --mount /mnt/backup

@@ -1,0 +1,15 @@
+[Unit]
+Description=Restrict Jocasta backend to the TLS ingress
+Requires=docker.service nebula.service
+PartOf=docker.service
+After=docker.service nebula.service
+Before=jocasta-backup.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/jocasta-firewall {{ mesh_host }} {{ hostvars[groups['edge_proxy'][0]].mesh_host }} {{ ansible_host }}
+ExecReload=/usr/local/sbin/jocasta-firewall {{ mesh_host }} {{ hostvars[groups['edge_proxy'][0]].mesh_host }} {{ ansible_host }}
+
+[Install]
+WantedBy=multi-user.target
