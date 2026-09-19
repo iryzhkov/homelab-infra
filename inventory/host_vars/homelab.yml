@@ -60,7 +60,7 @@ drift_check_enabled: true
 authentik_watchdog_enabled: true
 
 # Built from the exact source commit validated by Jocasta CI.
-jocasta_image: jocasta:8403174ead5c0c7c4680a5173a48fb310b1e7021
+jocasta_image: jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63
 
 stacks:
   - name: actual
