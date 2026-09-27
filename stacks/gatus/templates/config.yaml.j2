@@ -10,7 +10,7 @@ endpoints:
 {% for route in stack.routes | default([]) %}
 {% if route.port is defined %}
   - name: {{ route.host }}
-    group: Internal on {{ host_name }}
+    group: Internal on {{ host_name }} via {{ inventory_hostname }}
 {% if route.health_check is defined and route.health_check == false %}
     url: "tcp://{{ hostvars[host_name].ansible_host }}:{{ route.port }}"
     interval: 1m
@@ -29,7 +29,7 @@ endpoints:
 {% endif %}
 {% elif route.url is defined and '127.0.0.1' not in route.url %}
   - name: {{ route.host }}
-    group: Internal on {{ host_name }}
+    group: Internal on {{ host_name }} via {{ inventory_hostname }}
 {% if route.monitor_url is defined %}
     url: "{{ route.monitor_url }}"
 {% else %}
@@ -45,7 +45,7 @@ endpoints:
 {% endfor %}
 {% for route in traefik_static_routes %}
   - name: {{ route.host }}
-    group: Internal static
+    group: Internal static via {{ inventory_hostname }}
     url: "{{ route.url }}/"
     interval: 1m
     conditions:
@@ -55,9 +55,9 @@ endpoints:
 {% for host_name in groups['docker_hosts'] %}
 {% for stack in hostvars[host_name].stacks | default([]) %}
 {% for route in stack.routes | default([]) %}
-{% if route.host in gatus_public_from_homelab %}
+{% if route.host in gatus_public_from_lan %}
   - name: {{ route.host }}
-    group: Public via homelab
+    group: Public via {{ inventory_hostname }}
     url: "https://{{ route.host }}/"
     interval: 1m
     client:
@@ -69,14 +69,28 @@ endpoints:
 {% endfor %}
 {% endfor %}
 {% endfor %}
+  - name: Steward coordinator
+    group: Steward via {{ inventory_hostname }}
+    url: "http://{{ hostvars['normandy'].ansible_host }}:3003/health/coordinator"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% for worker_id in gatus_steward_worker_ids %}
+  - name: Steward worker {{ worker_id }}
+    group: Steward via {{ inventory_hostname }}
+    url: "http://{{ hostvars['normandy'].ansible_host }}:3003/health/worker/{{ worker_id }}"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% endfor %}
   - name: MQTT host ping
-    group: Internal static
+    group: Internal static via {{ inventory_hostname }}
     url: "icmp://{{ mqtt_broker_ip }}"
     interval: 1m
     conditions:
       - "[CONNECTED] == true"
   - name: Edge proxy TCP
-    group: Internal static
+    group: Internal static via {{ inventory_hostname }}
     url: "tcp://{{ edge_proxy_ip }}:443"
     interval: 1m
     conditions:

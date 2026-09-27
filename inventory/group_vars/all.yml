@@ -47,9 +47,15 @@ gatus_public_hosts:
   - igor.ryzhkov.dev
   - vault.ryzhkov.dev
 
-# Public services hosted on OCI are checked from homelab with a public DNS
-# resolver, so the probe follows the actual Internet route to OCI.
-gatus_public_from_homelab:
+# Public services hosted on OCI are checked from each LAN Gatus instance with
+# a public DNS resolver, so probes follow the actual Internet route to OCI.
+# Coordinator worker IDs (gaming-pc is called omarchy-pc in steward).
+gatus_steward_worker_ids:
+  - homelab
+  - normandy
+  - omarchy-pc
+
+gatus_public_from_lan:
   - emby.ryzhkov.dev
 
 # Dynamic configuration the generator has no shape for, because each is a
