@@ -1,0 +1,153 @@
+---
+# Keep the Gatus metrics scraper and its bucket in InfluxDB's desired state.
+# Run after deploying the Gatus stack; no credentials leave the controller/host.
+- name: Store Gatus metrics in InfluxDB
+  hosts: homelab
+  gather_facts: false
+  vars:
+    influx_api: http://127.0.0.1:8087/api/v2
+    gatus_metrics_url: "http://{{ ansible_host }}:3002/metrics"
+    gatus_oci_metrics_url: "http://{{ hostvars['oci'].mesh_host }}:3002/metrics"
+  tasks:
+    - name: Load the existing InfluxDB admin token on the controller
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/homelab-logging.sops.yaml"
+        name: influx_secrets
+      delegate_to: localhost
+      no_log: true
+
+    - name: Find the InfluxDB organization
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/orgs?org=ryzhkov"
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        return_content: true
+      register: influx_orgs
+      no_log: true
+
+    - name: Require the existing organization
+      ansible.builtin.assert:
+        that: influx_orgs.json.orgs | length == 1
+        fail_msg: Expected one ryzhkov InfluxDB organization.
+
+    - name: Find the Gatus bucket
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/buckets?orgID={{ influx_orgs.json.orgs[0].id }}&limit=100"
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        return_content: true
+      register: influx_buckets
+      no_log: true
+
+    - name: Create a 52-week Gatus bucket
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/buckets"
+        method: POST
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          orgID: "{{ influx_orgs.json.orgs[0].id }}"
+          name: gatus
+          retentionRules:
+            - type: expire
+              everySeconds: 31449600
+        status_code: 201
+      changed_when: true
+      register: influx_bucket_created
+      when: influx_buckets.json.buckets | selectattr('name', 'equalto', 'gatus') | list | length == 0
+      no_log: true
+
+    - name: Select the Gatus bucket
+      ansible.builtin.set_fact:
+        gatus_bucket_id: >-
+          {{ influx_bucket_created.json.id if influx_buckets.json.buckets | selectattr('name', 'equalto', 'gatus') | list | length == 0
+             else (influx_buckets.json.buckets | selectattr('name', 'equalto', 'gatus') | first).id }}
+
+    - name: Find the Gatus scraper
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/scrapers?name=gatus&orgID={{ influx_orgs.json.orgs[0].id }}"
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        return_content: true
+      register: influx_scrapers
+      no_log: true
+
+    - name: Create the Gatus scraper
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/scrapers"
+        method: POST
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          name: gatus
+          orgID: "{{ influx_orgs.json.orgs[0].id }}"
+          bucketID: "{{ gatus_bucket_id }}"
+          type: prometheus
+          url: "{{ gatus_metrics_url }}"
+        status_code: 201
+      changed_when: true
+      when: influx_scrapers.json.configurations | length == 0
+      no_log: true
+
+    - name: Update the Gatus scraper if its target or bucket changed
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/scrapers/{{ influx_scrapers.json.configurations[0].id }}"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          bucketID: "{{ gatus_bucket_id }}"
+          url: "{{ gatus_metrics_url }}"
+        status_code: 200
+      changed_when: true
+      when:
+        - influx_scrapers.json.configurations | length > 0
+        - influx_scrapers.json.configurations[0].bucketID != gatus_bucket_id or influx_scrapers.json.configurations[0].url != gatus_metrics_url
+      no_log: true
+
+    - name: Find the OCI Gatus scraper
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/scrapers?name=gatus-oci&orgID={{ influx_orgs.json.orgs[0].id }}"
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        return_content: true
+      register: influx_oci_scrapers
+      no_log: true
+
+    - name: Create the OCI Gatus scraper
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/scrapers"
+        method: POST
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          name: gatus-oci
+          orgID: "{{ influx_orgs.json.orgs[0].id }}"
+          bucketID: "{{ gatus_bucket_id }}"
+          type: prometheus
+          url: "{{ gatus_oci_metrics_url }}"
+        status_code: 201
+      changed_when: true
+      when: influx_oci_scrapers.json.configurations | length == 0
+      no_log: true
+
+    - name: Update the OCI Gatus scraper if its target or bucket changed
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/scrapers/{{ influx_oci_scrapers.json.configurations[0].id }}"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          bucketID: "{{ gatus_bucket_id }}"
+          url: "{{ gatus_oci_metrics_url }}"
+        status_code: 200
+      changed_when: true
+      when:
+        - influx_oci_scrapers.json.configurations | length > 0
+        - influx_oci_scrapers.json.configurations[0].bucketID != gatus_bucket_id or influx_oci_scrapers.json.configurations[0].url != gatus_oci_metrics_url
+      no_log: true

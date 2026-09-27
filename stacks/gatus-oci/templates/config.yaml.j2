@@ -1,0 +1,31 @@
+---
+metrics: true
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+endpoints:
+{% for host_name in groups['docker_hosts'] %}
+{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for route in stack.routes | default([]) %}
+{% if route.host in gatus_public_hosts %}
+  - name: {{ route.host }}
+    group: Public via OCI
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% for route in traefik_static_routes %}
+{% if route.host in gatus_public_hosts %}
+  - name: {{ route.host }}
+    group: Public via OCI
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% endif %}
+{% endfor %}

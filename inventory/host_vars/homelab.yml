@@ -158,6 +158,8 @@ stacks:
     routes:
       - host: jocasta.ryzhkov.dev
         url: "http://{{ mesh_host }}:1935"
+        # Gatus's Docker bridge is blocked by Jocasta's mesh-only firewall.
+        monitor_url: https://jocasta.ryzhkov.dev/healthz
         health_check:
           path: /healthz
   - name: kiwix

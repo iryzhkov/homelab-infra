@@ -1,28 +1,83 @@
 ---
+metrics: true
 storage:
   type: sqlite
   path: /data/gatus.db
 
 endpoints:
-  - name: Home Assistant
-    group: Kuma comparison
-    url: "{{ (traefik_static_routes | selectattr('host', 'equalto', 'home.ryzhkov.dev') | first).url }}"
+{% for host_name in groups['docker_hosts'] %}
+{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for route in stack.routes | default([]) %}
+{% if route.port is defined %}
+  - name: {{ route.host }}
+    group: Internal on {{ host_name }}
+{% if route.health_check is defined and route.health_check == false %}
+    url: "tcp://{{ hostvars[host_name].ansible_host }}:{{ route.port }}"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+{% else %}
+    url: "{{ route.scheme | default('http') }}://{{ hostvars[host_name].ansible_host }}:{{ route.port }}{{ route.health_check.path | default('/') }}"
+    interval: 1m
+{% if route.scheme | default('http') == 'https' %}
+    client:
+      insecure: true
+{% endif %}
+    conditions:
+      - "[STATUS] < 500"
+      - "[STATUS] != 404"
+{% endif %}
+{% elif route.url is defined and '127.0.0.1' not in route.url %}
+  - name: {{ route.host }}
+    group: Internal on {{ host_name }}
+{% if route.monitor_url is defined %}
+    url: "{{ route.monitor_url }}"
+{% else %}
+    url: "{{ route.url }}{{ route.health_check.path | default('/') }}"
+{% endif %}
     interval: 1m
     conditions:
       - "[STATUS] >= 200"
       - "[STATUS] < 300"
-
-  - name: Zigbee2MQTT
-    group: Kuma comparison
-    url: "{{ (traefik_static_routes | selectattr('host', 'equalto', 'zigbee.ryzhkov.dev') | first).url }}"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% for route in traefik_static_routes %}
+  - name: {{ route.host }}
+    group: Internal static
+    url: "{{ route.url }}/"
     interval: 1m
     conditions:
       - "[STATUS] >= 200"
       - "[STATUS] < 300"
-
+{% endfor %}
+{% for host_name in groups['docker_hosts'] %}
+{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for route in stack.routes | default([]) %}
+{% if route.host in gatus_public_from_homelab %}
+  - name: {{ route.host }}
+    group: Public via homelab
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    client:
+      dns-resolver: "tcp://8.8.8.8:53"
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
   - name: MQTT host ping
-    group: Kuma comparison
+    group: Internal static
     url: "icmp://{{ mqtt_broker_ip }}"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+  - name: Edge proxy TCP
+    group: Internal static
+    url: "tcp://{{ edge_proxy_ip }}:443"
     interval: 1m
     conditions:
       - "[CONNECTED] == true"

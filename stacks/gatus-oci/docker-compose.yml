@@ -1,0 +1,16 @@
+services:
+  gatus:
+    image: ghcr.io/twin/gatus:v5.37.0
+    container_name: gatus-oci
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "${GATUS_BIND_IP}:3002:8080"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - gatus-data:/data
+
+volumes:
+  gatus-data:
