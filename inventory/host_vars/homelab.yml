@@ -172,6 +172,14 @@ stacks:
     routes:
       - host: uptime.ryzhkov.dev
         port: 3001
+  - name: gatus
+    # LAN-only trial alongside Kuma. Do not route publicly or alert yet.
+    pull: missing
+    env_extra: {}
+    config_templates:
+      - src: config.yaml.j2
+        dest: config.yaml
+
   - name: librespeed
     routes:
       - host: speed.ryzhkov.dev

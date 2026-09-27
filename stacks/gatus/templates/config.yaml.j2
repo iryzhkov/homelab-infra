@@ -1,0 +1,28 @@
+---
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+endpoints:
+  - name: Home Assistant
+    group: Kuma comparison
+    url: "{{ (traefik_static_routes | selectattr('host', 'equalto', 'home.ryzhkov.dev') | first).url }}"
+    interval: 1m
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+
+  - name: Zigbee2MQTT
+    group: Kuma comparison
+    url: "{{ (traefik_static_routes | selectattr('host', 'equalto', 'zigbee.ryzhkov.dev') | first).url }}"
+    interval: 1m
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+
+  - name: MQTT host ping
+    group: Kuma comparison
+    url: "icmp://{{ mqtt_broker_ip }}"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"

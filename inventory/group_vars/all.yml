@@ -23,6 +23,9 @@ traefik_static_routes:
   - host: zigbee.ryzhkov.dev
     url: http://192.168.70.235:8080
 
+# Kuma's MQTT watchdog currently pings this host; the Gatus trial mirrors it.
+mqtt_broker_ip: 192.168.70.241
+
 # Dynamic configuration the generator has no shape for, because each is a
 # single instance rather than a pattern. Those with addresses in them are
 # rendered so the addresses still come from the inventory; the other two have
