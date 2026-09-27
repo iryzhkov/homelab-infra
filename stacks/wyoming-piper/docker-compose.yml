@@ -1,0 +1,22 @@
+# Piper text-to-speech for Home Assistant Assist, over the Wyoming protocol.
+#
+# Added 2026-09-27 so Assist answers aloud; speech-to-text stays with the
+# wyoming-openai stack on port 10300. Piper runs well on CPU, so this lives on
+# homelab rather than on gaming-pc and keeps working when that box is off.
+# The default voice is set here; Home Assistant can pick any other Piper voice
+# per pipeline, and the server downloads it into the data volume on first use.
+# The volume holds only re-downloadable voice models, so it is a named volume
+# outside the backed-up stack directory.
+services:
+  wyoming-piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: wyoming-piper
+    restart: unless-stopped
+    command: --voice en_US-lessac-medium
+    volumes:
+      - piper-data:/data
+    ports:
+      - "${HOST_IP}:10200:10200"
+
+volumes:
+  piper-data:

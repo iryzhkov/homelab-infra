@@ -267,3 +267,8 @@ stacks:
   - name: wyoming-openai
     # Publishes on the host's own address, so it needs HOST_IP and nothing else.
     env_extra: {}
+  - name: wyoming-piper
+    # Publishes on the host's own address, so it needs HOST_IP and nothing else.
+    # New on 2026-09-27, not adopted, so a missing image is pulled on deployment.
+    pull: missing
+    env_extra: {}
