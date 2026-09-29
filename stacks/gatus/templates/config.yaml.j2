@@ -69,6 +69,15 @@ endpoints:
 {% endfor %}
 {% endfor %}
 {% endfor %}
+{% for instance in adguard_instances %}
+  - name: AdGuard {{ instance.name }}
+    group: Internal infrastructure via {{ inventory_hostname }}
+    url: "http://{{ instance.ip }}:{{ adguard_web_port }}/"
+    interval: 1m
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 400"
+{% endfor %}
   - name: Steward coordinator
     group: Steward via {{ inventory_hostname }}
     url: "http://{{ hostvars['normandy'].ansible_host }}:3003/health/coordinator"
