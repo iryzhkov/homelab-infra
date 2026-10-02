@@ -6,7 +6,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     ports:
-      - "${HOST_IP}:3004:8080"
+      - "${HOST_IP}:3001:8080"
     volumes:
       - ./config.yaml:/config/config.yaml:ro
       - gatus-data:/data

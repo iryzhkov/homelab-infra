@@ -176,7 +176,7 @@ stacks:
     env_extra: {}
     routes:
       - host: uptime.ryzhkov.dev
-        port: 3004
+        port: 3001
     config_templates:
       - src: config.yaml.j2
         dest: config.yaml
