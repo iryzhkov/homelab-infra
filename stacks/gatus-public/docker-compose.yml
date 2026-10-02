@@ -1,0 +1,15 @@
+services:
+  gatus:
+    image: ghcr.io/twin/gatus:v5.37.0
+    container_name: gatus-public
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    ports:
+      - "${HOST_IP}:3004:8080"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - gatus-data:/data
+
+volumes:
+  gatus-data:

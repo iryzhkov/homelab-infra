@@ -1,0 +1,37 @@
+---
+metrics: true
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+endpoints:
+{% for host_name in groups['docker_hosts'] %}
+{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for route in stack.routes | default([]) %}
+{% if route.host in (gatus_public_hosts + gatus_public_from_lan) and route.host != 'uptime.ryzhkov.dev' %}
+  - name: {{ route.host }}
+    group: Public
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    client:
+      dns-resolver: "tcp://8.8.8.8:53"
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% for route in traefik_static_routes %}
+{% if route.host in gatus_public_hosts %}
+  - name: {{ route.host }}
+    group: Public
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    client:
+      dns-resolver: "tcp://8.8.8.8:53"
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+{% endif %}
+{% endfor %}

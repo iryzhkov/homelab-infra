@@ -170,10 +170,16 @@ stacks:
     routes:
       - host: manga.ryzhkov.dev
         port: 25600
-  - name: kuma
+  - name: gatus-public
+    source: gatus-public
+    pull: missing
+    env_extra: {}
     routes:
       - host: uptime.ryzhkov.dev
-        port: 3001
+        port: 3004
+    config_templates:
+      - src: config.yaml.j2
+        dest: config.yaml
   - name: gatus
     # Runs beside Kuma until alert delivery is verified.
     pull: missing
