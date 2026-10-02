@@ -18,6 +18,40 @@ upkeeper_drift_enabled: true
 # engine busy time (playbooks/base.yml).
 gpu_metrics: true
 
+# The data disk: VM 202's scsi1, a 400 GB zvol on proxmox-b's `tank`
+# (backup=0, so a restore of the VM drops it and nofail keeps the guest
+# booting; the services' own backups cover its contents). It replaced the
+# 900 GB qcow2 on ssd1tb in phase 2, 2026-10-02. Docker requires it, so no
+# container starts on an empty /mnt/data.
+local_mounts:
+  - path: /mnt/data
+    uuid: 0c01def4-9341-4497-aa2f-678c2b0e8531
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=10
+    before_docker: true
+
+# Immich's Postgres dump, daily since 2026-10-02 (it was Mon and Thu). With
+# /mnt/data at backup=0, vzdump no longer holds the database's data directory,
+# so this dump is the only offsite copy of it. roles/backup (nas_dump.yml)
+# deploys the script and normandy-backup.{service,timer}; homelab ships the
+# root to Backblaze on ship_cron, after the dump. pg_dump runs inside the
+# container over its local socket, as the database superuser; no password.
+backup_nas_dump:
+  root: /mnt/backup/normandy
+  on_calendar: "*-*-* 01:30"
+  ship_cron: "40 6 * * *"
+  keep_days: 14
+  databases:
+    - container: immich_postgres
+      name: immich
+      user: iryzhkov
+  config_dir: /home/igor/app
+  config_exclude:
+    - app/frigate/config/model_cache
+  # The hand-written script the role took over on 2026-10-02.
+  retired_files:
+    - /home/igor/app/pg_backup.sh
+
 stacks:
   - name: cloudflare
     secrets: normandy-cloudflare

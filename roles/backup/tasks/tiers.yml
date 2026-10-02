@@ -1,0 +1,112 @@
+---
+# homelab's tiers: hourly consistent snapshots of the small SQLite databases,
+# a daily InfluxDB archive, the weekly lifecycle check and the monthly restore
+# verification. Included from main.yml where backup_sqlite_sources is set.
+
+- name: Load the secrets the backups need
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/homelab-logging.sops.yaml"
+    name: backup_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Ensure the directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ansible_env.HOME }}/.local/bin"
+    - "{{ ansible_env.HOME }}/.config/homelab-backup"
+    - "{{ ansible_env.HOME }}/.config/systemd/user"
+    - "{{ backup_root }}/sqlite"
+    - "{{ backup_root }}/influxdb"
+
+- name: Describe the databases to snapshot
+  ansible.builtin.copy:
+    content: "{{ backup_sqlite_sources | to_nice_json }}\n"
+    dest: "{{ ansible_env.HOME }}/.config/homelab-backup/sqlite-sources.json"
+    mode: "0644"
+
+# InfluxDB's admin token, kept out of the unit file and out of the process
+# table: the wrapper sources this, the unit does not carry it.
+- name: Install the backup environment file
+  ansible.builtin.copy:
+    content: |
+      INFLUX_TOKEN={{ backup_secrets.INFLUX_TOKEN }}
+    dest: "{{ ansible_env.HOME }}/.config/homelab-backup/env"
+    mode: "0600"
+  no_log: true
+
+# The exclude list the twice-weekly cron jobs use. Taken over here because the
+# new snapshot directories have to be excluded from them, and an exclude list
+# that lives only on the host is the kind of thing that quietly stops matching
+# what it is meant to exclude.
+- name: Install the rclone exclude list
+  ansible.builtin.copy:
+    src: rclone_exclude.txt
+    dest: "{{ backup_root | dirname }}/rclone_exclude.txt"
+    mode: "0644"
+    backup: true
+
+- name: Own the bulk snapshot root as the backup user
+  ansible.builtin.file:
+    path: "{{ backup_root }}/bulk-sqlite"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0700"
+  become: true
+
+- name: Configure consistent bulk SQLite snapshots
+  ansible.builtin.copy:
+    src: bulk-sqlite-sources.json
+    dest: "{{ ansible_env.HOME }}/.config/homelab-backup/bulk-sqlite-sources.json"
+    mode: "0644"
+
+- name: Install the backup scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ ansible_env.HOME }}/.local/bin/{{ item }}"
+    mode: "0755"
+  loop:
+    - homelab-sqlite-backup
+    - homelab-influx-backup
+    - homelab-backup-run
+    - homelab-bulk-backup
+    - homelab-restore-verify
+    - homelab-b2-guard
+
+- name: Install the systemd user units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ ansible_env.HOME }}/.config/systemd/user/{{ item }}"
+    mode: "0644"
+  loop:
+    - homelab-backup-hourly.service
+    - homelab-backup-hourly.timer
+    - homelab-backup-daily.service
+    - homelab-backup-daily.timer
+    - homelab-backup-weekly.service
+    - homelab-backup-weekly.timer
+    - homelab-backup-verify.service
+    - homelab-backup-verify.timer
+  register: backup_units
+
+- name: Reload the user manager when a unit changed
+  ansible.builtin.systemd_service:
+    scope: user
+    daemon_reload: true
+  when: backup_units is changed
+
+- name: Enable the timers
+  ansible.builtin.systemd_service:
+    scope: user
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - homelab-backup-hourly.timer
+    - homelab-backup-daily.timer
+    - homelab-backup-weekly.timer
+    - homelab-backup-verify.timer
+  when: not ansible_check_mode

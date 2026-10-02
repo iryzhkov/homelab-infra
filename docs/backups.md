@@ -7,10 +7,13 @@ Three tiers, two of which this repository owns.
 | Hourly | Vaultwarden and Actual Budget, one consistent snapshot per database | every hour | `apps/homelab/backups/sqlite`, `rclone sync` |
 | Daily | InfluxDB, a full `influx backup` archive | 00:40 | `apps/homelab/backups/influxdb`, `rclone sync` |
 | Weekly | a check that the bucket's lifecycle rule is still sane | Sunday 03:20 | one API call |
-| Twice weekly | everything else: `~/app`, `~/apps`, `~/cv-site`, the NAS trees, the Postgres dumps | Mon and Thu, 01:30–06:40 | various, `rclone copy`, still in cron |
+| Daily, normandy | Immich's Postgres dump and a tar of `~/app` | 01:30 on normandy, shipped 06:40 by homelab | `/mnt/backup/normandy` on the NAS, then `apps/normandy`, `rclone copy` |
+| Twice weekly | everything else: `~/app`, `~/apps`, `~/cv-site`, the Immich library and black-pearl's NAS trees, homelab's own Postgres dumps (`pg_backup.sh`) | Mondays and Thursdays, 01:30–06:00 | various, `rclone copy`, still in cron |
 
-The first two are `roles/backup`, deployed by `playbooks/backup.yml`. The third
-is the pre-existing crontab on homelab and is untouched.
+The hourly, daily and weekly tiers and normandy's daily dump are `roles/backup`,
+deployed by `playbooks/backup.yml`. That role also sets the schedule of
+normandy's shipping line in homelab's crontab. The twice-weekly jobs are the
+pre-existing crontab on homelab and are otherwise untouched.
 
 ## Why the hourly tier exists
 
@@ -42,6 +45,30 @@ job: 400 MB of Home Assistant history with no copy anywhere.
 `influx backup` is used rather than copying the volume, because it is the only
 way to get a consistent picture out of a running InfluxDB. The archive is
 217 MB, takes 43 seconds, and seven are kept.
+
+## Normandy's daily Postgres dump
+
+Since phase 2 (2026-10-02) normandy's `/mnt/data` is a `backup=0` zvol, so
+vzdump no longer holds Immich's Postgres data directory and this dump is the
+only offsite copy of the database. It is `backup_nas_dump` in
+`inventory/host_vars/normandy.yml`, deployed by `roles/backup/tasks/nas_dump.yml`
+as `normandy-backup.timer` (daily 01:30) and `~/.local/bin/homelab-nas-dump`.
+The script runs `pg_dump` inside `immich_postgres` over the container's local
+socket, writes `/mnt/backup/normandy/postgres/immich_*.sql.gz` through a
+`.partial` file it checks with `gzip -t`, tars `~/app` into `config/`, and keeps
+14 days of both. A failure goes to the feed and the phone.
+
+homelab ships `/mnt/backup/normandy` to `b2:igor-offsite-backup/apps/normandy`
+with the crontab line `homelab-bulk-backup normandy`. Its schedule comes from
+`backup_nas_dump.ship_cron` (`40 6 * * *`), and `roles/backup/tasks/ship_schedule.yml`
+rewrites that one line in place. The offsite RPO for Immich's database is about
+a day; it was up to four days when both jobs ran Mondays and Thursdays. Because
+the shipping job uses `rclone copy`, every daily dump stays in the bucket, about
+185 MB a day.
+
+Immich also writes its own nightly dump (02:00 UTC, 14 kept) to
+`/mnt/shared/immich/backups` on the media share. `rclone_exclude.txt` keeps
+those out of Backblaze, so they are a second NAS copy only.
 
 ## Restoring
 

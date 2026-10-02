@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Dump this host's Postgres databases and tar its stack configuration onto the
+# NAS. Deployed by roles/backup (nas_dump.yml) from backup_nas_dump in the
+# host's inventory; edit it there, not here.
+#
+# The dumps land under {{ backup_nas_dump.root }}, which {{ backup_bulk_shipper }}
+# copies to Backblaze ({{ backup_nas_dump.ship_cron }}). This host deliberately
+# holds no Backblaze credentials: the NAS is the handoff point.
+#
+# Each dump is written to a .partial file, checked, and only then renamed, so
+# the shipping job never copies a half-written or broken dump. pg_dump runs
+# inside the database container as its own superuser, over the container's
+# local socket: no password is involved.
+#
+# Quiet on success. A failure goes to the feed and to the phone, as every other
+# backup tier does.
+
+set -uo pipefail
+
+root="{{ backup_nas_dump.root }}"
+pg_dir="$root/postgres"
+config_dir="$root/config"
+keep_days={{ backup_nas_dump.keep_days }}
+stamp=$(date +%Y-%m-%d_%H%M)
+failures=0
+
+output=$(mktemp)
+trap 'rm -f "$output"' EXIT
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$output"
+}
+
+fail() {
+    log "FAILED: $1"
+    failures=$((failures + 1))
+}
+
+backup_db() {
+    local container="$1" db="$2" user="$3"
+    local dump="$pg_dir/${db}_${stamp}.sql.gz"
+
+    log "Dumping $db from $container..."
+    if ! docker exec "$container" pg_dump -U "$user" -d "$db" | gzip >"$dump.partial"; then
+        rm -f "$dump.partial"
+        fail "pg_dump of $db from $container"
+        return
+    fi
+    if [ ! -s "$dump.partial" ] || ! gzip -t "$dump.partial"; then
+        rm -f "$dump.partial"
+        fail "$db dump is empty or not valid gzip"
+        return
+    fi
+    mv "$dump.partial" "$dump"
+    log "OK: $dump ($(du -h "$dump" | cut -f1))"
+}
+
+if ! mountpoint -q "$(dirname "$root")"; then
+    log "FATAL: $(dirname "$root") is not mounted, refusing to write backups to the local disk"
+    failures=1
+else
+    mkdir -p "$pg_dir" "$config_dir"
+    # Partial files left by a run that was killed.
+    find "$pg_dir" -name '*.partial' -delete
+
+{% for db in backup_nas_dump.databases %}
+    backup_db "{{ db.container }}" "{{ db.name }}" "{{ db.user }}"
+{% endfor %}
+{% if backup_nas_dump.config_dir is defined %}
+
+    # Compose files and env for every stack on this host. Small, but it is the
+    # part that is not reproducible from the container images. Root, because
+    # some stacks keep files only their container's user can read.
+    log "Archiving stack configuration..."
+    tarball="$config_dir/{{ backup_nas_dump.config_dir | basename }}_${stamp}.tar.gz"
+    if sudo -n tar -C "{{ backup_nas_dump.config_dir | dirname }}" -czf "$tarball" \
+{% for pattern in backup_nas_dump.config_exclude | default([]) %}
+        --exclude="{{ pattern }}" \
+{% endfor %}
+        "{{ backup_nas_dump.config_dir | basename }}"; then
+        log "OK: $tarball ($(du -h "$tarball" | cut -f1))"
+    else
+        fail "stack configuration archive"
+    fi
+{% endif %}
+
+    log "Pruning backups older than $keep_days days..."
+    find "$pg_dir" -name '*.sql.gz' -mtime +"$keep_days" -print -delete | tee -a "$output"
+    find "$config_dir" -name '*.tar.gz' -mtime +"$keep_days" -print -delete | tee -a "$output"
+fi
+
+if [ "$failures" -gt 0 ]; then
+    log "Completed with $failures failure(s)"
+    feed post "nas dump failed on $(hostname -s)" \
+        --severity fail --source backup --tag "backup infra" \
+        --body-file "$output" || true
+    homelab-notify -t "nas dump failed on $(hostname -s)" -p high -i "backup-nas-dump" - <"$output" || true
+    exit 1
+fi
+log "Completed successfully"

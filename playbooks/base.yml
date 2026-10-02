@@ -2,7 +2,8 @@
 # The base role, on the hosts that have one:
 #   hypervisors       SMART health of the physical drives into InfluxDB and
 #                     Gatus, hwmon temperatures into InfluxDB, and the
-#                     cluster's built-in metric server pointed at InfluxDB
+#                     cluster's built-in metric server pointed at InfluxDB,
+#                     and the ZFS ARC capped at zfs_arc_max_bytes
 #   gpu_metrics hosts the passed-through iGPU's engine busy counters
 #   nfs_mounts hosts  NFS mounts in /etc/fstab, ordered before docker.service
 #

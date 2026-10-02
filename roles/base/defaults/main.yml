@@ -14,3 +14,6 @@ smart_wear_max_pct: 80
 nfs_mounts: []
 # Mount points to unmount and remove from /etc/fstab.
 mounts_absent: []
+# Local filesystems kept in /etc/fstab by UUID, off unless a host lists some;
+# see tasks/local_mounts.yml for the shape of an item.
+local_mounts: []

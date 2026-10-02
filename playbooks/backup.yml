@@ -1,6 +1,8 @@
 ---
-# Backups this repository owns: hourly SQLite snapshots and a daily InfluxDB
-# archive. The twice-weekly rclone and pg_backup.sh jobs stay in cron.
+# Backups this repository owns: homelab's hourly SQLite snapshots and daily
+# InfluxDB archive, normandy's daily Postgres dump onto the NAS, and the
+# schedule of the job on homelab that ships that dump to Backblaze. homelab's
+# other twice-weekly rclone jobs stay in its crontab. See docs/backups.md.
 #
 #   ansible-playbook playbooks/backup.yml --check --diff
 
@@ -11,4 +13,7 @@
     - name: Install the backup jobs
       ansible.builtin.include_role:
         name: backup
-      when: backup_sqlite_sources is defined
+      when: >-
+        backup_sqlite_sources is defined
+        or backup_nas_dump is defined
+        or inventory_hostname == (backup_bulk_shipper | default('homelab'))
