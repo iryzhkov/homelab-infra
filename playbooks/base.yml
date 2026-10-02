@@ -4,6 +4,7 @@
 #                     Gatus, hwmon temperatures into InfluxDB, and the
 #                     cluster's built-in metric server pointed at InfluxDB
 #   gpu_metrics hosts the passed-through iGPU's engine busy counters
+#   nfs_mounts hosts  NFS mounts in /etc/fstab, ordered before docker.service
 #
 #   ansible-playbook playbooks/base.yml --check --diff
 #

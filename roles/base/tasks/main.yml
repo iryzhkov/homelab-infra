@@ -8,6 +8,8 @@
 #                           is cluster-wide, so one node writes it
 #   gpu_metrics: true       the passed-through iGPU's busy counters, on the
 #                           guest that owns the GPU
+#   nfs_mounts              NFS mounts in /etc/fstab, optionally ordered
+#                           before docker.service; mounts_absent retires mounts
 #
 # Everything reports to InfluxDB with write-only tokens decrypted here, on the
 # controller, from secrets/hardware-metrics.sops.yaml.
@@ -33,3 +35,11 @@
 - name: Collect iGPU engine busy time
   ansible.builtin.include_tasks: gpu.yml
   when: gpu_metrics | default(false)
+
+- name: Keep the NFS mounts
+  ansible.builtin.include_tasks: nfs_mounts.yml
+  vars:
+    nfs_docker_paths: >-
+      {{ nfs_mounts | selectattr('before_docker', 'defined')
+         | selectattr('before_docker') | map(attribute='path') | list }}
+  when: nfs_mounts | length > 0 or mounts_absent | length > 0
