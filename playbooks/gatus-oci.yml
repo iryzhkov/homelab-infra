@@ -1,0 +1,104 @@
+---
+# OCI's SSH key lives on homelab. Ansible renders inventory-derived files on
+# homelab and uses its existing restricted SSH path to update the offsite host.
+- name: Deploy the public Gatus probe on OCI
+  hosts: homelab
+  gather_facts: false
+  vars:
+    gatus_oci_stage: /home/iryzhkov/.cache/homelab-infra/gatus-oci
+    gatus_oci_dir: /home/ubuntu/app/gatus
+  tasks:
+    - name: Load the encrypted Discord webhook
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/gatus-alerting.sops.yaml"
+        name: gatus_oci_secrets
+      delegate_to: localhost
+      no_log: true
+
+    - name: Prepare the staging directory on homelab
+      ansible.builtin.file:
+        path: "{{ gatus_oci_stage }}"
+        state: directory
+        mode: "0750"
+
+    - name: Render public checks from Ansible inventory
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../stacks/gatus-oci/templates/config.yaml.j2"
+        dest: "{{ gatus_oci_stage }}/config.yaml"
+        mode: "0644"
+
+    - name: Stage the OCI Compose file
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../stacks/gatus-oci/docker-compose.yml"
+        dest: "{{ gatus_oci_stage }}/docker-compose.yml"
+        mode: "0644"
+
+    - name: Stage the OCI mesh bind address from inventory
+      ansible.builtin.copy:
+        content: |
+          GATUS_BIND_IP={{ hostvars['oci'].mesh_host }}
+          DISCORD_WEBHOOK_URL={{ gatus_oci_secrets.DISCORD_WEBHOOK_URL }}
+        dest: "{{ gatus_oci_stage }}/.env"
+        mode: "0600"
+      no_log: true
+
+    - name: Ensure the OCI stack directory exists
+      ansible.builtin.command:
+        argv: [ssh, -o, BatchMode=yes, oci, mkdir, -p, "{{ gatus_oci_dir }}"]
+      changed_when: false
+
+    - name: Check staged files
+      ansible.builtin.stat:
+        path: "{{ gatus_oci_stage }}/{{ item }}"
+        checksum_algorithm: sha256
+      loop: [config.yaml, docker-compose.yml, .env]
+      register: gatus_staged_files
+      changed_when: false
+
+    - name: Check OCI files
+      ansible.builtin.command:
+        argv: [ssh, -o, BatchMode=yes, oci, sha256sum, "{{ gatus_oci_dir }}/{{ item }}"]
+      loop: [config.yaml, docker-compose.yml, .env]
+      register: gatus_oci_files
+      failed_when: false
+      changed_when: false
+
+    - name: Install changed files on OCI
+      ansible.builtin.command:
+        argv:
+          - scp
+          - -q
+          - -o
+          - BatchMode=yes
+          - "{{ gatus_oci_stage }}/{{ item.item }}"
+          - "oci:{{ gatus_oci_dir }}/{{ item.item }}"
+      loop: "{{ gatus_oci_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stdout.startswith((gatus_staged_files.results | selectattr('item', 'equalto', item.item) | first).stat.checksum)
+      register: gatus_oci_copies
+
+    - name: Restrict the OCI environment file
+      ansible.builtin.command:
+        argv: [ssh, -o, BatchMode=yes, oci, chmod, '600', "{{ gatus_oci_dir }}/.env"]
+      changed_when: false
+
+    - name: Converge the OCI Gatus container
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -o
+          - BatchMode=yes
+          - oci
+          - docker
+          - compose
+          - -f
+          - "{{ gatus_oci_dir }}/docker-compose.yml"
+          - -p
+          - gatus-oci
+          - up
+          - -d
+          - --pull
+          - missing
+      register: gatus_oci_compose
+      changed_when: gatus_oci_copies is changed or 'Started' in gatus_oci_compose.stderr or 'Created' in gatus_oci_compose.stderr

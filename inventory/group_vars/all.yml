@@ -23,6 +23,41 @@ traefik_static_routes:
   - host: zigbee.ryzhkov.dev
     url: http://192.168.70.235:8080
 
+# Kuma's MQTT watchdog currently pings this host; the Gatus trial mirrors it.
+mqtt_broker_ip: 192.168.70.241
+
+# Current Cloudflare Tunnel hostnames with matching Ansible routes. Public
+# checks are generated from those routes and run on OCI, outside the LAN DNS.
+# emby.ryzhkov.dev is excluded because its public A record points to OCI itself.
+gatus_public_hosts:
+  - home.ryzhkov.dev
+  - budget.ryzhkov.dev
+  - uptime.ryzhkov.dev
+  - request.ryzhkov.dev
+  - photos.ryzhkov.dev
+  - manga.ryzhkov.dev
+  - obsidian.ryzhkov.dev
+  - auth.ryzhkov.dev
+  - rss.ryzhkov.dev
+  - speed.ryzhkov.dev
+  - draw.ryzhkov.dev
+  - git.ryzhkov.dev
+  - blog.ryzhkov.dev
+  - irc.ryzhkov.dev
+  - igor.ryzhkov.dev
+  - vault.ryzhkov.dev
+
+# Public services hosted on OCI are checked from each LAN Gatus instance with
+# a public DNS resolver, so probes follow the actual Internet route to OCI.
+# Coordinator worker IDs (gaming-pc is called omarchy-pc in steward).
+gatus_steward_worker_ids:
+  - homelab
+  - normandy
+  - omarchy-pc
+
+gatus_public_from_lan:
+  - emby.ryzhkov.dev
+
 # Dynamic configuration the generator has no shape for, because each is a
 # single instance rather than a pattern. Those with addresses in them are
 # rendered so the addresses still come from the inventory; the other two have

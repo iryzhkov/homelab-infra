@@ -1,0 +1,169 @@
+---
+metrics: true
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+alerting:
+  discord:
+    webhook-url: "${DISCORD_WEBHOOK_URL}"
+    default-alert:
+      failure-threshold: 5
+      success-threshold: 2
+      send-on-resolved: true
+
+default-endpoint: &alerted
+  alerts:
+    - type: discord
+
+endpoints:
+{% for host_name in groups['docker_hosts'] %}
+{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for route in stack.routes | default([]) %}
+{% if route.port is defined %}
+  - name: {{ route.host }}
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Internal on {{ host_name }} via {{ inventory_hostname }}
+{% if route.health_check is defined and route.health_check == false %}
+    url: "tcp://{{ hostvars[host_name].ansible_host }}:{{ route.port }}"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+{% else %}
+    url: "{{ route.scheme | default('http') }}://{{ hostvars[host_name].ansible_host }}:{{ route.port }}{{ route.health_check.path | default('/') }}"
+    interval: 1m
+{% if route.scheme | default('http') == 'https' %}
+    client:
+      insecure: true
+{% endif %}
+    conditions:
+      - "[STATUS] < 500"
+      - "[STATUS] != 404"
+{% endif %}
+{% elif route.url is defined and '127.0.0.1' not in route.url %}
+  - name: {{ route.host }}
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Internal on {{ host_name }} via {{ inventory_hostname }}
+{% if route.monitor_url is defined %}
+    url: "{{ route.monitor_url }}"
+{% else %}
+    url: "{{ route.url }}{{ route.health_check.path | default('/') }}"
+{% endif %}
+    interval: 1m
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% for route in traefik_static_routes %}
+  - name: {{ route.host }}
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Internal static via {{ inventory_hostname }}
+    url: "{{ route.url }}/"
+    interval: 1m
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+{% endfor %}
+{% for host_name in groups['docker_hosts'] %}
+{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for route in stack.routes | default([]) %}
+{% if route.host in gatus_public_from_lan %}
+  - name: {{ route.host }}
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Public via {{ inventory_hostname }}
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    client:
+      dns-resolver: "tcp://8.8.8.8:53"
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 300"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% for instance in adguard_instances %}
+  - name: AdGuard {{ instance.name }}
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Internal infrastructure via {{ inventory_hostname }}
+    url: "http://{{ instance.ip }}:{{ adguard_web_port }}/"
+    interval: 1m
+    conditions:
+      - "[STATUS] >= 200"
+      - "[STATUS] < 400"
+{% endfor %}
+  - name: Steward coordinator
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Steward via {{ inventory_hostname }}
+    url: "http://{{ hostvars['normandy'].ansible_host }}:3003/health/coordinator"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% for worker_id in gatus_steward_worker_ids %}
+  - name: Steward worker {{ worker_id }}
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Steward via {{ inventory_hostname }}
+    url: "http://{{ hostvars['normandy'].ansible_host }}:3003/health/worker/{{ worker_id }}"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% endfor %}
+  - name: MQTT host ping
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Internal static via {{ inventory_hostname }}
+    url: "icmp://{{ mqtt_broker_ip }}"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+  - name: Edge proxy TCP
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Internal static via {{ inventory_hostname }}
+    url: "tcp://{{ edge_proxy_ip }}:443"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+{% if inventory_hostname == 'normandy' %}
+  - name: Gatus homelab
+    <<: *alerted
+    group: Probe health via {{ inventory_hostname }}
+    url: "http://{{ hostvars['homelab'].ansible_host }}:3002/health"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+  - name: Gatus OCI
+    <<: *alerted
+    group: Probe health via {{ inventory_hostname }}
+    url: "http://{{ hostvars['oci'].mesh_host }}:3002/health"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% else %}
+  - name: Gatus normandy
+    <<: *alerted
+    group: Probe health via {{ inventory_hostname }}
+    url: "http://{{ hostvars['normandy'].ansible_host }}:3002/health"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% endif %}

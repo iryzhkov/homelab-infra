@@ -1,0 +1,45 @@
+---
+metrics: true
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+alerting:
+  discord:
+    webhook-url: "${DISCORD_WEBHOOK_URL}"
+    default-alert:
+      failure-threshold: 5
+      success-threshold: 2
+      send-on-resolved: true
+
+default-endpoint: &alerted
+  alerts:
+    - type: discord
+
+endpoints:
+{% for host_name in groups['docker_hosts'] %}
+{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for route in stack.routes | default([]) %}
+{% if route.host in gatus_public_hosts %}
+  - name: {{ route.host }}
+    <<: *alerted
+    group: Public via OCI
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% for route in traefik_static_routes %}
+{% if route.host in gatus_public_hosts %}
+  - name: {{ route.host }}
+    <<: *alerted
+    group: Public via OCI
+    url: "https://{{ route.host }}/"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+{% endif %}
+{% endfor %}

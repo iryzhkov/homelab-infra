@@ -159,6 +159,8 @@ stacks:
     routes:
       - host: jocasta.ryzhkov.dev
         url: "http://{{ mesh_host }}:1935"
+        # Gatus's Docker bridge is blocked by Jocasta's mesh-only firewall.
+        monitor_url: https://jocasta.ryzhkov.dev/healthz
         health_check:
           path: /healthz
   - name: kiwix
@@ -169,10 +171,25 @@ stacks:
     routes:
       - host: manga.ryzhkov.dev
         port: 25600
-  - name: kuma
+  - name: gatus-public
+    source: gatus-public
+    pull: missing
+    env_extra: {}
     routes:
       - host: uptime.ryzhkov.dev
         port: 3001
+    config_templates:
+      - src: config.yaml.j2
+        dest: config.yaml
+  - name: gatus
+    # Runs beside Kuma until alert delivery is verified.
+    pull: missing
+    secrets: gatus-alerting
+    env_extra: {}
+    config_templates:
+      - src: config.yaml.j2
+        dest: config.yaml
+
   - name: librespeed
     routes:
       - host: speed.ryzhkov.dev

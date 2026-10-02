@@ -25,6 +25,14 @@ stacks:
         port: 8971
         scheme: https
     secrets: normandy-frigate
+  - name: gatus
+    source: gatus
+    pull: missing
+    secrets: gatus-alerting
+    env_extra: {}
+    config_templates:
+      - src: config.yaml.j2
+        dest: config.yaml
   - name: immich
     routes:
       - host: photos.ryzhkov.dev
