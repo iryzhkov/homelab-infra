@@ -1,0 +1,35 @@
+---
+# The base configuration of a host, each part switched on by the inventory:
+#
+#   smart_drives            SMART and hwmon temperatures every 15 minutes, on
+#                           the hypervisors, the only hosts that see the
+#                           physical drives (the VMs see virtio disks)
+#   first hypervisor        the cluster's built-in metric server; the setting
+#                           is cluster-wide, so one node writes it
+#   gpu_metrics: true       the passed-through iGPU's busy counters, on the
+#                           guest that owns the GPU
+#
+# Everything reports to InfluxDB with write-only tokens decrypted here, on the
+# controller, from secrets/hardware-metrics.sops.yaml.
+
+- name: Load the metric tokens
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/hardware-metrics.sops.yaml"
+    name: metrics_secrets
+  delegate_to: localhost
+  no_log: true
+  when: >-
+    smart_drives is defined or gpu_metrics | default(false)
+    or inventory_hostname == groups['hypervisors'][0]
+
+- name: Collect SMART health and temperatures
+  ansible.builtin.include_tasks: smart.yml
+  when: smart_drives is defined
+
+- name: Point the cluster's metric server at InfluxDB
+  ansible.builtin.include_tasks: proxmox_metrics.yml
+  when: inventory_hostname == groups['hypervisors'][0]
+
+- name: Collect iGPU engine busy time
+  ansible.builtin.include_tasks: gpu.yml
+  when: gpu_metrics | default(false)

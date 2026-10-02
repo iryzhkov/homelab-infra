@@ -59,6 +59,10 @@ drift_check_peers:
 drift_check_enabled: true
 authentik_watchdog_enabled: true
 
+# The UHD 770 is passed through to this VM; roles/base reports its engine
+# busy time (playbooks/base.yml).
+gpu_metrics: true
+
 # Built from the exact source commit validated by Jocasta CI.
 jocasta_image: jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63
 

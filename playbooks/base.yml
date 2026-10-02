@@ -1,0 +1,198 @@
+---
+# The base role, on the hosts that have one:
+#   hypervisors       SMART health of the physical drives into InfluxDB and
+#                     Gatus, hwmon temperatures into InfluxDB, and the
+#                     cluster's built-in metric server pointed at InfluxDB
+#   gpu_metrics hosts the passed-through iGPU's engine busy counters
+#
+#   ansible-playbook playbooks/base.yml --check --diff
+#
+# The first play keeps the buckets and their write-only tokens in InfluxDB's
+# desired state, the way playbooks/gatus-influx.yml does for Gatus. InfluxDB
+# 2.9 stores tokens hashed and never shows one again after creation, so each
+# token is written into secrets/hardware-metrics.sops.yaml at the moment it is
+# created, and that file is the only copy. To replace one, delete the token in
+# InfluxDB (by its description) and its key in the secret, then run this again.
+#
+# The Gatus side is the `gatus` stack on smart_gatus_host, whose configuration
+# declares one external endpoint per drive in each hypervisor's smart_drives:
+#   ansible-playbook playbooks/site.yml -l normandy -e only=gatus
+
+- name: Keep the hardware metric buckets and their write tokens in InfluxDB
+  # The host running the `logging` stack, which holds InfluxDB.
+  hosts: homelab
+  gather_facts: false
+  vars:
+    influx_api: http://127.0.0.1:8087/api/v2
+    metrics_secret_file: "{{ playbook_dir }}/../secrets/hardware-metrics.sops.yaml"
+    # One bucket per writer, each with a token that can write only it.
+    influx_write_tokens:
+      # The base role's collectors: SMART, hwmon temperatures, iGPU busy.
+      - bucket: "{{ smart_influx_bucket }}"
+        retention: "{{ smart_influx_retention_seconds }}"
+        description: smart-write
+        key: INFLUX_TOKEN
+      # Proxmox's built-in metric server: node and guest CPU, memory, disk, net.
+      - bucket: "{{ proxmox_influx_bucket }}"
+        retention: "{{ proxmox_influx_retention_seconds }}"
+        description: proxmox-write
+        key: PROXMOX_INFLUX_TOKEN
+  tasks:
+    - name: Load the InfluxDB admin token and the metric tokens on the controller
+      community.sops.load_vars:
+        file: "{{ item.file }}"
+        name: "{{ item.name }}"
+      loop:
+        - { file: "{{ playbook_dir }}/../secrets/homelab-logging.sops.yaml", name: influx_secrets }
+        - { file: "{{ metrics_secret_file }}", name: metrics_secrets }
+      delegate_to: localhost
+      no_log: true
+
+    - name: Find the InfluxDB organization
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/orgs?org={{ smart_influx_org }}"
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        return_content: true
+      register: influx_orgs
+      check_mode: false
+      no_log: true
+
+    - name: Require the existing organization
+      ansible.builtin.assert:
+        that: influx_orgs.json.orgs | length == 1
+        fail_msg: Expected one {{ smart_influx_org }} InfluxDB organization.
+
+    # Listed rather than asked for by name: a name that does not exist yet
+    # answers 404.
+    - name: List the buckets
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/buckets?orgID={{ influx_orgs.json.orgs[0].id }}&limit=100"
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        return_content: true
+      register: influx_bucket_list
+      check_mode: false
+      no_log: true
+
+    - name: Create the missing buckets
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/buckets"
+        method: POST
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          orgID: "{{ influx_orgs.json.orgs[0].id }}"
+          name: "{{ item.bucket }}"
+          retentionRules:
+            - type: expire
+              everySeconds: "{{ item.retention | int }}"
+        status_code: 201
+      changed_when: true
+      register: influx_buckets_created
+      loop: "{{ influx_write_tokens }}"
+      loop_control:
+        label: "{{ item.bucket }}"
+      when: item.bucket not in influx_bucket_list.json.buckets | map(attribute='name')
+      no_log: true
+
+    - name: Keep each bucket's retention
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/buckets/{{ existing.id }}"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          retentionRules:
+            - type: expire
+              everySeconds: "{{ item.retention | int }}"
+        status_code: 200
+      changed_when: true
+      loop: "{{ influx_write_tokens }}"
+      loop_control:
+        label: "{{ item.bucket }}"
+      vars:
+        existing: "{{ influx_bucket_list.json.buckets | selectattr('name', 'equalto', item.bucket) | first | default({}) }}"
+      when:
+        - existing.id is defined
+        - existing.retentionRules[0].everySeconds | default(0) != item.retention | int
+      no_log: true
+
+    - name: Map bucket names to IDs, including any just created
+      ansible.builtin.set_fact:
+        influx_bucket_ids: >-
+          {{ dict(influx_bucket_list.json.buckets | map(attribute='name')
+                  | zip(influx_bucket_list.json.buckets | map(attribute='id')))
+             | combine(dict(influx_buckets_created.results | selectattr('json', 'defined')
+                            | map(attribute='json.name')
+                            | zip(influx_buckets_created.results | selectattr('json', 'defined')
+                                  | map(attribute='json.id')))) }}
+
+    - name: List the tokens
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/authorizations?orgID={{ influx_orgs.json.orgs[0].id }}"
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        return_content: true
+      register: influx_authorizations
+      check_mode: false
+      no_log: true
+
+    - name: Refuse a token and a secret that do not belong together
+      ansible.builtin.assert:
+        that: token_exists == (item.key in metrics_secrets)
+        fail_msg: >-
+          InfluxDB {{ 'has' if token_exists else 'has no' }} `{{ item.description }}`
+          token but secrets/hardware-metrics.sops.yaml
+          {{ 'holds' if item.key in metrics_secrets else 'holds no' }} {{ item.key }}.
+          A token cannot be read back, so delete whichever half exists and run
+          this again to issue a new pair.
+        quiet: true
+      loop: "{{ influx_write_tokens }}"
+      loop_control:
+        label: "{{ item.description }}"
+      vars:
+        token_exists: "{{ item.description in influx_authorizations.json.authorizations | map(attribute='description') }}"
+
+    - name: Create a token that can only write its bucket
+      ansible.builtin.uri:
+        url: "{{ influx_api }}/authorizations"
+        method: POST
+        headers:
+          Authorization: "Token {{ influx_secrets.INFLUX_TOKEN }}"
+        body_format: json
+        body:
+          orgID: "{{ influx_orgs.json.orgs[0].id }}"
+          description: "{{ item.description }}"
+          permissions:
+            - action: write
+              resource:
+                type: buckets
+                id: "{{ influx_bucket_ids[item.bucket] | default('') }}"
+                orgID: "{{ influx_orgs.json.orgs[0].id }}"
+        status_code: 201
+      changed_when: true
+      register: influx_tokens_created
+      loop: "{{ influx_write_tokens }}"
+      loop_control:
+        label: "{{ item.description }}"
+      when: item.key not in metrics_secrets
+      no_log: true
+
+    # --value-stdin keeps the token out of the controller's process list.
+    - name: Record each new token in the secret
+      ansible.builtin.command:
+        argv: [sops, set, --value-stdin, "{{ metrics_secret_file }}", '["{{ item.item.key }}"]']
+        stdin: "{{ item.json.token | to_json }}"
+      delegate_to: localhost
+      changed_when: true
+      loop: "{{ influx_tokens_created.results | selectattr('json', 'defined') | list }}"
+      no_log: true
+
+- name: Install the base role
+  hosts: hypervisors:docker_hosts
+  gather_facts: false
+  roles:
+    - base

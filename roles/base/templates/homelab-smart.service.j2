@@ -1,0 +1,15 @@
+[Unit]
+Description=Report SMART health of the physical drives to InfluxDB and Gatus
+Documentation=https://github.com/iryzhkov/homelab-infra
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/homelab-smart/env
+ExecStart=/usr/local/bin/homelab-smart-report
+# smartctl needs root and raw device access; nothing else does.
+ProtectHome=true
+ProtectSystem=strict
+PrivateTmp=true
+NoNewPrivileges=true

@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Report how busy the Intel iGPU is, once a minute, to InfluxDB.
+
+The iGPUs are passed through to guests, so the hypervisor cannot see them and
+this runs inside the guest that owns one. It reads the i915 PMU through
+perf_event_open: the engine busy counters (render, video, video enhance,
+blitter), the actual and requested frequency and RC6 residency, which is what
+intel_gpu_top shows. intel_gpu_top itself is not used because it looks for a
+PMU named after the PCI address when the GPU is not at 00:02.0, which a
+passed-through GPU is not, and the kernel may still register it as `i915`.
+
+Runs as root, which holds CAP_PERFMON, so kernel.perf_event_paranoid stays as
+it is. The counters stay open and are read every interval, so each point is
+the average over the whole minute rather than a sample of it.
+
+Configuration from the environment (the unit's EnvironmentFile):
+
+  GPU_HOST           host tag, the inventory name
+  INFLUX_WRITE_URL   full /api/v2/write URL, bucket and precision included
+  INFLUX_TOKEN       write-only token for that bucket
+  GPU_INTERVAL       seconds between points, default 60
+"""
+
+import ctypes
+import glob
+import os
+import platform
+import re
+import struct
+import sys
+import time
+import urllib.error
+import urllib.request
+
+PERF_EVENT_OPEN = {"x86_64": 298}
+
+
+class PerfEventAttr(ctypes.Structure):
+    # Only type, size and config are set; the rest of the structure is zero,
+    # which the kernel accepts for any size it knows how to read.
+    _fields_ = [
+        ("type", ctypes.c_uint32),
+        ("size", ctypes.c_uint32),
+        ("config", ctypes.c_uint64),
+        ("rest", ctypes.c_uint64 * 14),
+    ]
+
+
+def open_counters():
+    pmus = sorted(glob.glob("/sys/bus/event_source/devices/i915*"))
+    if not pmus:
+        raise RuntimeError("no i915 PMU: is the iGPU passed through and i915 loaded?")
+    pmu = pmus[0]
+    with open(f"{pmu}/type") as handle:
+        pmu_type = int(handle.read())
+    with open(f"{pmu}/cpumask") as handle:
+        cpu = int(re.split(r"[,-]", handle.read().strip())[0])
+    names = sorted(
+        name for name in os.listdir(f"{pmu}/events")
+        if name.endswith("-busy")
+        or name in ("actual-frequency", "requested-frequency", "rc6-residency")
+    )
+    libc = ctypes.CDLL(None, use_errno=True)
+    counters = {}
+    for name in names:
+        with open(f"{pmu}/events/{name}") as handle:
+            config = int(handle.read().strip().split("=")[1], 16)
+        attr = PerfEventAttr(type=pmu_type, size=ctypes.sizeof(PerfEventAttr), config=config)
+        fd = libc.syscall(PERF_EVENT_OPEN[platform.machine()], ctypes.byref(attr), -1, cpu, -1, 0)
+        if fd < 0:
+            raise OSError(ctypes.get_errno(), f"perf_event_open {name}")
+        counters[name] = fd
+    return os.path.basename(pmu), counters
+
+
+def read_all(counters):
+    return time.monotonic_ns(), {
+        name: struct.unpack("Q", os.read(fd, 8))[0] for name, fd in counters.items()
+    }
+
+
+def fields(before, after):
+    (t0, v0), (t1, v1) = before, after
+    elapsed = t1 - t0
+    out = {}
+    for name in v1:
+        delta = v1[name] - v0[name]
+        if name.endswith("-busy"):
+            out[f"{name[:-5]}_busy_pct"] = round(100 * delta / elapsed, 2)
+        elif name.endswith("-frequency"):
+            # Accumulated MHz per second, as intel_gpu_top reads it.
+            out[f"{name[:-10]}_freq_mhz"] = round(delta / (elapsed / 1e9), 1)
+        elif name == "rc6-residency":
+            out["rc6_pct"] = round(100 * delta / elapsed, 2)
+    return out
+
+
+def write(url, token, line):
+    request = urllib.request.Request(url, data=(line + "\n").encode(), method="POST")
+    request.add_header("Authorization", f"Token {token}")
+    request.add_header("Content-Type", "text/plain; charset=utf-8")
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return response.status
+
+
+def main():
+    env = os.environ
+    host = env["GPU_HOST"]
+    interval = int(env.get("GPU_INTERVAL", "60"))
+    device, counters = open_counters()
+    print(f"{device}: {', '.join(counters)}", flush=True)
+    previous = read_all(counters)
+    while True:
+        time.sleep(interval)
+        current = read_all(counters)
+        values = fields(previous, current)
+        previous = current
+        line = f"igpu,host={host},device={device} " + ",".join(
+            f"{key}={value}" for key, value in sorted(values.items()))
+        try:
+            write(env["INFLUX_WRITE_URL"], env["INFLUX_TOKEN"], line)
+        except (OSError, urllib.error.URLError) as error:
+            # A missed minute is not worth a restart; the next one is written.
+            print(f"InfluxDB write failed: {error}", file=sys.stderr, flush=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

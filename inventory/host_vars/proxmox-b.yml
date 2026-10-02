@@ -1,0 +1,9 @@
+---
+# hp-workstation-01.
+
+# Physical drives, as smartctl names them. See host_vars/proxmox-a.yml.
+smart_drives:
+  - model: WD PC SN810 SDCPNRY-256G-1006   # WD SN810 256 GB NVMe, boot
+    serial: "231231800792"
+  - model: CT1000BX500SSD1                 # Crucial BX500 1 TB SATA
+    serial: "2438E98C8AD2"

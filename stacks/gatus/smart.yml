@@ -1,0 +1,11 @@
+---
+# Prerequisite for the Gatus instance that holds the SMART external endpoints
+# (smart_gatus_host): the bearer token the hypervisors push with. Named in that
+# host's `prepare_tasks` only, so the other Gatus instance never loads it and
+# its configuration does not change.
+- name: Load the SMART push token
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/hardware-metrics.sops.yaml"
+    name: smart_secrets
+  delegate_to: localhost
+  no_log: true

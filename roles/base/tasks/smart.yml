@@ -1,0 +1,71 @@
+---
+# SMART health of every physical drive and every hwmon temperature sensor,
+# every 15 minutes, into InfluxDB (bucket `smart`), and one health result per
+# drive into Gatus (external endpoints).
+#
+# smartmontools comes with Proxmox and the collector is standard-library
+# Python, so nothing new is installed. The tokens are written to a root-only
+# file.
+
+- name: Require smartmontools
+  ansible.builtin.apt:
+    name: smartmontools
+    state: present
+
+- name: Install the collector
+  ansible.builtin.copy:
+    src: homelab-smart-report
+    dest: /usr/local/bin/homelab-smart-report
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure the configuration directory exists
+  ansible.builtin.file:
+    path: /etc/homelab-smart
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the collector's configuration
+  ansible.builtin.copy:
+    content: |
+      SMART_HOST={{ inventory_hostname }}
+      INFLUX_WRITE_URL={{ smart_influx_url }}/api/v2/write?org={{ smart_influx_org }}&bucket={{ smart_influx_bucket }}&precision=s
+      INFLUX_TOKEN={{ metrics_secrets.INFLUX_TOKEN }}
+      GATUS_URL=http://{{ hostvars[smart_gatus_host].ansible_host }}:3002
+      GATUS_TOKEN={{ metrics_secrets.GATUS_TOKEN }}
+      GATUS_GROUP={{ smart_gatus_group }}
+      SMART_TEMP_MAX_C={{ smart_temp_max_c }}
+      SMART_WEAR_MAX_PCT={{ smart_wear_max_pct }}
+    dest: /etc/homelab-smart/env
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Install the systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - homelab-smart.service
+    - homelab-smart.timer
+  register: smart_units
+
+- name: Reload systemd when a unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: smart_units is changed
+
+- name: Enable the timer
+  ansible.builtin.systemd_service:
+    name: homelab-smart.timer
+    enabled: true
+    state: started
+  # In check mode the unit files were never written.
+  when: not ansible_check_mode

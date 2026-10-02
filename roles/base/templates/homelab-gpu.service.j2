@@ -1,0 +1,21 @@
+[Unit]
+Description=Report iGPU engine busy time to InfluxDB
+Documentation=https://github.com/iryzhkov/homelab-infra
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/homelab-gpu/env
+ExecStart=/usr/bin/python3 /usr/local/bin/homelab-gpu-report
+Restart=always
+RestartSec=30
+# Root for CAP_PERFMON, so perf_event_paranoid is left alone; nothing else.
+ProtectHome=true
+ProtectSystem=strict
+PrivateTmp=true
+NoNewPrivileges=true
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

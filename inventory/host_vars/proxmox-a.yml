@@ -1,0 +1,11 @@
+---
+# hp-elite-mini-01.
+
+# Physical drives, as smartctl names them. Each becomes a Gatus external
+# endpoint that roles/base's SMART collector reports to; a drive missing from
+# this list is still written to InfluxDB but has nowhere to report its health.
+smart_drives:
+  - model: CT500P3SSD8        # Crucial P3 500 GB NVMe, boot
+    serial: "24244958383E"
+  - model: CT2000P3SSD8       # Crucial P3 2 TB NVMe
+    serial: "2420E8AFBCE0"

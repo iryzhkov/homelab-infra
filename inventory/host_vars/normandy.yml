@@ -14,6 +14,10 @@ fleet_ssh_authorized:
 drift_check_enabled: true
 upkeeper_drift_enabled: true
 
+# The UHD 630 is passed through to this VM for Frigate; roles/base reports its
+# engine busy time (playbooks/base.yml).
+gpu_metrics: true
+
 stacks:
   - name: cloudflare
     secrets: normandy-cloudflare
@@ -28,6 +32,8 @@ stacks:
   - name: gatus
     source: gatus
     pull: missing
+    # Loads the token of the SMART external endpoints this instance holds.
+    prepare_tasks: smart.yml
     secrets: gatus-alerting
     env_extra: {}
     config_templates:
