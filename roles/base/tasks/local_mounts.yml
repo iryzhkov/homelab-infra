@@ -1,0 +1,84 @@
+---
+# Local filesystems (a guest's data disk) in /etc/fstab, by UUID, and
+# docker.service ordered after the ones a stack needs, so Compose never starts
+# a container on an empty mount point. No package is installed, so this works
+# on Debian and Arch alike.
+#
+# An item of local_mounts:
+#   path             mount point; also the key of its fstab line, so a line
+#                    written by hand for the same path is replaced, not doubled
+#   uuid             filesystem UUID (blkid), never a /dev/sdX name
+#   fstype           ext4, xfs, ...
+#   opts             mount options; keep nofail, so a missing disk does not
+#                    send the guest to emergency mode (a restore drops a
+#                    backup=0 disk), and let before_docker do the gating
+#   before_docker    true: docker.service gets RequiresMountsFor on the path
+#
+# A changed line is written and mounted, but a filesystem that is already
+# mounted is not swapped for another: to move a path to a new disk, unmount it
+# first (with whatever uses it stopped), then run this.
+
+- name: Write each local mount to /etc/fstab
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "UUID={{ item.uuid }}"
+    fstype: "{{ item.fstype }}"
+    opts: "{{ item.opts }}"
+    passno: "2"
+    state: present
+  become: true
+  loop: "{{ local_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: local_fstab
+
+- name: Reload systemd after an fstab change
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when: local_fstab is changed
+
+- name: Mount each local mount
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "UUID={{ item.uuid }}"
+    fstype: "{{ item.fstype }}"
+    opts: "{{ item.opts }}"
+    passno: "2"
+    state: mounted
+  become: true
+  loop: "{{ local_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Ensure docker.service's drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  when: local_docker_paths | length > 0
+
+- name: Order docker.service after the local mounts its stacks need
+  ansible.builtin.copy:
+    content: |
+      # Written by homelab-infra roles/base (local_mounts).
+      [Unit]
+      RequiresMountsFor={{ local_docker_paths | join(' ') }}
+    dest: /etc/systemd/system/docker.service.d/local-mounts.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: local_docker_dropin
+  when: local_docker_paths | length > 0
+
+# Only a reload: the ordering applies the next time Docker starts, and
+# restarting it here would stop every container on the host.
+- name: Reload systemd after the docker.service drop-in changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when: local_docker_dropin is changed

@@ -5,18 +5,23 @@ being used well. It was, and the storage around it was not.
 
 ## The physical picture
 
+Updated 2026-10-02 for phase 2 of the serviceable transition. Each node's second
+drive is now a ZFS pool `tank`; drives, serials, quotas, the ARC cap and the
+commands used are in `docs/storage-pools.md`. The sections after this table
+describe the state of 2026-09-06.
+
 | Node | Device | Size | Proxmox storage | Holds |
 |---|---|---|---|---|
 | proxmox-a | nvme0n1, CT500P3 | 466 GB | `local`, `local-lvm` (LVM-thin) | every VM's system disk, all the LXC volumes |
-| proxmox-a | nvme1n1, CT2000P3 | 1.8 TB | `local2tb` (dir, qcow2) | Black Pearl's download scratch |
+| proxmox-a | nvme1n1, CT2000P3 | 1.8 TB | `tank` (ZFS) | empty so far; `local2tb` retired in phase 2, Black Pearl's scratch moved to the NAS in phase 1 |
 | proxmox-b | nvme0n1, WD SN810 | 239 GB | `local`, `local-lvm` | normandy's system disk |
-| proxmox-b | sda, CT1000BX500 | 932 GB | `ssd1tb` (dir, qcow2) | normandy's 900 GB data disk |
+| proxmox-b | sda, CT1000BX500 | 932 GB | `tank` (ZFS) | normandy's 400 GB data zvol (`/mnt/data`); `ssd1tb` and its 900 GB qcow2 are gone |
 | NAS | UniFi Drive | 44 TB | `nas-backup` (NFS) | media, backups, machine learning |
 
-`ssd1tb` appears as **disabled** in `pvesm status` on proxmox-a. That is not a
-fault: the storage is declared with `nodes hp-workstation-01`, so it exists only
-on proxmox-b. The same is true in reverse for `local2tb`, which shows disabled
-on proxmox-b. Each node sees the other's local storage listed and unavailable.
+`tank` is one storage definition with both nodes listed; each node resolves it
+to its own pool, so it is active on both. A node-local storage declared with
+`nodes` for only one node shows as **disabled** in `pvesm status` on the other;
+that is not a fault.
 
 ## Black Pearl's scratch disk is the right idea
 

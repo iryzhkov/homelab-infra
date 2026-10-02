@@ -7,3 +7,5 @@ phase; each file is named `YYYY-MM-DD-<topic>.md` after the day of the
 measurement.
 
 - [phase0/](phase0/) - baseline, backups and checks before any storage change.
+- [phase1/](phase1/) - black-pearl's partial downloads onto the NAS media share, its media mount made hard and Ansible-managed, the 1.8 TB disk retired.
+- [phase2/](phase2/) - ZFS ARC cap, `tank` pools on both nodes, normandy's data disk on `tank`, cloud-init templates; durable summary in [../storage-pools.md](../storage-pools.md).

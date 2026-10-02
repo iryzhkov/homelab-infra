@@ -1,0 +1,38 @@
+---
+# Cap the ZFS ARC on a hypervisor at zfs_arc_max_bytes, both for the next boot
+# and for the running kernel. Unset, the ARC may grow to half of RAM (OpenZFS's
+# default on Linux) and compete with the guests for memory.
+#
+# The boot-time value lives in /etc/modprobe.d/zfs.conf, which is copied into
+# the initramfs because the zfs module can load from there; only the
+# zfs_arc_max line is managed, so any other zfs option in that file is kept.
+# The running value is written to sysfs only when it differs.
+
+- name: Set zfs_arc_max for the next boot
+  ansible.builtin.lineinfile:
+    path: /etc/modprobe.d/zfs.conf
+    regexp: '^\s*options\s+zfs\s+zfs_arc_max='
+    line: options zfs zfs_arc_max={{ zfs_arc_max_bytes }}
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  register: zfs_modprobe_conf
+
+- name: Rebuild the initramfs when the ZFS options changed
+  ansible.builtin.command:
+    cmd: update-initramfs -u
+  changed_when: true
+  when: zfs_modprobe_conf is changed
+
+- name: Read the running zfs_arc_max
+  ansible.builtin.slurp:
+    src: /sys/module/zfs/parameters/zfs_arc_max
+  register: zfs_arc_max_live
+
+# Check mode skips this command; the preceding read shows whether it would run.
+- name: Set the running zfs_arc_max
+  ansible.builtin.shell:
+    cmd: echo {{ zfs_arc_max_bytes | int }} > /sys/module/zfs/parameters/zfs_arc_max
+  changed_when: true
+  when: (zfs_arc_max_live.content | b64decode | trim | int) != (zfs_arc_max_bytes | int)

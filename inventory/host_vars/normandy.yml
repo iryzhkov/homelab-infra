@@ -18,6 +18,18 @@ upkeeper_drift_enabled: true
 # engine busy time (playbooks/base.yml).
 gpu_metrics: true
 
+# The data disk: VM 202's scsi1, a 400 GB zvol on proxmox-b's `tank`
+# (backup=0, so a restore of the VM drops it and nofail keeps the guest
+# booting; the services' own backups cover its contents). It replaced the
+# 900 GB qcow2 on ssd1tb in phase 2, 2026-10-02. Docker requires it, so no
+# container starts on an empty /mnt/data.
+local_mounts:
+  - path: /mnt/data
+    uuid: 0c01def4-9341-4497-aa2f-678c2b0e8531
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=10
+    before_docker: true
+
 stacks:
   - name: cloudflare
     secrets: normandy-cloudflare

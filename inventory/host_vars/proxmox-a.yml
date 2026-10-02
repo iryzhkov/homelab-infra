@@ -1,6 +1,9 @@
 ---
 # hp-elite-mini-01.
 
+# ZFS ARC cap, 4 GiB (64 GB of RAM, most of it given to guests).
+zfs_arc_max_bytes: 4294967296
+
 # Physical drives, as smartctl names them. Each becomes a Gatus external
 # endpoint that roles/base's SMART collector reports to; a drive missing from
 # this list is still written to InfluxDB but has nowhere to report its health.

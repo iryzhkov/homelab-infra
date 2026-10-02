@@ -4,12 +4,16 @@
 #   smart_drives            SMART and hwmon temperatures every 15 minutes, on
 #                           the hypervisors, the only hosts that see the
 #                           physical drives (the VMs see virtio disks)
+#   zfs_arc_max_bytes       the ZFS ARC cap, at boot and in the running kernel,
+#                           on the hypervisors
 #   first hypervisor        the cluster's built-in metric server; the setting
 #                           is cluster-wide, so one node writes it
 #   gpu_metrics: true       the passed-through iGPU's busy counters, on the
 #                           guest that owns the GPU
 #   nfs_mounts              NFS mounts in /etc/fstab, optionally ordered
 #                           before docker.service; mounts_absent retires mounts
+#   local_mounts            local filesystems in /etc/fstab by UUID, optionally
+#                           ordered before docker.service
 #
 # Everything reports to InfluxDB with write-only tokens decrypted here, on the
 # controller, from secrets/hardware-metrics.sops.yaml.
@@ -28,6 +32,10 @@
   ansible.builtin.include_tasks: smart.yml
   when: smart_drives is defined
 
+- name: Cap the ZFS ARC
+  ansible.builtin.include_tasks: zfs_arc.yml
+  when: zfs_arc_max_bytes is defined
+
 - name: Point the cluster's metric server at InfluxDB
   ansible.builtin.include_tasks: proxmox_metrics.yml
   when: inventory_hostname == groups['hypervisors'][0]
@@ -43,3 +51,11 @@
       {{ nfs_mounts | selectattr('before_docker', 'defined')
          | selectattr('before_docker') | map(attribute='path') | list }}
   when: nfs_mounts | length > 0 or mounts_absent | length > 0
+
+- name: Keep the local mounts
+  ansible.builtin.include_tasks: local_mounts.yml
+  vars:
+    local_docker_paths: >-
+      {{ local_mounts | selectattr('before_docker', 'defined')
+         | selectattr('before_docker') | map(attribute='path') | list }}
+  when: local_mounts | length > 0
