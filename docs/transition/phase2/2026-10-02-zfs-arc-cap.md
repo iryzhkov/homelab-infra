@@ -1,6 +1,6 @@
 # Phase 2 step 1: ZFS ARC cap on the hypervisors
 
-Date: 2026-10-02, 14:04 to 14:12 PDT.
+Date: 2026-10-02, 14:04 to 14:12 PDT; review fixes 14:20 to 14:35 PDT.
 Hosts: proxmox-a (hp-elite-mini-01, 64 GB), proxmox-b (hp-workstation-01, 32 GB).
 Changed by: Ansible, `playbooks/base.yml` through `roles/base/tasks/zfs_arc.yml`.
 
@@ -17,11 +17,15 @@ boot and in the running kernel, before any ZFS pool exists.
   - manages one line, `options zfs zfs_arc_max=<bytes>`, in
     `/etc/modprobe.d/zfs.conf` with `lineinfile` (other zfs options in that
     file would be kept);
-  - runs `update-initramfs -u` only when that line changed (registered result
-    and `when`, no handlers);
-  - reads `/sys/module/zfs/parameters/zfs_arc_max` and writes it only when it
-    differs from the target (`changed_when: true` on the write, skipped
-    otherwise). In check mode the write and the initramfs rebuild are skipped.
+  - runs `update-initramfs -u -k all` only when that line changed (registered
+    result and `when`, no handlers), so every installed kernel's initrd gets
+    the file (the first run used `-u`; changed after review, see below);
+  - checks with `stat` that `/sys/module/zfs/parameters/zfs_arc_max` exists,
+    and only then reads it and writes it when it differs from the target
+    (`changed_when: true` on the write, skipped otherwise). With the zfs
+    module not loaded the live read and write are skipped and the cap applies
+    at the next module load. In check mode the write and the initramfs
+    rebuild are skipped.
 - Carried phase 0 fix, `roles/base/tasks/smart.yml`: the task that enables
   `homelab-smart.timer` now uses `state: restarted` when the
   `homelab-smart.timer` item of the registered unit loop changed, and
@@ -92,12 +96,35 @@ Command: `lsinitramfs /boot/initrd.img-$(uname -r) | grep zfs.conf; ls -l /boot/
 - Both: `etc/modprobe.d/zfs.conf` present in initrd.img-7.0.14-14-pve
   (the running and newest kernel), rebuilt 14:05:53 (proxmox-a) and 14:05:54
   (proxmox-b).
-- The older 6.8.x initrds were not rebuilt (`update-initramfs -u` rebuilds
-  only the newest kernel's). Booting one of them would still read
-  `/etc/modprobe.d/zfs.conf` when zfs loads from the root filesystem, since
-  the root is ext4 on LVM and zfs is not needed in early boot.
+- The older 6.8.x initrds were not rebuilt by this first run
+  (`update-initramfs -u` rebuilds only the newest kernel's); they were
+  rebuilt after review, below.
 
 Answer: the next boot of the default kernel applies the cap.
+
+## Review fixes (14:20 to 14:35)
+
+The phase 2 Ansible review asked for two changes to
+`roles/base/tasks/zfs_arc.yml`: guard the sysfs read with a `stat` so an
+unloaded zfs module does not fail the play, and rebuild every initrd with
+`update-initramfs -u -k all`. Both are in the task file as described above.
+
+- `ansible-playbook playbooks/base.yml -l proxmox-a,proxmox-b --check --diff`,
+  then the same without `--check`: changed=0 on both nodes (zfs.conf was
+  already in place, so the rebuild task does not fire).
+- One-off host change, run by hand at 14:27 to 14:28 because the role's
+  rebuild only runs when zfs.conf changes:
+  `ssh proxmox-a update-initramfs -u -k all` and
+  `ssh proxmox-b update-initramfs -u -k all`. rc=0 on both; it regenerated
+  five initrds on proxmox-a (7.0.14-14, 6.8.12-43, 6.8.12-20, 6.8.8-4,
+  6.8.4-2) and four on proxmox-b (7.0.14-14, 6.8.12-43, 6.8.12-20, 6.8.12-4).
+- Verification: `for i in /boot/initrd.img-*; do lsinitramfs $i | grep -c etc/modprobe.d/zfs.conf; done`
+  returned 1 for every initrd on both nodes, including the older ones
+  (for example initrd.img-6.8.4-2-pve on proxmox-a and
+  initrd.img-6.8.12-4-pve on proxmox-b). Root filesystem use after the
+  rebuild: 17% on proxmox-a, 40% on proxmox-b.
+
+Answer: every installed kernel now boots with the cap.
 
 Command: `free -m` (Mem line: total / used / free / buff-cache / available)
 
@@ -112,9 +139,11 @@ No host was rebooted.
 
 ## Idempotence and repository checks
 
-- `ansible-playbook playbooks/base.yml -l proxmox-a,proxmox-b` (run again,
-  also after the final edit to smart.yml): proxmox-a changed=0,
-  proxmox-b changed=0. `homelab-smart.timer` active on both.
+Final runs, after the review fixes and the one-off initramfs rebuild:
+
+- `ansible-playbook playbooks/base.yml -l proxmox-a,proxmox-b`: proxmox-a
+  changed=0, proxmox-b changed=0. `homelab-smart.timer` active on both;
+  zfs_arc_max still 4294967296 and 2147483648.
 - `ansible-playbook playbooks/base.yml --check --diff` (all hosts): changed=0
   on blackpearl, homelab, normandy, proxmox-a, proxmox-b, public-api.
 - `ansible-playbook playbooks/site.yml --check --diff`: rc=0, changed=0 on

@@ -38,6 +38,15 @@ On each node, with ID 9000 on proxmox-a and 9001 on proxmox-b:
    grep ' debian-13-genericcloud-amd64.qcow2$' SHA512SUMS; sha512sum debian-13-genericcloud-amd64.qcow2
    ```
 
+   Check for a signature on every rebuild. As of 2026-10-02, Debian publishes no `SHA512SUMS.sign` for current cloud images (it returns 404); see the FAQ on `https://cloud.debian.org/images/cloud/`. If a signature appears, verify it before using the image. Confirm the key's fingerprint against `https://www.debian.org/CD/verify` or the cloud images page.
+
+   ```
+   curl -fsSLO https://cloud.debian.org/images/cloud/trixie/<build>/SHA512SUMS.sign \
+     && gpgv --keyring <debian cloud key>.gpg SHA512SUMS.sign SHA512SUMS
+   ```
+
+   If there is no signature, cross-check the hash by fetching `SHA512SUMS` for the same build from `cdimage.debian.org/images/cloud/trixie/<build>/`. It must list the same hash as cloud.debian.org.
+
 2. Destroy the old template with `qm destroy $ID --purge 1`. Existing full clones do not depend on it.
 
 3. Build the new template:

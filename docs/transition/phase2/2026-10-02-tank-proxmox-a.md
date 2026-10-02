@@ -189,11 +189,13 @@ Proxmox added `mountpoint /tank` by itself. E11 extends `nodes` to hp-workstatio
 
 ### Quota
 
-Formula: `quota = floor(0.9 * (used + available))`, with `used` and `available` taken from `zfs get -Hp -o value used,available tank`. That gave used = 528384 and available = 1793577814425, so the quota is floor(0.9 * 1793578342809) = 1614220508528 bytes (1.47 TiB).
+Formula: `quota = floor(0.9 * (used + available))`, with `used` and `available` taken from `zfs get -Hp -o value used,available tank`. The quota was removed first with `zfs set quota=none tank` (exit 0, `zfs get -Hp -o value quota tank` then read 0), so that `available` was not capped by an earlier quota. The read then gave used = 626688 and available = 1931124043776, about raw minus the 1/32 slop. The quota is therefore floor(0.9 * 1931124670464) = 1738012203417 bytes (1.58 TiB, 87.2 % of raw).
 
-Command: `zfs set quota=1614220508528 tank`, exit 0. Afterwards `zfs get -p quota,used,available tank` reported quota 1614220508528, used 565248 and available 1614219943280.
+Command: `zfs set quota=1738012203417 tank`, exit 0. Afterwards `zfs get -Hp -o value quota,available tank` reported quota 1738012203417 and available 1738011564441.
 
-Correction: the first quota, 1793578342809 bytes, was 90 % of the raw size from `zpool list`. That equals the pool's usable space after the ZFS slop reservation, so it limited nothing. The lead had it recomputed from usable space so that about 10 % of the pool stays free.
+First correction: the first quota, 1793578342809 bytes, was floor(0.9 * raw size from `zpool list`). The lead had it recomputed from usable space so that about 10 % of the pool stays free.
+
+Second correction: the second value, 1614220508528 bytes, was computed while the first quota still capped `available`, so it came out as 0.9 of the first quota (about 83.6 % of usable space). It was replaced by the value above, measured with no quota set.
 
 ### Final state
 
@@ -201,14 +203,14 @@ Correction: the first quota, 1793578342809 bytes, was 90 % of the raw size from 
 
 ```
 Name   Type     Status   Total (KiB)  Used (KiB)  Available (KiB)  %
-tank   zfspool  active    1576387215         552       1576386663  0.00%
+tank   zfspool  active    1697277542         624      1697276918  0.00%
 ```
 
 `local`, `local-lvm` and `nas-backup` are unchanged and active. `ssd1tb` shows `disabled` on this node because it is restricted to hp-workstation-01, as before.
 
 `zpool status tank`: `state: ONLINE`, the single vdev `nvme-CT2000P3SSD8_2420E8AFBCE0` ONLINE, 0 read, write and checksum errors, `errors: No known data errors`.
 
-`zfs get compression,atime,quota tank`: compression `lz4` local, atime `off` local, quota `1614220508528` local.
+`zfs get compression,atime,quota tank`: compression `lz4` local, atime `off` local, quota `1738012203417` local.
 
 `zpool get autotrim,ashift tank`: autotrim `on` local, ashift `12` local.
 
@@ -230,5 +232,5 @@ Answer: no thermal change from creating the pool. Sensor 2 is the hot one, and i
 
 - Phase 2 step 3 (E11): extend `tank`'s `nodes` to include hp-workstation-01 after proxmox-b's pool exists. The pool name must be exactly `tank`.
 - Phase 7: the host-down test is the first real proof that `tank` imports at boot, through `zpool.cache` and `zfs-import@tank.service`.
-- Capacity planning on `tank` should use 1.47 TiB, the quota, rather than 1.8T.
+- Capacity planning on `tank` should use 1.58 TiB, the quota, rather than 1.8T.
 - The plan's "remove its fstab line" does not apply on proxmox-a, because the mount was a systemd unit. `docs/storage-pools.md` should describe it that way.

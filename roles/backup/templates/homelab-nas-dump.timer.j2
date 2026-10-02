@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily dump of this host's databases to the NAS
+
+[Timer]
+# Before the shipping job on {{ backup_bulk_shipper }} ({{ backup_nas_dump.ship_cron }}),
+# so the newest dump is on the NAS when it runs.
+OnCalendar={{ backup_nas_dump.on_calendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,57 @@
+---
+# The cron schedule of each NAS dump's shipping job on this host.
+#
+# homelab's crontab predates this repository and its lines carry no Ansible
+# marker, so ansible.builtin.cron would add a second line rather than change
+# the existing one. This rewrites the schedule fields of the one line that runs
+# `homelab-bulk-backup <host>`, the way playbooks/helper-maintenance.yml
+# rewrote the commands, and leaves every other line alone. A missing line is
+# an error rather than something to add: which jobs exist is still decided in
+# the crontab.
+#
+# Runs in check mode too, without writing, so --check --diff shows the change.
+
+- name: Converge the shipping schedule of each NAS dump
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      saved=$(mktemp)
+      trap 'rm -f "$saved"' EXIT
+      crontab -l >"$saved"
+      python3 - "$saved" "{{ item }}" "{{ hostvars[item].backup_nas_dump.ship_cron }}" \
+          "{{ 'check' if ansible_check_mode else 'apply' }}" <<'PY'
+      import pathlib, subprocess, sys
+      saved, job, schedule, mode = sys.argv[1:5]
+      command = str(pathlib.Path.home() / '.local/bin/homelab-bulk-backup') + ' ' + job
+      fields = schedule.split()
+      assert len(fields) == 5, 'ship_cron needs five fields: ' + schedule
+      old = pathlib.Path(saved).read_text()
+      lines, found, changed = [], 0, False
+      for line in old.splitlines():
+          parts = line.split(None, 5)
+          if (not line.lstrip().startswith('#') and len(parts) == 6
+                  and parts[5].strip() == command):
+              found += 1
+              if parts[:5] != fields:
+                  new = ' '.join(fields) + ' ' + command
+                  print('- ' + line)
+                  print('+ ' + new)
+                  line, changed = new, True
+          lines.append(line)
+      if found != 1:
+          sys.exit('expected one crontab line running %r, found %d' % (command, found))
+      if changed and mode == 'apply':
+          backup = pathlib.Path.home() / ('crontab.before-ship-schedule-' + job)
+          if not backup.exists():
+              backup.write_text(old)
+              backup.chmod(0o600)
+          subprocess.run(['crontab', '-'], input='\n'.join(lines) + '\n', text=True, check=True)
+      if changed:
+          print('changed')
+      PY
+  loop: "{{ groups['docker_hosts'] }}"
+  when: (hostvars[item].backup_nas_dump | default({})).ship_cron is defined
+  register: ship_cron
+  changed_when: "'changed' in ship_cron.stdout"
+  check_mode: false

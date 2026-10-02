@@ -1,0 +1,15 @@
+[Unit]
+Description=Dump this host's databases and stack config to the NAS
+Documentation=https://github.com/iryzhkov/homelab-infra/blob/main/docs/backups.md
+After=network-online.target docker.service
+Wants=network-online.target
+# Never write the dumps into an empty directory beneath a lost mount.
+RequiresMountsFor={{ backup_nas_dump.root }}
+
+[Service]
+Type=oneshot
+User={{ ansible_user }}
+Group={{ ansible_user }}
+SupplementaryGroups=docker
+Environment=PATH={{ ansible_env.HOME }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart={{ ansible_env.HOME }}/.local/bin/homelab-nas-dump

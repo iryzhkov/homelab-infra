@@ -1,0 +1,52 @@
+---
+# A daily dump of this host's Postgres databases, and a tar of its stack
+# configuration, onto the NAS. The host holds no Backblaze credentials on
+# purpose: the NAS is the handoff point, and the host named by
+# backup_bulk_shipper ships the directory offsite (ship_schedule.yml).
+#
+# The units are named after the host (normandy-backup.timer), the names the
+# hand-written units they replaced already had, so taking them over left no
+# second timer behind.
+
+- name: Install the NAS dump script
+  ansible.builtin.template:
+    src: homelab-nas-dump.j2
+    dest: "{{ ansible_env.HOME }}/.local/bin/homelab-nas-dump"
+    mode: "0755"
+
+- name: Install the NAS dump units
+  ansible.builtin.template:
+    src: "homelab-nas-dump.{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ inventory_hostname }}-backup.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - service
+    - timer
+  register: nas_dump_units
+  become: true
+
+# What the managed script replaced. Listed rather than left, so that nobody
+# edits the copy that no longer runs.
+- name: Remove the hand-written files the role replaced
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ backup_nas_dump.retired_files | default([]) }}"
+
+- name: Reload systemd when a unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when:
+    - nas_dump_units is changed
+    - not ansible_check_mode
+
+- name: Enable the NAS dump timer
+  ansible.builtin.systemd_service:
+    name: "{{ inventory_hostname }}-backup.timer"
+    enabled: true
+    state: started
+  become: true
+  when: not ansible_check_mode

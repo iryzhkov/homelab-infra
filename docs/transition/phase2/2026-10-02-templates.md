@@ -52,6 +52,40 @@ Command on proxmox-b: `sha512sum /var/lib/vz/template/cache/debian-13-genericclo
 
 Answer: proxmox-b computed the same `f46f0671...1b468c3d` hash, so both templates come from identical bytes.
 
+### 2a. Signature check (security review follow-up)
+
+The security review pointed out that the checksum came from the same HTTPS source as the image. It asked for the image's checksums to be verified against the signed `SHA512SUMS.sign` with `gpgv`.
+
+Command, on proxmox-a:
+
+```
+curl -fsSL -o SHA512SUMS-debian13-20261001-2618.sign https://cloud.debian.org/images/cloud/trixie/20261001-2618/SHA512SUMS.sign
+```
+
+Result: `curl: (22) The requested URL returned error: 404`.
+
+- A signature does not exist, so the `gpgv` step could not run. This is not a failed verification.
+- The `20261001-2618/`, `latest/` and `20260914-2601/` directories for trixie, and `bookworm/latest/`, each list only `SHA512SUMS`. HEAD requests for `SHA512SUMS.sign`, `.asc` and `.gpg` return 404.
+- `cdimage.debian.org/images/cloud/trixie/20261001-2618/` also lists only `SHA512SUMS`.
+
+Debian's own statement, from the FAQ on the index page `https://cloud.debian.org/images/cloud/` ("How can I verify my download is correct and exactly what has been created by Debian?"):
+
+> For the current official images (in the per-distribution directories), the safest method is to download the image and checksum files over TLS from cloud.debian.org or cdimage.debian.org. These names support DNSSEC, so a validating resolver can ensure that a client is connected to a Debian host. And TLS ensures that the data is not manipulated in flight.
+>
+> The legacy OpenStack images (in the OpenStack/ directory) provide checksums and signatures. See SHA512SUMS.sign, etc. ...
+>
+> If you're interested in contributing checksum signatures for the current images, please reach us on the list: debian-cloud at lists.debian.org.
+
+Only the legacy `OpenStack/current-10/` directory has `SHA512SUMS.sign`, which the listing confirms.
+
+The local keyrings were checked for completeness. Both nodes have `debian-archive-keyring 2025.1`, and `debian-keyring` is not installed. No signing key was fetched, because there is nothing to verify with it.
+
+Substitute check: the build's `SHA512SUMS` was fetched separately from the laptop through `cloud.debian.org` and through `cdimage.debian.org`. Both list `f46f0671...1b468c3d  debian-13-genericcloud-amd64-20261001-2618.qcow2`, the hash already verified on both nodes. This is weaker than a signature: both names are Debian-operated, both are served over TLS, and they share one origin.
+
+A DNSSEC validation check could not be run from this network. The laptop has no `dig` or `delv`, and DNS-over-HTTPS to `cloudflare-dns.com:443` is blocked (`Failed to connect`).
+
+Answer: no signature exists to verify. The image's integrity rests on TLS to Debian's own hosts, which is Debian's documented method for current cloud images, plus agreement between the two hosts' checksum files. The templates were not rebuilt, because nothing failed. Leftover files: no `.sign` file was written on either node.
+
 ## 3. Template build
 
 The same commands ran on each node, with ID=9000 on proxmox-a and ID=9001 on proxmox-b:

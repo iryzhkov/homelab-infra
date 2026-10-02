@@ -23,7 +23,9 @@ named `tank`. Every drive is addressed by `/dev/disk/by-id/` path, never by
 
 - `tank`: ashift 12, compression lz4, atime off, autotrim on. Raw size
   1992864825344 bytes.
-- Quota: 1614220508528 bytes (1.47 TiB), set on the pool's root dataset.
+- Quota: 1738012203417 bytes (1.58 TiB), set on the pool's root dataset. An
+  earlier value, 1614220508528, had been computed while a first quota still
+  capped `available`, and was replaced.
 - ARC cap: `zfs_arc_max = 4294967296` (4 GiB).
 - The 2 TB P3 is DRAM-less QLC and sustains bulk writes poorly (see
   `docs/storage.md`). Its second temperature sensor read 69 to 79 C in phase 0
@@ -134,7 +136,9 @@ wipefs -a /dev/disk/by-id/nvme-CT2000P3SSD8_2420E8AFBCE0
 zpool create -f -o ashift=12 -O compression=lz4 -O atime=off -o autotrim=on tank /dev/disk/by-id/nvme-CT2000P3SSD8_2420E8AFBCE0
 systemctl enable zfs-import@tank.service
 pvesm add zfspool tank --pool tank --sparse 1 --content images,rootdir --nodes hp-elite-mini-01
-zfs set quota=1614220508528 tank
+zfs set quota=none tank                    # measure usable space with no quota in place
+zfs get -Hp -o value used,available tank   # 626688, 1931124043776
+zfs set quota=1738012203417 tank
 ```
 
 proxmox-b, after normandy's data was copied to the NAS and `scsi1` released:
@@ -167,8 +171,10 @@ zfs get -Hp -o value used,available tank
 # quota = floor(0.9 * (used + available))
 ```
 
-90 % of the raw `zpool list` size is not used, because it is about equal to
-the usable space after ZFS's slop reservation and so limits nothing.
+Measure with no quota set (`zfs set quota=none tank` first), because an
+existing quota caps `available` and the result would shrink each time.
+Usable space is the raw `zpool list` size minus ZFS's slop reservation (about
+3 %, 1/32 of the pool).
 
 ## Attaching a mirror later
 
@@ -210,7 +216,35 @@ On normandy, after proxmox-b or VM 202 restarts:
    `systemctl show docker -p ActiveEnterTimestamp`.
 4. Immich and Frigate are healthy.
 
+## Rollback copy of normandy's old data disk
+
+The content of the old `/mnt/data` (the 900 GB qcow2 on `ssd1tb`, destroyed
+on 2026-10-02) is kept on the NAS at
+`/mnt/backup/normandy-migration/data-2026-10-02/`: `data/` (the tree),
+`owners.txt` (numeric owner, group and mode of every entry, because the export
+squashes ownership) and `sha-src.txt` (sha256 of every file). It was first
+written under `/mnt/backup/normandy` and moved out the same day. homelab's
+`homelab-bulk-backup normandy` job (Mon and Thu 06:40) copies that tree to B2
+with `rclone copy`, which never prunes. That would have put the raw Immich
+Postgres data directory and Frigate's media in B2 permanently.
+`normandy-migration` is not shipped anywhere.
+
+Keep the copy until the Postgres dump of 2026-10-05 has been verified. Delete
+it by about 2026-10-09, when the vzdumps of VM 202 that still hold the old
+`scsi1` roll over. Igor decides the deletion.
+
 ## Known gaps
+
+- normandy has a second, unmanaged docker.service drop-in,
+  `/etc/systemd/system/docker.service.d/no-block-boot.conf` (written by hand on
+  2026-09-15, not in this repository). Its entire content is `[Unit]` and
+  `DefaultDependencies=no`. It has nothing to do with `/mnt/data`: the
+  requirement on `/mnt/data` comes only from the managed `local-mounts.conf`.
+  `DefaultDependencies=no` drops docker.service's implicit ordering after
+  `sysinit.target` and `basic.target` and its implicit stop at
+  `shutdown.target`. Follow-up, not done: either bring it into this repository
+  with the reason it exists, or remove it once the boot behaviour it was
+  written for is understood.
 
 - Frigate's media (`/mnt/data/frigate/media`, snapshots and clips, about 281
   MB with 2-day retention) is not backed up by anything. Low value, but

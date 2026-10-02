@@ -1,0 +1,4 @@
+---
+# The host whose crontab runs homelab-bulk-backup, and so ships every
+# backup_nas_dump root to Backblaze.
+backup_bulk_shipper: homelab

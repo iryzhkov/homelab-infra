@@ -30,6 +30,28 @@ local_mounts:
     opts: defaults,nofail,x-systemd.device-timeout=10
     before_docker: true
 
+# Immich's Postgres dump, daily since 2026-10-02 (it was Mon and Thu). With
+# /mnt/data at backup=0, vzdump no longer holds the database's data directory,
+# so this dump is the only offsite copy of it. roles/backup (nas_dump.yml)
+# deploys the script and normandy-backup.{service,timer}; homelab ships the
+# root to Backblaze on ship_cron, after the dump. pg_dump runs inside the
+# container over its local socket, as the database superuser; no password.
+backup_nas_dump:
+  root: /mnt/backup/normandy
+  on_calendar: "*-*-* 01:30"
+  ship_cron: "40 6 * * *"
+  keep_days: 14
+  databases:
+    - container: immich_postgres
+      name: immich
+      user: iryzhkov
+  config_dir: /home/igor/app
+  config_exclude:
+    - app/frigate/config/model_cache
+  # The hand-written script the role took over on 2026-10-02.
+  retired_files:
+    - /home/igor/app/pg_backup.sh
+
 stacks:
   - name: cloudflare
     secrets: normandy-cloudflare

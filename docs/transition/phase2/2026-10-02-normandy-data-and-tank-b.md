@@ -81,7 +81,19 @@ RequiresMountsFor=
 no-block-boot.conf
 ```
 
-Answer: today docker.service has no ordering on `/mnt/data`. Running containers: gatus, cloudflared, frigate, immich_server, immich_machine_learning, immich_postgres, immich_redis; Compose projects cloudflare, frigate, gatus, immich (`/home/igor/app/immich-stack`).
+Answer: before the window, docker.service had no requirement or ordering on `/mnt/data`. The survey also read `systemctl show docker -p Requires` as `Requires=system.slice docker.socket`, with no `mnt-data.mount`.
+
+The phase 2 Ansible review said that `no-block-boot.conf` already had `Requires=... mnt-data.mount`. E11 re-read the file read-only at about 14:35 PDT and found that it does not:
+
+```
+-rw-r--r-- 1 root root 30 2026-09-15 14:04 /etc/systemd/system/docker.service.d/no-block-boot.conf
+[Unit]
+DefaultDependencies=no
+```
+
+That is the whole file, 30 bytes. `mnt-data.mount` appears in `systemctl show docker -p Requires -p After` only since 14:14. It comes from the `RequiresMountsFor=/mnt/data` in the new `local-mounts.conf`, which systemd expands into `Requires=` and `After=mnt-data.mount`. `DropInPaths` lists both files. They set different keys, so neither overrides the other. The new drop-in is therefore the only thing that makes Docker wait for `/mnt/data`; it duplicates nothing. `no-block-boot.conf` is hand-written and not in the repository. With `DefaultDependencies=no`, docker.service no longer gets the implicit `After=` and `Requires=` on `sysinit.target` and `basic.target`, nor the implicit `Conflicts=` and `Before=` on `shutdown.target`. It is unmanaged and unrelated to `/mnt/data`.
+
+Running containers: gatus, cloudflared, frigate, immich_server, immich_machine_learning, immich_postgres, immich_redis; Compose projects cloudflare, frigate, gatus, immich (`/home/igor/app/immich-stack`).
 
 ## Is `/mnt/data` managed by Ansible?
 
@@ -153,7 +165,7 @@ no pools available
 
 ## NAS destination chosen
 
-normandy already mounts the `services_backup` export at `/mnt/backup` (the same export proxmox-b mounts as `nas-backup`), 13 TB free. The copy is at `/mnt/backup/normandy/data-2026-10-02/` (agreed with the lead): `data/` (the tree), `owners.txt` (`find -printf '%U:%G %m %y %P'` of the source, 7589 lines), `sha-src.txt` (sha256 of every regular file in the source, 7537 lines, itself sha256 `3865c417f97efb307d0f452321e24c50c6e4d42715fddc6eab41dd98400ca897`). The export squashes ownership on write (files land as `977:988`), so the restore took ownership from `owners.txt`, not from the copy.
+normandy already mounts the `services_backup` export at `/mnt/backup` (the same export proxmox-b mounts as `nas-backup`), 13 TB free. The copy was written to `/mnt/backup/normandy/data-2026-10-02/` (agreed with the lead) and moved after the window to `/mnt/backup/normandy-migration/data-2026-10-02/`, a path that is not shipped to B2 (see Rollback). It holds: `data/` (the tree), `owners.txt` (`find -printf '%U:%G %m %y %P'` of the source, 7589 lines), `sha-src.txt` (sha256 of every regular file in the source, 7537 lines, itself sha256 `3865c417f97efb307d0f452321e24c50c6e4d42715fddc6eab41dd98400ca897`). The export squashes ownership on write (files land as `977:988`), so the restore took ownership from `owners.txt`, not from the copy.
 
 ## Design for the new disk
 
@@ -304,7 +316,15 @@ Immich and Frigate were stopped from 14:12:18 to 14:17:55 PDT (5 min 37 s), and 
 
 ## Rollback
 
-Before the point of no return, the NAS copy and the untouched `ssd1tb` were both available. Now only the NAS copy at `/mnt/backup/normandy/data-2026-10-02/` remains, with `owners.txt` and `sha-src.txt`, plus the vzdump of VM 202 from the night of 2026-10-02, which still includes the old `scsi1`. proxmox-b's previous fstab is at `/root/fstab-before-tank-2026-10-02`.
+Before the point of no return, the NAS copy and the untouched `ssd1tb` were both available. Now only the NAS copy remains, with `owners.txt` and `sha-src.txt`, plus the vzdumps of VM 202 taken before the window, which still include the old `scsi1`. proxmox-b's previous fstab is at `/root/fstab-before-tank-2026-10-02`.
+
+The NAS copy moved after the window. It now lives at `/mnt/backup/normandy-migration/data-2026-10-02/`.
+
+- Why: the phase 2 security review found that the copy sat under `/mnt/backup/normandy`. homelab's cron job `40 6 * * 1,4 homelab-bulk-backup normandy` ships that tree to `b2:igor-offsite-backup/apps/normandy` with `rclone copy`, which never prunes. The next run, Monday 2026-10-05 06:40, would have uploaded the raw Immich Postgres data directory and Frigate's media to B2 permanently.
+- The move: `sudo mv /mnt/backup/normandy/data-2026-10-02 /mnt/backup/normandy-migration/` on normandy at about 14:25 PDT. Both paths are on the same NFS mount (`192.168.40.40:/var/nfs/shared/services_backup`), so this was a rename that took 0.018 s.
+- Checks after the move: `owners.txt` has 7589 lines and `sha-src.txt` still hashes to `3865c417...a897`. `/mnt/backup/normandy` again holds only `config`, `os-migration-*` and `postgres`.
+- Shipped paths: `roles/backup/files/homelab-bulk-backup` ships only `$HOME/app`, `$HOME/apps`, `$HOME/cv-site`, `/mnt/shared/immich`, `/mnt/backup/blackpearl` and `/mnt/backup/normandy`, and homelab's crontab runs exactly those six jobs. The offsite bundle stages under `/mnt/backup/offsite`. vzdump on `nas-backup` prunes only its `dump/` directory. `/mnt/backup/normandy-migration` is outside every shipped path. It already held phase 0's `immich-pgdata.tgz`.
+- Retention: keep the copy until the Postgres dump of 2026-10-05 01:30 (`normandy-backup.timer`) has been verified. Delete it by about 2026-10-09, when the vzdumps that still hold the old `scsi1` roll over. Igor decides the deletion.
 
 ## Implications for later phases
 
