@@ -8,10 +8,12 @@ Three tiers, two of which this repository owns.
 | Daily | InfluxDB, a full `influx backup` archive | 00:40 | `apps/homelab/backups/influxdb`, `rclone sync` |
 | Weekly | a check that the bucket's lifecycle rule is still sane | Sunday 03:20 | one API call |
 | Daily, normandy | Immich's Postgres dump and a tar of `~/app` | 01:30 on normandy, shipped 06:40 by homelab | `/mnt/backup/normandy` on the NAS, then `apps/normandy`, `rclone copy` |
-| Twice weekly | everything else: `~/app`, `~/apps`, `~/cv-site`, the NAS trees, the Postgres dumps | Mon and Thu, 01:30–06:40 | various, `rclone copy`, still in cron |
+| Twice weekly | everything else: `~/app`, `~/apps`, `~/cv-site`, the Immich library and black-pearl's NAS trees, homelab's own Postgres dumps (`pg_backup.sh`) | Mondays and Thursdays, 01:30–06:00 | various, `rclone copy`, still in cron |
 
-The first two are `roles/backup`, deployed by `playbooks/backup.yml`. The third
-is the pre-existing crontab on homelab and is untouched.
+The hourly, daily and weekly tiers and normandy's daily dump are `roles/backup`,
+deployed by `playbooks/backup.yml`. That role also sets the schedule of
+normandy's shipping line in homelab's crontab. The twice-weekly jobs are the
+pre-existing crontab on homelab and are otherwise untouched.
 
 ## Why the hourly tier exists
 

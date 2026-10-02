@@ -310,7 +310,7 @@ Immich and Frigate were stopped from 14:12:18 to 14:17:55 PDT (5 min 37 s), and 
 
 ## Backup coverage of the new disk (read-only check)
 
-- Immich's Postgres: Immich's own nightly dump (`/mnt/shared/immich/backups/immich-db-backup-*`, newest 2026-10-02 02:00) and a hand-written `normandy-backup.timer` on normandy (Mon and Thu 01:30, `/mnt/backup/normandy/postgres/immich_*.sql.gz`, newest 2026-10-01). Neither is managed by the backup role; `roles/backup` only excludes the Immich dumps from rclone and ships `/mnt/backup/normandy` to B2. Gap: the dump job is unmanaged.
+- Immich's Postgres: Immich's own nightly dump (`/mnt/shared/immich/backups/immich-db-backup-*`, newest 2026-10-02 02:00) and a hand-written `normandy-backup.timer` on normandy (Mon and Thu 01:30, `/mnt/backup/normandy/postgres/immich_*.sql.gz`, newest 2026-10-01). Neither is managed by the backup role; `roles/backup` only excludes the Immich dumps from rclone and ships `/mnt/backup/normandy` to B2. Gap: the dump job is unmanaged. (Superseded later the same day: E13 brought the job under `roles/backup` as a daily timer, see `2026-10-02-immich-db-backup.md`.)
 - Frigate's media (snapshots and clips, 281 MB, 2-day retention): not covered by anything. Gap, low value.
 - No coverage was added, as the lead instructed.
 

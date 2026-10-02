@@ -62,9 +62,12 @@ need. The cap is set by Ansible, in the base role:
 - `inventory/host_vars/proxmox-b.yml`: `zfs_arc_max_bytes: 2147483648`
 - `roles/base/tasks/zfs_arc.yml`, included only on hosts that define
   `zfs_arc_max_bytes`. It writes `options zfs zfs_arc_max=<bytes>` in
-  `/etc/modprobe.d/zfs.conf`, runs `update-initramfs -u` when that line
-  changes, and writes `/sys/module/zfs/parameters/zfs_arc_max` when the live
-  value differs.
+  `/etc/modprobe.d/zfs.conf`. When that line changes it runs
+  `update-initramfs` for every installed kernel (`-u -k all`), so every
+  initramfs carries the cap. A `stat`
+  of `/sys/module/zfs/parameters/zfs_arc_max` checks that the zfs module is
+  loaded. Only when it is, and only when the live value differs, does the role
+  write the cap there.
 
 Apply with `ansible-playbook playbooks/base.yml -l proxmox-a,proxmox-b`. Both
 nodes boot through GRUB on EFI from `/boot` on the ext4 root, so
@@ -224,12 +227,12 @@ on 2026-10-02) is kept on the NAS at
 `owners.txt` (numeric owner, group and mode of every entry, because the export
 squashes ownership) and `sha-src.txt` (sha256 of every file). It was first
 written under `/mnt/backup/normandy` and moved out the same day. homelab's
-`homelab-bulk-backup normandy` job (Mon and Thu 06:40) copies that tree to B2
+`homelab-bulk-backup normandy` job (daily at 06:40, `40 6 * * *`) copies that tree to B2
 with `rclone copy`, which never prunes. That would have put the raw Immich
 Postgres data directory and Frigate's media in B2 permanently.
 `normandy-migration` is not shipped anywhere.
 
-Keep the copy until the Postgres dump of 2026-10-05 has been verified. Delete
+Keep the copy until a dump by the managed daily job has been verified. One was verified on 2026-10-02 14:32 (`docs/transition/phase2/2026-10-02-immich-db-backup.md`). Delete
 it by about 2026-10-09, when the vzdumps of VM 202 that still hold the old
 `scsi1` roll over. Igor decides the deletion.
 
@@ -247,12 +250,14 @@ it by about 2026-10-09, when the vzdumps of VM 202 that still hold the old
   written for is understood.
 
 - Frigate's media (`/mnt/data/frigate/media`, snapshots and clips, about 281
-  MB with 2-day retention) is not backed up by anything. Low value, but
-  recorded.
-- Immich's Postgres is dumped by Immich's own nightly job and by a hand-written
-  `normandy-backup.timer` on normandy (Mon and Thu 01:30, to
-  `/mnt/backup/normandy/postgres/`). Neither is managed by the backup role,
-  which only ships `/mnt/backup/normandy` to B2.
+  MB with 2-day retention) is not backed up by anything. This is the remaining
+  gap for this disk. Low value, but recorded.
+- Immich's Postgres on this disk is covered. Since commit 03a0c94, `roles/backup`
+  deploys `normandy-backup.timer` (daily 01:30, `backup_nas_dump` in
+  `inventory/host_vars/normandy.yml`) to `/mnt/backup/normandy/postgres/`.
+  homelab ships those dumps to B2 daily at 06:40. Immich's own nightly dump is a
+  second NAS-only copy. See `docs/backups.md` and
+  `docs/transition/phase2/2026-10-02-immich-db-backup.md`.
 - Boot import of `tank` is unproven on both nodes. Neither node has been
   rebooted since its pool was created. Phase 7's host-down test is the first
   proof.
