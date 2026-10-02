@@ -1,5 +1,10 @@
-{
-  "host": {{ inventory_hostname | to_json }},
-  "note": "Written by roles/drift_check at deploy time. Checksums and variable names only; this host holds no key and can decrypt nothing. No timestamp: the file's mtime is the deploy time, and embedding one would make every converge report a change.",
-  "stacks": {{ drift_manifest_stacks | default([]) | sort(attribute='name') | to_nice_json(indent=2) }}
-}
+{#- Rendered with the same filter and defaults (to_nice_json: sorted keys,
+    4-space indent, no trailing newline) as the targeted-deploy update in
+    playbooks/site.yml, so that the two writers of this file produce the same
+    bytes for the same content. When they differed, every converge after a
+    targeted deploy reported a change that was formatting only. -#}
+{{ {
+     'host': inventory_hostname,
+     'note': "Written by roles/drift_check at deploy time. Checksums and variable names only; this host holds no key and can decrypt nothing. No timestamp: the file's mtime is the deploy time, and embedding one would make every converge report a change.",
+     'stacks': drift_manifest_stacks | default([]) | sort(attribute='name'),
+   } | to_nice_json }}

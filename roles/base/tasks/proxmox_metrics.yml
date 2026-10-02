@@ -1,0 +1,79 @@
+---
+# Proxmox's built-in external metric server, sending node and guest CPU,
+# memory, disk and network to InfluxDB every 10 seconds. The entry lives in
+# /etc/pve/status.cfg and its token in /etc/pve/priv/metricserver/, both
+# cluster-wide, so this runs on one node and pvesh does the writing.
+#
+# pvesh never shows the token again, so a changed token is not detected here:
+# rotating it means deleting the entry (pvesh delete
+# /cluster/metrics/server/<proxmox_metric_server_id>) and running this.
+
+- name: Read the metric server entries
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/metrics/server --output-format json
+  register: pve_metric_servers
+  changed_when: false
+  check_mode: false
+
+# The list carries only id, type, server and port; the entry itself has the
+# rest.
+- name: Read the entry's settings
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/metrics/server/{{ proxmox_metric_server_id }} --output-format json
+  register: pve_metric_entry
+  changed_when: false
+  check_mode: false
+  when: proxmox_metric_server_id in pve_metric_servers.stdout | from_json | map(attribute='id')
+  no_log: true
+
+- name: Compare the entry with what it should be
+  # The entry's settings include its token.
+  no_log: true
+  ansible.builtin.set_fact:
+    pve_metric_current: "{{ current }}"
+    # --server 192.168.70.223 --port 8087 ..., in pvesh's argument form.
+    pve_metric_args: >-
+      {{ wanted | dict2items | map(attribute='key') | map('regex_replace', '^', '--')
+         | zip(wanted | dict2items | map(attribute='value') | map('string')) | flatten }}
+    # The wanted settings as the entry has them now; equal when nothing drifted.
+    pve_metric_in_line: >-
+      {{ (current | dict2items | selectattr('key', 'in', wanted | list) | items2dict) == wanted }}
+  vars:
+    current: "{{ pve_metric_entry.stdout | default('{}') | from_json }}"
+    wanted:
+      server: "{{ smart_influx_url | urlsplit('hostname') }}"
+      port: "{{ smart_influx_url | urlsplit('port') }}"
+      influxdbproto: "{{ smart_influx_url | urlsplit('scheme') }}"
+      organization: "{{ smart_influx_org }}"
+      bucket: "{{ proxmox_influx_bucket }}"
+
+# The first play of playbooks/base.yml issues it; in a check run before that
+# play has really run, there is nothing to create the entry with yet.
+- name: Require the metric server's token
+  ansible.builtin.assert:
+    that: "'PROXMOX_INFLUX_TOKEN' in metrics_secrets"
+    fail_msg: secrets/hardware-metrics.sops.yaml has no PROXMOX_INFLUX_TOKEN; run playbooks/base.yml -l homelab first.
+    quiet: true
+  when:
+    - pve_metric_current == {}
+    - not ansible_check_mode
+
+# The token rides on pvesh's command line for the moment it runs, on a node
+# where only root can list processes.
+- name: Create the metric server entry
+  ansible.builtin.command:
+    argv: >-
+      {{ ['pvesh', 'create', '/cluster/metrics/server/' ~ proxmox_metric_server_id,
+          '--type', 'influxdb', '--token', metrics_secrets.PROXMOX_INFLUX_TOKEN | default('')]
+         + pve_metric_args }}
+  changed_when: true
+  when: pve_metric_current == {}
+  no_log: true
+
+- name: Bring the entry's settings back in line
+  ansible.builtin.command:
+    argv: "{{ ['pvesh', 'set', '/cluster/metrics/server/' ~ proxmox_metric_server_id] + pve_metric_args }}"
+  changed_when: true
+  when:
+    - pve_metric_current != {}
+    - not pve_metric_in_line

@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Read SMART health from every physical drive, and every temperature sensor.
+
+Each drive under /dev/disk/by-id is read with `smartctl -j -a`. One InfluxDB
+point per drive goes to the `smart` bucket, and one health result per drive is
+pushed to Gatus as an external endpoint, where a heartbeat turns a silent
+collector into a failure as well.
+
+Every hwmon temperature sensor (CPU package and cores from coretemp, the NVMe
+composite and its sensors, the PCH, the NIC) goes to the same bucket as one
+`hwmon` point per sensor, read from sysfs without lm-sensors.
+
+Configuration comes from the environment (the systemd unit's EnvironmentFile):
+
+  SMART_HOST            host tag, the inventory name
+  INFLUX_WRITE_URL      full /api/v2/write URL, bucket and precision included
+  INFLUX_TOKEN          write-only token for that bucket
+  GATUS_URL             base URL of the Gatus instance holding the endpoints
+  GATUS_TOKEN           bearer token of those external endpoints
+  GATUS_GROUP           the endpoints' group name
+  SMART_TEMP_MAX_C      unhealthy at or above this temperature
+  SMART_WEAR_MAX_PCT    unhealthy at or above this much rated endurance used
+
+Only the standard library: the hypervisors carry smartmontools and Python and
+nothing else is installed for this.
+
+Exit status: 0 when every drive was read and every report was delivered, 1
+when anything was not. An unhealthy drive is not an error here; it is a result,
+and Gatus is where it is raised.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+BY_ID = "/dev/disk/by-id"
+
+
+def drives():
+    """One device path per physical drive, found by its stable by-id name."""
+    seen = {}
+    for name in sorted(os.listdir(BY_ID)):
+        # Partitions are skipped by name. The EUI aliases and the NVMe
+        # namespace duplicates (model_serial_1) resolve to a device already
+        # seen, so resolving the link is what removes them; a suffix test
+        # would also drop a drive whose serial is all digits, as the SN810's is.
+        if not re.match(r"^(nvme|ata)-", name) or "-part" in name:
+            continue
+        device = os.path.realpath(os.path.join(BY_ID, name))
+        seen.setdefault(device, name)
+    return sorted(seen)
+
+
+def read_smart(device):
+    result = subprocess.run(
+        ["smartctl", "-j", "-a", device],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    data = json.loads(result.stdout)
+    # Bits 0-1 of smartctl's exit status mean the command itself failed or the
+    # device could not be opened; the higher bits describe the drive and are
+    # reported through the fields below.
+    if data.get("smartctl", {}).get("exit_status", result.returncode) & 0b11:
+        raise RuntimeError(f"smartctl could not read {device}: exit {result.returncode}")
+    return data
+
+
+def ata_attribute(data, attribute_id):
+    for attribute in data.get("ata_smart_attributes", {}).get("table", []):
+        if attribute["id"] == attribute_id:
+            return attribute
+    return None
+
+
+def measure(data):
+    """The fields recorded for one drive, the same names for NVMe and SATA."""
+    fields = {
+        "temperature_c": data.get("temperature", {}).get("current"),
+        "power_on_hours": data.get("power_on_time", {}).get("hours"),
+        "smart_passed": bool(data.get("smart_status", {}).get("passed", False)),
+    }
+    nvme = data.get("nvme_smart_health_information_log")
+    if nvme is not None:
+        fields.update({
+            "wear_pct": nvme["percentage_used"],
+            "available_spare_pct": nvme["available_spare"],
+            # A data unit is 1000 blocks of 512 bytes, by the NVMe spec.
+            "bytes_written": nvme["data_units_written"] * 512000,
+            "data_units_written": nvme["data_units_written"],
+            "media_errors": nvme["media_errors"],
+            "critical_warning": nvme["critical_warning"],
+            "unsafe_shutdowns": nvme["unsafe_shutdowns"],
+        })
+    else:
+        # Crucial and Micron SATA drives: 202 Percent_Lifetime_Remain has the
+        # remaining life as its normalised value. 177 Wear_Leveling_Count is
+        # the equivalent on Samsung, for a drive added later.
+        lifetime = ata_attribute(data, 202) or ata_attribute(data, 177)
+        written = ata_attribute(data, 246) or ata_attribute(data, 241)
+        reallocated = ata_attribute(data, 5)
+        uncorrectable = ata_attribute(data, 187)
+        block = data.get("logical_block_size", 512)
+        fields.update({
+            "wear_pct": 100 - lifetime["value"] if lifetime else None,
+            "bytes_written": written["raw"]["value"] * block if written else None,
+            "total_lbas_written": written["raw"]["value"] if written else None,
+            "reallocated": reallocated["raw"]["value"] if reallocated else None,
+            "media_errors": uncorrectable["raw"]["value"] if uncorrectable else 0,
+            "critical_warning": 0 if data.get("smart_status", {}).get("passed", False) else 1,
+        })
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def verdict(fields, temp_max, wear_max):
+    """None when healthy, otherwise the reasons it is not."""
+    reasons = []
+    if not fields["smart_passed"]:
+        reasons.append("SMART overall assessment failed")
+    if fields.get("critical_warning", 0):
+        reasons.append(f"critical warning {fields['critical_warning']}")
+    if fields.get("temperature_c", 0) >= temp_max:
+        reasons.append(f"temperature {fields['temperature_c']} C")
+    if fields.get("wear_pct", 0) >= wear_max:
+        reasons.append(f"wear {fields['wear_pct']} %")
+    if fields.get("media_errors", 0):
+        reasons.append(f"{fields['media_errors']} media errors")
+    return "; ".join(reasons) or None
+
+
+def escape_tag(value):
+    return re.sub(r"([,= ])", r"\\\1", value)
+
+
+def line(host, data, fields):
+    tags = {
+        "host": host,
+        "device": data["device"]["name"],
+        "type": "nvme" if data["device"]["protocol"] == "NVMe" else "sata",
+        "model": data["model_name"],
+        "serial": data["serial_number"],
+    }
+    tag_text = ",".join(f"{key}={escape_tag(value)}" for key, value in tags.items())
+    field_text = ",".join(
+        f"{key}={str(value).lower()}" if isinstance(value, bool)
+        else f"{key}={value}i" if isinstance(value, int)
+        else f"{key}={value}"
+        for key, value in sorted(fields.items())
+    )
+    return f"smart,{tag_text} {field_text}"
+
+
+HWMON = "/sys/class/hwmon"
+
+
+def hwmon_lines(host):
+    """One line per readable temperature sensor, in degrees Celsius."""
+    lines = []
+    for hwmon in sorted(os.listdir(HWMON)):
+        path = os.path.join(HWMON, hwmon)
+        try:
+            with open(os.path.join(path, "name")) as handle:
+                chip = handle.read().strip()
+        except OSError:
+            continue
+        # nvme0, coretemp.0, 0000:00:14.2: tells two chips of one name apart.
+        device = os.path.basename(os.path.realpath(os.path.join(path, "device")))
+        for entry in sorted(os.listdir(path)):
+            match = re.fullmatch(r"temp(\d+)_input", entry)
+            if not match:
+                continue
+            try:
+                with open(os.path.join(path, entry)) as handle:
+                    millidegrees = int(handle.read().strip())
+            except (OSError, ValueError):
+                continue  # a sensor with no data, such as an idle Wi-Fi card
+            # ACPI thermal zones on these boards report -267 C: not a reading.
+            if not -40000 <= millidegrees <= 150000:
+                continue
+            try:
+                with open(os.path.join(path, f"temp{match[1]}_label")) as handle:
+                    label = handle.read().strip()
+            except OSError:
+                label = f"temp{match[1]}"
+            tags = {"host": host, "chip": chip, "device": device, "sensor": label}
+            tag_text = ",".join(f"{key}={escape_tag(value)}" for key, value in tags.items())
+            lines.append(f"hwmon,{tag_text} temperature_c={millidegrees / 1000}")
+    return lines
+
+
+def endpoint_key(group, name):
+    """Gatus's key for an endpoint: <group>_<name>, lowercased, separators to '-'."""
+    clean = lambda text: re.sub(r"[ /_,.#+&]", "-", text.lower())
+    return f"{clean(group)}_{clean(name)}"
+
+
+def post(url, token, scheme, body=b""):
+    request = urllib.request.Request(url, data=body, method="POST")
+    request.add_header("Authorization", f"{scheme} {token}")
+    request.add_header("Content-Type", "text/plain; charset=utf-8")
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return response.status
+
+
+def main():
+    env = os.environ
+    host = env["SMART_HOST"]
+    temp_max = int(env.get("SMART_TEMP_MAX_C", "70"))
+    wear_max = int(env.get("SMART_WEAR_MAX_PCT", "80"))
+    failures = 0
+    lines = []
+    results = []
+
+    for device in drives():
+        try:
+            data = read_smart(device)
+            fields = measure(data)
+        except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(f"{device}: {error}", file=sys.stderr)
+            failures += 1
+            continue
+        problem = verdict(fields, temp_max, wear_max)
+        lines.append(line(host, data, fields))
+        results.append((f"{host} {data['model_name']} {data['serial_number']}", problem))
+        print(f"{device} {data['model_name']} {data['serial_number']}: "
+              f"{fields.get('temperature_c')} C, wear {fields.get('wear_pct')} %, "
+              f"{problem or 'healthy'}")
+
+    temperatures = hwmon_lines(host)
+    print(f"{len(temperatures)} hwmon temperature sensors")
+    lines += temperatures
+
+    if lines:
+        try:
+            post(env["INFLUX_WRITE_URL"], env["INFLUX_TOKEN"], "Token",
+                 ("\n".join(lines) + "\n").encode())
+        except (OSError, urllib.error.URLError) as error:
+            print(f"InfluxDB write failed: {error}", file=sys.stderr)
+            failures += 1
+
+    if env.get("GATUS_URL"):
+        for name, problem in results:
+            query = {"success": "false" if problem else "true"}
+            if problem:
+                query["error"] = problem
+            url = (f"{env['GATUS_URL']}/api/v1/endpoints/"
+                   f"{endpoint_key(env['GATUS_GROUP'], name)}/external?"
+                   + urllib.parse.urlencode(query))
+            try:
+                post(url, env["GATUS_TOKEN"], "Bearer")
+            except (OSError, urllib.error.URLError) as error:
+                # A 404 here means the drive is not declared in the inventory's
+                # smart_drives, so Gatus has no endpoint for it.
+                print(f"Gatus push for {name} failed: {error}", file=sys.stderr)
+                failures += 1
+
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

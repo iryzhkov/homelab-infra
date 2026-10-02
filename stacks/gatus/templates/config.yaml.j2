@@ -167,3 +167,19 @@ endpoints:
     conditions:
       - "[STATUS] == 200"
 {% endif %}
+{% if inventory_hostname == smart_gatus_host %}
+
+# SMART health of the hypervisors' physical drives, pushed every 15 minutes by
+# roles/base. The heartbeat turns a collector that stopped into a failure.
+external-endpoints:
+{% for host_name in groups['hypervisors'] %}
+{% for drive in hostvars[host_name].smart_drives | default([]) %}
+  - name: "{{ host_name }} {{ drive.model }} {{ drive.serial }}"
+    <<: *alerted
+    group: {{ smart_gatus_group }}
+    token: "{{ smart_secrets.GATUS_TOKEN }}"
+    heartbeat:
+      interval: {{ smart_heartbeat }}
+{% endfor %}
+{% endfor %}
+{% endif %}

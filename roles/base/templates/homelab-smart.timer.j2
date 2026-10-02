@@ -1,0 +1,9 @@
+[Unit]
+Description=SMART health of the physical drives
+
+[Timer]
+OnCalendar={{ smart_on_calendar }}
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

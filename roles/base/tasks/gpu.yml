@@ -1,0 +1,57 @@
+---
+# iGPU engine busy time, once a minute, into InfluxDB (bucket `smart`). Runs
+# in the guest the iGPU is passed through to, as a root system service; see
+# the collector's docstring for why it reads the PMU itself. Standard-library
+# Python only, and it touches neither Docker nor any container.
+
+- name: Install the iGPU collector
+  ansible.builtin.copy:
+    src: homelab-gpu-report
+    dest: /usr/local/bin/homelab-gpu-report
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  register: gpu_script
+
+- name: Ensure the iGPU collector's configuration directory exists
+  ansible.builtin.file:
+    path: /etc/homelab-gpu
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+- name: Install the iGPU collector's configuration
+  ansible.builtin.copy:
+    content: |
+      GPU_HOST={{ inventory_hostname }}
+      INFLUX_WRITE_URL={{ smart_influx_url }}/api/v2/write?org={{ smart_influx_org }}&bucket={{ smart_influx_bucket }}&precision=s
+      INFLUX_TOKEN={{ metrics_secrets.INFLUX_TOKEN }}
+    dest: /etc/homelab-gpu/env
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  register: gpu_env
+  no_log: true
+
+- name: Install the iGPU collector's unit
+  ansible.builtin.template:
+    src: homelab-gpu.service.j2
+    dest: /etc/systemd/system/homelab-gpu.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: gpu_unit
+
+- name: Run the iGPU collector
+  ansible.builtin.systemd_service:
+    name: homelab-gpu.service
+    daemon_reload: "{{ gpu_unit is changed }}"
+    enabled: true
+    state: "{{ 'restarted' if gpu_script is changed or gpu_env is changed or gpu_unit is changed else 'started' }}"
+  become: true
+  when: not ansible_check_mode

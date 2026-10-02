@@ -1,0 +1,10 @@
+---
+# The SMART collector runs every 15 minutes. Where it reports to, and the
+# Gatus heartbeat that catches it going quiet, are in group_vars/all.yml,
+# because the Gatus stack on another host reads them too.
+smart_on_calendar: "*:0/15"
+
+# A drive is reported unhealthy at or above these. The Crucial P3s are QLC with
+# 110 TBW (500 GB) and 440 TBW (2 TB) ratings, so wear is the number to watch.
+smart_temp_max_c: 70
+smart_wear_max_pct: 80

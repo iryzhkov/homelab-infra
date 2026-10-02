@@ -183,3 +183,27 @@ offsite_local_work: "{{ lookup('env', 'HOME') }}/.cache/homelab-offsite"
 # machine in this house by design. Losing it means the bundle is unreadable;
 # that is the trade for a stolen phone yielding nothing.
 offsite_recipient: age1us6n6ky6yf6fz084hhw35rzd3xnsra5fazt9dgmc7lqsfhvwqupqpu74ju
+
+# SMART health of the hypervisors' physical drives (roles/base). Points go to
+# the `smart` bucket of the InfluxDB in the logging stack, over the LAN with a
+# write-only token; health results go to the Gatus instance that owns alerts,
+# as one external endpoint per drive listed in the hypervisor's smart_drives.
+# Playbook: playbooks/base.yml.
+smart_influx_url: "http://{{ hostvars | stack_host_ip(groups, 'logging') }}:8087"
+smart_influx_org: ryzhkov
+smart_influx_bucket: smart
+# 400 days, so a year-on-year wear comparison is always possible.
+smart_influx_retention_seconds: 34560000
+smart_gatus_host: normandy
+smart_gatus_group: SMART
+# Three missed 15-minute runs before Gatus calls a silent drive unhealthy.
+smart_heartbeat: 45m
+
+# Proxmox's built-in external metric server (node and guest CPU, memory, disk
+# and network, every 10 seconds) writes here with its own write-only token.
+# 90 days rather than 400: this is the high-volume one, and homelab's disk is
+# the one under pressure.
+proxmox_influx_bucket: proxmox
+proxmox_influx_retention_seconds: 7776000
+# The cluster-wide metric server entry, in /etc/pve/status.cfg.
+proxmox_metric_server_id: homelab-influx
