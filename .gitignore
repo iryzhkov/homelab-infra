@@ -2,3 +2,5 @@ snapshot/
 secrets/*.env
 *.decrypted
 .venv/
+__pycache__/
+*.py[cod]
