@@ -33,6 +33,7 @@ navidrome/data/navidrome.db
 *.db-shm
 *.db-wal
 embyserver-backup-full/**
+# Retired Kuma data is retained locally for rollback, not bulk-synced.
 kuma/**
 logs/**
 metadata/**

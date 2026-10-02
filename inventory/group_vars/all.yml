@@ -23,7 +23,7 @@ traefik_static_routes:
   - host: zigbee.ryzhkov.dev
     url: http://192.168.70.235:8080
 
-# Kuma's MQTT watchdog currently pings this host; the Gatus trial mirrors it.
+# Gatus pings the MQTT broker host from both LAN probes.
 mqtt_broker_ip: 192.168.70.241
 
 # Current Cloudflare Tunnel hostnames with matching Ansible routes. Public

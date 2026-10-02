@@ -182,7 +182,7 @@ stacks:
       - src: config.yaml.j2
         dest: config.yaml
   - name: gatus
-    # Runs beside Kuma until alert delivery is verified.
+    # Internal probe; Normandy owns service alerts and this probe watches Normandy.
     pull: missing
     secrets: gatus-alerting
     env_extra: {}
