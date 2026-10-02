@@ -69,8 +69,10 @@ services:
     volumes:
       - /home/iryzhkov/app/gluetun:/gluetun
       - /home/iryzhkov/app/qbittorrent:/config
+      # The NAS media share, hard-mounted by the base role. Incomplete and
+      # complete downloads both live under /mnt/shared/downloads since
+      # 2026-10-02; the local /mnt/tmp scratch disk was retired.
       - /mnt/shared:/mnt/shared
-      - /mnt/tmp:/mnt/tmp
     ulimits:
       nofile:
         soft: 32768

@@ -8,3 +8,9 @@ smart_on_calendar: "*:0/15"
 # 110 TBW (500 GB) and 440 TBW (2 TB) ratings, so wear is the number to watch.
 smart_temp_max_c: 70
 smart_wear_max_pct: 80
+
+# NFS mounts kept in /etc/fstab, off unless a host lists some; see
+# tasks/nfs_mounts.yml for the shape of an item.
+nfs_mounts: []
+# Mount points to unmount and remove from /etc/fstab.
+mounts_absent: []

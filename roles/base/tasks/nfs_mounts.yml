@@ -1,0 +1,128 @@
+---
+# NFS mounts in /etc/fstab, and docker.service ordered after the ones a stack
+# needs, so Compose never starts a container on an empty mount point.
+#
+# An item of nfs_mounts:
+#   path             mount point; also the key of its fstab line, so a line
+#                    written by hand for the same path is replaced, not doubled
+#   src              server:/export
+#   opts             mount options
+#   before_docker    true: docker.service gets RequiresMountsFor on the path
+#
+# A changed definition is applied by unmounting and mounting again, because an
+# NFS remount cannot change options such as soft and hard. Whatever uses the
+# path has to be stopped first; with before_docker that includes Docker's
+# containers, since stopping the mount stops docker.service.
+#
+# mounts_absent lists mount points to unmount and drop from /etc/fstab.
+
+- name: Install the NFS client
+  ansible.builtin.apt:
+    name: nfs-common
+    state: present
+  become: true
+  when: nfs_mounts | length > 0
+
+- name: Write each NFS mount to /etc/fstab
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.src }}"
+    fstype: nfs
+    opts: "{{ item.opts }}"
+    state: present
+  become: true
+  loop: "{{ nfs_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: nfs_fstab
+
+- name: Find the systemd units of changed mounts
+  ansible.builtin.command:
+    argv: [systemd-escape, --path, "{{ item.item.path }}"]
+  loop: "{{ nfs_fstab.results | selectattr('changed') | list }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+  register: nfs_changed_units
+  changed_when: false
+  check_mode: false
+
+# Unmounted through systemd rather than umount, because a hand-written line
+# may have used x-systemd.automount, whose automount unit outlives the fstab
+# line and would otherwise keep answering for the path with the old options.
+# Units that do not exist are not an error.
+- name: Unmount changed mounts, and any automount in front of them
+  ansible.builtin.command:
+    argv: [systemctl, stop, "{{ item.stdout }}.automount", "{{ item.stdout }}.mount"]
+  become: true
+  loop: "{{ nfs_changed_units.results }}"
+  loop_control:
+    label: "{{ item.item.item.path }}"
+  register: nfs_stop
+  changed_when: true
+  # 5: a unit that is not loaded, such as an automount that never existed.
+  failed_when: nfs_stop.rc not in [0, 5]
+
+- name: Reload systemd after an fstab change
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when: nfs_fstab is changed
+
+- name: Mount each NFS mount
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.src }}"
+    fstype: nfs
+    opts: "{{ item.opts }}"
+    state: mounted
+  become: true
+  loop: "{{ nfs_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Ensure docker.service's drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  when: nfs_docker_paths | length > 0
+
+- name: Order docker.service after the mounts its stacks need
+  ansible.builtin.copy:
+    content: |
+      # Written by homelab-infra roles/base (nfs_mounts).
+      [Unit]
+      RequiresMountsFor={{ nfs_docker_paths | join(' ') }}
+    dest: /etc/systemd/system/docker.service.d/nfs-mounts.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: nfs_docker_dropin
+  when: nfs_docker_paths | length > 0
+
+# Only a reload: the ordering applies the next time Docker starts, and
+# restarting it here would stop every container on the host.
+- name: Reload systemd after the docker.service drop-in changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when: nfs_docker_dropin is changed
+
+- name: Unmount and forget retired mounts
+  ansible.posix.mount:
+    path: "{{ item }}"
+    state: absent
+  become: true
+  loop: "{{ mounts_absent }}"
+  register: mounts_retired
+
+# Drops the generated .mount unit of a line that is gone from /etc/fstab.
+- name: Reload systemd after a mount was retired
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when: mounts_retired is changed

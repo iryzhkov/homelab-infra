@@ -2,6 +2,26 @@
 # Adopted 2026-09-06; the torrent stack came out of the removed Portainer's
 # volume, see playbooks/adopt-torrent.yml for the one-time teardown.
 
+# The NAS `media` share, where qBittorrent keeps both complete and incomplete
+# downloads (docs/transition/phase1/2026-10-02-downloads-cutover.md). Hard
+# rather than soft since 2026-10-02: a soft mount returns I/O errors to a
+# writer when the NAS is slow, which corrupts torrent data, where a hard mount
+# waits. Docker starts only once it is mounted, so the stack never writes into
+# an empty /mnt/shared. Replaces a hand-written automount line for the same
+# path. The services_backup automount at /mnt/apps is still hand-written.
+nfs_mounts:
+  - path: /mnt/shared
+    src: 192.168.40.40:/var/nfs/shared/media
+    opts: nconnect=8,rsize=1048576,wsize=1048576,async,noatime,_netdev,hard,timeo=50,retrans=3
+    before_docker: true
+
+# The 1.8 TB scratch disk (VM 102 scsi1), retired on 2026-10-02 once the
+# incomplete folder had moved to the NAS. Its fstab line had no nofail, so a
+# boot without the disk, such as a restore that drops the backup=0 volume,
+# stopped in emergency mode (docs/transition/phase1/2026-10-02-local2tb-retire.md).
+mounts_absent:
+  - /mnt/tmp
+
 stacks:
   - name: torrent
     routes:
