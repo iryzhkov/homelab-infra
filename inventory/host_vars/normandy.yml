@@ -28,6 +28,7 @@ stacks:
   - name: gatus
     source: gatus
     pull: missing
+    secrets: gatus-alerting
     env_extra: {}
     config_templates:
       - src: config.yaml.j2

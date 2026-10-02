@@ -8,6 +8,13 @@
     gatus_oci_stage: /home/iryzhkov/.cache/homelab-infra/gatus-oci
     gatus_oci_dir: /home/ubuntu/app/gatus
   tasks:
+    - name: Load the encrypted Discord webhook
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/gatus-alerting.sops.yaml"
+        name: gatus_oci_secrets
+      delegate_to: localhost
+      no_log: true
+
     - name: Prepare the staging directory on homelab
       ansible.builtin.file:
         path: "{{ gatus_oci_stage }}"
@@ -30,8 +37,10 @@
       ansible.builtin.copy:
         content: |
           GATUS_BIND_IP={{ hostvars['oci'].mesh_host }}
+          DISCORD_WEBHOOK_URL={{ gatus_oci_secrets.DISCORD_WEBHOOK_URL }}
         dest: "{{ gatus_oci_stage }}/.env"
-        mode: "0644"
+        mode: "0600"
+      no_log: true
 
     - name: Ensure the OCI stack directory exists
       ansible.builtin.command:
@@ -68,6 +77,11 @@
         label: "{{ item.item }}"
       when: not item.stdout.startswith((gatus_staged_files.results | selectattr('item', 'equalto', item.item) | first).stat.checksum)
       register: gatus_oci_copies
+
+    - name: Restrict the OCI environment file
+      ansible.builtin.command:
+        argv: [ssh, -o, BatchMode=yes, oci, chmod, '600', "{{ gatus_oci_dir }}/.env"]
+      changed_when: false
 
     - name: Converge the OCI Gatus container
       ansible.builtin.command:

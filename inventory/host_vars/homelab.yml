@@ -175,8 +175,9 @@ stacks:
       - host: uptime.ryzhkov.dev
         port: 3001
   - name: gatus
-    # LAN-only trial alongside Kuma. Do not route publicly or alert yet.
+    # Runs beside Kuma until alert delivery is verified.
     pull: missing
+    secrets: gatus-alerting
     env_extra: {}
     config_templates:
       - src: config.yaml.j2

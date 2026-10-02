@@ -6,6 +6,8 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    environment:
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
     ports:
       - "${GATUS_BIND_IP}:3002:8080"
     volumes:
