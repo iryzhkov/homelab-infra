@@ -22,18 +22,9 @@ description: Second edge reverse proxy, VM 108 on proxmox-b
 qemu_guest_agent: true
 docker_install: true
 
-# Every router asks for the wildcard, never a single-name certificate
-# (decided 2026-10-02). public-api follows at the VIP cutover.
-traefik_wildcard_only: true
-
 # The same machine-to-machine access as public-api.
 fleet_ssh_authorized:
   - homelab
-
-# keepalived is installed and configured but not started; starting it before
-# public-api runs it too would claim the VIP with no peer. The cutover runbook
-# turns it on.
-keepalived_enabled: false
 
 stacks:
   # No routes: the routes are declared once, on public-api, and every edge_proxy

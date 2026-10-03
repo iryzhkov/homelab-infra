@@ -2,11 +2,9 @@
 # One floating address in front of the edge_proxy group, held by whichever
 # member keepalived elects. See docs/transition/phase4/runbook-vip-cutover.md.
 
-# Off by default: the role installs keepalived and writes its configuration,
-# but leaves the service stopped and disabled. A single member running it
-# with no peer would claim the VIP at once. The cutover runbook turns it on,
-# public-api first.
-keepalived_enabled: false
+# On since the cutover (2026-10-02). Set false to install and configure
+# keepalived without running it, which also drops the VIP (the rollback).
+keepalived_enabled: true
 
 # Reserved on VLAN 20 outside the DHCP pool (.6-.254); .2 is left free. The
 # cutover declares edge_vip in group_vars/all.yml, where AdGuard's play can

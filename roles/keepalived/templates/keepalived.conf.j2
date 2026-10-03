@@ -24,6 +24,9 @@ vrrp_instance edge {
     priority {{ keepalived_priority }}
     advert_int 1
     unicast_src_ip {{ ansible_host }}
+    # Ignore any advertisement whose source is not a listed peer, so nothing
+    # else on VLAN 20 (the AdGuard CTs share it) can take part in the election.
+    check_unicast_src
     unicast_peer {
 {% for peer in groups['edge_proxy'] if peer != inventory_hostname %}
         {{ hostvars[peer].ansible_host }}
