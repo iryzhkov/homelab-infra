@@ -19,8 +19,8 @@ services:
     entrypoint: ["tini", "--", "/bin/sh", "-c"]
     command:
       - >-
-        export COUCHDB_USER="$$(cat /run/secrets/couchdb_user)"
-        COUCHDB_PASSWORD="$$(cat /run/secrets/couchdb_password)"
+        export COUCHDB_USER="`cat /run/secrets/couchdb_user`"
+        COUCHDB_PASSWORD="`cat /run/secrets/couchdb_password`"
         && exec /docker-entrypoint.sh /opt/couchdb/bin/couchdb
     ports:
       - "5984:5984"

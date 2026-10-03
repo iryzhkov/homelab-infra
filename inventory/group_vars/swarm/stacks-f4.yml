@@ -3,18 +3,13 @@
 # docs/transition/phase5/migration-plan.md; evidence and cutover record in
 # docs/transition/phase5/2026-10-03-F4.md.
 #
-# NOT ACTIVE YET: the entries are in pending_swarm_stacks_f4, which nothing
-# reads (only swarm_stacks_* variables are). Activate one stack at its
-# cutover by moving its entry into a list named swarm_stacks_f4 in this file,
-# then run, in order:
-#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name> -e swarm_cutover=<name>
-#   ansible-playbook playbooks/traefik.yml
-#   ansible-playbook playbooks/site.yml -l homelab,normandy -e only=gatus
-#   ansible-playbook playbooks/backup.yml -l homelab,normandy
+# Active: all three were cut over on 2026-10-02 (23:38 to 23:48 PDT). Deploy a
+# change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name>
 # None of the three holds SQLite: the hourly job mirrors their directories
 # to the other worker, and a move copies them cold.
 
-pending_swarm_stacks_f4:
+swarm_stacks_f4:
   - name: cv-site
     pin: homelab
     secrets: homelab-cv-site

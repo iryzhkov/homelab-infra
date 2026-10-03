@@ -144,3 +144,17 @@
         mode: "0644"
       delegate_to: "{{ swarm_prep_node }}"
       become: true
+
+# Loki's configuration is this repository's (stacks/logging/files), on every
+# deploy, after the seeding above. Its hash is in the loki service's
+# environment, so a change here also redeploys Loki.
+- name: Install Loki's configuration
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src | default(playbook_dir ~ '/../stacks/logging') }}/files/loki-config.yml"
+    dest: "{{ swarm_prep_dir }}/config/loki-config.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: "{{ swarm_prep_node }}"
+  become: true
+  when: swarm_prep_owner.stat.exists or swarm_cutover | default('') == swarm_stack.name

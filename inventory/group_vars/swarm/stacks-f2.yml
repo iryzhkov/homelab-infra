@@ -4,22 +4,16 @@
 # migration-plan.md; evidence and cutover record in
 # docs/transition/phase5/2026-10-03-F2.md.
 #
-# NOT ACTIVE YET: the entries are in pending_swarm_stacks_f2, which nothing
-# reads (only swarm_stacks_* variables are). Activate one stack at its
-# cutover by moving its entry into a list named swarm_stacks_f2 in this file,
-# then run, in order:
-#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name> -e swarm_cutover=<name>
-#   ansible-playbook playbooks/traefik.yml
-#   ansible-playbook playbooks/site.yml -l homelab,normandy -e only=gatus
-#   ansible-playbook playbooks/backup.yml -l homelab,normandy
+# Active: all eight were cut over on 2026-10-02 (23:08 to 23:27 PDT), and
+# their entries in roles/backup/files/bulk-sqlite-sources.json were removed
+# at the same time. Deploy a change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name>
 #
-# Snapshots: each application's main database hourly (the twice-weekly
-# bulk-sqlite job keeps its old entries until the lead's cleanup, and then
-# finds the Compose copies idle), the rest of the config directory mirrored to
-# the other worker. Media covers, logs and the log databases are left out:
+# Snapshots: each application's main database hourly, the rest of the config
+# directory mirrored to the other worker. Media covers, logs and the log databases are left out:
 # they are rebuilt or disposable, and covers are 1.5 GB of the 2.4 GB.
 
-pending_swarm_stacks_f2:
+swarm_stacks_f2:
   - name: sonarr-tv
     pin: homelab
     prepare_tasks: swarm-prepare.yml

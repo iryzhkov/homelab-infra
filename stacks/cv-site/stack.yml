@@ -19,9 +19,9 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        export DISCORD_WEBHOOK="$$(cat /run/secrets/discord_webhook)"
-        IMMICH_API_KEY="$$(cat /run/secrets/immich_api_key)"
-        IMMICH_ALBUM_ID="$$(cat /run/secrets/immich_album_id)"
+        export DISCORD_WEBHOOK="`cat /run/secrets/discord_webhook`"
+        IMMICH_API_KEY="`cat /run/secrets/immich_api_key`"
+        IMMICH_ALBUM_ID="`cat /run/secrets/immich_album_id`"
         && exec ./cv-site
     ports:
       - "8091:8091"

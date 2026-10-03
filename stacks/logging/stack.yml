@@ -40,6 +40,11 @@ services:
         target: /etc/loki/local-config.yaml
         read_only: true
     command: -config.file=/etc/loki/local-config.yaml
+    # The hash of stacks/logging/files/loki-config.yml (installed by
+    # swarm-prepare.yml): a changed configuration changes the service, and
+    # the deploy restarts Loki with it.
+    environment:
+      LOKI_CONFIG_SHA256: ${LOKI_CONFIG_SHA256:?set by env_extra}
     deploy:
       replicas: 1
       placement:

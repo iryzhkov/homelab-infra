@@ -5,22 +5,13 @@
 # roles/swarm/tasks/stack.yml, `snapshot` in inventory/group_vars/swarm/
 # backup.yml.
 #
-# NOT ACTIVE YET. Everything that reads Swarm stacks (playbooks/swarm.yml,
-# site.yml's skip list, the Traefik generator, Gatus, the backup role and
-# playbooks/swarm-move.yml) reads only variables named swarm_stacks_*; the
-# entries below are in pending_swarm_stacks_f1, which nothing reads. A stack
-# is activated in the same change as its cutover by moving its entry, as it
-# is, into a list named swarm_stacks_f1 in this file (created with the first
-# one), then running, in order:
-#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name> -e swarm_cutover=<name>
-#   ansible-playbook playbooks/traefik.yml
-#   ansible-playbook playbooks/site.yml -l homelab,normandy -e only=gatus
-#   ansible-playbook playbooks/backup.yml -l homelab,normandy
-# In the same cutover, remove the stack's backup_sqlite_sources entries from
-# inventory/host_vars/homelab.yml and run playbooks/backup.yml -l homelab;
-# otherwise the hourly tier keeps snapshotting the idle Compose copy.
+# Active: all three were cut over on 2026-10-02 (23:01 to 23:07 PDT), and
+# their Compose-era backup_sqlite_sources entries were removed at the same
+# time. Deploy a change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name>
+# and move a stack between workers with playbooks/swarm-move.yml.
 
-pending_swarm_stacks_f1:
+swarm_stacks_f1:
   - name: vaultwarden
     pin: homelab
     secrets: homelab-vaultwarden

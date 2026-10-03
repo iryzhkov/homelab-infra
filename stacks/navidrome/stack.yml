@@ -43,6 +43,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+      start_interval: 2s
     deploy:
       replicas: 1
       placement:

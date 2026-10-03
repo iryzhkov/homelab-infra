@@ -3,28 +3,21 @@
 # docs/transition/phase5/migration-plan.md; evidence and cutover record in
 # docs/transition/phase5/2026-10-03-F5.md.
 #
-# NOT ACTIVE YET: the entry is in pending_swarm_stacks_f5, which nothing
-# reads (only swarm_stacks_* variables are). Activate it at the cutover by
-# moving it into a list named swarm_stacks_f5 in this file, then run, in
-# order:
-#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=logging -e swarm_cutover=logging
-#   ansible-playbook playbooks/traefik.yml
-#   ansible-playbook playbooks/site.yml -l homelab,normandy -e only=gatus
-#   ansible-playbook playbooks/backup.yml -l homelab,normandy
-#   ansible-playbook playbooks/base.yml -l homelab,normandy,blackpearl
-# The last one writes loki_push_url and the non-blocking log mode into each
-# Docker daemon's daemon.json (roles/base, tasks/docker_logging.yml), which
-# activates itself once `logging` is a Swarm stack; it takes effect at each
-# daemon's next restart. public-api is left to the phase 4 owner.
-#
-# Before the cutover, roles/backup/files/homelab-influx-backup has to find
-# the Swarm task instead of a container named `influxdb` (batch B's file; see
-# the F5 evidence file).
+# Active: cut over on 2026-10-02 (23:49 PDT; Loki fixed at 00:00). Deploy a
+# change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=logging
+# Since this entry exists, roles/base writes loki_push_url and the
+# non-blocking log mode into each Docker daemon's daemon.json
+# (tasks/docker_logging.yml; applied to homelab, normandy and blackpearl,
+# effective at each daemon's next restart). public-api is left to the phase
+# 4 owner.
 
-pending_swarm_stacks_f5:
+swarm_stacks_f5:
   - name: logging
     pin: homelab
     secrets: homelab-logging
+    env_extra:
+      LOKI_CONFIG_SHA256: "{{ lookup('file', '../stacks/logging/files/loki-config.yml') | hash('sha256') }}"
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab

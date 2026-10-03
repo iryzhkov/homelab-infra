@@ -33,21 +33,11 @@ offsite_enabled: true
 # 2026-09-06 restore test found the SQLite databases were being copied live as
 # three separate files, and InfluxDB not at all.
 backup_root: /home/iryzhkov/app/backups
-backup_sqlite_sources:
-  vaultwarden:
-    path: /home/iryzhkov/app/vaultwarden/data/db.sqlite3
-    keep: 48
-  navidrome:
-    path: /home/iryzhkov/app/navidrome/data/navidrome.db
-    keep: 48
-  actual-account:
-    path: /home/iryzhkov/app/actual/server-files/account.sqlite
-    keep: 48
-  # One database per budget, named after a UUID. A glob so that a budget added
-  # later is backed up without an edit here.
-  actual-budget:
-    glob: /home/iryzhkov/app/actual/user-files/*.sqlite
-    keep: 48
+# Empty since phase 5 batch F1 (2026-10-02): vaultwarden, navidrome and actual
+# are Swarm stacks, snapshotted hourly by roles/backup tasks/swarm.yml. Kept
+# defined, because it is what makes this host run tiers.yml (the daily
+# InfluxDB archive, the weekly and verify tiers).
+backup_sqlite_sources: {}
 
 # public-api cannot reach the feed from its VLAN, so homelab runs its check
 # over SSH and reports for both.
