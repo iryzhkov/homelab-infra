@@ -113,14 +113,28 @@ Stop: if memory shows as applied (`cur memory: 20480`) on the running VM, run
 
 ## 2. Move Docker's data (inside homelab)
 
-2.1 Stop Docker, socket first, so nothing can socket-activate it on the old root.
+2.1 Stop Docker and mask it for the copy.
+
+Stopping `docker.socket` is not enough. The 2026-10-02 window found that
+Docker came back twice while it was meant to be down
+(`2026-10-02-homelab-window.md`, deviation 1), because `authentik-watchdog.timer`,
+and `forgejo-webhooks.service` and `jocasta-container.service` with
+`Restart=on-failure`, start units that have `Requires=docker.service`. A
+runtime mask (a `/dev/null` link under `/run/systemd/system`, gone at the next
+boot) makes every such start fail instead.
+
+First check the stop timeout. homelab's is 90 s; if it is ever much shorter,
+stop the containers first (`docker stop -t 30 $(docker ps -q)`), so dockerd is
+not killed in the middle of their grace periods.
 
 ```
-ssh homelab 'date -Is; sudo systemctl stop docker.socket docker.service; systemctl is-active docker.socket docker.service; docker ps 2>&1 | head -1'
+ssh homelab 'systemctl show docker -p TimeoutStopUSec'
+ssh homelab 'date -Is; sudo systemctl stop docker.socket docker.service && sudo systemctl mask --runtime docker.service docker.socket; systemctl is-active docker.socket docker.service; systemctl is-enabled docker.service docker.socket; docker ps 2>&1 | head -1'
 ```
 
-Expected: `inactive inactive`, and `docker ps` cannot connect. This is the start
-of the outage. containerd keeps running; it holds no containers now.
+Expected: `TimeoutStopUSec=1min 30s`; then `inactive inactive`,
+`masked-runtime masked-runtime`, and `docker ps` cannot connect. This is the
+start of the outage. containerd keeps running; it holds no containers now.
 Rollback: section A.
 
 2.2 Final copy, and a dry run that must find nothing left to copy.
@@ -146,22 +160,35 @@ on the thin LV).
 ansible-playbook playbooks/base.yml -l homelab --diff
 ```
 
+The plain command works with homelab's Docker stopped: the playbook's first play
+(InfluxDB buckets and tokens) sees InfluxDB down, prints that it is skipped and
+ends, and the base role still runs. `--start-at-task` is no longer needed.
+
+The converge runs while Docker is still masked, on purpose. The role's
+`docker info` then fails to connect, which the role tolerates (`failed_when:
+false`, and the pending-restart report needs rc 0), so nothing starts Docker in
+the middle of the converge. The drop-in is written to
+`/etc/systemd/system/docker.service.d/`, which the runtime mask does not touch.
+
 Expected: changed=3 or 4: `/etc/docker/daemon.json` gains `"data-root":
 "/mnt/docker-data/docker"` (the file is also reformatted as sorted, two-space
 JSON; the other keys are unchanged), `docker.service.d/local-mounts.conf` with
-`RequiresMountsFor=/mnt/docker-data`, and a daemon-reload. The "restart
-pending" message may be absent because `docker info` cannot reach the stopped
-daemon. Docker must still be stopped afterwards:
+`RequiresMountsFor=/mnt/docker-data`, and a daemon-reload. No "restart
+pending" message, because `docker info` cannot reach the stopped daemon.
+
+Then unmask, so the VM restart can start Docker. From here a timer may start
+Docker early, which is harmless now: daemon.json names the new root and the copy
+is complete.
 
 ```
-ssh homelab 'systemctl is-active docker.service docker.socket; systemctl show docker -p RequiresMountsFor; sudo grep data-root /etc/docker/daemon.json'
+ssh homelab 'sudo systemctl unmask --runtime docker.service docker.socket; systemctl is-enabled docker.service docker.socket; systemctl show docker -p RequiresMountsFor; sudo grep data-root /etc/docker/daemon.json'
 ```
 
-Expected: `inactive inactive`, `RequiresMountsFor=/mnt/docker-data`, the
-data-root line. Stop: if Docker is active, it started on whichever root
-daemon.json named at that moment; go to section A.
+Expected: `enabled enabled`, `RequiresMountsFor=/mnt/docker-data`, the
+data-root line. Stop: if `RequiresMountsFor` is empty, run `sudo systemctl
+daemon-reload` and check again before step 3.
 
-Docker is not started here: the VM restart in step 3 starts it on the new root.
+Docker is not started here; the VM restart in step 3 starts it on the new root.
 
 ## 3. Stop and start the VM (proxmox-a)
 
@@ -267,19 +294,25 @@ host_vars change from step 2.3.
 ## Rollback
 
 A. Before the VM restart (Docker stopped, step 2.1 to 2.3). The old root is intact.
-In host_vars set `docker_data_root: /var/lib/docker` and comment
-`before_docker` again, converge `base.yml -l homelab` (daemon.json now names the
-old root; the drop-in file stays but only requires a mount that exists), then
-`ssh homelab 'sudo systemctl start docker.socket docker.service'`. Expected: 42
-containers running, `docker info` root `/var/lib/docker`. The VM can still be
-restarted for the memory and disk changes, or those reverted as in C.
+If Docker is not masked yet (the window was after 2.3), mask it first:
+`sudo systemctl mask --runtime docker.service docker.socket`. In host_vars set
+`docker_data_root: /var/lib/docker` and comment `before_docker` again, then
+`ansible-playbook playbooks/base.yml -l homelab --diff` (the InfluxDB play
+skips itself while Docker is down; daemon.json now names the old root; the
+drop-in file stays but only requires a mount that exists), then
+`ssh homelab 'sudo systemctl unmask --runtime docker.service docker.socket && sudo systemctl start docker.socket docker.service'`.
+Expected: 42 containers running, `docker info` root `/var/lib/docker`. The VM
+can still be restarted for the memory and disk changes, or those reverted as in C.
 
 B. After the restart, Docker misbehaves on the new root. Containers have written
 to their volumes on the new root since the start, so copy back first:
-`sudo systemctl stop docker.socket docker.service`, then
+`sudo systemctl stop docker.socket docker.service && sudo systemctl mask --runtime docker.service docker.socket`,
+then
 `sudo rsync -aHAX -x --numeric-ids --delete /mnt/docker-data/docker/ /var/lib/docker/`,
-then as in A (set `/var/lib/docker`, converge, start). If the new root itself is
-suspect, skip the copy-back and accept losing the writes since the window.
+then as in A (set `/var/lib/docker`, converge with the plain
+`ansible-playbook playbooks/base.yml -l homelab --diff`, unmask, start). If the
+new root itself is suspect, skip the copy-back and accept losing the writes
+since the window.
 
 C. Memory back to 28 GB:
 `ssh proxmox-a 'qm set 101 --memory 28672 --delete balloon'` (the original

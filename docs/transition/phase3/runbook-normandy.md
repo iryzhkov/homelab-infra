@@ -113,6 +113,22 @@ Expected: `inactive inactive inactive` and no shim process. Frigate has a 30 s
 stop grace period, so the stop takes up to about 40 s. This is the start of the
 outage. Rollback: section A.
 
+Lessons from the 2026-10-02 windows, for any later run of this step:
+
+- Stop the Compose stacks (or `docker stop -t 30 $(docker ps -q)`) before
+  stopping Docker. Omarchy sets `DefaultTimeoutStopSec=5s`, so systemd can
+  kill dockerd while containers are still inside their grace periods
+  (`2026-10-02-normandy-window.md`). Check with
+  `systemctl show docker -p TimeoutStopUSec`.
+- Stopping `docker.socket` does not keep Docker down. On homelab, a timer and
+  `Restart=on-failure` units with `Requires=docker.service` started it twice
+  during the copy (`2026-10-02-homelab-window.md`, deviation 1). After the stop,
+  run `sudo systemctl mask --runtime docker.service docker.socket containerd.service`,
+  converge while they are masked (the role's `docker info` then fails
+  harmlessly), and `sudo systemctl unmask --runtime docker.service docker.socket containerd.service`
+  before the VM restart. List normandy's dependents first with
+  `systemctl list-dependencies --reverse docker.service`.
+
 2.2 Final copy of both roots, then a dry run that must find nothing left.
 
 ```
