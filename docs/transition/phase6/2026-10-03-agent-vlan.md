@@ -41,8 +41,8 @@ Recorded answer: the next tag in the series is 130, and 192.168.130.0/24 is free
 |---|---|---|---|---|
 | `6ac09e6a1825b50cb14d2eff` | Agents -> edge VIP (HTTPS) | Agents, any | Public API, 192.168.20.3 | TCP 443 |
 | `6ac09e6e1825b50cb14d2f13` | Agents -> AdGuard DNS | Agents, any | Public API, 192.168.20.154, .106, .83 | TCP/UDP 53 |
-| `6ac09e6e1825b50cb14d2f16` | Agents -> Nebula peers (Public API) | Agents, any | Public API, 192.168.20.33, .4 | UDP 4242 |
-| `6ac09e6e1825b50cb14d2f19` | Agents -> Nebula peers (Internal) | Agents, any | Internal, 192.168.70.223, .70.234, 192.168.1.5, .1.29, 192.168.90.163, .90.212 | UDP 4242 |
+| `6ac09e6e1825b50cb14d2f16` (deleted, see Review fix) | Agents -> Nebula peers (Public API) | Agents, any | Public API, 192.168.20.33, .4 | UDP 4242 |
+| `6ac09e6e1825b50cb14d2f19` (deleted, see Review fix) | Agents -> Nebula peers (Internal) | Agents, any | Internal, 192.168.70.223, .70.234, 192.168.1.5, .1.29, 192.168.90.163, .90.212 | UDP 4242 |
 | `6ac09e6e1825b50cb14d2f1c` | Laptop and steward coordinator -> Agents (SSH) | Internal, 192.168.90.163, 192.168.70.234 | Agents, any | TCP 22 |
 | `6ac09e6e1825b50cb14d2f1f` | Agents -> Gateway (DHCP/NTP) | Agents, any | Gateway | UDP 67, 123 |
 | `6ac09e6e1825b50cb14d2f22` | Agents -> Gateway (ICMP) | Agents, any | Gateway | ICMP |
@@ -167,7 +167,7 @@ normandy both answer with the pinned key (`AAAAC3NzaC1lZDI1NTE5AAAAICXpj9...`), 
 In this order, with the agent VMs stopped first:
 
 1. `DELETE /proxy/network/v2/api/site/default/firewall-policies/<_id>` for the nine
-   `_id`s above (eight, and the Forgejo one). All eight sit on zone pairs that involve only the Agents zone, so
+   `_id`s above still present (six of the original eight, and the Forgejo one). All eight sit on zone pairs that involve only the Agents zone, so
    deleting them removes no return rule anyone else relies on.
 2. `DELETE /proxy/network/api/s/default/rest/networkconf/6ac09e501825b50cb14d2ddf`.
 3. `DELETE /proxy/network/v2/api/site/default/firewall/zone/6ac09e4c1825b50cb14d2dc4`.
@@ -183,6 +183,27 @@ laptop and normandy on 22; no existing policy or network changed. Forgejo SSH on
 homelab:2222 was added for UpKeeper and the steward's clones, and the VLAN is carried on
 ports 13 and 14 since 00:16 with no household interruption.
 
+## Review fix: the Nebula policies removed (2026-10-03)
+
+The agents are not on Nebula, so the two UDP 4242 policies were unused. Before each
+delete, the zone pair was checked for another user policy, because deleting the last one
+removes the pair's return rule: Agents -> Public API still holds `Agents -> edge VIP
+(HTTPS)` and `Agents -> AdGuard DNS`; Agents -> Internal still holds `Agents -> Forgejo
+SSH`. The full bodies were saved first, as `nebula-policy-<_id>.json` in
+`~/.cache/homelab-transition/phase6-e27/`.
+
+```
+DELETE /proxy/network/v2/api/site/default/firewall-policies/6ac09e6e1825b50cb14d2f16   204   Agents -> Nebula peers (Public API)
+DELETE /proxy/network/v2/api/site/default/firewall-policies/6ac09e6e1825b50cb14d2f19   204   Agents -> Nebula peers (Internal)
+```
+
+Afterwards 295 policies (299 less the two and their `(Return)` twins). The other three
+Agents policies and their returns are present; apart from the UDM renumbering two
+predefined Internal -> Agents entries (index 30001/30003 to 30000/30002), every other
+policy is unchanged. From agent-a, `https://ov.ryzhkov.dev/health` 200, DNS answers, and
+Forgejo 2222 opens. Rollback: `POST` each saved body (without `_id`) to
+`firewall-policies`.
+
 ## Implications for later phases
 
 - Carried item: the agents are not on the Nebula mesh. The household nodes' hand-written
@@ -195,6 +216,7 @@ ports 13 and 14 since 00:16 with no household interruption.
   `pki.blocklist`, so they cannot be revoked; their fingerprints are agent-a
   `655f9685ba441b58e55e0112488aa8dd2d2df66a240f2870a05070b3c86031d4` and agent-b
   `53d476626ecee70c113dab6c0ac14277461460cc0ed027609b243677741f866b`, to be blocklisted
-  if they are ever exposed. The two UDP 4242 policies stay, unused until then.
+  if they are ever exposed. The two UDP 4242 policies were deleted after review (see
+  "Review fix" below); joining the mesh later means adding them back.
 - A later NAS export for agents, or the steward reached over HTTPS through the VIP, is one
   more policy each, recorded here.
