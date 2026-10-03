@@ -14,7 +14,9 @@ jobs:
       - run: python3 scripts/test-upkeeper-drift.py
       - run: python3 scripts/test-helper-backups.py
       - run: python3 scripts/test-jocasta-backup.py
+      - run: python3 scripts/test-swarm-snapshot.py
+      - run: python3 -m py_compile roles/backup/files/homelab-swarm-snapshot roles/backup/files/homelab-sqlite-backup
       - run: python3 -m py_compile stacks/jocasta/files/jocasta-backup scripts/jocasta-credentials.py
       - run: shellcheck -S warning stacks/jocasta/files/jocasta-firewall
-      - run: shellcheck -S warning roles/backup/files/homelab-bulk-backup roles/backup/files/homelab-restore-verify roles/offsite_phone/files/homelab-offsite-run roles/offsite_phone/files/homelab-offsite-bundle roles/fleet_helpers/files/zigbee-watchdog.sh
+      - run: shellcheck -S warning roles/backup/files/homelab-bulk-backup roles/backup/files/homelab-backup-run roles/backup/files/homelab-restore-verify roles/offsite_phone/files/homelab-offsite-run roles/offsite_phone/files/homelab-offsite-bundle roles/fleet_helpers/files/zigbee-watchdog.sh
       - run: python3 -m py_compile roles/drift_check/files/homelab-drift-check

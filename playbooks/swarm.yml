@@ -1,0 +1,69 @@
+---
+# The Docker Swarm (plan phase 5): homelab and normandy as managers and
+# workers, OCI as a drained third manager.
+#
+#   ansible-playbook playbooks/swarm.yml --check --diff
+#   ansible-playbook playbooks/swarm.yml --tags nodes      # firewall, init/join, unlock, labels
+#   ansible-playbook playbooks/swarm.yml --tags registry   # tokens, login, push, pre-pull
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<stack>
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<stack> -e swarm_cutover=<stack>
+#
+# A manager that restarted is autolocked; running the nodes play unlocks it
+# with the key in secrets/swarm.sops.yaml.
+#
+# One node at a time, in name order, bootstrap manager (homelab) first, so a
+# failure stops before the next joins. Neither init nor join restarts a
+# Compose container. Re-creating the cluster on new addresses needs
+# -e swarm_rebuild=true (it removes every Swarm service).
+#
+# The registry and stack plays run on the workers only: OCI pulls nothing.
+
+- name: Swarm nodes
+  hosts: swarm
+  serial: 1
+  order: sorted
+  gather_facts: false
+  tags: [nodes]
+  roles:
+    - swarm
+
+- name: Registry tokens, logins and pushes
+  hosts: swarm_workers
+  gather_facts: false
+  tags: [registry]
+  tasks:
+    - name: Push the locally built images
+      ansible.builtin.include_role:
+        name: swarm
+        tasks_from: registry_push.yml
+
+- name: Pre-pull the locally built images on every other node
+  hosts: swarm_workers
+  gather_facts: false
+  tags: [registry]
+  tasks:
+    - name: Pre-pull
+      ansible.builtin.include_role:
+        name: swarm
+        tasks_from: registry_pull.yml
+
+- name: Swarm stacks
+  hosts: swarm_workers
+  gather_facts: false
+  tags: [stacks]
+  tasks:
+    - name: Deploy each stack from the bootstrap manager
+      ansible.builtin.include_role:
+        name: swarm
+        tasks_from: stack.yml
+      when: inventory_hostname == swarm_bootstrap_manager
+      loop: >-
+        {{ (swarm_all_stacks | selectattr('name', 'equalto', only) | list)
+           if only is defined else swarm_all_stacks }}
+      loop_control:
+        loop_var: swarm_stack
+        label: "{{ swarm_stack.name }}"
+      vars:
+        swarm_all_stacks: >-
+          {{ query('varnames', '^swarm_stacks_') | sort
+             | map('extract', hostvars[inventory_hostname]) | flatten }}

@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Restrict Docker Swarm ports to the peer workers
+# After netfilter-persistent, which restores a saved ruleset at boot, and
+# before Docker, so Swarm never listens on an open port.
+After=network-pre.target netfilter-persistent.service
+Before=docker.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/swarm-firewall
+ExecReload=/usr/local/sbin/swarm-firewall
+
+[Install]
+WantedBy=multi-user.target

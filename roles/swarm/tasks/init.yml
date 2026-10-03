@@ -1,0 +1,95 @@
+---
+# The bootstrap manager: create the cluster once, with explicit addresses
+# (control plane on the mesh, data path on VLAN 70), an
+# explicit overlay address pool and autolock, and keep its unlock key in
+# secrets/swarm.sops.yaml.
+
+- name: Initialise the Swarm
+  ansible.builtin.command:
+    argv:
+      - docker
+      - swarm
+      - init
+      - --advertise-addr
+      - "{{ swarm_advertise_addr }}"
+      - --listen-addr
+      - "{{ swarm_advertise_addr }}:2377"
+      - --data-path-addr
+      - "{{ swarm_data_path_addr }}"
+      - --default-addr-pool
+      - "{{ swarm_default_addr_pool }}"
+      - --default-addr-pool-mask-length
+      - "{{ swarm_default_addr_pool_mask }}"
+      - "{{ '--autolock' if swarm_autolock else '--autolock=false' }}"
+  # The output carries the join command and the unlock key.
+  no_log: true
+  changed_when: true
+  when: swarm_state == 'inactive'
+
+- name: Read the cluster settings
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+      - --format
+      - "{{ '{{' }}json .Swarm{{ '}}' }}"
+  register: swarm_info_raw
+  changed_when: false
+  check_mode: false
+
+- name: Parse them
+  ansible.builtin.set_fact:
+    swarm_info: "{{ swarm_info_raw.stdout | from_json }}"
+
+# A check run that would have initialised (or left and re-initialised) still
+# sees the old state, so it has nothing to compare.
+- name: Check the cluster against the inventory
+  when:
+    - swarm_info.LocalNodeState == 'active'
+    - not (ansible_check_mode and swarm_state == 'inactive')
+  block:
+    - name: Require the address pool the inventory names
+      ansible.builtin.assert:
+        that:
+          - swarm_info.Cluster.DefaultAddrPool == [swarm_default_addr_pool]
+          - swarm_info.Cluster.SubnetSize == swarm_default_addr_pool_mask | int
+          - swarm_info.NodeAddr == swarm_advertise_addr
+        fail_msg: >-
+          The running cluster uses {{ swarm_info.Cluster.DefaultAddrPool }}/{{
+          swarm_info.Cluster.SubnetSize }} on {{ swarm_info.NodeAddr }}; the
+          inventory says {{ swarm_default_addr_pool }}/{{
+          swarm_default_addr_pool_mask }} on {{ swarm_advertise_addr }}. The
+          pool is fixed at init and cannot be changed in place.
+        quiet: true
+
+    - name: Keep autolock as the inventory says
+      ansible.builtin.command:
+        argv: [docker, swarm, update, "--autolock={{ swarm_autolock | lower }}"]
+      no_log: true
+      changed_when: true
+      when: >-
+        (swarm_info.Cluster.Spec.EncryptionConfig.AutoLockManagers | default(false))
+        != swarm_autolock
+
+- name: Keep the unlock key in the secret
+  when:
+    - swarm_autolock
+    - not ansible_check_mode or swarm_state == 'active'
+  block:
+    - name: Read the unlock key
+      ansible.builtin.command:
+        argv: [docker, swarm, unlock-key, -q]
+      register: swarm_unlock_key
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    # --value-stdin keeps the key out of the controller's process list.
+    - name: Record the unlock key
+      ansible.builtin.command:
+        argv: [sops, set, --value-stdin, "{{ swarm_secret_file }}", '["swarm_unlock_key"]']
+        stdin: "{{ swarm_unlock_key.stdout | trim | to_json }}"
+      delegate_to: localhost
+      changed_when: true
+      no_log: true
+      when: swarm_secrets.swarm_unlock_key | default('') != swarm_unlock_key.stdout | trim

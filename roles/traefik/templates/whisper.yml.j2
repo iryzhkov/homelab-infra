@@ -59,4 +59,7 @@ http:
           interval: 10s
           timeout: 3s
         servers:
-          - url: "http://{{ hostvars | stack_host_ip(groups, 'whisper') }}:8080"
+{# Every worker once whisper is a Swarm stack, the one host before. #}
+{% for address in hostvars | stack_host_ips(groups, 'whisper') %}
+          - url: "http://{{ address }}:8080"
+{% endfor %}

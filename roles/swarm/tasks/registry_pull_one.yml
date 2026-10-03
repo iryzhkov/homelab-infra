@@ -1,0 +1,41 @@
+---
+- name: Read the digest {{ image.build_host }} pushed for {{ image.name }}
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - --format
+      - "{{ '{{' }}json .RepoDigests{{ '}}' }}"
+      - "{{ image.source }}"
+  delegate_to: "{{ image.build_host }}"
+  register: swarm_image_pushed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the digests held here
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - --format
+      - "{{ '{{' }}json .RepoDigests{{ '}}' }}"
+      - "{{ swarm_registry }}/{{ swarm_registry_owner }}/{{ image.name }}:{{ image.tag }}"
+  register: swarm_image_here
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Pull {{ image.name }}
+  ansible.builtin.command:
+    argv: [docker, pull, --quiet, "{{ swarm_registry }}/{{ swarm_registry_owner }}/{{ image.name }}:{{ image.tag }}"]
+  changed_when: true
+  vars:
+    swarm_pushed_digests: >-
+      {{ (swarm_image_pushed.stdout | default('[]') | from_json if swarm_image_pushed.rc == 0 else [])
+         | select('match', swarm_registry ~ '/' ~ swarm_registry_owner ~ '/' ~ image.name ~ '@') | list }}
+  when:
+    - swarm_pushed_digests | length > 0
+    - swarm_pushed_digests | first not in (swarm_image_here.stdout | default(''))

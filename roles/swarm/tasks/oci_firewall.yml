@@ -1,0 +1,63 @@
+---
+# OCI's firewall is a hand-written iptables-persistent ruleset
+# (/etc/iptables/rules.v4, restored by netfilter-persistent at boot), whose
+# INPUT chain ends in REJECT and whose FORWARD chain jumps to DOCKER-USER.
+# Each rule below is written into that file, validated with
+# iptables-restore --test, and applied to the live tables, so the running
+# state and the boot state agree without a full `netfilter-persistent save`
+# (which would also freeze Docker's own chains into the file).
+#
+#   INPUT        the control ports from the other managers' mesh addresses,
+#                above the final REJECT; 4789 stays rejected
+#   DOCKER-USER  nothing forwarded into docker_gwbridge: OCI is drained and
+#                runs no task, so the routing mesh must not answer on its
+#                public address or forward over Nebula
+
+- name: Write the control-port rules into rules.v4
+  ansible.builtin.lineinfile:
+    path: /etc/iptables/rules.v4
+    line: >-
+      -A INPUT -s {{ hostvars[item.0].swarm_advertise_addr }}/32 -i {{ swarm_mesh_iface }}
+      -p {{ item.1.proto }} -m {{ item.1.proto }} --dport {{ item.1.port }}
+      -m comment --comment "swarm manager {{ item.0 }}" -j ACCEPT
+    insertbefore: '^-A INPUT -j REJECT'
+    firstmatch: true
+    validate: iptables-restore --test %s
+  become: true
+  loop: "{{ swarm_manager_peers | product(swarm_control_ports) | list }}"
+  loop_control:
+    label: "{{ item.0 }} {{ item.1.port }}/{{ item.1.proto }}"
+
+- name: Write the routing-mesh block into rules.v4
+  ansible.builtin.lineinfile:
+    path: /etc/iptables/rules.v4
+    line: -A DOCKER-USER -o docker_gwbridge -m comment --comment "swarm ingress off" -j DROP
+    insertbefore: '^-A FORWARD -j DOCKER-USER'
+    firstmatch: true
+    validate: iptables-restore --test %s
+  become: true
+
+- name: Apply the control-port rules now
+  ansible.builtin.iptables:
+    chain: INPUT
+    action: insert
+    source: "{{ hostvars[item.0].swarm_advertise_addr }}/32"
+    in_interface: "{{ swarm_mesh_iface }}"
+    protocol: "{{ item.1.proto }}"
+    match: ["{{ item.1.proto }}"]
+    destination_port: "{{ item.1.port | string }}"
+    comment: swarm manager {{ item.0 }}
+    jump: ACCEPT
+  become: true
+  loop: "{{ swarm_manager_peers | product(swarm_control_ports) | list }}"
+  loop_control:
+    label: "{{ item.0 }} {{ item.1.port }}/{{ item.1.proto }}"
+
+- name: Apply the routing-mesh block now
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    action: insert
+    out_interface: docker_gwbridge
+    comment: swarm ingress off
+    jump: DROP
+  become: true

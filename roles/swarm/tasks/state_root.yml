@@ -1,0 +1,23 @@
+---
+# <pool>/swarm holds the state of the stateful Swarm services pinned to this
+# node, and /srv/swarm points at it, so every stack file names one path that
+# exists on both workers.
+
+- name: Create the state directory on the pool disk
+  ansible.builtin.file:
+    path: "{{ swarm_pool_path }}/swarm"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Point the state root at it
+  ansible.builtin.file:
+    src: "{{ swarm_pool_path }}/swarm"
+    dest: "{{ swarm_state_root }}"
+    state: link
+    # Only so a check run, which did not create the directory, can report
+    # the link; a real run never needs force.
+    force: "{{ ansible_check_mode }}"
+  become: true

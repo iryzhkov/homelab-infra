@@ -9,29 +9,43 @@
 #
 # Run one stack at a time while adopting:
 #   ansible-playbook playbooks/site.yml -l homelab -e 'only=vaultwarden'
+#
+# A stack named by any swarm_stacks_* entry (inventory/group_vars/swarm/) runs
+# as a Swarm stack, deployed by playbooks/swarm.yml, and is skipped here even
+# though its host_vars entry stays until the phase 5 cleanup: converging it
+# would bring back the Compose project its cutover retired, and with it a
+# second claim on the same published ports.
 
 - name: Deploy Compose stacks
   hosts: docker_hosts
   gather_facts: false
+
+  vars:
+    site_swarm_stack_names: "{{ hostvars | swarm_stack_names(groups) }}"
 
   tasks:
     - name: Deploy each stack
       ansible.builtin.include_role:
         name: compose_stack
       loop: >-
-        {{ (stacks | default([]) | selectattr('name', 'equalto', only) | list)
-           if only is defined else (stacks | default([])) }}
+        {{ ((stacks | default([]) | selectattr('name', 'equalto', only) | list)
+            if only is defined else (stacks | default([])))
+           | rejectattr('name', 'in', site_swarm_stack_names) | list }}
       loop_control:
         loop_var: stack
         label: "{{ stack.name }}"
 
     # A targeted deploy updates only its entry in an existing complete manifest.
     # This avoids reconverging unrelated stacks merely to register a new service.
+    # A targeted run naming a Swarm stack deploys nothing and removes the
+    # stack's entry, so the drift check stops expecting its Compose project.
     - name: Update the existing manifest after a targeted deployment
       when:
         - only is defined
         - drift_check_enabled | default(false)
-        - drift_manifest_stacks | default([]) | length > 0
+        - >-
+          drift_manifest_stacks | default([]) | length > 0
+          or only in site_swarm_stack_names
       block:
         - name: Locate the existing drift manifest
           ansible.builtin.stat:
@@ -51,7 +65,7 @@
                  | combine({'stacks':
                    (((targeted_manifest_file.content | b64decode | from_json).stacks
                      | rejectattr('name', 'equalto', only) | list)
-                    + drift_manifest_stacks) | sort(attribute='name')})
+                    + drift_manifest_stacks | default([])) | sort(attribute='name')})
                  | to_nice_json }}
             dest: "{{ targeted_manifest_stat.stat.path }}"
             mode: "0644"

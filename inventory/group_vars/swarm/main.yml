@@ -1,0 +1,88 @@
+---
+# The Docker Swarm across the two household workers (plan phase 5). Read by
+# roles/swarm and playbooks/swarm.yml. Per-host values (pool path, interfaces)
+# are on the hosts in inventory/hosts.yml.
+#
+# Stack batches add their own files beside this one, named
+# stacks-<batch>.yml, each defining one variable named swarm_stacks_<batch>.
+# playbooks/swarm.yml deploys the union of every swarm_stacks_* variable, so
+# two batches never edit the same file. See docs/transition/phase5/
+# migration-plan.md.
+
+# The manager that initialises the cluster and that the others join through.
+swarm_bootstrap_manager: homelab
+
+# Every address is explicit (normandy has a second NIC on VLAN 60, and Docker
+# would otherwise pick by route). Raft and gossip advertise and listen on the
+# mesh address, so the OCI manager can reach the other two inside Nebula's
+# mutual TLS; the VXLAN data path uses the workers' VLAN 70 address, so no
+# overlay traffic crosses Nebula or leaves VLAN 70 (lead decision, 2026-10-02).
+swarm_advertise_addr: "{{ mesh_host }}"
+swarm_data_path_addr: "{{ ansible_host }}"
+
+# How the Swarm ports are filtered: `unit` (swarm-firewall.service, or ufw
+# where it is active) on the workers; OCI overrides it.
+swarm_firewall: unit
+
+# Overlay subnets, including the ingress network, come from here rather than
+# from Swarm's default 10.0.0.0/8, which contains the Nebula mesh
+# (10.42.0.0/24) and OCI's VCN (10.0.0.0/24). Local bridges on both workers
+# use 172.16.0.0/12 (daemon.json default-address-pools).
+swarm_default_addr_pool: 10.200.0.0/16
+swarm_default_addr_pool_mask: 24
+
+# Raft and the cluster CA are encrypted at rest. A restarted manager stays
+# locked until `ansible-playbook playbooks/swarm.yml` unlocks it with the key
+# held in secrets/swarm.sops.yaml (swarm_unlock_key). Compose containers on
+# that host are not affected by the lock.
+swarm_autolock: true
+
+# Node labels. gpu=intel marks a household worker; host and pool let a stack
+# address one node and find its data disk.
+swarm_node_labels:
+  gpu: intel
+  host: "{{ inventory_hostname }}"
+  pool: "{{ swarm_pool_path }}"
+
+# Where stateful Swarm services keep their data on every node: a symlink to
+# <pool>/swarm, so a stack file names one path on both workers.
+swarm_state_root: /srv/swarm
+
+# The deployed stack files and their environment, on the deploying manager.
+swarm_deploy_root: "{{ stack_root | dirname }}/swarm"
+
+# Forgejo's container registry (packages are enabled by default; /v2/ answers
+# 401 with a bearer realm at https://git.ryzhkov.dev/v2/token). Images are
+# pushed under the user `igor`. The push token (write:package) is installed
+# only on the hosts that build images, the pull token (read:package) on every
+# other node; both live in secrets/swarm.sops.yaml and are created by
+# playbooks/swarm.yml when missing.
+swarm_registry: git.ryzhkov.dev
+swarm_registry_owner: igor
+
+# Locally built images, pushed from the host that builds them and pre-pulled
+# on every other node, so that a drain of proxmox-a (which hosts Forgejo and
+# with it the registry) does not need the registry. hugo is not here: its
+# image is the public nginx, and the site is a bind-mounted directory that
+# the Forgejo webhook builds on homelab.
+swarm_registry_images:
+  - name: cv-site
+    source: cv-site-app:latest
+    tag: latest
+    build_host: homelab
+  - name: dsh
+    source: dsh-dsh:latest
+    tag: latest
+    build_host: homelab
+  - name: openviking
+    source: openviking-openviking:latest
+    tag: latest
+    build_host: homelab
+  - name: whisper-server
+    source: whisper-cpp-dispatch:local
+    tag: latest
+    build_host: homelab
+  - name: jocasta
+    source: "{{ hostvars['homelab'].jocasta_image }}"
+    tag: "{{ hostvars['homelab'].jocasta_image.split(':') | last }}"
+    build_host: homelab

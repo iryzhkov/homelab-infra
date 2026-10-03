@@ -1,0 +1,407 @@
+---
+# Move a stateful Swarm stack to the other worker: a planned drain, a few
+# minutes per stack, no data loss (docs/transition/phase5/migration-plan.md,
+# "The scripted move"; docs/backups.md, "Swarm stacks").
+#
+#   ansible-playbook playbooks/swarm-move.yml -e stack=<name> -e to=<host> --check
+#   ansible-playbook playbooks/swarm-move.yml -e stack=<name> -e to=<host>
+#
+# 1. Preconditions, all read-only (so --check runs them and stops before any
+#    change): every manager Ready and Reachable, which with OCI as the third
+#    manager is the two-of-three rule for after the stop; OCI's mesh address
+#    answering from both workers; exactly one node carrying pin.<stack>, not
+#    <to>; /srv/swarm/<stack>/.swarm-owner on that node naming it; the peer
+#    copy on <to> refreshed within two hours (-e allow_stale=true to skip).
+# 2. Stop: every service of the stack scaled to 0, waiting until no task
+#    runs on the old node. The replica counts are kept in
+#    /srv/swarm/<stack>/.swarm-replicas first, so they travel with the data
+#    and a re-run after a failure still knows them.
+# 3. Final snapshot: a cold rsync of /srv/swarm/<stack>/ from the old node to
+#    <to>'s peer directory (`final/`), over the restricted swarmsync key.
+# 4. Restore on <to> into /srv/swarm/<stack>/ and write .swarm-owner.
+# 5. Retire the old copy to /srv/swarm/.moved/<stack>-<stamp> on the old node
+#    (kept until the stack next leaves that node; the hourly job ignores it).
+# 6. Flip the pin label.
+# 7. Start with the recorded replica counts, wait for every task to run and
+#    report healthy, probe the stack's routes on <to> and through Traefik.
+# 8. Post to the feed.
+#
+# Runs on <to>, which is a manager; nothing is done by hand on either node.
+# The crash path (old node gone) is the manual procedure in docs/backups.md.
+
+- name: Move a stateful Swarm stack
+  hosts: "{{ to | default('no-target-given') }}"
+  gather_facts: false
+  vars:
+    swarm_move_stamp: "{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}"
+    swarm_move_max_age: "{{ 7200 if not (allow_stale | default(false) | bool) else 999999999 }}"
+    swarm_move_all_stacks: >-
+      {{ query('varnames', '^swarm_stacks_') | sort
+         | map('extract', hostvars[inventory_hostname]) | flatten }}
+    swarm_move_entry: >-
+      {{ swarm_move_all_stacks | selectattr('name', 'equalto', stack) | first | default({}) }}
+    swarm_move_dir: "{{ swarm_state_root }}/{{ stack }}"
+    # Go templates for docker's --format, kept away from Jinja.
+    swarm_move_node_format: !unsafe '{{.Hostname}}|{{.Status}}|{{.ManagerStatus}}'
+    swarm_move_id_format: !unsafe '{{.ID}} {{index .Spec.Labels "host"}}'
+    swarm_move_replica_format: !unsafe >-
+      {{.Spec.Name}} {{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{else}}global{{end}}
+    swarm_move_status_format: !unsafe '{{.Status}}'
+    swarm_move_name_format: !unsafe '{{.Name}}'
+  tasks:
+    # 1. Preconditions ------------------------------------------------------
+
+    - name: Require a stack and a worker to move it to
+      ansible.builtin.assert:
+        that:
+          - stack is defined
+          - stack is match('^[a-z0-9][a-z0-9_-]*$')
+          - to in groups['swarm_workers']
+        fail_msg: >-
+          Usage: -e stack=<name> -e to=<one of {{ groups['swarm_workers'] | join(', ') }}>.
+        quiet: true
+
+    - name: Read the managers' state
+      ansible.builtin.command:
+        argv:
+          - docker
+          - node
+          - ls
+          - --format
+          - "{{ swarm_move_node_format }}"
+      register: swarm_move_nodes
+      changed_when: false
+      check_mode: false
+
+    # Every manager up and unlocked: after the stop the cluster still has to
+    # reschedule and move a label, which needs two of the three votes even if
+    # one more manager falters during the move.
+    - name: Refuse to move without full quorum
+      ansible.builtin.assert:
+        that: >-
+          swarm_move_nodes.stdout_lines | select('search', '[|]Ready[|](Leader|Reachable)$')
+          | list | length == groups['swarm'] | length
+        fail_msg: >-
+          All {{ groups['swarm'] | length }} managers must be Ready and Reachable
+          before a move; docker node ls says {{ swarm_move_nodes.stdout_lines }}.
+          Unlock a locked manager with `ansible-playbook playbooks/swarm.yml
+          --tags nodes -l <host>` first.
+        quiet: true
+
+    - name: Check that OCI answers on the mesh from both workers
+      ansible.builtin.command:
+        argv: [ping, -c, "2", -W, "3", "{{ hostvars[item[1]].mesh_host }}"]
+      delegate_to: "{{ item[0] }}"
+      loop: "{{ groups['swarm_workers'] | product(groups['swarm_drain_managers']) | list }}"
+      changed_when: false
+      check_mode: false
+      register: swarm_move_oci
+      failed_when: false
+
+    - name: Refuse to move while OCI is unreachable
+      ansible.builtin.assert:
+        that: swarm_move_oci.results | rejectattr('rc', 'equalto', 0) | list | length == 0
+        fail_msg: >-
+          OCI does not answer on the mesh from
+          {{ swarm_move_oci.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | list }}.
+          A move with OCI gone would leave one vote of three.
+        quiet: true
+
+    - name: Find the node holding pin.{{ stack }}
+      ansible.builtin.command:
+        argv: [docker, node, ls, -q, --filter, "node.label=pin.{{ stack }}=true"]
+      register: swarm_move_pinned
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse anything but exactly one pinned node
+      ansible.builtin.assert:
+        that: swarm_move_pinned.stdout_lines | length == 1
+        fail_msg: >-
+          {{ swarm_move_pinned.stdout_lines | length }} nodes carry
+          pin.{{ stack }}=true; a move needs exactly one.
+        quiet: true
+
+    - name: Read the pinned node's inventory name and the target's node ID
+      ansible.builtin.command:
+        argv:
+          - docker
+          - node
+          - inspect
+          - --format
+          - "{{ swarm_move_id_format }}"
+          - "{{ swarm_move_pinned.stdout | trim }}"
+          - self
+      register: swarm_move_ids
+      changed_when: false
+      check_mode: false
+
+    - name: Remember the two nodes
+      ansible.builtin.set_fact:
+        swarm_move_from: "{{ swarm_move_ids.stdout_lines[0].split()[1] }}"
+        swarm_move_from_id: "{{ swarm_move_ids.stdout_lines[0].split()[0] }}"
+        swarm_move_to_id: "{{ swarm_move_ids.stdout_lines[1].split()[0] }}"
+
+    - name: Refuse a move to where the stack already is
+      ansible.builtin.assert:
+        that:
+          - swarm_move_from in groups['swarm_workers']
+          - swarm_move_from != to
+        fail_msg: "pin.{{ stack }} is on {{ swarm_move_from }}; nothing to move to {{ to }}."
+        quiet: true
+
+    - name: Read the stack's services
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - ls
+          - --filter
+          - label=com.docker.stack.namespace={{ stack }}
+          - --format
+          - "{{ swarm_move_name_format }}"
+      register: swarm_move_services
+      changed_when: false
+      check_mode: false
+
+    - name: Read their replica counts
+      ansible.builtin.command:
+        argv: >-
+          {{ ['docker', 'service', 'inspect', '--format', swarm_move_replica_format]
+             + swarm_move_services.stdout_lines }}
+      register: swarm_move_replicas_now
+      changed_when: false
+      check_mode: false
+      when: swarm_move_services.stdout_lines | length > 0
+
+    - name: Read the stack's ownership and recorded replica counts on {{ swarm_move_from }}
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          cat {{ swarm_move_dir }}/.swarm-owner 2>/dev/null || echo missing
+          cat {{ swarm_move_dir }}/.swarm-replicas 2>/dev/null || echo '{}'
+      delegate_to: "{{ swarm_move_from }}"
+      become: true
+      register: swarm_move_from_state
+      changed_when: false
+      check_mode: false
+
+    - name: Read the target's state directory and the peer copy's age
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          if [ -e {{ swarm_move_dir }} ]; then
+              cat {{ swarm_move_dir }}/.swarm-owner 2>/dev/null || echo unowned
+          else
+              echo absent
+          fi
+          stamp=$(cut -d' ' -f1 {{ swarm_peer_snapshot_dir }}/{{ swarm_move_from }}/{{ stack }}/sync/last-sync 2>/dev/null || echo 0)
+          echo $(( $(date +%s) - stamp ))
+      become: true
+      register: swarm_move_to_state
+      changed_when: false
+      check_mode: false
+
+    - name: Work out the replica counts to restore
+      ansible.builtin.set_fact:
+        swarm_move_replicas: >-
+          {%- set live = {} -%}
+          {%- for line in swarm_move_replicas_now.stdout_lines | default([]) -%}
+          {%-   set _ = live.update({line.split()[0]: line.split()[1]}) -%}
+          {%- endfor -%}
+          {%- set recorded = swarm_move_from_state.stdout_lines[1:] | join('\n') | from_json -%}
+          {{ live if (live.values() | map('int') | sum) > 0 else recorded }}
+
+    - name: Refuse a move the stack is not ready for
+      ansible.builtin.assert:
+        that:
+          - swarm_move_services.stdout_lines | length > 0
+          - "'global' not in swarm_move_replicas.values() | list"
+          - swarm_move_replicas | length > 0
+          - (swarm_move_replicas.values() | map('int') | sum) > 0
+          - swarm_move_from_state.stdout_lines[0] == swarm_move_from
+          - swarm_move_to_state.stdout_lines[0] in ['absent', to]
+          - swarm_move_to_state.stdout_lines[1] | int < swarm_move_max_age | int
+        fail_msg: >-
+          {{ stack }}: services {{ swarm_move_services.stdout_lines }}, replicas
+          {{ swarm_move_replicas }}; {{ swarm_move_dir }} on {{ swarm_move_from }} is owned
+          by '{{ swarm_move_from_state.stdout_lines[0] }}' (must be {{ swarm_move_from }});
+          on {{ to }} it is '{{ swarm_move_to_state.stdout_lines[0] }}' (must be absent);
+          the peer copy on {{ to }} is {{ swarm_move_to_state.stdout_lines[1] }} s old
+          (limit {{ swarm_move_max_age }}; -e allow_stale=true to skip).
+        quiet: true
+
+    - name: Say what will happen
+      ansible.builtin.debug:
+        msg: >-
+          Moving {{ stack }} ({{ swarm_move_replicas }}) from {{ swarm_move_from }}
+          to {{ to }}; the peer copy is {{ swarm_move_to_state.stdout_lines[1] }} s old.
+          {{ 'Check mode: nothing below runs.' if ansible_check_mode else '' }}
+
+    # 2. Stop -----------------------------------------------------------------
+
+    - name: Keep the replica counts with the data
+      ansible.builtin.copy:
+        content: "{{ swarm_move_replicas | to_json }}\n"
+        dest: "{{ swarm_move_dir }}/.swarm-replicas"
+        owner: root
+        group: root
+        mode: "0644"
+      delegate_to: "{{ swarm_move_from }}"
+      become: true
+
+    - name: Scale every service of {{ stack }} to 0
+      ansible.builtin.command:
+        argv: >-
+          {{ ['docker', 'service', 'scale', '--detach=false']
+             + (swarm_move_replicas.keys() | map('regex_replace', '$', '=0') | list) }}
+      changed_when: true
+
+    - name: Wait until no task of {{ stack }} runs on {{ swarm_move_from }}
+      ansible.builtin.command:
+        argv: [docker, ps, -q, --filter, "label=com.docker.stack.namespace={{ stack }}"]
+      delegate_to: "{{ swarm_move_from }}"
+      register: swarm_move_running
+      until: swarm_move_running.stdout | trim | length == 0
+      retries: 36
+      delay: 5
+      changed_when: false
+      # A skipped command never meets an until: in check mode it would retry
+      # until it gave up.
+      when: not ansible_check_mode
+
+    # 3. Final snapshot -------------------------------------------------------
+
+    - name: Copy the quiescent state to {{ to }}
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - -a
+          - --numeric-ids
+          - --delete
+          - --mkpath
+          - -e
+          - >-
+            ssh -i {{ swarm_sync_dir }}/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile={{ swarm_sync_dir }}/known_hosts
+          - "{{ swarm_move_dir }}/"
+          - "{{ swarm_sync_user }}@{{ hostvars[to].ansible_host }}:{{ stack }}/final/"
+      delegate_to: "{{ swarm_move_from }}"
+      become: true
+      changed_when: true
+
+    # 4. Restore --------------------------------------------------------------
+
+    - name: Restore it into {{ swarm_move_dir }} on {{ to }}
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - -a
+          - --numeric-ids
+          - --delete
+          - "{{ swarm_peer_snapshot_dir }}/{{ swarm_move_from }}/{{ stack }}/final/"
+          - "{{ swarm_move_dir }}/"
+      become: true
+      changed_when: true
+
+    - name: Make {{ to }} the owner
+      ansible.builtin.copy:
+        content: "{{ to }}\n"
+        dest: "{{ swarm_move_dir }}/.swarm-owner"
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+      # The directory exists only once the restore above has run.
+      when: not ansible_check_mode
+
+    # 5. Retire the old copy --------------------------------------------------
+
+    - name: Set the old copy aside on {{ swarm_move_from }}
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          mkdir -p -m 0700 {{ swarm_state_root }}/.moved
+          rm -rf {{ swarm_state_root }}/.moved/{{ stack }}-*
+          mv {{ swarm_move_dir }} {{ swarm_state_root }}/.moved/{{ stack }}-{{ swarm_move_stamp }}
+      delegate_to: "{{ swarm_move_from }}"
+      become: true
+      changed_when: true
+
+    # 6. Flip the pin ---------------------------------------------------------
+
+    - name: Remove pin.{{ stack }} from {{ swarm_move_from }}
+      ansible.builtin.command:
+        argv: [docker, node, update, --label-rm, "pin.{{ stack }}", "{{ swarm_move_from_id }}"]
+      changed_when: true
+
+    - name: Pin {{ stack }} to {{ to }}
+      ansible.builtin.command:
+        argv: [docker, node, update, --label-add, "pin.{{ stack }}=true", "{{ swarm_move_to_id }}"]
+      changed_when: true
+
+    # 7. Start ----------------------------------------------------------------
+
+    - name: Scale {{ stack }} back up
+      ansible.builtin.command:
+        argv: >-
+          {{ ['docker', 'service', 'scale', '--detach=false']
+             + (swarm_move_replicas | dictsort | map('join', '=') | list) }}
+      changed_when: true
+
+    - name: Wait until every task runs, and is healthy, on {{ to }}
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --filter
+          - label=com.docker.stack.namespace={{ stack }}
+          - --format
+          - "{{ swarm_move_status_format }}"
+      register: swarm_move_up
+      until: >-
+        swarm_move_up.stdout_lines | length == (swarm_move_replicas.values() | map('int') | sum)
+        and swarm_move_up.stdout_lines | select('search', 'starting|unhealthy') | list | length == 0
+      retries: 60
+      delay: 5
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Probe each route on {{ to }} itself
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[to].ansible_host }}:{{ item.port }}{{ (item.health_check | default({})).path | default('/') }}"
+        status_code: [200, 204, 301, 302, 303, 307, 308, 401, 403]
+        timeout: 10
+      loop: "{{ swarm_move_entry.routes | default([]) }}"
+      loop_control:
+        label: "{{ item.host | default(item.port) }}"
+      register: swarm_move_probe
+      until: swarm_move_probe is succeeded
+      retries: 12
+      delay: 5
+      when: not ansible_check_mode
+
+    - name: Probe each route through Traefik
+      ansible.builtin.uri:
+        url: "https://{{ item.host }}{{ (item.health_check | default({})).path | default('/') }}"
+        status_code: [200, 204, 301, 302, 303, 307, 308, 401, 403]
+        timeout: 10
+      loop: "{{ swarm_move_entry.routes | default([]) | selectattr('host', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.host }}"
+      register: swarm_move_route
+      until: swarm_move_route is succeeded
+      retries: 12
+      delay: 5
+      when: not ansible_check_mode
+
+    # 8. Record -----------------------------------------------------------------
+
+    - name: Post the move to the feed
+      ansible.builtin.shell:
+        cmd: >-
+          PATH="$HOME/.local/bin:$PATH" feed post
+          "swarm stack {{ stack }} moved from {{ swarm_move_from }} to {{ to }}"
+          --severity info --source swarm --tag "swarm move"
+      changed_when: true
+      failed_when: false

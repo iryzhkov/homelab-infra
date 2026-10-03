@@ -39,6 +39,40 @@
 {%     endfor %}
 {%   endfor %}
 {% endfor %}
+{#
+  Swarm stacks (the swarm_stacks_* lists in inventory/group_vars/swarm/).
+  Through the routing mesh a published port answers on every worker, so a
+  route's service lists every worker, each probed by the route's health check.
+  A Swarm entry wins over the host_vars entry of the same stack name, which
+  stays until the phase 5 cleanup: that stack's host_vars routes are dropped.
+  A route with an explicit url keeps it. While Authentik runs in Swarm, the
+  forward-auth middleware, which takes one address, uses the first worker.
+#}
+{% set swarm = namespace(names=hostvars | swarm_stack_names(groups), retired=[]) %}
+{% for h in groups['docker_hosts'] | sort %}
+{%   for stack in hostvars[h].stacks | default([]) if stack.name in swarm.names %}
+{%     for route in stack.routes | default([]) %}
+{%       set _ = swarm.retired.append(route.name | default(route.host.split('.')[0])) %}
+{%     endfor %}
+{%   endfor %}
+{% endfor %}
+{% set ns.routes = ns.routes | rejectattr('name', 'in', swarm.retired) | list %}
+{% for stack in hostvars | swarm_stacks(groups) %}
+{%   for route in stack.routes | default([]) %}
+{%     set urls = [] %}
+{%     if route.url is defined %}
+{%       set _ = urls.append(route.url) %}
+{%     elif route.port is defined %}
+{%       for address in hostvars | stack_host_ips(groups, stack.name) %}
+{%         set _ = urls.append((route.scheme | default('http')) ~ '://' ~ address ~ ':' ~ route.port) %}
+{%       endfor %}
+{%     endif %}
+{%     set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]), url=urls | first | default(''), urls=urls)) %}
+{%     if stack.name == 'authentik' %}
+{%       set ns.authentik_url = urls | first | default('') %}
+{%     endif %}
+{%   endfor %}
+{% endfor %}
 {% for route in traefik_static_routes | default([]) %}
 {%   set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]))) %}
 {% endfor %}
@@ -87,7 +121,9 @@ http:
           timeout: {{ check.timeout | default(traefik_health_check.timeout) }}
 {% endif %}
         servers:
-          - url: "{{ route.url }}"
+{% for url in route.urls | default([route.url]) %}
+          - url: "{{ url }}"
+{% endfor %}
 
 {% endfor %}
   middlewares:

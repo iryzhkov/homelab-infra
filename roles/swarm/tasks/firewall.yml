@@ -1,0 +1,201 @@
+---
+# Swarm's ports, and the routing mesh unreachable from the interfaces it must
+# not serve:
+#   control (2377/tcp, 7946/tcp+udp)  only from the other managers' mesh
+#                                     addresses, on nebula1
+#   data (4789/udp)                   only from the other worker's VLAN 70
+#                                     address, on the VLAN 70 interface
+#   routing mesh                      dropped in DOCKER-USER when it arrives
+#                                     on a blocked interface
+#
+# The routing mesh DNATs a published port in PREROUTING and forwards it to the
+# ingress sandbox on docker_gwbridge, so INPUT rules never see it; it is
+# filtered in DOCKER-USER by the interface it arrived on.
+#
+# Three mechanisms, one per kind of host:
+#   homelab  no host firewall: swarm-firewall.service keeps two chains of its
+#            own, before Docker starts
+#   normandy ufw (Omarchy, ufw-docker), whose init flushes the built-in chains,
+#            so the rules are ufw rules
+#   oci      hand-written iptables-persistent: rules.v4 and the live tables
+#            are edited together (oci_firewall.yml)
+
+- name: Keep OCI's persistent ruleset
+  ansible.builtin.include_tasks: oci_firewall.yml
+  when: swarm_firewall == 'iptables_persistent'
+
+- name: Ask whether ufw is active
+  ansible.builtin.command:
+    argv: [ufw, status]
+  become: true
+  register: swarm_ufw_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: swarm_firewall == 'unit'
+
+- name: Use ufw where it is active
+  when:
+    - swarm_firewall == 'unit'
+    - "'Status: active' in swarm_ufw_status.stdout | default('')"
+  block:
+    # The first layout (2026-10-02 20:19) let the control ports in from the
+    # peer's VLAN 70 address; the control plane is on the mesh now.
+    - name: Retire the VLAN 70 control-port rules
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - delete
+          - allow
+          - in
+          - "on"
+          - "{{ swarm_iface }}"
+          - from
+          - "{{ hostvars[item.0].ansible_host }}"
+          - to
+          - any
+          - port
+          - "{{ item.1.port }}"
+          - proto
+          - "{{ item.1.proto }}"
+      become: true
+      loop: "{{ swarm_worker_peers | product(swarm_control_ports) | list }}"
+      loop_control:
+        label: "{{ item.0 }} {{ item.1.port }}/{{ item.1.proto }}"
+      register: swarm_ufw_retire
+      changed_when: "'non-existent' not in swarm_ufw_retire.stdout"
+
+    # nebula1 is allowed wholesale further down normandy's list, so the Swarm
+    # ports are closed on it explicitly, above that rule. Inserted at position
+    # 1, denies first and the manager allows after them, so the allows end on
+    # top; a rule already present is skipped and keeps its place.
+    - name: Close the Swarm ports on the mesh
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - insert
+          - "1"
+          - deny
+          - in
+          - "on"
+          - "{{ swarm_mesh_iface }}"
+          - to
+          - any
+          - port
+          - "{{ item.port }}"
+          - proto
+          - "{{ item.proto }}"
+          - comment
+          - swarm closed on mesh
+      become: true
+      loop: "{{ swarm_control_ports + swarm_data_ports }}"
+      loop_control:
+        label: "{{ item.port }}/{{ item.proto }}"
+      register: swarm_ufw_deny
+      changed_when: "'Skipping' not in swarm_ufw_deny.stdout"
+
+    - name: Open the control ports to the other managers on the mesh
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - insert
+          - "1"
+          - allow
+          - in
+          - "on"
+          - "{{ swarm_mesh_iface }}"
+          - from
+          - "{{ hostvars[item.0].swarm_advertise_addr }}"
+          - to
+          - any
+          - port
+          - "{{ item.1.port }}"
+          - proto
+          - "{{ item.1.proto }}"
+          - comment
+          - swarm manager {{ item.0 }}
+      become: true
+      loop: "{{ swarm_manager_peers | product(swarm_control_ports) | list }}"
+      loop_control:
+        label: "{{ item.0 }} {{ item.1.port }}/{{ item.1.proto }}"
+      register: swarm_ufw_allow
+      changed_when: "'Skipping' not in swarm_ufw_allow.stdout"
+
+    - name: Open the data port to the other worker on VLAN 70
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - allow
+          - in
+          - "on"
+          - "{{ swarm_iface }}"
+          - from
+          - "{{ hostvars[item.0].swarm_data_path_addr }}"
+          - to
+          - any
+          - port
+          - "{{ item.1.port }}"
+          - proto
+          - "{{ item.1.proto }}"
+          - comment
+          - swarm peer {{ item.0 }}
+      become: true
+      loop: "{{ swarm_worker_peers | product(swarm_data_ports) | list }}"
+      loop_control:
+        label: "{{ item.0 }} {{ item.1.port }}/{{ item.1.proto }}"
+      register: swarm_ufw_data
+      changed_when: "'Skipping' not in swarm_ufw_data.stdout"
+
+    - name: Keep the routing mesh off the blocked interfaces
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - route
+          - deny
+          - in
+          - "on"
+          - "{{ item }}"
+          - out
+          - "on"
+          - docker_gwbridge
+          - comment
+          - swarm ingress off {{ item }}
+      become: true
+      loop: "{{ swarm_ingress_blocked_ifaces }}"
+      register: swarm_ufw_route
+      changed_when: "'Skipping' not in swarm_ufw_route.stdout"
+
+- name: Use a firewall unit where there is no ufw
+  when:
+    - swarm_firewall == 'unit'
+    - "'Status: active' not in swarm_ufw_status.stdout | default('')"
+  block:
+    - name: Install the firewall script
+      ansible.builtin.template:
+        src: swarm-firewall.j2
+        dest: /usr/local/sbin/swarm-firewall
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+      register: swarm_fw_script
+
+    - name: Install the firewall unit
+      ansible.builtin.template:
+        src: swarm-firewall.service.j2
+        dest: /etc/systemd/system/swarm-firewall.service
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+      register: swarm_fw_unit
+
+    - name: Enable the firewall unit and apply it now
+      ansible.builtin.systemd_service:
+        name: swarm-firewall.service
+        daemon_reload: "{{ swarm_fw_unit is changed }}"
+        enabled: true
+        state: "{{ 'restarted' if (swarm_fw_script is changed or swarm_fw_unit is changed) else 'started' }}"
+      become: true
+      # A check run cannot ask systemd about a unit it has not installed.
+      when: not (ansible_check_mode and swarm_fw_unit is changed)

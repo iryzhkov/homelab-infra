@@ -1,0 +1,122 @@
+---
+# A Swarm manager: firewall first, so the ports are closed to everything but
+# the other managers before the daemon listens on them; then (workers) the
+# state root; then init (the bootstrap manager) or join (everyone else),
+# unlock when locked, availability and labels.
+#
+# Neither init nor join restarts Docker or touches a running Compose
+# container: they add the ingress and docker_gwbridge networks and start
+# swarmkit inside the existing daemon. Leaving does touch them: see the
+# rebuild block below.
+#
+# Docker is driven through its CLI because no host has the Docker SDK for
+# Python that community.docker's swarm modules need.
+
+- name: Require mesh control-plane addresses and, on workers, a VLAN 70 data path
+  ansible.builtin.assert:
+    that:
+      - swarm_advertise_addr is match('^10\.42\.0\.')
+      - >-
+        inventory_hostname not in groups['swarm_workers']
+        or (swarm_data_path_addr is match('^192\.168\.70\.')
+            and swarm_pool_path is match('^/') and swarm_iface | length > 0)
+    fail_msg: >-
+      {{ inventory_hostname }}: advertise {{ swarm_advertise_addr }}, data path
+      {{ swarm_data_path_addr }}; see the swarm group in inventory/hosts.yml.
+    quiet: true
+
+- name: Load the Swarm secrets
+  community.sops.load_vars:
+    file: "{{ swarm_secret_file }}"
+    name: swarm_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Restrict the Swarm ports and the routing mesh
+  ansible.builtin.include_tasks: firewall.yml
+
+- name: Keep the state root on the pool disk
+  ansible.builtin.include_tasks: state_root.yml
+  when: inventory_hostname in groups['swarm_workers']
+
+- name: Read this node's Swarm state and address
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+      - --format
+      - "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }} {{ '{{' }}.Swarm.NodeAddr{{ '}}' }}"
+  register: swarm_state_raw
+  changed_when: false
+  check_mode: false
+
+- name: Remember it
+  ansible.builtin.set_fact:
+    swarm_state: "{{ (swarm_state_raw.stdout | trim).split(' ') | first }}"
+    swarm_node_addr_now: "{{ (swarm_state_raw.stdout | trim).split(' ')[1] | default('') }}"
+
+# Addresses are fixed when a node joins. A node in a cluster on other
+# addresses leaves it, but only when the run says -e swarm_rebuild=true:
+# leaving destroys every service and secret held in that cluster.
+- name: Leave a cluster built on other addresses
+  when:
+    - swarm_state in ['active', 'locked']
+    - swarm_node_addr_now != swarm_advertise_addr
+  block:
+    - name: Refuse to leave unasked
+      ansible.builtin.assert:
+        that: swarm_rebuild | default(false) | bool
+        fail_msg: >-
+          {{ inventory_hostname }} is in a Swarm on {{ swarm_node_addr_now }},
+          the inventory says {{ swarm_advertise_addr }}. Re-creating it removes
+          every Swarm service; run with -e swarm_rebuild=true to do it.
+        quiet: true
+
+    - name: List the running Compose containers before leaving
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --quiet
+          - --filter
+          - label=com.docker.compose.project
+      register: swarm_compose_running
+      changed_when: false
+
+    - name: Leave the old cluster
+      ansible.builtin.command:
+        argv: [docker, swarm, leave, --force]
+      changed_when: true
+
+    # `docker swarm leave --force` tears down the libnetwork agent, and with
+    # it the embedded DNS records (127.0.0.11) of every container already
+    # running on a local bridge network. The containers keep running and
+    # external names still resolve, but Compose service names such as
+    # `postgresql` or `db` return NXDOMAIN until the container is restarted.
+    # This took Authentik, Miniflux, Grafana and Immich down on 2026-10-02;
+    # see docs/transition/phase5/2026-10-02-incident-authentik.md.
+    # Restarting re-registers each endpoint; the daemon itself is untouched.
+    - name: Restart the Compose containers so their DNS records come back
+      ansible.builtin.command:
+        argv: "{{ ['docker', 'restart', '--timeout', '30'] + swarm_compose_running.stdout_lines }}"
+      when: swarm_compose_running.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Count this node as outside any cluster
+      ansible.builtin.set_fact:
+        swarm_state: inactive
+
+- name: Unlock a locked manager
+  ansible.builtin.include_tasks: unlock.yml
+  when: swarm_state == 'locked'
+
+- name: Initialise the cluster
+  ansible.builtin.include_tasks: init.yml
+  when: inventory_hostname == swarm_bootstrap_manager
+
+- name: Join the cluster
+  ansible.builtin.include_tasks: join.yml
+  when: inventory_hostname != swarm_bootstrap_manager
+
+- name: Keep the node labels and availability
+  ansible.builtin.include_tasks: labels.yml

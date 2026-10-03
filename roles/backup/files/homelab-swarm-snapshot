@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Hourly snapshots of the stateful Swarm stacks pinned to this worker, and
+their copy on the other worker.
+
+Deployed by roles/backup (tasks/swarm.yml) to both Swarm workers and run as
+root by `homelab-backup-run hourly`. The configuration, rendered from the
+union of the swarm_stacks_* inventory variables, is
+/etc/swarm-sync/config.json:
+
+    {"host": "homelab", "pool": "/mnt/docker-data", "state_root": "/srv/swarm",
+     "peer": {"name": "normandy", "address": "192.168.70.234", "user": "swarmsync"},
+     "key": "/etc/swarm-sync/id_ed25519", "known_hosts": "/etc/swarm-sync/known_hosts",
+     "offsite": [{"source": "...", "remote": "b2:..."}], "rclone_config": "...",
+     "stacks": [{"name": "vaultwarden", "snapshot": {...}}]}
+
+A stack is this worker's to snapshot only while <state_root>/<stack>/.swarm-owner
+names this host. The move playbook (playbooks/swarm-move.yml) and the stack's
+cutover write that file, so exactly one worker snapshots a stack at a time and
+the other one holds its copy.
+
+For each stack owned here:
+
+  sqlite    homelab-sqlite-backup into <pool>/snapshots/<stack>/<name>/
+  postgres  pg_dump -Fc inside the running task into
+            <pool>/snapshots/<stack>/<database>_<stamp>.dump, keep N
+  files     nothing local
+
+then, to the peer, over a key that can only run `rrsync -wo` into this
+host's peer directory there:
+
+  <pool>/snapshots/<stack>/      -> <stack>/snapshots/
+  <state_root>/<stack>/<dir>/    -> <stack>/files/<dir>/   (each `files:` entry)
+  a timestamp                    -> <stack>/sync/last-sync (read by the move playbook)
+
+and finally, on the worker holding the Backblaze credentials, `rclone sync`
+of each `offsite` source that holds anything.
+
+With no stack in the configuration the run does nothing at all: no SSH, no
+rclone, no output.
+
+Exit status is non-zero when any step failed; the caller reports it to the
+feed and the phone.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+SQLITE_BACKUP = os.environ.get("HOMELAB_SQLITE_BACKUP", "/usr/local/sbin/homelab-sqlite-backup")
+
+
+class Run:
+    def __init__(self, config, dry_run=False):
+        self.config = config
+        self.dry_run = dry_run
+        self.failures = 0
+        self.stamp = time.strftime("%Y-%m-%d_%H%M")
+
+    def log(self, message):
+        print(message, flush=True)
+
+    def fail(self, message):
+        print("FAILED: " + message, file=sys.stderr, flush=True)
+        self.failures += 1
+
+    def run(self, argv, **kwargs):
+        """Run a command; a dry run prints it instead."""
+        if self.dry_run:
+            self.log("would run: " + " ".join(argv))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return subprocess.run(argv, text=True, capture_output=True, **kwargs)
+
+    # Paths -------------------------------------------------------------
+
+    def state_dir(self, stack):
+        return os.path.join(self.config["state_root"], stack)
+
+    def snapshot_dir(self, stack):
+        return os.path.join(self.config["pool"], "snapshots", stack)
+
+    def owned_here(self, stack):
+        try:
+            with open(os.path.join(self.state_dir(stack), ".swarm-owner")) as handle:
+                return handle.read().strip() == self.config["host"]
+        except FileNotFoundError:
+            return False
+
+    # Local snapshots ---------------------------------------------------
+
+    def sqlite(self, stack, entries):
+        sources = {}
+        for entry in entries:
+            spec = {"keep": entry.get("keep", 48)}
+            if "glob" in entry:
+                spec["glob"] = entry["glob"]
+            else:
+                spec["path"] = entry["path"]
+            sources[entry["name"]] = spec
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(sources, handle)
+            sources_file = handle.name
+        try:
+            os.makedirs(self.snapshot_dir(stack), mode=0o700, exist_ok=True)
+            result = self.run([SQLITE_BACKUP, "--config", sources_file,
+                               "--out", self.snapshot_dir(stack), "--owner", "root"])
+        finally:
+            os.unlink(sources_file)
+        for line in (result.stdout + result.stderr).splitlines():
+            self.log(f"{stack}: {line}")
+        if result.returncode != 0:
+            self.fail(f"{stack}: SQLite snapshot")
+
+    def service_stopped(self, service):
+        """True when the service is deliberately scaled to zero (a move)."""
+        result = self.run(["docker", "service", "inspect", "--format",
+                           "{{.Spec.Mode.Replicated.Replicas}}", service])
+        return result.returncode == 0 and result.stdout.strip() == "0"
+
+    def postgres(self, stack, entries):
+        directory = self.snapshot_dir(stack)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        for entry in entries:
+            service, database = entry["service"], entry["database"]
+            found = self.run(["docker", "ps", "-q", "--filter",
+                              f"label=com.docker.swarm.service.name={service}"])
+            containers = found.stdout.split()
+            if self.dry_run:
+                containers = ["<task>"]
+            if not containers:
+                if self.service_stopped(service):
+                    self.log(f"{stack}: {service} is scaled to 0, no dump")
+                else:
+                    self.fail(f"{stack}: no running task of {service} on this node")
+                continue
+            dump = os.path.join(directory, f"{database}_{self.stamp}.dump")
+            partial = dump + ".partial"
+            argv = ["docker", "exec", containers[0], "pg_dump", "-Fc",
+                    "-U", entry["user"], database]
+            if self.dry_run:
+                self.log("would run: " + " ".join(argv) + " > " + dump)
+                continue
+            with open(partial, "wb") as out:
+                result = subprocess.run(argv, stdout=out, stderr=subprocess.PIPE)
+            if result.returncode != 0 or os.path.getsize(partial) == 0:
+                os.unlink(partial)
+                self.fail(f"{stack}: pg_dump of {database}: "
+                          + result.stderr.decode(errors="replace").strip())
+                continue
+            os.rename(partial, dump)
+            removed = prune(directory, f"{database}_", ".dump", entry.get("keep", 48))
+            self.log(f"{stack}: {database} {os.path.getsize(dump)} bytes"
+                     + (f", {removed} old dump(s) removed" if removed else ""))
+
+    # Peer copy ---------------------------------------------------------
+
+    def ssh_command(self):
+        return (f"ssh -i {self.config['key']} -o IdentitiesOnly=yes -o BatchMode=yes"
+                f" -o ConnectTimeout=15 -o StrictHostKeyChecking=yes"
+                f" -o UserKnownHostsFile={self.config['known_hosts']}")
+
+    def peer_target(self, path):
+        peer = self.config["peer"]
+        return f"{peer['user']}@{peer['address']}:{path}"
+
+    def rsync(self, source, destination, extra=()):
+        argv = ["rsync", "-a", "--numeric-ids", "--delete", "--mkpath",
+                "-e", self.ssh_command(), *extra, source, self.peer_target(destination)]
+        return self.run(argv)
+
+    def to_peer(self, stack, snapshot):
+        ok = True
+        if os.path.isdir(self.snapshot_dir(stack)):
+            result = self.rsync(self.snapshot_dir(stack) + "/", f"{stack}/snapshots/")
+            if result.returncode != 0:
+                self.fail(f"{stack}: snapshots to {self.config['peer']['name']}: "
+                          + result.stderr.strip())
+                ok = False
+        excludes = [f"--exclude={pattern}" for pattern in snapshot.get("exclude", [])]
+        for directory in snapshot.get("files", []):
+            relative = files_relative(self.state_dir(stack), directory)
+            if relative is None:
+                self.fail(f"{stack}: {directory} is not under {self.state_dir(stack)}")
+                ok = False
+                continue
+            if not os.path.isdir(directory):
+                # Never mirror a missing directory: --delete would empty the copy.
+                self.fail(f"{stack}: {directory} is missing")
+                ok = False
+                continue
+            result = self.rsync(directory.rstrip("/") + "/",
+                                f"{stack}/files/{relative}/", excludes)
+            if result.returncode != 0:
+                self.fail(f"{stack}: {directory} to {self.config['peer']['name']}: "
+                          + result.stderr.strip())
+                ok = False
+        if ok:
+            # The newest complete copy, for the move playbook's freshness check.
+            # Sent as a directory: through rrsync, rsync could create a single
+            # file but not replace it ("could not make way for new regular
+            # file", 2026-10-02).
+            with tempfile.TemporaryDirectory() as scratch:
+                with open(os.path.join(scratch, "last-sync"), "w") as handle:
+                    handle.write(f"{int(time.time())} {self.config['host']}\n")
+                result = self.rsync(scratch + "/", f"{stack}/sync/")
+            if result.returncode != 0:
+                self.fail(f"{stack}: timestamp to {self.config['peer']['name']}: "
+                          + result.stderr.strip())
+
+    # Offsite -----------------------------------------------------------
+
+    def offsite(self):
+        for entry in self.config.get("offsite", []):
+            source = entry["source"]
+            if not os.path.isdir(source) or not os.listdir(source):
+                continue
+            result = self.run(["rclone", "sync", source, entry["remote"],
+                               "--config", self.config["rclone_config"]])
+            if result.returncode != 0:
+                self.fail(f"rclone sync {source} to {entry['remote']}: "
+                          + result.stderr.strip()[-2000:])
+
+    def main(self):
+        stacks = self.config.get("stacks", [])
+        if not stacks:
+            return 0
+        for stack in stacks:
+            name, snapshot = stack["name"], stack["snapshot"]
+            if not self.owned_here(name):
+                continue
+            if snapshot.get("sqlite"):
+                self.sqlite(name, snapshot["sqlite"])
+            if snapshot.get("postgres"):
+                self.postgres(name, snapshot["postgres"])
+            self.to_peer(name, snapshot)
+        self.offsite()
+        return 1 if self.failures else 0
+
+
+def files_relative(state_dir, directory):
+    """The path of a `files:` entry below its stack's state directory."""
+    relative = os.path.relpath(os.path.normpath(directory), os.path.normpath(state_dir))
+    if relative == "." or relative.startswith(".."):
+        return None
+    return relative
+
+
+def prune(directory, prefix, suffix, keep):
+    """Keep the newest `keep` files named prefix*suffix; the stamp sorts by time."""
+    found = sorted((entry for entry in os.listdir(directory)
+                    if entry.startswith(prefix) and entry.endswith(suffix)), reverse=True)
+    for stale in found[keep:]:
+        os.unlink(os.path.join(directory, stale))
+    return len(found[keep:])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--config", default="/etc/swarm-sync/config.json")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print what would run, change nothing")
+    args = parser.parse_args()
+    if not os.path.exists(args.config):
+        # Not a Swarm worker: nothing to do.
+        return 0
+    with open(args.config) as handle:
+        config = json.load(handle)
+    return Run(config, dry_run=args.dry_run).main()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
