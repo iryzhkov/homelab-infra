@@ -19,11 +19,18 @@ keepalived_router_id: 20
 # Priority falls with the position in the edge_proxy group, so the first
 # member (public-api) is preferred at an election. With nopreempt it does not
 # take the address back from a healthy holder when it returns.
-keepalived_priority: "{{ 150 - 50 * groups['edge_proxy'].index(inventory_hostname) }}"
+# Never below 10, so a fourth member or later still has a valid priority (1 to
+# 254); members from the third on share 50 or less, which nopreempt tolerates.
+keepalived_priority: "{{ [150 - 50 * groups['edge_proxy'].index(inventory_hostname), 10] | max }}"
 
-# Traefik's API, published on loopback only; an answer means the process is
-# up and its configuration loaded. 2 s between checks, two failures to drop.
+# The check passes only if both answer, 2 s between checks, two failures to
+# drop:
+#   Traefik's API, published on loopback only: the process is up and its
+#   configuration loaded;
+#   the websecure entrypoint, for a name no router claims: TLS is served and
+#   the catch-all redirect answers, which needs no backend.
 keepalived_check_url: http://127.0.0.1:8080/api/version
+keepalived_check_name: edge-health.ryzhkov.dev
 keepalived_check_interval: 2
 keepalived_check_fall: 2
 keepalived_check_rise: 2

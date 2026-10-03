@@ -103,6 +103,9 @@
       ansible.builtin.command:
         cmd: dig +short +timeout=3 +tries=2 @{{ adguard_origin.ip }} {{ adguard_probe_name }}
       register: dns_probe
+      # A read, so it runs in check mode too; otherwise a check run that finds a
+      # difference fails here and reports a rollback it never did.
+      check_mode: false
       until: dns_probe.rc == 0 and (dns_probe.stdout | trim | length > 0)
       retries: 5
       delay: 3

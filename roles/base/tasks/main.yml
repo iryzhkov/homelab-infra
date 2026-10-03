@@ -21,6 +21,9 @@
 #                           the same way
 #   qemu_guest_agent: true  qemu-guest-agent installed and running
 #   docker_install: true    Docker Engine and Compose from download.docker.com
+#   swapfile_size_mb        a swapfile of that size
+#   unattended_upgrades_absent  no automatic package upgrades
+#   resolved_llmnr          systemd-resolved's LLMNR setting
 #
 # Everything reports to InfluxDB with write-only tokens decrypted here, on the
 # controller, from secrets/hardware-metrics.sops.yaml.
@@ -90,3 +93,21 @@
 - name: Install Docker
   ansible.builtin.include_tasks: docker_install.yml
   when: docker_install | bool
+
+- name: Keep the swapfile
+  ansible.builtin.include_tasks: swapfile.yml
+  when: swapfile_size_mb | int > 0
+
+# One policy for hosts that must not change underneath a running service: the
+# edge VMs, where an upgrade of docker-ce or containerd restarts every
+# container at an hour nobody chose. Upgrades there are a converge.
+- name: Remove unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: absent
+  become: true
+  when: unattended_upgrades_absent | bool
+
+- name: Set systemd-resolved's LLMNR
+  ansible.builtin.include_tasks: resolved.yml
+  when: resolved_llmnr | length > 0

@@ -1,0 +1,35 @@
+---
+# systemd-resolved's LLMNR, in a drop-in this role owns. The edge VMs answer
+# on the DMZ VLAN and have no use for link-local name resolution there.
+
+- name: Look for systemd-resolved
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/systemd-resolved
+  register: resolved_binary
+
+- name: Configure systemd-resolved
+  when: resolved_binary.stat.exists
+  become: true
+  block:
+    - name: Create the drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Write the LLMNR setting
+      ansible.builtin.copy:
+        content: |
+          # Written by homelab-infra roles/base (resolved_llmnr).
+          [Resolve]
+          LLMNR={{ resolved_llmnr }}
+        dest: /etc/systemd/resolved.conf.d/homelab-llmnr.conf
+        mode: "0644"
+      register: resolved_conf
+
+    # A restart of resolved drops its cache for a moment; nothing else.
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd_service:
+        name: systemd-resolved
+        state: restarted
+      when: resolved_conf is changed

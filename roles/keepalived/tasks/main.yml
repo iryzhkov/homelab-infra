@@ -32,7 +32,10 @@
 # installing it before the file exists does not start it.
 - name: Install keepalived
   ansible.builtin.apt:
-    name: keepalived
+    name:
+      - keepalived
+      # The Traefik check runs it.
+      - curl
     state: present
     update_cache: true
     cache_valid_time: 3600

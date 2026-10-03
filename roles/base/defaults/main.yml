@@ -50,6 +50,18 @@ qemu_guest_agent: false
 # Off by default, so that the hosts whose Docker predates this repository are
 # not touched. Installing never restarts a running daemon.
 docker_install: false
+
+# A swapfile at /swapfile of this many MiB, active and in /etc/fstab. 0 leaves
+# swap alone. Creating it never restarts anything.
+swapfile_size_mb: 0
+
+# true: unattended-upgrades is removed, so no package upgrade restarts
+# Docker or a service behind the host's back. false leaves it as it is.
+unattended_upgrades_absent: false
+
+# systemd-resolved's LLMNR setting ("yes", "no", "resolve"), in a drop-in.
+# Empty leaves it alone; ignored on a host without systemd-resolved.
+resolved_llmnr: ""
 docker_install_packages:
   - docker-ce
   - docker-ce-cli

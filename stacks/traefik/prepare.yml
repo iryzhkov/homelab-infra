@@ -7,6 +7,17 @@
 # Used by the edge VMs built from the template. public-api's directories
 # predate this repository and its stack entry does not name this file.
 
+# The stack root and the stack directory, 0755 as on public-api, rather than
+# the 0775 a fresh user's umask gives them.
+- name: Keep the stack directories at 0755
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ stack_root }}"
+    - "{{ stack_dir }}"
+
 - name: Create Traefik's bind-mounted directories
   ansible.builtin.file:
     path: "{{ stack_dir }}/{{ item }}"
