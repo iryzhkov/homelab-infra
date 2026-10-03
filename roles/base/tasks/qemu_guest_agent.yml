@@ -1,0 +1,19 @@
+---
+# The Debian genericcloud image ships without the guest agent, which Proxmox
+# uses for a clean shutdown, the guest's addresses and fs-freeze during backup.
+
+- name: Install qemu-guest-agent
+  ansible.builtin.apt:
+    name: qemu-guest-agent
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+
+# The unit is static (started by udev when the virtio serial port appears),
+# so it is started rather than enabled.
+- name: Start qemu-guest-agent
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent
+    state: started
+  become: true

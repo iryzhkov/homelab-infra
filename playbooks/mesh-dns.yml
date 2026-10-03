@@ -1,0 +1,10 @@
+---
+# DNS for Nebula mesh clients on every edge VM; see roles/mesh_dns.
+#
+#   ansible-playbook playbooks/mesh-dns.yml --check --diff
+
+- name: Configure mesh DNS on the edge VMs
+  hosts: edge_proxy
+  gather_facts: false
+  roles:
+    - mesh_dns

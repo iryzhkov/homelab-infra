@@ -1,0 +1,8 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# keepalived's track_script for Traefik: exit 0 while Traefik's API answers
+# and the websecure entrypoint serves the catch-all (a 302, which curl -f
+# passes) for a name no router claims.
+/usr/bin/curl -fsS -o /dev/null --max-time 2 {{ keepalived_check_url }} || exit 1
+exec /usr/bin/curl -fsSk -o /dev/null --max-time 2 \
+    --resolve {{ keepalived_check_name }}:443:127.0.0.1 https://{{ keepalived_check_name }}/

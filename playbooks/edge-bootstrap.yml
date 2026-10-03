@@ -1,0 +1,75 @@
+---
+# First certificate on a new edge proxy, before it is given any routes.
+#
+# Traefik requests a certificate for every router whose host no certificate in
+# its store covers yet, and it handles routers in no particular order. Handed
+# the full dynamic configuration with an empty acme.json, it would request one
+# certificate per hostname in parallel with the wildcard, against the same
+# registered domain's weekly Let's Encrypt limit public-api renews under. So the
+# catch-all, which carries the ryzhkov.dev + *.ryzhkov.dev wildcard, goes in
+# first, alone; once that certificate is served, every later router is
+# covered by it and the full configuration requests nothing more.
+#
+# Run once per new edge VM, after its traefik stack is up and before
+# playbooks/traefik.yml:
+#   ansible-playbook playbooks/site.yml -l public-api-b
+#   ansible-playbook playbooks/edge-bootstrap.yml -l public-api-b
+#   ansible-playbook playbooks/traefik.yml -l public-api-b
+#
+# On a host that already serves the wildcard it changes nothing.
+
+- name: Issue the wildcard certificate on a new edge proxy
+  hosts: edge_proxy
+  gather_facts: false
+  vars:
+    # A name no router claims, so only the catch-all can answer it.
+    edge_bootstrap_probe_name: edge-bootstrap-probe.ryzhkov.dev
+    edge_bootstrap_probe: >-
+      echo | openssl s_client -connect 127.0.0.1:443
+      -servername {{ edge_bootstrap_probe_name }} 2>/dev/null
+      | openssl x509 -noout -issuer 2>/dev/null
+  tasks:
+    - name: Ask which certificate Traefik serves for an unclaimed name
+      ansible.builtin.shell: "{{ edge_bootstrap_probe }}"
+      register: edge_bootstrap_before
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Issue the wildcard first
+      when: "\"Let's Encrypt\" not in edge_bootstrap_before.stdout"
+      block:
+        - name: Refuse to bootstrap a host that already has routes
+          ansible.builtin.stat:
+            path: "{{ traefik_dynamic_dir }}/generated.yml"
+          register: edge_bootstrap_generated
+
+        - name: Stop if the full configuration is already installed
+          ansible.builtin.assert:
+            that: not edge_bootstrap_generated.stat.exists
+            fail_msg: >-
+              {{ traefik_dynamic_dir }}/generated.yml exists but Traefik does
+              not serve a Let's Encrypt certificate. Look at Traefik's log
+              before going further; requesting more would only spend the rate
+              limit.
+
+        - name: Install the catch-all alone
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../stacks/traefik/dynamic/catchall.yml"
+            dest: "{{ traefik_dynamic_dir }}/catchall.yml"
+            mode: "0644"
+
+        # DNS-01 with delayBeforeCheck 10 normally finishes inside a minute.
+        # One attempt only: a failure is diagnosed, not retried in a loop.
+        - name: Wait for Traefik to serve the wildcard
+          ansible.builtin.shell: "{{ edge_bootstrap_probe }}"
+          register: edge_bootstrap_after
+          until: "\"Let's Encrypt\" in edge_bootstrap_after.stdout"
+          retries: 30
+          delay: 10
+          changed_when: false
+          when: not ansible_check_mode
+
+        - name: Report the issuer
+          ansible.builtin.debug:
+            msg: "{{ edge_bootstrap_after.stdout | default('check mode: not waited for') }}"

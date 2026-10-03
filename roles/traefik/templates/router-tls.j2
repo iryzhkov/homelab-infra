@@ -1,0 +1,17 @@
+{#
+  A router's tls block, included by every dynamic configuration file.
+
+  traefik_wildcard_only: each router asks for the ryzhkov.dev + *.ryzhkov.dev
+  wildcard instead of a certificate for its own host name, so an edge with an
+  empty acme.json issues one certificate rather than one per router, and the
+  store stops renewing single-name ones that nothing asks for. Without it the
+  block renders exactly as the hand-written files had it.
+#}
+      tls:
+        certResolver: "{{ traefik_cert_resolver }}"
+{% if traefik_wildcard_only | bool %}
+        domains:
+          - main: "{{ traefik_wildcard_domain }}"
+            sans:
+              - "*.{{ traefik_wildcard_domain }}"
+{% endif %}

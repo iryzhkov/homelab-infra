@@ -64,15 +64,19 @@ gatus_public_from_lan:
 # none to speak of.
 #   admin.yml     Proxmox across both nodes with a sticky cookie
 #   whisper.yml   the whisper failover pair and its path-rewriting middleware
+#   t3.yml        T3 Code, including the laptop's LAN-to-mesh failover pair.
+#                 Its addresses are still literal (two of its four backends
+#                 are machines this inventory does not describe, and one is a
+#                 Nebula address); it is rendered for the routers' tls block.
+#   cartest.yml   the Bellerophon test car on gaming-pc, adopted from
+#                 public-api on 2026-10-02
 traefik_rendered_files:
   - admin.yml
   - whisper.yml
-#   t3.yml        T3 Code, including the laptop's LAN-to-mesh failover pair.
-#                 Left verbatim: two of its four backends are machines this
-#                 inventory does not describe, and one is a Nebula address.
+  - t3.yml
+  - cartest.yml
 #   catchall.yml  the wildcard-certificate 404 for unclaimed hostnames
 traefik_static_files:
-  - t3.yml
   - catchall.yml
 
 # AdGuard Home runs in three LXCs rather than as containers on a Docker host.
@@ -110,7 +114,14 @@ adguard_probe_name: vault.ryzhkov.dev
 # This is the other half of the DNS story. Traefik's routing follows the host a
 # stack runs on; the name that reaches Traefik at all follows the host Traefik
 # runs on.
-edge_proxy_ip: "{{ hostvars[groups['edge_proxy'][0]].ansible_host }}"
+# Since the phase 4 cutover (2026-10-02) that is the edge VIP, held by
+# whichever edge_proxy member keepalived elects. Rollback: point it back at
+# "{{ hostvars[groups['edge_proxy'][0]].ansible_host }}".
+edge_proxy_ip: "{{ edge_vip }}"
+
+# The VRRP address keepalived floats between the edge_proxy members
+# (roles/keepalived), reserved on VLAN 20 outside the DHCP pool.
+edge_vip: 192.168.20.3
 
 # Machine-to-machine SSH inside the fleet. A key listed here is authorised on
 # the hosts whose host_vars name it in fleet_ssh_authorized, restricted to the

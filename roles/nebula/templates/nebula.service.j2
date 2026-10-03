@@ -1,0 +1,13 @@
+[Unit]
+Description=Nebula VPN
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nebula -config /etc/nebula/config.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -165,6 +165,17 @@ endpoints:
     interval: 1m
     conditions:
       - "[CONNECTED] == true"
+{% for edge in groups['edge_proxy'] %}
+  - name: Edge {{ edge }} TCP
+{% if inventory_hostname == 'normandy' %}
+    <<: *alerted
+{% endif %}
+    group: Internal static via {{ inventory_hostname }}
+    url: "tcp://{{ hostvars[edge].ansible_host }}:443"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+{% endfor %}
 {% if inventory_hostname == 'normandy' %}
   - name: Gatus homelab
     <<: *alerted

@@ -1,0 +1,36 @@
+---
+# One floating address in front of the edge_proxy group, held by whichever
+# member keepalived elects. See docs/transition/phase4/runbook-vip-cutover.md.
+
+# On since the cutover (2026-10-02). Set false to install and configure
+# keepalived without running it, which also drops the VIP (the rollback).
+keepalived_enabled: true
+
+# Reserved on VLAN 20 outside the DHCP pool (.6-.254); .2 is left free. The
+# cutover declares edge_vip in group_vars/all.yml, where AdGuard's play can
+# read it too, and points edge_proxy_ip at it.
+keepalived_vip: "{{ edge_vip | default('192.168.20.3') }}"
+keepalived_vip_prefix: 24
+
+# Unique among the VRRP routers on VLAN 20; nothing else there speaks VRRP
+# today. 20 for the VLAN.
+keepalived_router_id: 20
+
+# Priority falls with the position in the edge_proxy group, so the first
+# member (public-api) is preferred at an election. With nopreempt it does not
+# take the address back from a healthy holder when it returns.
+# Never below 10, so a fourth member or later still has a valid priority (1 to
+# 254); members from the third on share 50 or less, which nopreempt tolerates.
+keepalived_priority: "{{ [150 - 50 * groups['edge_proxy'].index(inventory_hostname), 10] | max }}"
+
+# The check passes only if both answer, 2 s between checks, two failures to
+# drop:
+#   Traefik's API, published on loopback only: the process is up and its
+#   configuration loaded;
+#   the websecure entrypoint, for a name no router claims: TLS is served and
+#   the catch-all redirect answers, which needs no backend.
+keepalived_check_url: http://127.0.0.1:8080/api/version
+keepalived_check_name: edge-health.ryzhkov.dev
+keepalived_check_interval: 2
+keepalived_check_fall: 2
+keepalived_check_rise: 2
