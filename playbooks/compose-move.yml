@@ -210,6 +210,24 @@
         - item.stdout | trim != item.item.split()[1]
         - "'@' not in item.item.split()[0]"
 
+    # The guest worker keeps a movable stack's state under <pool>/compose/
+    # (compose_data_dirs). Its root is root:root 0700 on both workers, so that
+    # copies such as Immich's Postgres directory (uid 999, which is another
+    # account on homelab) are not reachable through it; found open (0755) and
+    # closed by hand by E22 on 2026-10-03. The copies keep their own modes,
+    # which rsync -a carries. Home-host state directories (under ~/app or
+    # /mnt/data/immich) are not touched.
+    - name: Close the compose state root on both workers
+      ansible.builtin.file:
+        path: "{{ hostvars[item].swarm_pool_path }}/compose"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      delegate_to: "{{ item }}"
+      become: true
+      loop: "{{ groups['swarm_workers'] }}"
+
     # 3. Warm copy -------------------------------------------------------------------
 
     # rrsync allows one session per peer directory at a time, and the hourly
