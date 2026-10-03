@@ -1,0 +1,272 @@
+---
+# Move a movable Compose stack (compose_movable_stacks in group_vars/all.yml:
+# emby, immich) to the other household worker, for a host drain and back.
+#
+#   ansible-playbook playbooks/compose-move.yml -e stack=<emby|immich> -e to=<homelab|normandy> --check
+#   ansible-playbook playbooks/compose-move.yml -e stack=<emby|immich> -e to=<homelab|normandy>
+#
+# 1. Preconditions, all read-only (--check stops after them): the stack is
+#    movable, <to> is the other worker, the stack runs on <from> (its current
+#    placement) and not on <to>, <to>'s pool disk has room for two copies.
+# 2. Images: every image the running containers use is made present on <to>
+#    with the same image ID (a tag is streamed with docker save | docker load
+#    from <from>; a digest reference is pulled).
+# 3. Warm copy while the stack runs: <from>'s state directory
+#    (compose_data_dirs) to <to>'s peer directory over the restricted
+#    swarmsync key (peer-snapshots/<from>/compose/<stack>/), then locally into
+#    <to>'s state directory.
+# 4. Live data check, where the stack has one (Immich: row counts from its
+#    database while it runs).
+# 5. Stop and remove the stack's containers on <from> (removed, not only
+#    stopped, so that `restart: always` cannot start a second copy when <from>
+#    reboots). Named volumes and the state directory stay as they are.
+# 6. Cold copy, the same two steps; then both copies are compared with an
+#    rsync dry run, which must list nothing, and the cold data check runs
+#    (Emby: MediaItems in library.db on both sides).
+# 7. Placement: written to compose_placement_override_file on the controller
+#    (removed when the stack returns to its home host).
+# 8. Converge: site.yml -l <to> -e only=<stack> (deploys it, with <to>'s
+#    HOST_IP, data path and GPU groups); site.yml -l <from> -e only=<stack>
+#    (drops it from <from>'s drift manifest); traefik.yml (the route's
+#    backend); site.yml -e only=gatus on both workers (the checks).
+# 9. Verify: every container running and healthy on <to>, the route through
+#    the VIP, the live data check equal to step 4; post to the feed.
+#
+# Rollback before step 7: start the stack on <from> again with
+# `ansible-playbook playbooks/site.yml -l <from> -e only=<stack>`. After it:
+# move it back with this playbook (the copy on <from> is the cold copy, so the
+# warm copy back is quick).
+
+- name: Move a Compose stack to the other worker
+  hosts: "{{ to | default('no-target-given') }}"
+  gather_facts: false
+  vars:
+    cm_from: "{{ compose_placement[stack] }}"
+    cm_home: "{{ compose_placement_home[stack] }}"
+    cm_project: "{{ compose_movable_stacks[stack].name }}"
+    cm_src: "{{ compose_data_dirs[stack][cm_from] }}"
+    cm_dst: "{{ compose_data_dirs[stack][to] }}"
+    cm_stage: "{{ swarm_peer_snapshot_dir }}/{{ cm_from }}/compose/{{ stack }}"
+    cm_ssh: >-
+      ssh -i {{ swarm_sync_dir }}/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes
+      -o StrictHostKeyChecking=yes -o UserKnownHostsFile={{ swarm_sync_dir }}/known_hosts
+    cm_image_format: !unsafe '{{.Config.Image}} {{.Image}}'
+    cm_status_format: !unsafe '{{.Names}} {{.Status}}'
+    cm_check_flag: "{{ ['--check'] if ansible_check_mode else [] }}"
+    # Per stack: the route probed through the VIP, and the data checks.
+    # `live` runs on the host where the stack runs (before the stop on <from>,
+    # after the start on <to>); `cold` runs against the state directory {dir}
+    # on <from> after the stop and on <to> after the cold copy.
+    cm_checks:
+      emby:
+        probe: { host: emby.ryzhkov.dev, path: /System/Info/Public }
+        cold: >-
+          python3 -c "import sqlite3; c = sqlite3.connect('file:{dir}/data/library.db?mode=ro', uri=True);
+          print('MediaItems', c.execute('select count(*) from MediaItems').fetchone()[0])"
+      immich:
+        probe: { host: photos.ryzhkov.dev, path: /api/server/ping }
+        live: >-
+          docker exec immich_postgres psql -U iryzhkov -d immich -Atc
+          "select 'assets ' || count(*) from asset union all select 'users ' || count(*) from \"user\"
+          union all select 'albums ' || count(*) from album"
+  tasks:
+    # 1. Preconditions --------------------------------------------------------------
+
+    - name: Require a movable stack and the other worker
+      ansible.builtin.assert:
+        that:
+          - stack is defined and stack in compose_movable_stacks
+          - to in groups['swarm_workers']
+          - cm_from in groups['swarm_workers']
+          - cm_from != to
+          - stack in compose_data_dirs and to in compose_data_dirs[stack] and cm_from in compose_data_dirs[stack]
+        fail_msg: >-
+          Usage: -e stack=<{{ compose_movable_stacks.keys() | join('|') }}> -e to=<worker>.
+          {{ stack | default('?') }} is placed on {{ compose_placement[stack] | default('?') }}
+          ({{ compose_placement_override_file }} overrides the home placement).
+        quiet: true
+
+    - name: Read the stack's containers on {{ cm_from }}
+      ansible.builtin.command:
+        argv: [docker, ps, -a, --filter, "label=com.docker.compose.project={{ cm_project }}", --format, "{{ cm_status_format }}"]
+      delegate_to: "{{ cm_from }}"
+      register: cm_from_ps
+      changed_when: false
+      check_mode: false
+
+    - name: Read the stack's containers on {{ to }}
+      ansible.builtin.command:
+        argv: [docker, ps, -a, -q, --filter, "label=com.docker.compose.project={{ cm_project }}"]
+      register: cm_to_ps
+      changed_when: false
+      check_mode: false
+
+    - name: Measure the state directory on {{ cm_from }}
+      ansible.builtin.command:
+        argv: [du, -sb, "{{ cm_src }}"]
+      delegate_to: "{{ cm_from }}"
+      become: true
+      register: cm_size
+      changed_when: false
+      check_mode: false
+
+    - name: Read free space on {{ to }}'s pool disk
+      ansible.builtin.command:
+        argv: [df, -B1, --output=avail, "{{ swarm_pool_path }}"]
+      register: cm_avail
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse a move the stack is not ready for
+      ansible.builtin.assert:
+        that:
+          - cm_from_ps.stdout_lines | length > 0
+          - cm_from_ps.stdout_lines | select('search', ' Up ') | list | length == cm_from_ps.stdout_lines | length
+          - cm_to_ps.stdout_lines | length == 0
+          - cm_avail.stdout_lines[-1] | int > 2 * (cm_size.stdout.split()[0] | int) + 5368709120
+        fail_msg: >-
+          {{ stack }} on {{ cm_from }}: {{ cm_from_ps.stdout_lines }} (all must be Up);
+          containers on {{ to }}: {{ cm_to_ps.stdout_lines | length }} (must be none);
+          state {{ cm_size.stdout.split()[0] }} bytes, {{ cm_avail.stdout_lines[-1] }} free on
+          {{ to }}:{{ swarm_pool_path }} (needs two copies and 5 GiB).
+        quiet: true
+
+    # Before anything stops: on 2026-10-03 the first Emby rehearsal failed at
+    # the placement step, after the stop, because this directory did not exist.
+    - name: Make sure the placement file's directory exists on the controller
+      ansible.builtin.file:
+        path: "{{ compose_placement_override_file | dirname }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    # What the placement was before this move, for the rollback. cm_from is
+    # frozen here too: as a play variable it is read lazily from the placement
+    # file, which the switch-over rewrites, after which it would name <to>
+    # (the first emby retry on 2026-10-03 converged normandy twice and left
+    # homelab's drift manifest listing emby because of it).
+    - name: Remember the placement before the move
+      ansible.builtin.set_fact:
+        cm_from: "{{ compose_placement[stack] }}"
+        cm_prev_override: >-
+          {%- set out = {} -%}
+          {%- for k, v in compose_placement.items() -%}
+          {%-   if v != compose_placement_home[k] | default('') -%}
+          {%-     set _ = out.update({k: v}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Say what will happen
+      ansible.builtin.debug:
+        msg: >-
+          Moving {{ stack }} ({{ cm_from_ps.stdout_lines | length }} containers,
+          {{ (cm_size.stdout.split()[0] | int / 1073741824) | round(1) }} GiB in {{ cm_src }})
+          from {{ cm_from }} to {{ to }}:{{ cm_dst }}.
+          {{ 'Check mode: nothing below runs.' if ansible_check_mode else '' }}
+
+    # 2. Images --------------------------------------------------------------------
+
+    - name: Read the images the stack runs on {{ cm_from }}
+      ansible.builtin.shell:
+        cmd: >-
+          docker inspect --format '{{ cm_image_format }}'
+          $(docker ps -q --filter label=com.docker.compose.project={{ cm_project }}) | sort -u
+      delegate_to: "{{ cm_from }}"
+      register: cm_images
+      changed_when: false
+      check_mode: false
+
+    - name: Read which of them {{ to }} already has
+      ansible.builtin.shell:
+        cmd: docker image inspect --format '{{ '{{' }}.Id{{ '}}' }}' '{{ item.split()[0] }}' 2>/dev/null || echo missing
+      loop: "{{ cm_images.stdout_lines }}"
+      register: cm_have
+      changed_when: false
+      check_mode: false
+
+    - name: Pull the images named by digest on {{ to }}
+      ansible.builtin.command:
+        argv: [docker, pull, "{{ item.item.split()[0] }}"]
+      loop: "{{ cm_have.results }}"
+      loop_control:
+        label: "{{ item.item.split()[0] }}"
+      when:
+        - item.stdout | trim != item.item.split()[1]
+        - "'@' in item.item.split()[0]"
+
+    - name: Stream the tagged images from {{ cm_from }} to {{ to }}
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          docker save '{{ item.item.split()[0] }}'
+          | ssh -o BatchMode=yes {{ hostvars[to].ssh_user }}@{{ hostvars[to].ansible_host }} docker load
+        executable: /bin/bash
+      delegate_to: "{{ cm_from }}"
+      loop: "{{ cm_have.results }}"
+      loop_control:
+        label: "{{ item.item.split()[0] }}"
+      when:
+        - item.stdout | trim != item.item.split()[1]
+        - "'@' not in item.item.split()[0]"
+
+    # 3. Warm copy -------------------------------------------------------------------
+
+    # rrsync allows one session per peer directory at a time, and the hourly
+    # snapshot job of <from> writes to the same one: on 2026-10-03 the Immich
+    # cold copy failed with "Another instance of rrsync is already accessing
+    # this directory" (rc 12) during the hourly run. Every copy over the key
+    # therefore retries while that lock is held.
+    - name: Warm copy, {{ cm_from }} to {{ to }}'s peer directory
+      ansible.builtin.command:
+        argv: [rsync, -a, --numeric-ids, --delete, --mkpath, -e, "{{ cm_ssh }}", "{{ cm_src }}/",
+               "{{ swarm_sync_user }}@{{ ansible_host }}:compose/{{ stack }}/"]
+      delegate_to: "{{ cm_from }}"
+      become: true
+      register: cm_warm
+      until: cm_warm.rc == 0 or 'Another instance of rrsync' not in cm_warm.stderr | default('')
+      retries: 30
+      delay: 10
+
+    - name: Warm copy, into {{ cm_dst }}
+      ansible.builtin.command:
+        argv: [rsync, -a, --numeric-ids, --delete, --mkpath, "{{ cm_stage }}/", "{{ cm_dst }}/"]
+      become: true
+
+    # 4. Live data check on the running stack ------------------------------------
+
+    - name: Live data check on {{ cm_from }}
+      ansible.builtin.command:
+        cmd: "{{ cm_checks[stack].live }}"
+      delegate_to: "{{ cm_from }}"
+      register: cm_live_before
+      changed_when: false
+      check_mode: false
+      when: cm_checks[stack].live is defined
+
+    # 5 to 9 run as one unit: any failure after the stop rolls back to
+    # <from> (tasks/compose-move-rollback.yml) and then fails the play.
+    - name: Switch over to {{ to }}, rolling back on failure
+      block:
+        - name: Stop, copy, place, converge, verify
+          ansible.builtin.include_tasks: tasks/compose-move-switch.yml
+      rescue:
+        - name: Roll back to {{ cm_from }}
+          ansible.builtin.include_tasks: tasks/compose-move-rollback.yml
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "{{ stack }}: {{ cm_from }} -> {{ to }}; placement override now {{ cm_override }}"
+          - "cold check: {{ cm_cold.results | default([]) | map(attribute='stdout', default='-') | list }}"
+          - "live check: {{ cm_live_before.stdout_lines | default([]) }} -> {{ cm_live_after.stdout_lines | default([]) }}"
+          - "route: {{ cm_probe.stdout | default('-') }}"
+
+    - name: Post the move to the feed
+      ansible.builtin.shell:
+        cmd: >-
+          PATH="$HOME/.local/bin:$PATH" feed post
+          "compose stack {{ stack }} moved from {{ cm_from }} to {{ to }}"
+          --severity info --source compose --tag "compose move"
+      changed_when: true
+      failed_when: false

@@ -1,0 +1,79 @@
+---
+# Rescue of the switch-over in playbooks/compose-move.yml: any failure after
+# the stop puts <stack> back on <from>, from <from>'s own state directory,
+# which the move never changes. Writes the stack made on <to> after the
+# switch are lost; the stop to rollback window is minutes. Ends by failing
+# the play, so the caller (host-drain.yml) stops too.
+
+- name: Rollback | say why
+  ansible.builtin.debug:
+    msg: >-
+      '{{ ansible_failed_task.name | default('?') }}' failed
+      ({{ ansible_failed_result.msg | default('') | truncate(300) }});
+      rolling {{ stack }} back to {{ cm_from }}.
+
+- name: Rollback | remove the stack's containers on {{ to }}
+  ansible.builtin.shell:
+    cmd: |
+      ids=$(docker ps -aq --filter label=com.docker.compose.project={{ cm_project }})
+      [ -z "$ids" ] || docker rm -f $ids
+
+- name: Rollback | remove the staging copy on {{ to }} (shipped to B2 from homelab)
+  ansible.builtin.file:
+    path: "{{ cm_stage }}"
+    state: absent
+  become: true
+
+- name: Rollback | restore the placement file
+  ansible.builtin.copy:
+    content: |
+      # Written by playbooks/compose-move.yml: movable Compose stacks that are
+      # away from their home host (compose_placement_home). Removed when the
+      # last of them returns. Every playbook run from this machine reads it.
+      {{ cm_prev_override | to_nice_yaml }}
+    dest: "{{ compose_placement_override_file }}"
+    mode: "0644"
+  delegate_to: localhost
+  when: cm_prev_override | length > 0
+
+- name: Rollback | remove the placement file when nothing was away
+  ansible.builtin.file:
+    path: "{{ compose_placement_override_file }}"
+    state: absent
+  delegate_to: localhost
+  when: cm_prev_override | length == 0
+
+- name: Rollback | converge the stack back onto {{ cm_from }}, then the rest
+  ansible.builtin.command:
+    argv: "{{ ['ansible-playbook'] + item }}"
+    chdir: "{{ playbook_dir }}/.."
+    stdin: ""
+  delegate_to: localhost
+  loop:
+    - [playbooks/site.yml, -l, "{{ cm_from }}", -e, "only={{ stack }}"]
+    - [playbooks/site.yml, -l, "{{ to }}", -e, "only={{ stack }}"]
+    - [playbooks/traefik.yml]
+    - [playbooks/site.yml, -l, "{{ groups['swarm_workers'] | join(',') }}", -e, only=gatus]
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  when: not ansible_check_mode
+
+- name: Rollback | wait for the route through the VIP
+  ansible.builtin.command:
+    argv: [curl, -s, -o, /dev/null, -m, "10", -w, "%{http_code}", --resolve,
+           "{{ cm_checks[stack].probe.host }}:443:{{ edge_vip }}",
+           "https://{{ cm_checks[stack].probe.host }}{{ cm_checks[stack].probe.path }}"]
+  delegate_to: localhost
+  register: cm_rb_probe
+  until: cm_rb_probe.stdout == '200'
+  retries: 24
+  delay: 5
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Rollback | fail the move
+  ansible.builtin.fail:
+    msg: >-
+      {{ stack }} was rolled back to {{ cm_from }} (route {{ cm_rb_probe.stdout | default('not probed in check mode') }}).
+      Placement override restored to {{ cm_prev_override }}. Diagnose before moving it again.

@@ -19,7 +19,9 @@
 
 services:
   app:
-    image: git.ryzhkov.dev/igor/cv-site:latest
+    # Pinned to the build without baked data (2026-10-03, commit 4b88ec2 of
+    # the checkout); a rebuild is pushed by --tags registry and pinned here.
+    image: git.ryzhkov.dev/igor/cv-site:latest@sha256:22709eb93e941a822c7b1403b64da018a6bd5ef2d25202bd010e5c6040f4351d
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-

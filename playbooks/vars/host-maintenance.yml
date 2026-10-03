@@ -25,6 +25,14 @@ host_maintenance_unmovable: [logging]
 # The VIP and Gatus.
 host_maintenance_gatus_port: 3002
 
+# Movable Compose stacks (compose_movable_stacks in group_vars/all.yml) move
+# with playbooks/compose-move.yml before the drain. Compose stacks have no
+# Swarm reservation, so the memory check counts these working-set estimates
+# for them: Emby transcoding, Immich with machine learning loaded.
+host_maintenance_compose_memory:
+  emby: 2147483648
+  immich: 3221225472
+
 # Household routes checked through the VIP after the drain, with the path
 # that answers without a login. `down_with` names the host whose maintenance
 # takes the route down by design (the plan's accepted exceptions and the
@@ -55,9 +63,9 @@ host_maintenance_routes:
   - { host: igor.ryzhkov.dev, path: / }
   - { host: garage.ryzhkov.dev, path: / }
   - { host: obsidian.ryzhkov.dev, path: / }
-  - { host: photos.ryzhkov.dev, path: /, down_with: proxmox-b }
+  - { host: photos.ryzhkov.dev, path: /api/server/ping }
+  - { host: emby.ryzhkov.dev, path: /System/Info/Public }
   - { host: cctv.ryzhkov.dev, path: /, down_with: proxmox-b }
-  - { host: emby.ryzhkov.dev, path: /, down_with: proxmox-a }
   - { host: jocasta.ryzhkov.dev, path: /healthz, down_with: proxmox-a }
   - { host: ai.ryzhkov.dev, path: /, down_with: proxmox-a }
   - { host: logs.ryzhkov.dev, path: /api/health, down_with: proxmox-a }
@@ -71,9 +79,9 @@ host_maintenance_routes:
 # that matter (every route through the VIP) are made by the playbook itself.
 host_maintenance_gatus_expected:
   proxmox-a: >-
-    ^internal-on-homelab-|^internal-on-blackpearl-|_adguard-ct10[07]$|_edge-public-api-tcp$|_home-ryzhkov-dev$|_zigbee-ryzhkov-dev$|_mqtt-host-ping$|_emby-ryzhkov-dev$|_logs-ryzhkov-dev$|_steward-worker-homelab$|_gatus-homelab$|^smart_proxmox-a-
+    ^internal-on-homelab-|^internal-on-blackpearl-|_adguard-ct10[07]$|_edge-public-api-tcp$|_home-ryzhkov-dev$|_zigbee-ryzhkov-dev$|_mqtt-host-ping$|_logs-ryzhkov-dev$|_steward-worker-homelab$|_gatus-homelab$|^smart_proxmox-a-
   proxmox-b: >-
-    ^internal-on-normandy-|_adguard-ct201$|_edge-public-api-b-tcp$|_photos-ryzhkov-dev$|_cctv-ryzhkov-dev$|_steward-worker-normandy$|_gatus-normandy$|^smart_proxmox-b-
+    ^internal-on-normandy-|_adguard-ct201$|_edge-public-api-b-tcp$|_cctv-ryzhkov-dev$|_steward-worker-normandy$|_gatus-normandy$|^smart_proxmox-b-
 
 host_maintenance:
   proxmox-a:
@@ -84,8 +92,9 @@ host_maintenance:
     edge: public-api
     survivor_edge: public-api-b
     # Compose projects stopped before the guests, per Docker host on this node.
+    # Emby is not here: it moves to normandy (compose-move.yml).
     compose_stop:
-      homelab: [emby, dsh, jocasta, gatus, cloudflare]
+      homelab: [dsh, jocasta, gatus, cloudflare]
       blackpearl: [torrent, diun]
     # Guests in shutdown order: agents first, then the Docker hosts (after
     # their stacks were stopped), Home Assistant and its radios, the edge, and
@@ -111,8 +120,9 @@ host_maintenance:
     survivor_worker: homelab
     edge: public-api-b
     survivor_edge: public-api
+    # Immich is not here: it moves to homelab (compose-move.yml).
     compose_stop:
-      normandy: [frigate, immich, gatus, cloudflare]
+      normandy: [frigate, gatus, cloudflare]
     guests:
       - { type: qm, id: 211, name: agent-b }
       - { type: qm, id: 202, name: omarchy }

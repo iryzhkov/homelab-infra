@@ -1,0 +1,22 @@
+---
+# Emby can run on either household worker (compose_placement in
+# group_vars/all.yml). Its state is the config directory named by EMBY_CONFIG,
+# which playbooks/compose-move.yml copies before the stack is converged on a
+# new worker. Refuse to start Emby on a directory without its library
+# database: that would be a new, empty server answering for
+# emby.ryzhkov.dev.
+
+- name: Emby | look for the library database
+  ansible.builtin.stat:
+    path: "{{ stack.env_extra.EMBY_CONFIG }}/data/library.db"
+  become: true
+  register: emby_library_db
+
+- name: Emby | refuse an empty config directory
+  ansible.builtin.assert:
+    that: emby_library_db.stat.exists
+    fail_msg: >-
+      {{ stack.env_extra.EMBY_CONFIG }}/data/library.db does not exist on
+      {{ inventory_hostname }}. Move Emby with playbooks/compose-move.yml, which
+      copies its state first; do not converge it onto an empty directory.
+    quiet: true

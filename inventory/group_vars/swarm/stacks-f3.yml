@@ -43,8 +43,19 @@ swarm_stacks_f3:
       host: homelab
       dir: "/home/iryzhkov/app/openviking"
       project: openviking
-    # No Traefik route: agents and dsh call port 1933 on homelab's address
-    # (dsh through stack_host_ip, which keeps answering through the mesh).
+    # https://ov.ryzhkov.dev through the edges, with both workers as backends,
+    # so agent memory keeps answering when it moves (phase 7, 2026-10-03).
+    # The name is internal only: AdGuard answers the VIP on the LAN and each
+    # edge's dnsmasq its own mesh address; there is no public DNS record and
+    # no tunnel hostname for it. OpenViking's own API key still guards every
+    # call but /health. Clients that still name 192.168.70.223:1933 lose
+    # OpenViking whenever homelab is down (runbook-host-maintenance.md lists
+    # them).
+    routes:
+      - host: ov.ryzhkov.dev
+        port: 1933
+        health_check:
+          path: /health
     snapshot:
       class: files
       # A vector store and plain files, no SQLite: mirrored hourly, copied

@@ -21,8 +21,10 @@
 #  7. Start the Compose-pinned stacks that the drain stopped.
 #  8. Move every stateful stack whose inventory pin names the returning worker
 #     back to it with swarm-move.yml (after a fresh hourly snapshot on the
-#     other worker, which the move's freshness check needs); restore a shed
-#     tier with -e shed=<stack,...>.
+#     other worker, which the move's freshness check needs); move every
+#     movable Compose stack whose home is the returning worker back with
+#     compose-move.yml (which removes the placement override file once all
+#     are home); restore a shed tier with -e shed=<stack,...>.
 #  9. Verify: both Gatus instances without failures, every route through the
 #     VIP, keepalived active on both edges with the VIP on exactly one.
 
@@ -250,7 +252,7 @@
 
     - name: Say what moves home
       ansible.builtin.debug:
-        msg: "to {{ hm.worker }}, in order: {{ hr_moves }}"
+        msg: "to {{ hm.worker }}, in order: {{ hr_moves }}; Compose placement now {{ compose_placement }} (home {{ compose_placement_home }})"
 
     # The move refuses a peer copy older than two hours; while the worker was
     # away, the other worker's hourly copies to it failed.
@@ -272,6 +274,34 @@
       register: hr_move
       changed_when: not ansible_check_mode
       check_mode: false
+
+    - name: Work out the movable Compose stacks to bring home
+      ansible.builtin.set_fact:
+        hr_compose_moves: >-
+          {{ compose_placement_home | dict2items | selectattr('value', 'equalto', hm.worker)
+             | map(attribute='key') | reject('in', compose_placement | dict2items
+                 | selectattr('value', 'equalto', hm.worker) | map(attribute='key') | list)
+             | sort }}
+
+    - name: Move each movable Compose stack home
+      ansible.builtin.command:
+        argv: >-
+          {{ ['ansible-playbook', playbook_dir ~ '/compose-move.yml', '-e', 'stack=' ~ item,
+              '-e', 'to=' ~ hm.worker] + hm_check_flag }}
+        chdir: "{{ playbook_dir }}/.."
+        stdin: ""
+      loop: "{{ hr_compose_moves }}"
+      delegate_to: localhost
+      register: hr_compose_move
+      changed_when: not ansible_check_mode
+      check_mode: false
+
+    - name: Report the Compose moves
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ item.stdout_lines | select('search', 'Moving |placement override|live check|cold check|ok=') | list }}"
+      loop: "{{ hr_compose_move.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: Restore the shed tier from its stack files
       ansible.builtin.command:

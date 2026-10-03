@@ -22,7 +22,9 @@
 #     stopped on the leaving edge; nopreempt keeps it on the survivor after).
 #  3. Shed the optional tier: -e shed=<stack,stack> scales those stacks to 0.
 #  4. playbooks/swarm-move.yml for every stateful stack pinned to the leaving
-#     worker, one at a time, in host_maintenance order; logging stays.
+#     worker, one at a time, in host_maintenance order; logging stays. Then
+#     playbooks/compose-move.yml for every movable Compose stack placed on it
+#     (Emby from homelab, Immich from normandy).
 #  5. docker node update --availability drain on the leaving worker; wait
 #     until it runs no Swarm task and every other service has a running task.
 #  6. Stop the Compose-pinned stacks on the host's Docker VMs.
@@ -281,6 +283,10 @@
         hm_stays: >-
           {{ (hm_worker_labels.stdout | from_json).keys() | select('match', '^pin[.]')
              | map('regex_replace', '^pin[.]', '') | select('in', host_maintenance_unmovable) | list }}
+        # Movable Compose stacks placed on the leaving worker (group_vars/all.yml).
+        hm_compose_moves: >-
+          {{ compose_placement | dict2items | selectattr('value', 'equalto', hm.worker)
+             | map(attribute='key') | sort }}
 
     - name: Read memory reservations of the services running on {{ hm.worker }}
       ansible.builtin.shell:
@@ -313,6 +319,9 @@
           {%-     set total.n = total.n + (f[2] | int) -%}
           {%-   endif -%}
           {%- endfor -%}
+          {%- for s in hm_compose_moves -%}
+          {%-   set total.n = total.n + (host_maintenance_compose_memory[s] | default(0) | int) -%}
+          {%- endfor -%}
           {{ total.n }}
 
     - name: Refuse unless what moves fits on {{ hm.survivor_worker }} with 2 GiB to spare
@@ -331,6 +340,7 @@
           - "memory: {{ (hm_avail.stdout | int / 1048576) | int }} MiB available on {{ hm.survivor_worker }}; {{ (hm_need | int / 1048576) | int }} MiB reserved by what moves there"
           - "shed: {{ hm_shed }}"
           - "moves, in order: {{ hm_moves }}"
+          - "compose moves: {{ hm_compose_moves }}"
           - "stays (down while {{ hm.worker }} is): {{ hm_stays }}"
           - "compose stopped: {{ hm.compose_stop }}"
           - "guests stopped in order: {{ hm.guests | map(attribute='name') | list }} (only with power_off=true)"
@@ -405,6 +415,28 @@
       ansible.builtin.debug:
         msg: "{{ item.item }}: {{ item.stdout_lines | select('search', 'Moving |PLAY RECAP|ok=') | list }}"
       loop: "{{ hm_move.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # 4b. Move the movable Compose stacks (Emby, Immich) ------------------------
+
+    - name: Move each movable Compose stack to {{ hm.survivor_worker }}
+      ansible.builtin.command:
+        argv: >-
+          {{ ['ansible-playbook', playbook_dir ~ '/compose-move.yml', '-e', 'stack=' ~ item,
+              '-e', 'to=' ~ hm.survivor_worker] + hm_check_flag }}
+        chdir: "{{ playbook_dir }}/.."
+        stdin: ""
+      loop: "{{ hm_compose_moves }}"
+      register: hm_compose_move
+      delegate_to: localhost
+      changed_when: not ansible_check_mode
+      check_mode: false
+
+    - name: Report the Compose moves
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ item.stdout_lines | select('search', 'Moving |placement override|live check|cold check|ok=') | list }}"
+      loop: "{{ hm_compose_move.results }}"
       loop_control:
         label: "{{ item.item }}"
 

@@ -1,8 +1,5 @@
 ---
 # Adopted 2026-09-06.
-#
-# immich keeps its upstream layout: the project directory is immich-stack and
-# the Compose file reads stack.env rather than .env.
 
 # homelab's key was authorised here by hand before this repository existed;
 # declaring it means the list is somewhere other than the host itself.
@@ -65,7 +62,20 @@ backup_nas_dump:
   retired_files:
     - /home/igor/app/pg_backup.sh
 
-stacks:
+# The iGPU passed through to this VM (UHD 630, hostpci0 0000:00:02.0 on
+# proxmox-b), as Compose stacks that may land here need it: the render and
+# video group IDs for Emby's GIDLIST, and the udev path that names
+# /dev/dri/igpu-render (the VM also has a virtio-gpu, so renderD numbers swap).
+igpu:
+  name: Intel UHD 630
+  id_path: pci-0000:01:00.0
+  render_gid: 987
+  video_gid: 983
+
+# This host's own Compose stacks. Immich is not listed: it is one of the
+# movable stacks in group_vars/all.yml (compose_placement), which adds it to
+# `stacks` wherever it is placed.
+host_stacks:
   - name: cloudflare
     secrets: normandy-cloudflare
   - name: frigate
@@ -86,10 +96,3 @@ stacks:
     config_templates:
       - src: config.yaml.j2
         dest: config.yaml
-  - name: immich
-    routes:
-      - host: photos.ryzhkov.dev
-        port: 2283
-    dir: /home/igor/app/immich-stack
-    env_file: stack.env
-    secrets: normandy-immich

@@ -57,6 +57,12 @@ import time
 
 SQLITE_BACKUP = os.environ.get("HOMELAB_SQLITE_BACKUP", "/usr/local/sbin/homelab-sqlite-backup")
 
+# rrsync's refusal while another transfer holds the peer directory's lock, and
+# how long to keep retrying it (the environment overrides are for the tests).
+LOCKED = "Another instance of rrsync is already accessing this directory"
+LOCK_WAIT_SECONDS = float(os.environ.get("SWARM_SNAPSHOT_LOCK_WAIT", "300"))
+LOCK_RETRY_DELAY = float(os.environ.get("SWARM_SNAPSHOT_LOCK_DELAY", "15"))
+
 
 class Run:
     def __init__(self, config, dry_run=False):
@@ -182,9 +188,24 @@ class Run:
         return f"{peer['user']}@{peer['address']}:{path}"
 
     def rsync(self, source, destination, extra=()):
+        """rsync to the peer, waiting out another writer's rrsync lock.
+
+        rrsync holds a lock on the peer directory for each transfer, and
+        playbooks/compose-move.yml writes through the same directory. While
+        it does, rrsync refuses with LOCKED; retry for up to five minutes, as
+        compose-move does, rather than fail the hour (2026-10-03).
+        """
         argv = ["rsync", "-a", "--numeric-ids", "--delete", "--mkpath",
                 "-e", self.ssh_command(), *extra, source, self.peer_target(destination)]
-        return self.run(argv)
+        deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        while True:
+            result = self.run(argv)
+            if result.returncode == 0 or LOCKED not in result.stderr:
+                return result
+            if time.monotonic() >= deadline:
+                return result
+            self.log(f"{destination}: peer directory busy (rrsync lock), retrying")
+            time.sleep(LOCK_RETRY_DELAY)
 
     def to_peer(self, stack, snapshot):
         ok = True
@@ -228,12 +249,21 @@ class Run:
     # Offsite -----------------------------------------------------------
 
     def offsite(self):
+        # Only the directories of the stacks this tier knows: <stack>/ in each
+        # source. Anything else under a snapshot or peer directory (on
+        # 2026-10-03 compose-move's staging, peer-snapshots/<host>/compose/,
+        # with Emby's config and Immich's raw Postgres directory) is neither
+        # uploaded nor, being outside the filter, deleted from the bucket.
+        filters = [f"--filter=+ /{stack['name']}/**" for stack in self.config.get("stacks", [])]
+        filters.append("--filter=- **")
         for entry in self.config.get("offsite", []):
             source = entry["source"]
-            if not os.path.isdir(source) or not os.listdir(source):
+            # A missing directory is skipped; an empty one is synced, so a
+            # stack that left is pruned offsite too (hidden, kept 30 days).
+            if not os.path.isdir(source):
                 continue
             result = self.run(["rclone", "sync", source, entry["remote"],
-                               "--config", self.config["rclone_config"]])
+                               "--config", self.config["rclone_config"], *filters])
             if result.returncode != 0:
                 self.fail(f"rclone sync {source} to {entry['remote']}: "
                           + result.stderr.strip()[-2000:])

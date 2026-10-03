@@ -11,7 +11,9 @@
     state: directory
     owner: root
     group: root
-    mode: "0755"
+    # Closed like every private stack directory (roles/swarm state_root.yml);
+    # the container sees only the mounted file.
+    mode: "0700"
   become: true
   delegate_to: "{{ item }}"
   loop: "{{ groups['swarm_workers'] }}"

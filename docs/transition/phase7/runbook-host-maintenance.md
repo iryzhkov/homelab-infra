@@ -11,7 +11,7 @@ drain the requirements document asks for.
 
 | Host | Guest | What it carries | How it leaves |
 |---|---|---|---|
-| proxmox-a | VM 101 homelab | Swarm worker and manager (Leader today); 20 stateful stacks pinned here; Compose: Emby, dsh, Jocasta, Gatus, cloudflared; `feedd` | stateful stacks move to normandy one at a time (`swarm-move.yml`); stateless tasks move by the drain; `logging` and the Compose stacks stop |
+| proxmox-a | VM 101 homelab | Swarm worker and manager (Leader today); 20 stateful stacks pinned here; Compose: Emby, dsh, Jocasta, Gatus, cloudflared; `feedd` | stateful stacks move to normandy one at a time (`swarm-move.yml`); Emby moves to normandy (`compose-move.yml`); stateless tasks move by the drain; `logging` and the other Compose stacks stop |
 | proxmox-a | VM 102 black-pearl | torrent stack, diun (Compose) | stops; no peer by design |
 | proxmox-a | VM 103 homeassistant | Home Assistant, ZBT-2 radio by USB | stops (accepted exception) |
 | proxmox-a | CT 105 zigbee2mqtt, CT 104 mqtt | Zigbee coordinator (CP210x by USB), MQTT broker | stop (accepted exception) |
@@ -19,7 +19,7 @@ drain the requirements document asks for.
 | proxmox-a | CT 100 adguard (origin), CT 107 adguard (replica) | DNS 192.168.20.154 and .106 | stop; CT 201 on proxmox-b (.83) answers alone |
 | proxmox-a | CT 110 healthcheck | external checks | stops |
 | proxmox-a | VM 111 agent-a | steward agent runs | stops |
-| proxmox-b | VM 202 normandy (`omarchy`) | Swarm worker and manager; stateless tasks; Compose: Frigate, Immich (server, ML, Postgres, Redis), Gatus, cloudflared | stateless tasks move by the drain; Compose stacks stop |
+| proxmox-b | VM 202 normandy (`omarchy`) | Swarm worker and manager; stateless tasks; Compose: Frigate, Immich (server, ML, Postgres, Redis), Gatus, cloudflared | stateless tasks move by the drain; Immich moves to homelab (`compose-move.yml`); the other Compose stacks stop |
 | proxmox-b | VM 108 public-api-b | edge Traefik, keepalived member | stops; the VIP must be on public-api first |
 | proxmox-b | CT 201 alpine-adguard | DNS replica 192.168.20.83 | stops; CT 100 and CT 107 answer |
 | proxmox-b | VM 211 agent-b | steward agent runs | stops |
@@ -36,8 +36,10 @@ Classes:
   `playbooks/swarm-move.yml` (stop, cold copy, restore, pin flip, start).
 - **Swarm, never moves**: `logging` (Grafana, InfluxDB, Loki). Loki publishes 3100 in host mode
   on homelab and every log client names homelab's address. `swarm-move.yml` refuses it.
-- **Compose pinned**: Emby, dsh, Jocasta, Gatus and cloudflared on homelab; Frigate, Immich,
-  Gatus and cloudflared on normandy; torrent and diun on black-pearl. They stop with their host.
+- **Compose movable**: Emby (home homelab) and Immich (home normandy). Each moves to the other
+  worker with `playbooks/compose-move.yml` (below), using that worker's iGPU.
+- **Compose pinned**: dsh, Jocasta, Gatus and cloudflared on homelab; Frigate, Gatus and
+  cloudflared on normandy; torrent and diun on black-pearl. They stop with their host.
 - **LXC**: the AdGuard origin (CT 100) and its replicas (CT 107 on proxmox-a, CT 201 on
   proxmox-b); MQTT, Zigbee2MQTT and the healthcheck on proxmox-a.
 
@@ -47,28 +49,37 @@ From the plan, confirmed by Igor 2026-10-02:
 
 - proxmox-a down: Home Assistant automations, Zigbee and Thread (USB radios), MQTT.
 - proxmox-b down: Frigate (no camera recording or detection).
-- Emby and Immich without hardware acceleration while the other host's iGPU is unavailable.
-  The plan means them to keep running on the other host. **Today neither move is scripted**
-  (see "Compose-pinned moves, not yet scripted" below), so Emby is down while proxmox-a is,
-  and Immich is down while proxmox-b is, until that work is done.
+- Emby and Immich keep running on the other worker, with that worker's iGPU (homelab has a
+  UHD 770, normandy a UHD 630), moved by `compose-move.yml`.
 - black-pearl (torrents) has no peer and is down while proxmox-a is.
 
-Recorded on 2026-10-03, to be put to Igor as exceptions for today:
+Igor, 2026-10-03 about 10:30: Emby and Immich move; the remaining exceptions are, for
+proxmox-a, Home Assistant, Zigbee and MQTT, Jocasta, dsh, the feed, logging and torrents, and
+for proxmox-b, Frigate. In detail:
 
 - `logging` (Grafana at logs.ryzhkov.dev, InfluxDB, Loki) is down while proxmox-a is. Containers
   log in non-blocking mode, so their log lines are dropped, not queued, and no container stops
   waiting on Loki.
 - Jocasta (the agents' working-document store), dsh (`ai.ryzhkov.dev`) and the fleet feed
   (`feedd`) are down while proxmox-a is. dsh is tied to homelab by design (it runs
-  `docker compose` on homelab's own projects); Jocasta and the feed are not in a movable form
-  yet (prep record).
-- OpenViking moves to normandy with the other stateful stacks, but its consumers (dsh, the
-  fleet's `ov-memory` clients) name `192.168.70.223:1933`, which only answers while homelab is
-  up. Agent memory is therefore unreachable while proxmox-a is down, unless the consumers use
-  a name or both worker addresses.
-- Literal homelab addresses: the *arr apps call flaresolverr at `192.168.70.223:8191`; Home
-  Assistant names Wyoming on `192.168.70.223:10200` and `:10300` and InfluxDB on `:8087`;
-  OCI's Caddy proxies `emby.ryzhkov.dev` to `10.42.0.2:8096`. All fail while homelab is down.
+  `docker compose` on homelab's own projects); Jocasta (mesh-only listener, its firewall chain,
+  three systemd units and its backup unit) and the feed (a Python script and user unit not in
+  this repository, named by every fleet host) are not in a movable form.
+
+Consequences that follow from those, not separate exceptions:
+
+- OpenViking moves to normandy with the other stateful stacks and is reachable as
+  `https://ov.ryzhkov.dev` through the edges (live since 2026-10-03 11:15). Clients that name `192.168.70.223:1933` lose it while homelab is
+  down until they switch to that name.
+- Literal homelab addresses: the *arr apps call flaresolverr at `192.168.70.223:8191` (the
+  routing mesh keeps it answering only while homelab is up); Home Assistant names Wyoming and
+  InfluxDB on homelab (HA is down with proxmox-a anyway).
+- cv-site's `IMMICH_URL` is the literal `http://192.168.70.234:2283`
+  (`inventory/group_vars/swarm/stacks-f4.yml`), so its photo feature fails while Immich runs on
+  homelab; `https://photos.ryzhkov.dev` would follow it.
+- Backups that name a host keep naming the home host: Emby's twice-weekly SQLite copy runs on
+  homelab, Immich's nightly dump on normandy. While a stack is away (hours), the job on the
+  home host is down with it; no new backup of that stack is taken until it returns.
 - While homelab is down, normandy's hourly snapshot job cannot copy to its peer and reports a
   failure every hour (the feed is down too; the phone gets it). normandy's snapshots stay local.
 - `swarm.yml --tags stacks` runs from the bootstrap manager, homelab, and cannot deploy while
@@ -97,11 +108,18 @@ Recorded on 2026-10-03, to be put to Igor as exceptions for today:
 5. **Nobody home.** The plan powers a host off when nobody is home. `host-drain.yml` refuses
    while Home Assistant shows a person at home or Emby shows playback (see "Presence
    pre-check"). `-e allow_home=true` and `-e allow_playing=true` override, only on Igor's word.
-6. **No `swarm.yml --tags stacks` converge while a stateful stack sits away from its inventory
+6. **Converge from the laptop only while a Compose stack is away.** The temporary placement of
+   Emby and Immich lives in `~/.local/state/homelab-infra/compose-placement.yml` on the laptop
+   (`compose_placement_override_file`), written by `compose-move.yml` and removed when both are
+   home. A `site.yml` run from another machine would not see it, would deploy the stack on its
+   home host as well, and the prepare check would refuse there only if that host's copy were
+   missing. Never edit the file by hand; move the stack instead.
+7. **No `swarm.yml --tags stacks` converge while a stateful stack sits away from its inventory
    pin**, until the prepare-file fix is confirmed (2026-10-03: miniflux's and Authentik's
    `swarm-prepare.yml` read the node from the inventory pin rather than the node label, so a
-   converge would recreate an empty state directory on the old node and abort; E26 is
-   fixing them). The drain and return playbooks never run that converge while stacks are
+   converge would recreate an empty state directory on the old node and abort; E26's fix
+   to read the node label was reported done by the lead the same day; re-check it before
+   relying on this rule's removal). The drain and return playbooks never run that converge while stacks are
    away, except `-e shed=` restores after every stack is home.
 
 ## Presence pre-check
@@ -135,6 +153,7 @@ is the drain-only rehearsal (plan phase 7 step 1); undo it with `host-return.yml
 | 2. VIP | If the leaving host's edge holds 192.168.20.3, `keepalived` is stopped there and the playbook waits for the survivor to take it (phase 4 measured 1.34 s). `nopreempt` keeps it there afterwards. | `systemctl start keepalived` on the stopped edge (`host-return.yml` does it); the VIP stays where it is. |
 | 3. Shed | Only with `-e shed=<stack,...>`: those stacks scaled to 0. Not needed today: normandy has 11.6 GiB available against 4.7 GiB reserved by everything that moves there. Candidates, cheapest first: whisper (1.5 GiB limit), komga, flaresolverr, wyoming-piper, librespeed, kiwix. | `ansible-playbook playbooks/swarm.yml --tags stacks -e only=<stack>` per shed stack (the return does it with the same `-e shed=`). |
 | 4. Moves | `swarm-move.yml -e stack=<s> -e to=<survivor worker>` per stateful stack pinned to the leaving worker: leaf stacks in name order, then authentik, miniflux, vaultwarden, forgejo last (the image mirror). Each is a stop, a cold copy, a restore, a pin flip, a start, probes, and a tidy of obsolete copies. About 40 s each, of which about 20 s is the route failing; 19 stacks take about 13 minutes. | A move that fails before its pin flip leaves the stack stopped on the old node: `docker service scale <svc>=<n>` on it restores it (the counts are in `/srv/swarm/<stack>/.swarm-replicas`). After the flip: move it back with `swarm-move.yml -e to=<old node>`. Moves already done stay valid; continue or run `host-return.yml`. |
+| 4b. Compose moves | `compose-move.yml -e stack=<s> -e to=<survivor worker>` for the movable Compose stack placed on the leaving worker: Emby for proxmox-a, Immich for proxmox-b (section "Compose moves"). | Before the placement flip: `site.yml -l <worker> -e only=<s>`. After it: `compose-move.yml -e to=<worker>`. |
 | 5. Drain | `docker node update --availability drain <worker>`; wait until it runs no Swarm task and every service except `logging` and the shed has a running task. hugo runs one of two replicas (one per node). | `docker node update --availability active <worker>`. |
 | 6. Compose | `docker stop -t 60` on every container of the host's Compose projects (normandy's Omarchy `DefaultTimeoutStopSec=5s` would otherwise kill them at shutdown). | `docker start` on them (`host-return.yml` step 7). |
 | 7. Verify | Every household route through the VIP answers 2xx, 3xx or 401, except those that go down with this host by design; `vault.ryzhkov.dev` resolves to the VIP from the surviving worker (a VLAN 70 client); Gatus on the survivor fails only where `host_maintenance_gatus_expected` allows. | Investigate before powering off; `host-return.yml` undoes steps 2 to 6. |
@@ -171,20 +190,50 @@ Power the host on by hand (neither node wakes from power-off over the network). 
 | 5. Unlock | `swarm.yml --tags nodes -l <worker>`, then all three managers Ready and Reachable | the by-hand unlock above |
 | 6. Undrain | `docker node update --availability active` | - |
 | 7. Compose | `docker start` every stopped container of the projects the drain stopped; wait until none is exited, starting or unhealthy | `ansible-playbook playbooks/site.yml -l <host> -e only=<project>` |
-| 8. Stacks home | the survivor's hourly snapshot job runs once (the move needs a peer copy under two hours old), then `swarm-move.yml -e to=<worker>` for every stack whose inventory `pin` names the worker, same order as the drain; then `-e shed=` stacks are redeployed | a stack left on the survivor keeps working there; move it later |
+| 8. Stacks home | the survivor's hourly snapshot job runs once (the move needs a peer copy under two hours old), then `swarm-move.yml -e to=<worker>` for every stack whose inventory `pin` names the worker, same order as the drain; then `compose-move.yml -e to=<worker>` for the movable Compose stack whose home is the worker (the override file is removed once both are home); then `-e shed=` stacks are redeployed | a stack left on the survivor keeps working there; move it later |
 | 9. Verify | both Gatus instances without failures, every route through the VIP, keepalived active on both edges and the VIP on exactly one | - |
 
 Swarm does not rebalance stateless tasks when a node returns; they come back when their
 service is next updated, or with `docker service update --force <service>` (start-first, no
 gap).
 
-## Compose-pinned moves, not yet scripted
+## Compose moves: `ansible-playbook playbooks/compose-move.yml -e stack=<emby|immich> -e to=<worker>`
 
-The plan wants Emby to run on normandy while proxmox-a is down, and Immich on homelab while
-proxmox-b is down. Neither is a one-variable move today: each host's Compose stacks are a
-literal `stacks:` list in its host_vars, read by about a dozen consumers (site.yml, the
-Traefik generator, Gatus, the drift manifest, the backup role), and the Compose files carry
-host literals. The design proposed for the lead:
+Emby (home homelab) and Immich (home normandy) are defined once, in
+`inventory/group_vars/all.yml` (`compose_movable_stacks`), and placed by `compose_placement`:
+the home placement (`compose_placement_home`) overlaid with the laptop's override file (rule
+6). Every host's `stacks` is its own `host_stacks` plus the movable stacks placed on it, so
+site.yml, the Traefik generator, the stacks filters, Gatus and the drift manifest all follow
+a move with no other change. Per-host values come from the host the stack lands on: `HOST_IP`
+(Immich publishes on it), `stack_root`, the state directory (`compose_data_dirs`: on the guest
+worker, its pool disk), the iGPU's render and video group IDs for Emby's `GIDLIST`, and the
+iGPU's udev path, from which `stacks/immich/prepare.yml` writes the `/dev/dri/igpu-render` rule.
+Both prepare files refuse to start the stack on an empty state directory.
+
+The move, in order: preconditions (the stack runs on its current host and not on the target;
+room for two copies on the target's pool disk); images made present on the target with the
+same image IDs (`docker save | docker load` from the source for tags, a pull for digests); a
+warm copy while running, through the restricted `swarmsync` key into
+`peer-snapshots/<from>/compose/<stack>/` and then locally into the state directory; the live
+data check (Immich: assets, users, albums from its database); stop and remove the containers
+on the source (removed, so `restart: always` cannot start a second copy when the source boots
+again); the cold copy, the same two steps, then an rsync dry run in both steps that must list
+nothing and the cold data check (Emby: MediaItems in `library.db` on both copies); the
+placement written to the laptop's override file (removed once every stack is home); then
+`site.yml -l <to> -e only=<stack>`, `site.yml -l <from> -e only=<stack>` (drops it from the old
+host's drift manifest), `traefik.yml`, `site.yml -e only=gatus` on both workers; then the
+containers healthy on the target, the route through the VIP, and the live check equal to
+before. `host-drain.yml` runs it after the Swarm moves; `host-return.yml` runs it back.
+
+Rollback before the placement flip: `site.yml -l <from> -e only=<stack>` starts it on the source
+again (its directory is untouched). After the flip: move it back; the copy on the source is the
+cold copy, so the warm copy back is short.
+
+Sizes (2026-10-03): Emby's state 15.3 GiB, 105,259 files; Immich's Postgres 1.4 GiB, and its
+images 7.2 GB to stream to homelab the first time. Immich's machine-learning model cache
+(7.6 GB, a named volume) is not copied; homelab downloads the models again on first use.
+
+The design, as it was proposed before it was built:
 
 1. An inventory variable `compose_placement: {emby: homelab, immich: normandy}` and one
    definition of each movable stack, from which each host's `stacks:` list is built; the
@@ -199,11 +248,32 @@ host literals. The design proposed for the lead:
 4. Outside the repository: OCI's Caddy (`emby.ryzhkov.dev` to `10.42.0.2:8096`) and Home
    Assistant's Emby integration name homelab.
 
-Estimated downtime per move once built: Immich 3 to 5 minutes, Emby 2 to 3 minutes. Until
-then they are on the exception list above. Jocasta (mesh-only listener, its firewall chain,
-three systemd units and its backup unit) and the feed (`feedd`, a Python script and user unit
-not in this repository, named by every fleet host) need more than this and are not planned for
-today.
+## Outside the repository
+
+- **OCI's Caddy** is now in the repository (`playbooks/oci-caddy.yml`): `emby.ryzhkov.dev`
+  proxies to both edges over the mesh (10.42.0.3 first, 10.42.0.10 second) with TLS to
+  `emby.ryzhkov.dev` and an active health check on `/System/Info/Public`, so it follows Emby
+  through Traefik wherever it runs and survives the loss of either edge. Emby still sees OCI's
+  mesh address for outside clients (Traefik does not trust OCI's `X-Forwarded-For`). Apply
+  with `ansible-playbook playbooks/oci-caddy.yml` (a `caddy reload`, no dropped connections).
+- **UniFi, for Igor**: the port group `traefik-homelab-ports` (id `6a966cc55afbaf142ea88874`),
+  used by the policy `public-api -> homelab (Traefik backends)` towards both workers, lacks
+  2283 (Immich on homelab). (1933 is not in it either, but another policy already lets the
+  edges reach it: `ov.ryzhkov.dev/health` answers 200 through the VIP.) Measured from both edges:
+  `192.168.70.223:2283` times out (curl exit 28) while `:8096` answers 302. Without 2283,
+  `photos.ryzhkov.dev` fails while Immich runs on homelab.
+- **Home Assistant, for Igor**: `configuration.yaml` (`media_player: platform: emby, host:
+  192.168.70.223`) and `packages/requests.yaml` (four `rest_command`s on
+  `http://192.168.70.223:8096`) name homelab. While Emby runs on normandy (a proxmox-a drain)
+  Home Assistant is down too, so it matters only for a drain-only rehearsal; the lasting fix is
+  `https://emby.ryzhkov.dev`.
+- **OpenViking clients** that name `192.168.70.223:1933` (found 2026-10-03):
+  `~/.config/ov-mcp/config.toml` on the laptop, normandy and gaming-pc (`base_url`), homelab's
+  `~/.config/ov-mcp/config.toml` and `~/.codex/config.toml`, the laptop's
+  `~/.claude/settings.json`, and the `ov-memory` skill's text on every host. homelab's own
+  `~/.claude.json` uses `127.0.0.1:1933`, which stops answering when OpenViking moves to
+  normandy. They belong to the agent tooling (UpKeeper); the failover-capable address is
+  `https://ov.ryzhkov.dev`, live since 2026-10-03 11:15.
 
 ## Measured
 

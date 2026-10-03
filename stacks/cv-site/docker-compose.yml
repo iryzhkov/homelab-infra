@@ -1,7 +1,34 @@
 services:
   app:
     image: git.ryzhkov.dev/igor/cv-site:latest
-    build: .
+    # The build of the image the Swarm stack runs (stack.yml), from the
+    # checkout in ~/cv-site:
+    #   docker compose --project-directory ~/cv-site -f <this file> build app
+    # The checkout's own Dockerfile ends with COPY --from=builder /app/data,
+    # which baked the site's live data (visitor analytics, contact-form
+    # submissions) into an image anyone could pull from Forgejo (found
+    # 2026-10-03). This is that Dockerfile without the data: the service
+    # bind-mounts /app/data at run time. data/ and .env still enter the
+    # builder stage through COPY . ., which is never pushed.
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM golang:1.24-alpine AS builder
+        WORKDIR /app
+        COPY go.mod ./
+        RUN go mod download
+        COPY . .
+        RUN CGO_ENABLED=0 go build -o cv-site .
+
+        FROM alpine:3.21
+        RUN apk --no-cache add ca-certificates
+        WORKDIR /app
+        COPY --from=builder /app/cv-site .
+        COPY --from=builder /app/templates ./templates
+        COPY --from=builder /app/static ./static
+        RUN mkdir data
+        EXPOSE 8090
+        CMD ["./cv-site"]
     container_name: cv-site
     ports:
       - "8091:8091"

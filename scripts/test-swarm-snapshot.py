@@ -25,7 +25,16 @@ class SwarmSnapshotTests(unittest.TestCase):
         self.calls = self.base / "calls"
         for directory in (self.pool, self.state, self.bin):
             directory.mkdir()
-        self.fake("rsync", 'printf "rsync %s\\n" "$*" >>"$CALLS"; exit "${RSYNC_STATUS:-0}"')
+        # LOCKED_TIMES: refuse that many calls the way rrsync does while
+        # another transfer holds the peer directory's lock.
+        self.fake("rsync", 'printf "rsync %s\\n" "$*" >>"$CALLS"\n'
+                           'n=$(cat "$CALLS.locked" 2>/dev/null || echo 0)\n'
+                           'if [ "$n" -lt "${LOCKED_TIMES:-0}" ]; then\n'
+                           '  echo $((n + 1)) >"$CALLS.locked"\n'
+                           '  echo "/usr/bin/rrsync error: Another instance of rrsync is already'
+                           ' accessing this directory." >&2; exit 1\n'
+                           'fi\n'
+                           'exit "${RSYNC_STATUS:-0}"')
         self.fake("rclone", 'printf "rclone %s\\n" "$*" >>"$CALLS"')
         self.fake("sqlite-backup", 'printf "sqlite %s\\n" "$*" >>"$CALLS"')
         # Read-only label and stack queries answer from the environment and
@@ -59,6 +68,7 @@ class SwarmSnapshotTests(unittest.TestCase):
         }
         path = self.base / "config.json"
         path.write_text(json.dumps(config))
+        env = {"SWARM_SNAPSHOT_LOCK_WAIT": "0.3", "SWARM_SNAPSHOT_LOCK_DELAY": "0.01", **env}
         environment = dict(os.environ, CALLS=str(self.calls),
                            PATH=str(self.bin) + ":" + os.environ["PATH"],
                            HOMELAB_SQLITE_BACKUP=str(self.bin / "sqlite-backup"), **env)
@@ -187,18 +197,47 @@ class SwarmSnapshotTests(unittest.TestCase):
         self.assertEqual(run.returncode, 1)
         self.assertFalse(any("/sync/" in call for call in calls))
 
-    def test_offsite_only_ships_directories_that_hold_something(self):
+    def test_rrsync_lock_is_retried_until_free(self):
+        self.own("cv-site")
+        run, calls = self.run_case([{"name": "cv-site", "snapshot": {
+            "class": "files", "files": [str(self.state / "cv-site/data")]}}],
+            LOCKED_TIMES="3", SWARM_SNAPSHOT_LOCK_WAIT="30")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("peer directory busy (rrsync lock), retrying", run.stdout)
+        # Three refusals, then the files mirror and the timestamp.
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(calls[-1].endswith("cv-site/sync/"))
+
+    def test_rrsync_lock_held_past_the_wait_fails(self):
+        self.own("cv-site")
+        run, calls = self.run_case([{"name": "cv-site", "snapshot": {
+            "class": "files", "files": [str(self.state / "cv-site/data")]}}],
+            LOCKED_TIMES="100000")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("Another instance of rrsync", run.stderr)
+        self.assertFalse(any(call.endswith("/sync/") for call in calls))
+
+    def test_other_rsync_errors_are_not_retried(self):
+        self.own("cv-site")
+        run, calls = self.run_case([{"name": "cv-site", "snapshot": {
+            "class": "files", "files": [str(self.state / "cv-site/data")]}}],
+            RSYNC_STATUS="12", SWARM_SNAPSHOT_LOCK_WAIT="30")
+        self.assertEqual(run.returncode, 1)
+        self.assertEqual(len(calls), 1)
+
+    def test_offsite_ships_only_the_known_stacks_of_existing_directories(self):
         self.own("cv-site", host="normandy")
-        full = self.pool / "peer"
-        full.mkdir()
-        (full / "x").write_text("x")
-        (self.pool / "empty").mkdir()
+        peer = self.pool / "peer"
+        (peer / "compose" / "emby").mkdir(parents=True)
+        (peer / "compose" / "emby" / "big").write_text("x")
         run, calls = self.run_case(
-            [{"name": "cv-site", "snapshot": {"class": "files", "files": []}}],
-            offsite=[{"source": str(self.pool / "empty"), "remote": "b2:a"},
-                     {"source": str(full), "remote": "b2:b"}])
+            [{"name": "cv-site", "snapshot": {"class": "files", "files": []}},
+             {"name": "vaultwarden", "snapshot": {"class": "files", "files": []}}],
+            offsite=[{"source": str(self.pool / "missing"), "remote": "b2:a"},
+                     {"source": str(peer), "remote": "b2:b"}])
         self.assertEqual(run.returncode, 0)
-        self.assertEqual(calls, [f"rclone sync {full} b2:b --config /rc"])
+        self.assertEqual(calls, [f"rclone sync {peer} b2:b --config /rc "
+                                 "--filter=+ /cv-site/** --filter=+ /vaultwarden/** --filter=- **"])
 
 
 if __name__ == "__main__":

@@ -24,7 +24,9 @@ swarm_stacks_f4:
     # Immich is compose-pinned on normandy, Ollama runs on gaming-pc; change
     # these if either moves.
     env_extra:
-      IMMICH_URL: http://192.168.70.234:2283
+      # By name through the edge proxy, so it follows Immich wherever the
+      # compose-pinned stack runs (2026-10-03; was http://192.168.70.234:2283).
+      IMMICH_URL: https://photos.ryzhkov.dev
       OLLAMA_URL: http://192.168.90.212:11434
     routes:
       - host: igor.ryzhkov.dev

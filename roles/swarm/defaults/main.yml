@@ -11,6 +11,10 @@ swarm_control_ports:
 swarm_data_ports:
   - { port: 4789, proto: udp }
 
+# Stack directories under <pool>/swarm that hold only public content and keep
+# the deploying user's 0755 (tasks/state_root.yml closes every other one).
+swarm_state_public_stacks: [hugo, voice, whisper, wyoming-piper]
+
 # The interface the control plane uses.
 swarm_mesh_iface: nebula1
 

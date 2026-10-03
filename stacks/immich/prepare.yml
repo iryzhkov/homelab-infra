@@ -1,0 +1,53 @@
+---
+# Immich can run on either household worker (compose_placement in
+# group_vars/all.yml).
+#
+# 1. /dev/dri/igpu-render: Immich's ffmpeg.preferredHwDevice setting (in its
+#    database, so it travels with it) names this udev symlink rather than a
+#    renderD number, because each VM also has a virtio-gpu and the numbering
+#    can swap between boots. The rule is written from the host's `igpu`
+#    variable, so the symlink exists on whichever worker runs Immich.
+# 2. The database directory (DB_DATA_LOCATION) must hold a Postgres cluster:
+#    on an empty directory the Postgres image would initialise a new, empty
+#    database and Immich would start without its library index.
+#    playbooks/compose-move.yml copies the directory before converging.
+
+- name: Immich | name the iGPU's render node /dev/dri/igpu-render
+  ansible.builtin.copy:
+    content: |
+      # Stable name for the passed-through {{ igpu.name }} render node. The VM also has
+      # a virtio-gpu, and renderD* numbering can swap between boots, so containers
+      # should reference /dev/dri/igpu-render rather than a renderD number.
+      SUBSYSTEM=="drm", KERNEL=="renderD*", ENV{ID_PATH}=="{{ igpu.id_path }}", SYMLINK+="dri/igpu-render"
+    dest: /etc/udev/rules.d/99-igpu-render.rules
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: immich_udev_rule
+
+- name: Immich | apply the rule to the render nodes
+  ansible.builtin.shell:
+    cmd: udevadm control --reload && udevadm trigger --subsystem-match=drm --action=change && udevadm settle
+  become: true
+  when: immich_udev_rule is changed
+
+- name: Immich | look for the symlink and the database cluster
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  become: true
+  loop:
+    - /dev/dri/igpu-render
+    - "{{ stack.env_extra.DB_DATA_LOCATION }}/PG_VERSION"
+  register: immich_prereqs
+
+- name: Immich | refuse without the render node or the database
+  ansible.builtin.assert:
+    that: immich_prereqs.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Missing on {{ inventory_hostname }}:
+      {{ immich_prereqs.results | rejectattr('stat.exists') | map(attribute='item') | list }}.
+      The database is copied by playbooks/compose-move.yml; never converge Immich
+      onto an empty database directory.
+    quiet: true
+  when: not ansible_check_mode or immich_udev_rule is not changed

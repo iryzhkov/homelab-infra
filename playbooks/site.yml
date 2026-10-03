@@ -45,6 +45,9 @@
     # This avoids reconverging unrelated stacks merely to register a new service.
     # A targeted run naming a Swarm stack deploys nothing and removes the
     # stack's entry, so the drift check stops expecting its Compose project.
+    # So does a targeted run naming a movable Compose stack (compose_placement)
+    # on a host it is not placed on: after a move, the old host stops
+    # expecting it.
     - name: Update the existing manifest after a targeted deployment
       when:
         - only is defined
@@ -52,6 +55,7 @@
         - >-
           drift_manifest_stacks | default([]) | length > 0
           or only in site_swarm_stack_names
+          or only in compose_placement | default({})
       block:
         - name: Locate the existing drift manifest
           ansible.builtin.stat:
