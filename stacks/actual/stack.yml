@@ -10,7 +10,9 @@
 
 services:
   actual-server:
-    image: actualbudget/actual-server:26.9.0
+    # Docker Hub actualbudget/actual-server:26.9.0 (sha256:552beab3dec8c93d46b8b9245612d63c3f123b8a45063a474f53e229b17621d3),
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/actualbudget/actual-server@sha256:b84e08e4e94a225f39a7e001fc2c364500a976a40be2cefc18e45561b4056fba
     ports:
       - "5006:5006"
     volumes:

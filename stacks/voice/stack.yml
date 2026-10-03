@@ -9,7 +9,9 @@
 # address, both reachable from either worker.
 services:
   voice:
-    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    # Docker Hub caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/caddy@sha256:1bbeef4aae2a0815e51ef2e1675fb8db4e60fa3a2d009fd2127cedbc5f80cd42
     ports:
       - "8097:8097"
     volumes:

@@ -14,7 +14,9 @@
 
 services:
   komga:
-    image: gotson/komga@sha256:9cf102f5fb78e2e020700c53eca757e4f4d4e347121b0a16380822760337cca9
+    # Docker Hub gotson/komga@sha256:9cf102f5fb78e2e020700c53eca757e4f4d4e347121b0a16380822760337cca9,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/gotson/komga@sha256:3e2770daf09a67679f20e7c7f7aeb1c6bb9eec08d8b260b7b5cd024faa752135
     ports:
       - "25600:25600"
     environment:

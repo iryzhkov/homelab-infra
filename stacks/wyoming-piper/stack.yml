@@ -10,10 +10,22 @@
 # is up.
 services:
   wyoming-piper:
-    image: rhasspy/wyoming-piper:latest@sha256:7d39aafac409c2b6b09d999ed04d84c311d632e558b35baa60fad6aac722af7a
+    # Docker Hub rhasspy/wyoming-piper:latest@sha256:7d39aafac409c2b6b09d999ed04d84c311d632e558b35baa60fad6aac722af7a,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/rhasspy/wyoming-piper@sha256:1a32035b5a9c2efe19eae63aade8b07a57209d96da7e04bbc1176a71d912c7dd
     command: --voice en_US-lessac-medium
     ports:
       - "10200:10200"
+    # The image's own check, probed every 2 s during its 300 s start period
+    # rather than every 30 s, so a moved task joins the routing mesh as soon
+    # as it answers (see stacks/excalidraw/stack.yml).
+    healthcheck:
+      test: ["CMD", "/usr/src/.venv/bin/python3", "-m", "wyoming_piper.health_check"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 300s
+      start_interval: 2s
     volumes:
       - type: bind
         source: ${SWARM_STATE_ROOT}/wyoming-piper/data

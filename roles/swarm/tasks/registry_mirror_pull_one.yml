@@ -1,4 +1,7 @@
 ---
+# One image on a node other than the mirror host. Nothing is done where the
+# node already holds the exact reference the stack names.
+
 - name: Look for {{ image.source }} here
   ansible.builtin.command:
     argv: [docker, image, inspect, --format, "{{ '{{' }}.Id{{ '}}' }}", "{{ image.source }}"]
@@ -7,41 +10,55 @@
   failed_when: false
   check_mode: false
 
-- name: Read the digest the mirror host pushed
-  ansible.builtin.command:
-    argv: [docker, image, inspect, --format, "{{ '{{' }}json .RepoDigests{{ '}}' }}", "{{ image.mirror }}"]
-  delegate_to: "{{ swarm_registry_mirror_host }}"
-  register: swarm_mirror_pushed
-  changed_when: false
-  failed_when: false
-  check_mode: false
+- name: Fetch {{ image.source }} from the mirror
+  when: swarm_mirror_here.rc != 0
+  block:
+    - name: Read the digest the mirror host pushed
+      ansible.builtin.command:
+        argv: [docker, image, inspect, --format, "{{ '{{' }}json .RepoDigests{{ '}}' }}", "{{ image.mirror }}"]
+      delegate_to: "{{ swarm_registry_mirror_host }}"
+      register: swarm_mirror_pushed
+      changed_when: false
+      failed_when: false
+      check_mode: false
 
-- name: Read the mirror digests held here
-  ansible.builtin.command:
-    argv: [docker, image, inspect, --format, "{{ '{{' }}json .RepoDigests{{ '}}' }}", "{{ image.mirror }}"]
-  register: swarm_mirror_held
-  changed_when: false
-  failed_when: false
-  check_mode: false
+    - name: Read the mirror digests held here
+      ansible.builtin.command:
+        argv: [docker, image, inspect, --format, "{{ '{{' }}json .RepoDigests{{ '}}' }}", "{{ image.mirror }}"]
+      register: swarm_mirror_held
+      changed_when: false
+      failed_when: false
+      check_mode: false
 
-- name: Pull {{ image.mirror }}
-  ansible.builtin.command:
-    argv: [docker, pull, --quiet, "{{ image.mirror }}"]
-  changed_when: true
-  vars:
-    swarm_mirror_digests: >-
-      {{ (swarm_mirror_pushed.stdout | from_json if swarm_mirror_pushed.rc == 0 else [])
-         | select('match', image.mirror_repo ~ '@') | list }}
-  when:
-    - swarm_mirror_digests | length > 0
-    - swarm_mirror_digests | first not in swarm_mirror_held.stdout | default('')
+    - name: Pull {{ image.mirror }}
+      ansible.builtin.command:
+        argv: [docker, pull, --quiet, "{{ image.mirror }}"]
+      changed_when: true
+      vars:
+        swarm_mirror_digests: >-
+          {{ (swarm_mirror_pushed.stdout | from_json if swarm_mirror_pushed.rc == 0 else [])
+             | select('match', image.mirror_repo ~ '@') | list }}
+      when:
+        - swarm_mirror_digests | length > 0
+        - swarm_mirror_digests | first not in swarm_mirror_held.stdout | default('')
 
-- name: Give it its original name, where this node has none
-  ansible.builtin.command:
-    argv: [docker, tag, "{{ image.mirror }}", "{{ image.source_name }}"]
-  changed_when: true
-  when:
-    - not ansible_check_mode
-    - swarm_mirror_here.rc != 0
-    - image.source_name | length > 0
-    - swarm_mirror_pushed.rc == 0
+    # Only under a name this node does not have yet: retagging an existing
+    # name would point it at the mirror's manifest.
+    - name: Look for the original name here
+      ansible.builtin.command:
+        argv: [docker, image, inspect, --format, "{{ '{{' }}.Id{{ '}}' }}", "{{ image.source_name }}"]
+      register: swarm_mirror_named
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: image.source_name | length > 0
+
+    - name: Give it its original name
+      ansible.builtin.command:
+        argv: [docker, tag, "{{ image.mirror }}", "{{ image.source_name }}"]
+      changed_when: true
+      when:
+        - not ansible_check_mode
+        - image.source_name | length > 0
+        - swarm_mirror_named.rc | default(0) != 0
+        - swarm_mirror_pushed.rc == 0

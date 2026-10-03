@@ -13,6 +13,15 @@ services:
       TITLE: "Speed to my server"
     ports:
       - "7080:8080"
+    # The image's own check, probed every 2 s while the task starts, so a
+    # moved task joins the routing mesh as soon as it answers (see
+    # stacks/excalidraw/stack.yml).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      start_interval: 2s
     deploy:
       replicas: 1
       placement:
@@ -26,3 +35,6 @@ services:
           memory: 32M
       restart_policy:
         condition: any
+      # No mount, so the new task can start before the old one stops.
+      update_config:
+        order: start-first

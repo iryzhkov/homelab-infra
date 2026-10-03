@@ -10,6 +10,10 @@ services:
     image: traefik:latest
     container_name: traefik
     restart: unless-stopped
+    # Below every other process on a 2 GB edge VM, so that memory pressure
+    # takes something else first (on 2026-10-02 the OOM killer took Traefik
+    # on public-api-b).
+    oom_score_adj: -500
     network_mode: bridge
     environment:
       TZ: America/Los_Angeles

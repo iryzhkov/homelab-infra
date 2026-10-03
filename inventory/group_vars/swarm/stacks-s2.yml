@@ -4,11 +4,9 @@
 # whisper. See docs/transition/phase5/migration-plan.md and the batch's
 # evidence file, docs/transition/phase5/2026-10-03-S2.md.
 #
-# Entries wait in pending_swarm_stacks_s2, a name nothing reads. A stack is
-# activated in the change that cuts it over: its entry moves to
-# swarm_stacks_s2, and swarm.yml (with -e swarm_cutover=<name>), traefik.yml
-# and the Gatus deploy run straight after. When every entry has moved,
-# pending_swarm_stacks_s2 is deleted.
+# All six were cut over on 2026-10-02, one at a time, each in the change that
+# added its entry here, with swarm.yml (-e swarm_cutover=<name>), traefik.yml
+# and the Gatus deploy straight after.
 #
 # Every stack here keeps files under /srv/swarm/<name> on both workers,
 # written by its swarm-prepare.yml; none of them is state worth a snapshot.
@@ -38,7 +36,23 @@ swarm_stacks_s2:
       host: homelab
       dir: /home/iryzhkov/app/wyoming-piper
 
-pending_swarm_stacks_s2:
+  # No route here: roles/traefik/templates/whisper.yml.j2 lists the workers
+  # as the CPU fallback of whisper.ryzhkov.dev.
+  - name: whisper
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/whisper
+
+  - name: gatus-public
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/gatus-public
+    routes:
+      - host: uptime.ryzhkov.dev
+        port: 3001
+
   - name: adguard
     prepare_tasks: swarm-prepare.yml
     compose:
@@ -50,20 +64,3 @@ pending_swarm_stacks_s2:
         # adguardhome-sync answers 401 on / and 200 on /healthz.
         health_check:
           path: /healthz
-
-  - name: gatus-public
-    prepare_tasks: swarm-prepare.yml
-    compose:
-      host: homelab
-      dir: /home/iryzhkov/app/gatus-public
-    routes:
-      - host: uptime.ryzhkov.dev
-        port: 3001
-
-  # No route here: roles/traefik/templates/whisper.yml.j2 lists the workers
-  # as the CPU fallback of whisper.ryzhkov.dev.
-  - name: whisper
-    prepare_tasks: swarm-prepare.yml
-    compose:
-      host: homelab
-      dir: /home/iryzhkov/app/whisper

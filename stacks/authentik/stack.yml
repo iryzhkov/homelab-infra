@@ -49,7 +49,9 @@ x-authentik-environment: &authentik-environment
 
 services:
   postgresql:
-    image: docker.io/library/postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    # Docker Hub postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/postgres@sha256:49c0be96b8c1cc13508a297288dee13b874298bf2ae34a81c392acd9c0f052b7
     command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_DB: authentik
@@ -88,7 +90,9 @@ services:
           memory: 160M
 
   redis:
-    image: docker.io/library/redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+    # Docker Hub redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/redis@sha256:9edcda8e020021e916e9bd26acc90c61103cc93b6dedbb757cc206ddb320df6f
     command: --save 60 1 --loglevel warning
     volumes:
       - type: bind

@@ -185,6 +185,54 @@ Finding: a push from homelab's classic store does not keep a multi-platform pinn
 
 Remaining: run `--tags registry` for real; Docker Hub images not on homelab (Hub refused homelab at 22:30) wait for the limit; tell executors which pinned Hub images need mirror references; confirm `swarm.yml --check` changed=0.
 
+## 7. Image mirror run and Docker Hub references (2026-10-02, after the quota pause)
+
+Lead decision: stacks using a Docker Hub image reference the Forgejo mirror, pinned to the mirror's own digest; E20 owns the change in every stack file.
+
+- Docker Hub quota before the run (`HEAD /v2/ratelimitpreview/test/manifests/latest` from homelab): `ratelimit-remaining: 100;w=3600`, source 104.8.3.194; after the mirror run still 100: every image was already on homelab, nothing was pulled from Docker Hub.
+- `ansible-playbook playbooks/swarm.yml --tags registry -l homelab`: 33 external images (16 Docker Hub, 17 ghcr.io, lscr.io and codeberg.org) tagged and pushed to `git.ryzhkov.dev/igor/mirror/<registry>/<repository>:<tag>` (changed=78, failed=0). The locally built images were untouched.
+- Mirror changes made to the role on the way: references already rewritten to the mirror are listed for pre-pull by their exact digest; a node that already holds a stack's exact reference is left alone; the original name is tagged only when the node lacks that name (the first version re-tagged a pinned reference on every run).
+- normandy: every mirrored image pre-pulled from Forgejo (changed=36, then 13 after the fix); all 16 Docker Hub mirror references resolve by digest on normandy. Second run of `--tags registry`: changed=0 on both workers.
+
+Docker Hub images, upstream reference (and the upstream digest homelab holds for tag-only references) and mirror digest. Every mirror digest differs from upstream, because homelab's classic store pushes a single-platform manifest; the image IDs are identical.
+
+| Stack | Upstream | Upstream digest | Mirror digest |
+|---|---|---|---|
+| vaultwarden | vaultwarden/server:1.37.3 | sha256:1587c45feaa4... | sha256:39894b6d6148d0b2583e4da429a61065f2b08dc3afbbc00f7265b5676e04f9b9 |
+| actual | actualbudget/actual-server:26.9.0 | sha256:552beab3dec8... | sha256:b84e08e4e94a225f39a7e001fc2c364500a976a40be2cefc18e45561b4056fba |
+| navidrome | deluan/navidrome:0.64.0 | sha256:a384948b81bd... | sha256:9a847e6f168cbde48358cd2069ffaf45f5a487d71a8ad081c501cbd28f382575 |
+| komga | gotson/komga (digest only) | sha256:9cf102f5fb78... | sha256:3e2770daf09a67679f20e7c7f7aeb1c6bb9eec08d8b260b7b5cd024faa752135 |
+| obsidian | couchdb:3.5.0 | sha256:1c0a30a54535... | sha256:33cade1ff68a3f191e2639a339957400cf825aba948eec57f696d28ae851a88d |
+| logging loki | grafana/loki:3.7.8 | sha256:1107dd5274e0... | sha256:e664166bca56031661b40a0a0b1c77dfeffa4b03053cc887836dd4f51cb212ab |
+| logging grafana | grafana/grafana:13.2.2 | sha256:ac461fb352ab... | sha256:9924c7fe0effe4a5fea08b3451905de54f09fde9d1589463a5f2d02d9ec158bc |
+| logging influxdb | influxdb:2.9.1 | sha256:05d6fb735bc2... | sha256:cdf0f56ff18bc55c73c297d6a3092d461cb58009187e764def2ad89d6f3e0ac5 |
+| miniflux db | postgres:17.11-alpine | sha256:b0f9560a2de0... | sha256:be3e03840bb22a93ac0c3b0003d88887e015d4d1707b06913bbf437d564a0e73 |
+| miniflux | miniflux/miniflux:2.3.3 | sha256:49d7b6098761... | sha256:bb06d6abea8c2a8bd7b78d7b02d8ddc24425aab4d1afec8e3b87655242977a54 |
+| authentik postgresql | postgres:16.15-alpine | sha256:721873c34ceb... | sha256:49c0be96b8c1cc13508a297288dee13b874298bf2ae34a81c392acd9c0f052b7 |
+| authentik redis | redis:8.10.2-alpine | sha256:3811787313eb... | sha256:9edcda8e020021e916e9bd26acc90c61103cc93b6dedbb757cc206ddb320df6f |
+| hugo | nginx:latest | sha256:abe47724e466... | sha256:4e4863e5f038304761ced85e0511553c88ea268650ee4bf85b759a3e7dc1c325 |
+| excalidraw (active) | excalidraw/excalidraw:latest | sha256:f7ee194addd6... | sha256:8f46c86c80e6d2d3e166bef9f9bdc09da12ec0533d548d4de7317a15fa9e6675 |
+| voice (active) | caddy:2-alpine | sha256:6aeddd44c307... | sha256:1bbeef4aae2a0815e51ef2e1675fb8db4e60fa3a2d009fd2127cedbc5f80cd42 |
+| wyoming-piper (active) | rhasspy/wyoming-piper:latest | sha256:7d39aafac409... | sha256:1a32035b5a9c2efe19eae63aade8b07a57209d96da7e04bbc1176a71d912c7dd |
+
+The full upstream digests are in the comment above each rewritten `image:` line.
+
+- Rewritten (pending stacks, no service affected): vaultwarden, actual, navidrome, komga, obsidian, logging (3), miniflux (2), authentik (postgresql, redis), hugo. Each reads `image: git.ryzhkov.dev/igor/mirror/docker.io/<repo>@<mirror digest>` under a comment naming the upstream tag and digest. `inventory/group_vars/swarm/stacks-*.yml` holds no image keys, so no inventory change.
+- Not rewritten: ghcr.io, lscr.io and codeberg.org images (not Docker Hub; mirrored and pre-pulled all the same), the locally built `git.ryzhkov.dev/igor/*` images.
+- Active Docker Hub stacks excalidraw, voice and wyoming-piper: rewritten on the lead's go and redeployed one at a time with `ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name>`. The active ghcr.io stacks (librespeed, kiwix, flaresolverr, wyoming-openai) need no change.
+
+  | Stack | Deploy (PDT) | Old task shutdown, new task running (UTC) | Task gap | Seen by users | Runs on, image |
+  |---|---|---|---|---|---|
+  | excalidraw | 22:25:05 to 22:25:51 | 05:25:13.9, 05:25:45.9 | 32 s | https://draw.ryzhkov.dev probed every 0.5 s: 502 and timeouts 22:25:12 to 22:25:26, then 503 until 22:25:49 while Traefik's 30 s health check still marked both backends down; about 37 s in all | homelab, `git.ryzhkov.dev/igor/mirror/docker.io/excalidraw/excalidraw@sha256:8f46c86c...` |
+  | voice | 22:26:53 to 22:27:09 | 05:27:04.1, 05:27:04.5 | 0.4 s | one failed probe at 22:27:05 (no Traefik health check on this route) | normandy, `.../library/caddy@sha256:1bbeef4a...` |
+  | wyoming-piper | 22:28:03 to 22:28:26 | 05:28:12.9, 05:28:20.8 | 8 s | no Traefik route; Home Assistant's text-to-speech at 192.168.70.223:10200 unavailable for about 8 s plus the voice load. My TCP probe (`nc`) was faulty and failed before the deploy too; a Wyoming `describe` afterwards answered `{"type": "info", "version": "1.10.2", ...}` on both 192.168.70.223 and .234 | homelab, `.../rhasspy/wyoming-piper@sha256:1a32035b...` |
+
+  `docker inspect` of each running task shows `Spec.ContainerSpec.Image` equal to the mirror reference above. Gatus (normandy's instance): `draw.ryzhkov.dev` and `voice.ryzhkov.dev` green on both probes for the last four results after the switch; Gatus has no check for wyoming-piper. The `nc` probe's closed connections left `ConnectionResetError` tracebacks in wyoming-piper's log; harmless.
+
+  The excalidraw outage was longer than the task swap because Traefik keeps a backend down until its next health check (30 s interval). Stateless stacks would avoid the gap with `update_config.order: start-first` (allowed by the lint where there is no mount); that is the batch owners' choice.
+- After the switches: `swarm.yml --check` changed=0 on homelab, normandy and oci; `stack-lint.py stacks/*/stack.yml` exit 0.
+- `scripts/stack-lint.py stacks/*/stack.yml`: exit 0. `ansible-playbook playbooks/swarm.yml --check`: changed=0 on homelab, normandy and oci.
+
 ## Autolock and OCI rules
 
 The migration plan carries the operating rules (unlock after a manager restart, no drain while OCI is unreachable). With three managers one may be down or locked and the cluster keeps quorum. Because OCI is also the Proxmox QDevice and the Nebula lighthouse, and the control plane now runs over Nebula, an OCI outage removes one Swarm vote and the QDevice vote together; the two workers still hold 2 of 3.

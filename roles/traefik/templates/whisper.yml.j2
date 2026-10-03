@@ -5,13 +5,14 @@
 # Speech-to-text with automatic failover.
 #
 # whisper-gpu is gaming-pc (RTX 4090, CUDA, large-v3-turbo): about 90ms for a
-# ten-second utterance. whisper-cpu is homelab (four CPU cores, small.en):
-# about 3s for the same clip, with lower accuracy. Traefik's failover service
+# ten-second utterance. whisper-cpu is the Swarm stack `whisper` (CPU,
+# small.en), reached on both workers through the routing mesh: about 3s for
+# the same clip, with lower accuracy. Traefik's failover service
 # is strict primary/backup rather than round-robin, so the fallback is only
 # used while gaming-pc is unreachable -- asleep, rebooting, or off.
 #
 # Note: the fallback is roughly 22x slower. If dictation suddenly feels sluggish
-# it most likely means gaming-pc is down and this is serving from homelab; the
+# it most likely means gaming-pc is down and the CPU fallback is serving; the
 # Traefik access log shows which back end handled each request.
 
 http:

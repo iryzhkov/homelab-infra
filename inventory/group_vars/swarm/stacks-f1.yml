@@ -16,9 +16,9 @@
 #   ansible-playbook playbooks/traefik.yml
 #   ansible-playbook playbooks/site.yml -l homelab,normandy -e only=gatus
 #   ansible-playbook playbooks/backup.yml -l homelab,normandy
-# The Compose project's backup_sqlite_sources entry in
-# inventory/host_vars/homelab.yml is the lead's to remove (it keeps
-# snapshotting the now idle Compose copy until then).
+# In the same cutover, remove the stack's backup_sqlite_sources entries from
+# inventory/host_vars/homelab.yml and run playbooks/backup.yml -l homelab;
+# otherwise the hourly tier keeps snapshotting the idle Compose copy.
 
 pending_swarm_stacks_f1:
   - name: vaultwarden

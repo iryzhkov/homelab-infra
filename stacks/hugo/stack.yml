@@ -10,7 +10,9 @@
 # so the site answers while either worker is down.
 services:
   hugo-frontend:
-    image: nginx:latest@sha256:abe47724e466aeab9a345d8e46a221c2fa8953c7848bb4a3bd9976a7199f8cf2
+    # Docker Hub nginx:latest@sha256:abe47724e466aeab9a345d8e46a221c2fa8953c7848bb4a3bd9976a7199f8cf2,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/nginx@sha256:4e4863e5f038304761ced85e0511553c88ea268650ee4bf85b759a3e7dc1c325
     ports:
       - "4580:80"
     volumes:

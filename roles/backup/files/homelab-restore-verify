@@ -10,7 +10,9 @@ suffix="${scratch##*.}"
 vw_container="vw-restore-verify-$suffix"
 pg_container="pg-restore-verify-$suffix"
 cleanup() {
-    docker rm -f "$vw_container" "$pg_container" >/dev/null 2>&1 || true
+    # -v: postgres declares VOLUME for its data directory, so every run used
+    # to leave an anonymous volume behind (phase 0 carry).
+    docker rm -f -v "$vw_container" "$pg_container" >/dev/null 2>&1 || true
     rm -rf "$scratch"
 }
 trap cleanup EXIT

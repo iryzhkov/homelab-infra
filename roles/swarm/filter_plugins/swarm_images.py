@@ -36,6 +36,18 @@ def _qualify(repo):
 
 def swarm_mirror_ref(image, registry, owner):
     tagged, repo, tag, digest = _split(image)
+    # A stack that already names the mirror (repository@digest): nothing to
+    # mirror, only to pre-pull, by that exact reference.
+    if repo.startswith(f"{registry}/{owner}/mirror/"):
+        return {
+            "source": image,
+            "source_name": "",
+            "pinned": digest,
+            "repo": repo,
+            "tag": tag,
+            "mirror_repo": repo,
+            "mirror": image,
+        }
     qualified = _qualify(repo)
     if not tag:
         tag = "pinned-" + digest.split(":", 1)[-1][:12] if digest else "latest"

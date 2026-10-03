@@ -25,7 +25,7 @@
                   Sonarr and adguardhome-sync do — must be probed somewhere
                   else or its router starts returning 503.
 #}
-{% set ns = namespace(routes=[], authentik_url='', hosts=[]) %}
+{% set ns = namespace(routes=[], authentik_url='', authentik_service='', hosts=[]) %}
 {% for h in groups['docker_hosts'] | sort %}
 {%   for stack in hostvars[h].stacks | default([]) %}
 {%     for route in stack.routes | default([]) %}
@@ -36,8 +36,9 @@
          own; the Authentik outpost path is the one that does this. #}
 {%       set url = route.url | default(((route.scheme | default('http')) ~ '://' ~ hostvars[h].ansible_host ~ ':' ~ route.port) if route.port is defined else '') %}
 {%       set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]), url=url)) %}
-{%       if stack.name == 'authentik' %}
+{%       if stack.name == 'authentik' and route.service is not defined %}
 {%         set ns.authentik_url = url %}
+{%         set ns.authentik_service = route.name | default(route.host.split('.')[0]) %}
 {%       endif %}
 {%     endfor %}
 {%   endfor %}
@@ -70,9 +71,18 @@
 {%         set _ = urls.append((route.scheme | default('http')) ~ '://' ~ address ~ ':' ~ route.port) %}
 {%       endfor %}
 {%     endif %}
-{%     set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]), url=urls | first | default(''), urls=urls)) %}
-{%     if stack.name == 'authentik' %}
+{#     A restarted Swarm task is back within seconds; with the 30 s default
+       interval Traefik kept excalidraw marked down for about 37 s after an
+       image switch. Swarm routes are probed every 5 s, unless the route sets
+       its own interval or timeout; `health_check: false` stays false. #}
+{%     set check = route.health_check | default(traefik_health_check) %}
+{%     if check %}
+{%       set check = traefik_health_check | combine({'interval': '5s', 'timeout': '3s'}) | combine(route.health_check if route.health_check is defined and route.health_check is mapping else {}) %}
+{%     endif %}
+{%     set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]), url=urls | first | default(''), urls=urls, health_check=check)) %}
+{%     if stack.name == 'authentik' and route.service is not defined %}
 {%       set ns.authentik_url = urls | first | default('') %}
+{%       set ns.authentik_service = route.name | default(route.host.split('.')[0]) %}
 {%     endif %}
 {%   endfor %}
 {% endfor %}
@@ -109,6 +119,19 @@ http:
 {% include 'router-tls.j2' %}
 
 {% endfor %}
+{% if ns.authentik_service %}
+    # Forward auth's way to Authentik: the loopback-only entry point in the
+    # static configuration (stacks/traefik/templates/traefik.yml.j2), which
+    # trusts X-Forwarded-* from 127.0.0.1 only, so the original request's
+    # headers reach Authentik intact, and the Authentik route's own service,
+    # with every backend and its health check.
+    authentik-authloop-router:
+      entryPoints:
+        - authloop
+      rule: "PathPrefix(`/outpost.goauthentik.io/`)"
+      service: {{ ns.authentik_service }}-service
+
+{% endif %}
   services:
 {% for route in routes if route.service is not defined %}
     {{ route.name }}-service:
@@ -129,10 +152,17 @@ http:
 
 {% endfor %}
   middlewares:
-    # Authentik's forward auth, pointed at wherever the authentik stack runs.
+    # Authentik's forward auth, through this edge's own loopback entry point
+    # and the Authentik service (every backend, health checked), so it does
+    # not depend on any one worker. Without an authentik route, straight to
+    # wherever the authentik stack runs.
     authentik-forwardauth:
       forwardAuth:
+{% if ns.authentik_service %}
+        address: "http://127.0.0.1:{{ traefik_authloop_port | default(8081) }}/outpost.goauthentik.io/auth/traefik"
+{% else %}
         address: "{{ ns.authentik_url }}/outpost.goauthentik.io/auth/traefik"
+{% endif %}
         trustForwardHeader: true
         authResponseHeaders:
           - X-authentik-username

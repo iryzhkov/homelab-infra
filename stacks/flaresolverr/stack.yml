@@ -30,3 +30,6 @@ services:
           memory: 128M
       restart_policy:
         condition: any
+      # No mount, so the new task can start before the old one stops.
+      update_config:
+        order: start-first

@@ -12,7 +12,9 @@
 
 services:
   navidrome:
-    image: deluan/navidrome:0.64.0
+    # Docker Hub deluan/navidrome:0.64.0 (sha256:a384948b81bd1529986c5960169e7fc4fa00f46bde6bd517971a4c36671db2af),
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/deluan/navidrome@sha256:9a847e6f168cbde48358cd2069ffaf45f5a487d71a8ad081c501cbd28f382575
     user: "${NAVIDROME_UID}:${NAVIDROME_GID}"
     ports:
       - "4533:4533"
