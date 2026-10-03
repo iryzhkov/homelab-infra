@@ -41,6 +41,7 @@ services:
       test: ["CMD", "pg_isready", "-U", "miniflux"]
       interval: 10s
       start_period: 30s
+      start_interval: 2s
     # Swarm's default of 10 s can kill Postgres in the middle of its shutdown
     # checkpoint.
     stop_grace_period: 60s
@@ -90,11 +91,14 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+      start_interval: 2s
     deploy:
       replicas: 1
       placement:
         constraints:
           - node.labels.pin.miniflux == true
+      update_config:
+        order: stop-first
       restart_policy:
         condition: any
         delay: 5s

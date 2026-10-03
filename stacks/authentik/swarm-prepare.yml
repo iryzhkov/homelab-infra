@@ -38,7 +38,9 @@
     p2_dump_dir: "{{ hostvars[swarm_stack.pin].swarm_pool_path }}/snapshots/authentik/cutover"
     p2_project: "{{ swarm_stack.compose.project | default(swarm_stack.name) }}"
     p2_scratch: swarm-restore-check-authentik
-    p2_image: docker.io/library/postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    # The stack's own postgresql image (Docker Hub postgres:16.15-alpine, from
+    # the Forgejo mirror), already on both workers.
+    p2_image: git.ryzhkov.dev/igor/mirror/docker.io/library/postgres@sha256:49c0be96b8c1cc13508a297288dee13b874298bf2ae34a81c392acd9c0f052b7
     p2_database: authentik
     p2_user: authentik
     p2_checks:
@@ -207,6 +209,10 @@
               - "{{ p2_scratch }}"
               - --network
               - none
+              # Not the daemon's Loki driver: a blocked Loki push can hang the
+              # container's removal (gatus, 2026-10-03).
+              - --log-driver
+              - local
               # A tmpfs at the image's VOLUME path: no anonymous volume is
               # left behind (the nightly restore check's phase 0 carry).
               - --tmpfs

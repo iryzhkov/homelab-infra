@@ -29,8 +29,19 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+    # Host mode, not the routing mesh: homelab's older containers push to
+    # localhost:3100, which resolves to ::1 first. The routing mesh is IPv4
+    # only, and on ::1 the port reaches dockerd's placeholder listener, which
+    # never accepts, so every push (and every container stop flushing its
+    # logs) hung (2026-10-03, F5 evidence). Host mode puts a real listener on
+    # every address of the node Loki runs on. The cost: 3100 answers only on
+    # that node, as it did under Compose; every other client names homelab's
+    # address, so Loki has to stay pinned to homelab.
     ports:
-      - "3100:3100"
+      - target: 3100
+        published: 3100
+        protocol: tcp
+        mode: host
     volumes:
       - type: bind
         source: ${SWARM_STATE_ROOT}/logging/loki

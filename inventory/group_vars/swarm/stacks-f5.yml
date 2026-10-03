@@ -6,6 +6,8 @@
 # Active: cut over on 2026-10-02 (23:49 PDT; Loki fixed at 00:00). Deploy a
 # change with
 #   ansible-playbook playbooks/swarm.yml --tags stacks -e only=logging
+# Do not move it with swarm-move.yml: Loki's 3100 is published in host mode
+# (stacks/logging/stack.yml), and every log client names homelab's address.
 # Since this entry exists, roles/base writes loki_push_url and the
 # non-blocking log mode into each Docker daemon's daemon.json
 # (tasks/docker_logging.yml; applied to homelab, normandy and blackpearl,

@@ -32,7 +32,9 @@
     p1_dump_dir: "{{ hostvars[swarm_stack.pin].swarm_pool_path }}/snapshots/miniflux/cutover"
     p1_project: "{{ swarm_stack.compose.project | default(swarm_stack.name) }}"
     p1_scratch: swarm-restore-check-miniflux
-    p1_image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    # The stack's own db image (Docker Hub postgres:17.11-alpine, from the
+    # Forgejo mirror), already on both workers.
+    p1_image: git.ryzhkov.dev/igor/mirror/docker.io/library/postgres@sha256:be3e03840bb22a93ac0c3b0003d88887e015d4d1707b06913bbf437d564a0e73
     p1_database: miniflux
     p1_user: miniflux
     # exact: the restored count must equal the live one; at_most: entries
@@ -180,6 +182,10 @@
               - "{{ p1_scratch }}"
               - --network
               - none
+              # Not the daemon's Loki driver: a blocked Loki push can hang the
+              # container's removal (gatus, 2026-10-03).
+              - --log-driver
+              - local
               # A tmpfs at the image's VOLUME path: no anonymous volume is
               # left behind (the nightly restore check's phase 0 carry).
               - --tmpfs
