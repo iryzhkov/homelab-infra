@@ -139,12 +139,21 @@
         fail_msg: "{{ hm_pvecm.stdout_lines | select('search', 'Flags|votes|State') | list }}"
         quiet: true
 
+    # A second run, for the power-off after a drain-only run, finds the worker
+    # already drained, its Gatus stopped with the other Compose stacks, and the
+    # expected failures present: it reads only the survivor's Gatus and
+    # ignores what host_maintenance_gatus_expected allows.
+    - name: Note whether {{ hm.worker }} is already drained
+      ansible.builtin.set_fact:
+        hm_redrain: >-
+          {{ hm_nodes.stdout_lines | select('search', hm.worker) | select('search', '[|]Drain$') | list | length > 0 }}
+
     - name: Read both Gatus instances
       ansible.builtin.uri:
         url: "http://{{ hostvars[item].ansible_host }}:{{ host_maintenance_gatus_port }}/api/v1/endpoints/statuses"
         return_content: true
         timeout: 10
-      loop: "{{ groups['swarm_workers'] }}"
+      loop: "{{ [hm.survivor_worker] if hm_redrain else groups['swarm_workers'] }}"
       register: hm_gatus
       delegate_to: localhost
       check_mode: false
@@ -158,7 +167,8 @@
         failing: >-
           {%- set out = [] -%}
           {%- for e in hm_gatus.results | map(attribute='json') | flatten -%}
-          {%-   if e.results | default([]) | length > 0 and not e.results[-1].success -%}
+          {%-   if e.results | default([]) | length > 0 and not e.results[-1].success
+                 and not (hm_redrain and e.key is search(host_maintenance_gatus_expected[host] | trim)) -%}
           {%-     set _ = out.append(e.key) -%}
           {%-   endif -%}
           {%- endfor -%}

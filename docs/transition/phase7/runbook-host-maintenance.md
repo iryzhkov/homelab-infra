@@ -7,6 +7,24 @@ the measurements this runbook relies on. The playbooks are `playbooks/host-drain
 failures are in `playbooks/vars/host-maintenance.yml`. Later this becomes the automated
 drain the requirements document asks for.
 
+This is the plan's `homelab/runbooks/host-maintenance.md`. It was proved on 2026-10-03: both
+hosts drained, powered off for about ten minutes and returned with the playbooks, with the
+results in `2026-10-03-drain-proxmox-b.md` and `2026-10-03-drain-proxmox-a.md`.
+
+In short, per host:
+
+```
+ansible-playbook playbooks/host-drain.yml  -e host=<h> --check        # every check, nothing changed
+ansible-playbook playbooks/host-drain.yml  -e host=<h>                # drain only; verify by hand
+ansible-playbook playbooks/host-drain.yml  -e host=<h> -e power_off=true
+# hold; then wake it (below)
+ansible-playbook playbooks/host-return.yml -e host=<h>
+```
+
+proxmox-b first, then proxmox-a, never both, and the second only after the first is fully back
+and `site.yml`, `swarm.yml` and `backup.yml` check clean. Measured: proxmox-b drains in about 5
+minutes and returns in about 4; proxmox-a drains in about 18 (19 moves) and returns in about 17.
+
 ## What lives where
 
 | Host | Guest | What it carries | How it leaves |
@@ -67,6 +85,9 @@ for proxmox-b, Frigate. In detail:
   this repository, named by every fleet host) are not in a movable form.
 
 Consequences that follow from those, not separate exceptions:
+
+- Agent infrastructure, not household: the agent VM on the host (agent-a or agent-b) stops; the
+  steward coordinator runs on normandy and is down while proxmox-b is (its Gatus checks fail then).
 
 - OpenViking moves to normandy with the other stateful stacks and is reachable as
   `https://ov.ryzhkov.dev` through the edges (live since 2026-10-03 11:15). Clients that name `192.168.70.223:1933` lose it while homelab is
@@ -179,7 +200,16 @@ managers rejoin later through the nodes play with `-e swarm_rebuild=true` after
 
 ## Return: `ansible-playbook playbooks/host-return.yml -e host=<proxmox-a|proxmox-b>`
 
-Power the host on by hand (neither node wakes from power-off over the network). Then:
+Power the host on. Both nodes wake from power-off by Wake-on-LAN (proved 2026-10-03); send the
+magic packet from the other node, which is on the same LAN:
+
+```
+# MAC: proxmox-a 7c:4d:8f:99:6b:56, proxmox-b 9c:7b:ef:a9:e3:d4 (UDM ARP table, /proc/net/arp)
+ssh <other node> "python3 -c \"import socket; m=bytes.fromhex('<mac without colons>'); p=b'\\xff'*6+m*16; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1); [s.sendto(p,('192.168.1.255',x)) for x in (9,7)]\""
+```
+
+The node answers ping about 40 s (proxmox-b) to 2 minutes (proxmox-a) later. Otherwise press the
+power button. Then:
 
 | Step | What happens | If it fails |
 |---|---|---|
@@ -192,6 +222,13 @@ Power the host on by hand (neither node wakes from power-off over the network). 
 | 7. Compose | `docker start` every stopped container of the projects the drain stopped; wait until none is exited, starting or unhealthy | `ansible-playbook playbooks/site.yml -l <host> -e only=<project>` |
 | 8. Stacks home | the survivor's hourly snapshot job runs once (the move needs a peer copy under two hours old), then `swarm-move.yml -e to=<worker>` for every stack whose inventory `pin` names the worker, same order as the drain; then `compose-move.yml -e to=<worker>` for the movable Compose stack whose home is the worker (the override file is removed once both are home); then `-e shed=` stacks are redeployed | a stack left on the survivor keeps working there; move it later |
 | 9. Verify | both Gatus instances without failures, every route through the VIP, keepalived active on both edges and the VIP on exactly one | - |
+| 10. Loki (proxmox-a only) | after homelab returns, Loki's task runs but `/ready` can stay at "Ingester not ready: waiting for 15s after being ready"; then `docker service update --force logging_loki` on a manager, and `curl http://127.0.0.1:3100/ready` on homelab answers `ready` within half a minute | logs are dropped meanwhile, nothing else waits on it |
+
+What the return proves on each host, checked on 2026-10-03: `tank` imported at boot
+(`journalctl -b -u zfs-import@tank`), the pool disk mounted before containerd and Docker
+(monotonic activation times: normandy 7.0, 8.1, 10.2 s; homelab 2.7, 2.9, 5.7 s), the worker came
+back locked and the nodes play unlocked it. Zigbee2MQTT needs a few minutes for the mesh to
+re-form after proxmox-a returns (`NWK_NO_ROUTE` pings, then none).
 
 Swarm does not rebalance stateless tasks when a node returns; they come back when their
 service is next updated, or with `docker service update --force <service>` (start-first, no
@@ -281,3 +318,22 @@ From the 2026-10-03 rehearsals (`2026-10-03-prep.md`): a move of autobrr (SQLite
 with 34 s of route failures; miniflux (Postgres) about 40 s each way with 21 s and 22 s of
 failures and identical row counts; the S-stack drain cost the stateless services 0 to 34 s
 each. phase 4: the VIP moves in 1.34 s.
+
+From the host-down runs (per-service tables in the two drain records): each stateful stack is
+unreachable for 6 to 50 s at its move out and again at its move home (Forgejo 67 s and 88 s,
+the slowest); Immich 16 s and 22 s; Emby 24 s and 28 s; Authentik and forward auth about 50 s and
+37 s. While a host is down, only the accepted exceptions fail: Frigate for proxmox-b; Home
+Assistant, Zigbee, MQTT, Jocasta, dsh, the feed, logging and torrents for proxmox-a.
+
+## Lessons built into the playbooks (2026-10-03)
+
+- Every Swarm route needs a Traefik health check, or Traefik keeps sending part of the traffic to
+  a stopped worker (voice failed every other request while proxmox-b was down; its route now
+  checks `/`).
+- `host-return.yml` waits for Docker to be active before comparing the mount and Docker start
+  times.
+- A second `host-drain.yml` run (the power-off after a drain-only run) reads only the survivor's
+  Gatus and tolerates the expected failures.
+- `compose-move.yml` rolls back to the source automatically when anything after the stop fails,
+  retries copies while the hourly job holds rrsync's lock, removes its staging copy (which would
+  otherwise be shipped to B2 from homelab), and keeps `<pool>/compose` root-only.

@@ -134,6 +134,11 @@
           systemctl show docker -p ActiveEnterTimestampMonotonic --value
       delegate_to: "{{ hm.worker }}"
       register: hr_mount
+      # Docker may still be starting when the guest first answers SSH (its
+      # timestamp reads 0 until then; 2026-10-03, normandy, 30 s after boot).
+      until: hr_mount.stdout_lines | length == 4 and hr_mount.stdout_lines[3] | int > 0
+      retries: 30
+      delay: 10
       changed_when: false
       check_mode: false
 
