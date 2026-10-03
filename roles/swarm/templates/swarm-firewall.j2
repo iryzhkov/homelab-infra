@@ -30,6 +30,9 @@ iptables -C INPUT -j SWARM-INPUT 2>/dev/null || iptables -I INPUT 1 -j SWARM-INP
 # existing DOCKER-USER chain and its rules when it starts.
 iptables -N SWARM-INGRESS 2>/dev/null || true
 iptables -F SWARM-INGRESS
+{% for p in swarm_mesh_published_ports %}
+iptables -A SWARM-INGRESS -i {{ swarm_mesh_iface }} -o docker_gwbridge -s {{ swarm_mesh_cidr }} -p {{ p.proto }} --dport {{ p.port }} -j RETURN
+{% endfor %}
 {% for iface in swarm_ingress_blocked_ifaces %}
 iptables -A SWARM-INGRESS -i {{ iface }} -o docker_gwbridge -j DROP
 {% endfor %}

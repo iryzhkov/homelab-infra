@@ -65,21 +65,32 @@ swarm_registry_owner: igor
 # with it the registry) does not need the registry. hugo is not here: its
 # image is the public nginx, and the site is a bind-mounted directory that
 # the Forgejo webhook builds on homelab.
+#
+# Each image is built (or, for Jocasta, loaded) directly under its registry
+# name, so no local-only tag exists for an image prune to remove: the
+# weekly docker-update sweep of 2026-10-03 pruned the old local tags
+# (dsh-dsh, cv-site-app, openviking-openviking, whisper-cpp-dispatch:local,
+# jocasta:<commit>) and broke every reference to them. The Compose files
+# carry `image: <registry name>` beside `build:`, so a rebuild
+# (`docker compose build` in the stack directory, or `docker build -t
+# <registry name> <context>`) re-creates the same name; then
+# `ansible-playbook playbooks/swarm.yml --tags registry` pushes it, because
+# a rebuilt image has no registry digest yet, and pre-pulls it elsewhere.
 swarm_registry_images:
   - name: cv-site
-    source: cv-site-app:latest
+    source: git.ryzhkov.dev/igor/cv-site:latest
     tag: latest
     build_host: homelab
   - name: dsh
-    source: dsh-dsh:latest
+    source: git.ryzhkov.dev/igor/dsh:latest
     tag: latest
     build_host: homelab
   - name: openviking
-    source: openviking-openviking:latest
+    source: git.ryzhkov.dev/igor/openviking:latest
     tag: latest
     build_host: homelab
   - name: whisper-server
-    source: whisper-cpp-dispatch:local
+    source: git.ryzhkov.dev/igor/whisper-server:latest
     tag: latest
     build_host: homelab
   - name: jocasta

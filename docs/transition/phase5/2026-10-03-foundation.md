@@ -233,6 +233,25 @@ The full upstream digests are in the comment above each rewritten `image:` line.
 - After the switches: `swarm.yml --check` changed=0 on homelab, normandy and oci; `stack-lint.py stacks/*/stack.yml` exit 0.
 - `scripts/stack-lint.py stacks/*/stack.yml`: exit 0. `ansible-playbook playbooks/swarm.yml --check`: changed=0 on homelab, normandy and oci.
 
+## 8. Pruned local tags and mesh pushes to Loki (2026-10-03)
+
+Background in `2026-10-03-F5.md`: the weekly docker-update sweep pruned homelab's local tags `dsh-dsh:latest`, `jocasta:37ce...`, `cv-site-app`, `openviking-openviking` and `whisper-cpp-dispatch:local`; the images remain under `git.ryzhkov.dev/igor/...`.
+
+Repository changes:
+
+- `inventory/group_vars/swarm/main.yml`: every `swarm_registry_images` source is the registry name itself; a comment records the rebuild path (build under the registry name, then `--tags registry`, which pushes because a rebuilt image has no registry digest yet). `swarm.yml --tags registry --check`: changed=0 on both workers.
+- `inventory/host_vars/homelab.yml`: `jocasta_image: git.ryzhkov.dev/igor/jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63`, matching the hand-edited `~/app/jocasta/.env`; `site.yml --check -e only=jocasta` shows the `.env` unchanged. `docs/jocasta.md`: load CI builds under the registry name.
+- Compose files: `image: git.ryzhkov.dev/igor/<name>:latest` beside `build:` for dsh, cv-site and openviking; whisper's `image:` changed from `whisper-cpp-dispatch:local`. cv-site, openviking and whisper are Swarm stacks now, so their Compose files are not deployed.
+
+Not converged, waiting for the lead: both remaining Compose projects would be recreated, with the same image ID.
+
+- jocasta: the running container was created from `jocasta:37ce...`; any `docker compose up` (`site.yml`, or `jocasta-container.service` at boot) now recreates it because the image name in its configuration changed with the hand edit. `site.yml --check -l homelab -e only=jocasta`: `Bring the stack up` changed.
+- dsh: the deployed Compose file still has no `image:`, so `site.yml --check` fails at dsh (`No such image: dsh-dsh:latest`, Compose's dry run on the old file). A real run installs the new file and recreates dsh (also picking up the `compose_logging_override` another executor added to `roles/compose_stack`).
+
+Mesh pushes to Loki: toolfeedback, which UpKeeper ships to every fleet host in homelab-cli (found on gaming-pc and in a t3-steward workspace on homelab), pushes to `http://10.42.0.2:3100`. homelab's `SWARM-INGRESS` dropped `-i nebula1 -o docker_gwbridge`, which covers Loki's host-mode port. The role now has `swarm_mesh_published_ports` (3100/tcp) and `swarm_mesh_cidr` (10.42.0.0/24): on homelab `-A SWARM-INGRESS -s 10.42.0.0/24 -i nebula1 -o docker_gwbridge -p tcp --dport 3100 -j RETURN` ahead of the drop; on normandy `ufw route insert 1 allow in on nebula1 out on docker_gwbridge from 10.42.0.0/24 to any port 3100 proto tcp`. Applied with `swarm.yml --tags nodes -l homelab,normandy`. From the laptop (10.42.0.5): `curl http://10.42.0.2:3100/ready` 000 before, 200 after; `10.42.0.2:5090` still no answer (mesh block intact); `10.42.0.7:3100` no answer because Loki runs on homelab only.
+
+Checks: `base.yml --check` changed=0 on all seven hosts. `swarm.yml --check`: normandy and oci changed=0; homelab reports five stacks (vaultwarden, navidrome, sonarr-tv, radarr-movie and one more) whose `deployed.yml` would change, all from another executor's uncommitted `swarm_stack_logging` addition to `roles/swarm/tasks/stack.yml`, not from this section. `site.yml --check`: changed=0 on blackpearl, normandy, public-api and public-api-b; homelab fails at dsh as above until the dsh and jocasta recreates are approved.
+
 ## Autolock and OCI rules
 
 The migration plan carries the operating rules (unlock after a manager restart, no drain while OCI is unreachable). With three managers one may be down or locked and the cluster keeps quorum. Because OCI is also the Proxmox QDevice and the Nebula lighthouse, and the control plane now runs over Nebula, an OCI outage removes one Swarm vote and the QDevice vote together; the two workers still hold 2 of 3.

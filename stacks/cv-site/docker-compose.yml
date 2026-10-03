@@ -1,5 +1,6 @@
 services:
   app:
+    image: git.ryzhkov.dev/igor/cv-site:latest
     build: .
     container_name: cv-site
     ports:

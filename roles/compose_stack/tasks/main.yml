@@ -124,6 +124,57 @@
     label: "{{ item.dest }}"
   register: stack_config_files
 
+# See compose_logging_override in defaults/main.yml.
+- name: Read this host's Docker log defaults
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: compose_daemon_json
+  failed_when: false
+
+- name: Work out which services get the logging override
+  ansible.builtin.set_fact:
+    compose_log_daemon: >-
+      {{ (compose_daemon_json.content | b64decode | from_json)
+         if compose_daemon_json.content is defined else {} }}
+    compose_log_services: >-
+      {{ ((lookup('file', playbook_dir ~ '/../stacks/' ~ (stack.source | default(stack.name)) ~ '/docker-compose.yml')
+           | from_yaml).services | default({})).items()
+         | rejectattr('1.logging', 'defined') | map(attribute='0') | list }}
+
+- name: Decide whether this stack gets the override
+  ansible.builtin.set_fact:
+    compose_log_override_wanted: >-
+      {{ compose_logging_override | bool
+         and compose_log_daemon['log-driver'] | default('') == 'loki'
+         and (compose_log_daemon['log-opts'] | default({}))['mode'] | default('') == 'non-blocking'
+         and compose_log_services | length > 0 }}
+    compose_log_doc: >-
+      {%- set services = {} -%}
+      {%- for name in compose_log_services -%}
+      {%-   set _ = services.update({name: {'logging': {'driver': 'loki',
+              'options': (compose_log_daemon['log-opts'] | default({}))}}}) -%}
+      {%- endfor -%}
+      {{ {'services': services} }}
+
+- name: Install the logging override
+  ansible.builtin.copy:
+    content: |
+      # Written by homelab-infra roles/compose_stack (compose_logging_override):
+      # this host's daemon.json Loki settings, made explicit so they apply
+      # without a daemon restart. Do not edit; it is rewritten on every run.
+      {{ compose_log_doc | to_nice_yaml(indent=2) }}
+    dest: "{{ stack_dir }}/docker-compose.override.yml"
+    mode: "0644"
+  become: "{{ stack_needs_root }}"
+  when: compose_log_override_wanted | bool
+
+- name: Remove a logging override this stack no longer gets
+  ansible.builtin.file:
+    path: "{{ stack_dir }}/docker-compose.override.yml"
+    state: absent
+  become: "{{ stack_needs_root }}"
+  when: not compose_log_override_wanted | bool
+
 # Compose reads .env for interpolation on its own, but a stack that keeps its
 # variables somewhere else needs --env-file, or every ${VAR} in the Compose
 # file resolves to an empty string. immich is the one that does.
@@ -160,7 +211,8 @@
            'env_keys': (stack_env | default({}) | list | sort)
                        if (stack.secrets is defined or stack.env_extra is defined)
                           and (stack.write_env | default(true)) else [],
-           'config_files': stack.config_templates | default([]) | map(attribute='dest') | list,
+           'config_files': (stack.config_templates | default([]) | map(attribute='dest') | list)
+                           + (['docker-compose.override.yml'] if compose_log_override_wanted | bool else []),
          }] }}
 
 - name: Restart the stack when a mounted configuration file changed

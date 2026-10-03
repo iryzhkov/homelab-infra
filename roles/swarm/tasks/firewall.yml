@@ -165,6 +165,38 @@
       register: swarm_ufw_route
       changed_when: "'Skipping' not in swarm_ufw_route.stdout"
 
+    # Inserted at the top, above the route denies, as ufw evaluates in order.
+    - name: Let mesh clients reach the mesh-published ports
+      ansible.builtin.command:
+        argv:
+          - ufw
+          - route
+          - insert
+          - "1"
+          - allow
+          - in
+          - "on"
+          - "{{ swarm_mesh_iface }}"
+          - out
+          - "on"
+          - docker_gwbridge
+          - from
+          - "{{ swarm_mesh_cidr }}"
+          - to
+          - any
+          - port
+          - "{{ item.port }}"
+          - proto
+          - "{{ item.proto }}"
+          - comment
+          - swarm mesh port {{ item.port }}
+      become: true
+      loop: "{{ swarm_mesh_published_ports }}"
+      loop_control:
+        label: "{{ item.port }}/{{ item.proto }}"
+      register: swarm_ufw_mesh_ports
+      changed_when: "'Skipping' not in swarm_ufw_mesh_ports.stdout"
+
 - name: Use a firewall unit where there is no ufw
   when:
     - swarm_firewall == 'unit'

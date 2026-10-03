@@ -134,9 +134,11 @@
     argv:
       - docker
       - ps
-      - -aq
+      - -a
       - --filter
       - label=com.docker.compose.project={{ swarm_stack.compose.project | default(swarm_stack.name) }}
+      - --format
+      - "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Label \"com.docker.swarm.service.id\"{{ '}}' }}"
   # delegate_to is templated before when, so it needs a value for a stack
   # without a compose key too.
   delegate_to: "{{ swarm_stack.compose.host | default(inventory_hostname) }}"
@@ -145,11 +147,15 @@
   check_mode: false
   when: swarm_stack.compose is defined
 
+# Only containers that are not Swarm tasks count: an image built by
+# `docker compose build` carries the com.docker.compose.project label itself,
+# so the stack's own tasks match the filter (cv-site, 2026-10-03).
 - name: Remember whether a Compose project still runs
   ansible.builtin.set_fact:
     swarm_stack_compose_present: >-
       {{ swarm_stack.compose is defined
-         and swarm_stack_compose.stdout | default('') | trim | length > 0 }}
+         and swarm_stack_compose.stdout_lines | default([])
+             | map('trim') | reject('search', ' ') | list | length > 0 }}
 
 - name: Report the cutover a real run would refuse
   ansible.builtin.debug:
@@ -335,9 +341,25 @@
     - ansible_check_mode
     - swarm_stack_rendered.rc | int == 0
 
+# Every service that names no log driver gets swarm_stack_logging
+# (defaults/main.yml): a service's own LogConfig reaches its tasks at once,
+# while the daemon's defaults change only with a daemon restart.
+- name: Give every service without its own logging the shared Loki settings
+  ansible.builtin.set_fact:
+    swarm_stack_deployed: >-
+      {%- set doc = swarm_stack_rendered.stdout | from_yaml -%}
+      {%- for name, svc in (doc.services | default({})).items() -%}
+      {%-   if svc.logging is not defined -%}
+      {%-     set _ = svc.update({'logging': swarm_stack_logging}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ doc | to_nice_yaml(indent=2, width=4096) }}
+  no_log: true
+  when: swarm_stack_rendered.rc | int == 0
+
 - name: Install the rendered file
   ansible.builtin.copy:
-    content: "{{ swarm_stack_rendered.stdout }}\n"
+    content: "{{ swarm_stack_deployed }}"
     dest: "{{ swarm_stack_dir }}/deployed.yml"
     mode: "0600"
   register: swarm_stack_file

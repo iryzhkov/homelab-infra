@@ -23,9 +23,14 @@ credentials alone are not a recovery copy.
 ## Deploy
 
 Build the server image from the exact Jocasta source commit that passed CI,
-load it onto homelab with the tag jocasta:<full-source-commit>, and set
-jocasta_image in the homelab inventory to that immutable tag. Alternatively
-use an immutable registry digest. The playbook refuses mutable tags.
+load it onto homelab with the tag
+git.ryzhkov.dev/igor/jocasta:<full-source-commit>, and set jocasta_image in
+the homelab inventory to that immutable tag; then
+`ansible-playbook playbooks/swarm.yml --tags registry` pushes it to Forgejo
+and pre-pulls it on normandy. Use the registry name, not a local-only tag such
+as jocasta:<commit>: the weekly image prune removed that one on 2026-10-03.
+Alternatively use an immutable registry digest. The playbook refuses mutable
+tags.
 
 Run from this repository with the controller's existing SOPS age key:
 
