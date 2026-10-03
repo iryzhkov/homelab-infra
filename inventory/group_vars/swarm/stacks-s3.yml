@@ -1,0 +1,22 @@
+---
+# Phase 5 batch S3, static sites: hugo (blog.ryzhkov.dev). See
+# docs/transition/phase5/migration-plan.md and the batch's evidence file,
+# docs/transition/phase5/2026-10-03-S3.md.
+#
+# The entry waits in pending_swarm_stacks_s3, a name nothing reads. It is
+# activated in the change that cuts hugo over, together with the new webhook
+# handler (roles/forgejo_webhooks/files/handlers/igor/blog.sh): the variable
+# is renamed swarm_stacks_s3, and swarm.yml (with -e swarm_cutover=hugo),
+# site.yml for the handler, traefik.yml and the Gatus deploy run straight
+# after.
+
+pending_swarm_stacks_s3:
+  - name: hugo
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/hugo/blog/deploy
+      project: hugo
+    routes:
+      - host: blog.ryzhkov.dev
+        port: 4580

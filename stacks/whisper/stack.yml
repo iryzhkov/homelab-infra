@@ -1,0 +1,49 @@
+# Swarm stack for the CPU fallback of whisper.ryzhkov.dev (phase 5, batch S2).
+# Replaces docker-compose.yml beside it, which stays until the phase 5
+# cleanup, and which is also where the image is built (Dockerfile in the
+# Compose directory on homelab): GGML_NATIVE off, one CPU backend per
+# instruction-set level, so the same image runs on homelab (Alder Lake) and
+# normandy (i5-9500, AVX2, no AVX-512).
+#
+# The image is the registry copy of whisper-cpp-dispatch:local, pushed and
+# pre-pulled by `playbooks/swarm.yml --tags registry` and pinned here to the
+# digest both workers hold. After a rebuild: run --tags registry, then update
+# the digest.
+#
+# Stateless: the small.en model (466 MB) is read-only, mirrored by
+# swarm-prepare.yml to /srv/swarm/whisper/models on both workers. Traefik's
+# whisper-cpu fallback (roles/traefik/templates/whisper.yml.j2) lists both
+# workers.
+services:
+  whisper:
+    image: git.ryzhkov.dev/igor/whisper-server:latest@sha256:c256c7b5e92981c17b308eda4dd5ab2016f5239999c704a8c0b263ae64ba6251
+    entrypoint: ["bash", "-c"]
+    command:
+      - /app/build/bin/whisper-server
+        --model /models/ggml-small.en.bin
+        --host 0.0.0.0
+        --port 8080
+        --threads 4
+    ports:
+      - "8080:8080"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/whisper/models
+        target: /models
+        read_only: true
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 283 MiB with the model loaded. Both workers
+        # have four vCPUs; three leave one for everything else on the node
+        # (Frigate and Immich on normandy) while a transcription runs.
+        limits:
+          memory: 1536M
+          cpus: "3"
+        reservations:
+          memory: 320M
+      restart_policy:
+        condition: any

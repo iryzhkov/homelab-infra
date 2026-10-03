@@ -1,0 +1,36 @@
+# Swarm stack for voice.ryzhkov.dev, the browser transcription front end
+# (phase 5, batch S2). Replaces docker-compose.yml beside it, which stays until
+# the phase 5 cleanup.
+#
+# Stateless. The Caddyfile and the static site are not in this repository:
+# they live in the Compose directory on homelab (~/app/voice), and
+# swarm-prepare.yml mirrors them to /srv/swarm/voice on both workers.
+# Caddy proxies to https://whisper.ryzhkov.dev and to gaming-pc's Ollama by
+# address, both reachable from either worker.
+services:
+  voice:
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    ports:
+      - "8097:8097"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/voice/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/voice/site
+        target: /srv
+        read_only: true
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 12 MiB.
+        limits:
+          memory: 64M
+        reservations:
+          memory: 16M
+      restart_policy:
+        condition: any

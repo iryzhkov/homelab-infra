@@ -1,0 +1,34 @@
+# The Lounge as a Swarm stack (phase 5, batch F3). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f3.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State (config.js, users/, vapid.json, logs/ with the 1.4 GB
+# igor.sqlite3) lives in ${SWARM_STATE_ROOT}/thelounge/data on the node
+# labelled pin.thelounge. The image is the version :latest resolved to at
+# conversion (4.5.2).
+
+services:
+  thelounge:
+    image: ghcr.io/thelounge/thelounge:4.5.2
+    ports:
+      - "9009:9000"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/thelounge/data
+        target: /var/opt/thelounge
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.thelounge == true
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 112M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

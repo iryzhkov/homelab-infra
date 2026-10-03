@@ -1,0 +1,33 @@
+# Swarm stack for adguardhome-sync, dns-sync.ryzhkov.dev (phase 5, batch S2).
+# Replaces docker-compose.yml beside it, which stays until the phase 5 cleanup.
+# This is the sync tool, not AdGuard Home: it copies the origin LXC's settings
+# to the replicas every two hours.
+#
+# Stateless. Its configuration, which carries the AdGuard admin login, is
+# rendered by swarm-prepare.yml from templates/adguardhome-sync.yaml.j2 onto
+# both workers as /srv/swarm/adguard/adguardhome-sync.yaml, owned by the
+# container's uid 1001 and mode 0400 (the Compose copy was 0644). The same
+# file restarts the service when the configuration changes.
+services:
+  adguardhome-sync:
+    image: ghcr.io/bakito/adguardhome-sync:latest@sha256:b3499852640866c5742fd72cca190f40e2741c279d60fd62b9130cd8142aafec
+    ports:
+      - "8321:8080"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/adguard/adguardhome-sync.yaml
+        target: /config/adguardhome-sync.yaml
+        read_only: true
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 27 MiB.
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+      restart_policy:
+        condition: any

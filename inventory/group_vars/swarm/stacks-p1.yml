@@ -1,0 +1,29 @@
+---
+# Phase 5 batch P1: Miniflux, the small Postgres stack, before Authentik (P2),
+# which it logs in through. See docs/transition/phase5/migration-plan.md and
+# docs/transition/phase5/2026-10-03-P1.md.
+#
+# DRAFT, NOT ACTIVE. The list is named draft_swarm_stacks_p1 so that nothing
+# reads it: playbooks/swarm.yml, site.yml, the Traefik generator, Gatus and
+# the backup role all look for variables named swarm_stacks_*. The cutover
+# activates it by renaming the variable to swarm_stacks_p1, in the same change
+# as the cutover run (batch 0 rule), and runs playbooks/traefik.yml,
+# site.yml -l homelab,normandy -e only=gatus and backup.yml straight after.
+draft_swarm_stacks_p1:
+  - name: miniflux
+    secrets: homelab-miniflux
+    pin: homelab
+    compose:
+      host: homelab
+      dir: "{{ hostvars['homelab'].stack_root }}/miniflux"
+    prepare_tasks: swarm-prepare.yml
+    routes:
+      - host: rss.ryzhkov.dev
+        port: 5080
+    # Hourly pg_dump on the node holding pin.miniflux, kept 48, copied to the
+    # other worker; no live file mirror, since a running Postgres directory is
+    # not a consistent copy. A move takes a cold copy of the whole directory.
+    snapshot:
+      class: postgres
+      postgres:
+        - { service: miniflux_db, database: miniflux, user: miniflux, keep: 48 }

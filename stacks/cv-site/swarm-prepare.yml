@@ -1,0 +1,135 @@
+---
+# Seed /srv/swarm/cv-site from the Compose project at cutover (phase 5, batch F4).
+#
+# Included by roles/swarm/tasks/stack.yml on the bootstrap manager on every
+# deploy of the stack, after the pin label is set and before the Compose
+# project is removed. It acts only in the cutover run
+# (-e swarm_cutover=cv-site), and only while the state directory on the
+# pinned node holds no .swarm-owner:
+#
+#   1. a first copy of each source while Compose still runs, to shorten the
+#      interruption
+#   2. stop the Compose project's containers
+#   3. the final copy (rsync -a --numeric-ids --delete) from quiescent files
+#   4. write .swarm-owner naming the pinned node: from then on the hourly
+#      snapshot (roles/backup, homelab-swarm-snapshot) takes the stack, and
+#      playbooks/swarm-move.yml can move it
+#
+# A re-run after a failed deploy finds .swarm-owner and copies nothing, so it
+# never overwrites what the Swarm service wrote with older Compose data. The
+# Compose directory is left as it was: it is the rollback copy.
+
+# data/ holds analytics.jsonl, appended on every request (root-owned, copied
+# with numeric ids); the rest of the Compose directory is the source the
+# image was built from and stays.
+- name: Name what the cutover copies
+  ansible.builtin.set_fact:
+    swarm_prep_copies:
+      - src: "{{ swarm_stack.compose.dir }}/data/"
+        dest: "{{ swarm_state_root }}/cv-site/data/"
+
+- name: Find the node holding pin.{{ swarm_stack.name }}
+  ansible.builtin.command:
+    argv: [docker, node, ls, -q, --filter, "node.label=pin.{{ swarm_stack.name }}=true"]
+  register: swarm_prep_pinned
+  changed_when: false
+  check_mode: false
+
+- name: Read the pinned node's inventory name
+  ansible.builtin.command:
+    argv: [docker, node, inspect, --format, "{{ swarm_prep_host_format }}", "{{ swarm_prep_pinned.stdout_lines[0] }}"]
+  vars:
+    swarm_prep_host_format: !unsafe '{{index .Spec.Labels "host"}}'
+  register: swarm_prep_pin_host
+  changed_when: false
+  check_mode: false
+  when: swarm_prep_pinned.stdout_lines | length == 1
+
+# Before the first cutover (and in check mode, where the label task is
+# skipped) no node carries the label yet: the inventory's pin is the answer.
+- name: Remember where the state lives
+  ansible.builtin.set_fact:
+    swarm_prep_node: >-
+      {{ (swarm_prep_pin_host.stdout | trim)
+         if swarm_prep_pinned.stdout_lines | length == 1 else swarm_stack.pin }}
+    swarm_prep_dir: "{{ swarm_state_root }}/{{ swarm_stack.name }}"
+
+- name: Look for the owner marker on {{ swarm_prep_node }}
+  ansible.builtin.stat:
+    path: "{{ swarm_prep_dir }}/.swarm-owner"
+  delegate_to: "{{ swarm_prep_node }}"
+  become: true
+  register: swarm_prep_owner
+
+- name: Seed the state directory from the Compose project
+  when:
+    - swarm_cutover | default('') == swarm_stack.name
+    - not swarm_prep_owner.stat.exists
+  block:
+    - name: Refuse to seed across hosts
+      ansible.builtin.assert:
+        that: swarm_prep_node == swarm_stack.compose.host
+        fail_msg: >-
+          pin.{{ swarm_stack.name }} is on {{ swarm_prep_node }} but the Compose
+          project runs on {{ swarm_stack.compose.host }}; the cutover copies on
+          one host only. Move the label back or seed by hand.
+        quiet: true
+
+    - name: Create the state directory
+      ansible.builtin.file:
+        path: "{{ swarm_prep_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      delegate_to: "{{ swarm_prep_node }}"
+      become: true
+
+    - name: Copy the state while Compose still runs, to shorten the stop
+      ansible.builtin.command:
+        argv: "{{ ['rsync', '-a', '--numeric-ids', '--delete', '--mkpath'] + item.extra | default([]) + [item.src, item.dest] }}"
+      loop: "{{ swarm_prep_copies }}"
+      loop_control:
+        label: "{{ item.src }}"
+      delegate_to: "{{ swarm_prep_node }}"
+      become: true
+      changed_when: true
+
+    - name: List the Compose project's running containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - -q
+          - --filter
+          - label=com.docker.compose.project={{ swarm_stack.compose.project | default(swarm_stack.name) }}
+      delegate_to: "{{ swarm_stack.compose.host }}"
+      register: swarm_prep_running
+      changed_when: false
+
+    - name: Stop them, so the final copy reads quiescent files
+      ansible.builtin.command:
+        argv: "{{ ['docker', 'stop', '--time', '30'] + swarm_prep_running.stdout_lines }}"
+      delegate_to: "{{ swarm_stack.compose.host }}"
+      changed_when: true
+      when: swarm_prep_running.stdout_lines | length > 0
+
+    - name: Copy the state again from the stopped project
+      ansible.builtin.command:
+        argv: "{{ ['rsync', '-a', '--numeric-ids', '--delete', '--mkpath'] + item.extra | default([]) + [item.src, item.dest] }}"
+      loop: "{{ swarm_prep_copies }}"
+      loop_control:
+        label: "{{ item.src }}"
+      delegate_to: "{{ swarm_prep_node }}"
+      become: true
+      changed_when: true
+
+    - name: Hand the stack to {{ swarm_prep_node }}
+      ansible.builtin.copy:
+        content: "{{ swarm_prep_node }}\n"
+        dest: "{{ swarm_prep_dir }}/.swarm-owner"
+        owner: root
+        group: root
+        mode: "0644"
+      delegate_to: "{{ swarm_prep_node }}"
+      become: true

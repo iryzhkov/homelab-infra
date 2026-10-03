@@ -1,0 +1,78 @@
+---
+# Phase 5 batch F3 (sqlite-agent-infra): forgejo, openviking, thelounge.
+# docs/transition/phase5/migration-plan.md; evidence and cutover record in
+# docs/transition/phase5/2026-10-03-F3.md.
+#
+# jocasta is not here: it stays a Compose project on homelab (compose-pinned).
+# Its port is bound to homelab's mesh address and filtered per source by
+# jocasta-firewall; a Swarm port is published on every interface of both
+# workers through the routing mesh, which the ingress filter drops on
+# nebula1, the only interface the edge proxies reach it on. Reasons in full
+# in the F3 evidence file.
+#
+# NOT ACTIVE YET: the entries are in pending_swarm_stacks_f3, which nothing
+# reads (only swarm_stacks_* variables are). Activate one stack at its
+# cutover by moving its entry into a list named swarm_stacks_f3 in this file,
+# then run, in order:
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name> -e swarm_cutover=<name>
+#   ansible-playbook playbooks/traefik.yml
+#   ansible-playbook playbooks/site.yml -l homelab,normandy -e only=gatus
+#   ansible-playbook playbooks/backup.yml -l homelab,normandy
+
+pending_swarm_stacks_f3:
+  - name: forgejo
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "{{ hostvars['homelab'].stack_root }}/forgejo"
+      project: forgejo
+    routes:
+      - host: git.ryzhkov.dev
+        port: 3500
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: forgejo, path: /srv/swarm/forgejo/data/gitea/gitea.db, keep: 48 }
+      # Repositories, LFS, attachments, the registry's packages, app.ini and
+      # the SSH host keys. Logs, temporary files and generated archives are
+      # left out.
+      files:
+        - /srv/swarm/forgejo/data
+      exclude: [gitea/gitea.db, gitea/gitea.db-*, gitea/log/**, gitea/tmp/**, gitea/repo-archive/**]
+
+  - name: openviking
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "{{ hostvars['homelab'].stack_root }}/openviking"
+      project: openviking
+    # No Traefik route: agents and dsh call port 1933 on homelab's address
+    # (dsh through stack_host_ip, which keeps answering through the mesh).
+    snapshot:
+      class: files
+      # A vector store and plain files, no SQLite: mirrored hourly, copied
+      # cold on a move.
+      files:
+        - /srv/swarm/openviking/data
+        - /srv/swarm/openviking/config
+
+  - name: thelounge
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "{{ hostvars['homelab'].stack_root }}/thelounge"
+      project: thelounge
+    routes:
+      - host: irc.ryzhkov.dev
+        port: 9009
+    snapshot:
+      # files, not sqlite: logs/igor.sqlite3 is 1.4 GB, and an hourly gzipped
+      # copy would send about half a gigabyte an hour to the other worker and
+      # to Backblaze for IRC history. The mirror's copy of it is
+      # crash-consistent at best; a move copies it cold.
+      class: files
+      files:
+        - /srv/swarm/thelounge/data

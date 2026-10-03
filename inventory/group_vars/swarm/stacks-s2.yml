@@ -1,0 +1,68 @@
+---
+# Phase 5 batch S2, stateless voice and miscellaneous: adguard
+# (adguardhome-sync), gatus-public, voice, wyoming-openai, wyoming-piper,
+# whisper. See docs/transition/phase5/migration-plan.md and the batch's
+# evidence file, docs/transition/phase5/2026-10-03-S2.md.
+#
+# Entries wait in pending_swarm_stacks_s2, a name nothing reads. A stack is
+# activated in the change that cuts it over: its entry moves to
+# swarm_stacks_s2, and swarm.yml (with -e swarm_cutover=<name>), traefik.yml
+# and the Gatus deploy run straight after. When every entry has moved,
+# pending_swarm_stacks_s2 is deleted.
+#
+# Every stack here keeps files under /srv/swarm/<name> on both workers,
+# written by its swarm-prepare.yml; none of them is state worth a snapshot.
+
+pending_swarm_stacks_s2:
+  - name: adguard
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/adguard
+    routes:
+      - host: dns-sync.ryzhkov.dev
+        port: 8321
+        # adguardhome-sync answers 401 on / and 200 on /healthz.
+        health_check:
+          path: /healthz
+
+  - name: gatus-public
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/gatus-public
+    routes:
+      - host: uptime.ryzhkov.dev
+        port: 3001
+
+  - name: voice
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/voice
+    routes:
+      - host: voice.ryzhkov.dev
+        port: 8097
+        # No unauthenticated endpoint answers 200, as before.
+        health_check: false
+
+  # No route: Home Assistant names 192.168.70.223:10300.
+  - name: wyoming-openai
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/wyoming-openai
+
+  # No route: Home Assistant names 192.168.70.223:10200.
+  - name: wyoming-piper
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/wyoming-piper
+
+  # No route here: roles/traefik/templates/whisper.yml.j2 lists the workers
+  # as the CPU fallback of whisper.ryzhkov.dev.
+  - name: whisper
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/whisper

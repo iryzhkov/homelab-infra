@@ -1,0 +1,28 @@
+# Swarm stack for speed.ryzhkov.dev (phase 5, batch S1). Replaces
+# docker-compose.yml beside it, which stays until the phase 5 cleanup.
+#
+# Stateless. A speed test through Traefik now measures the path to whichever
+# worker runs the task, plus the routing mesh hop when Traefik reaches the
+# other one. Image pinned to the digest the Compose container ran; the tag
+# alone would have pulled a newer build during the move.
+services:
+  speedtest:
+    image: ghcr.io/librespeed/speedtest:latest@sha256:431062ce955c5e9b3eda5034ab09cce3daff7608c3bcfacdf17f49fa6f5f8cf0
+    environment:
+      MODE: standalone
+      TITLE: "Speed to my server"
+    ports:
+      - "7080:8080"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 11 MiB idle; a test buffers in PHP.
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+      restart_policy:
+        condition: any

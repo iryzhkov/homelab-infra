@@ -1,0 +1,61 @@
+# Forgejo as a Swarm stack (phase 5, batch F3). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f3.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State (git/, gitea/ with gitea.db and the registry's packages,
+# ssh/ with the host keys) lives in ${SWARM_STATE_ROOT}/forgejo/data on the
+# node labelled pin.forgejo.
+#
+# Forgejo hosts the container registry every Swarm node pulls the locally
+# built images from; those are pre-pulled on both workers, so a move of this
+# stack does not need the registry it moves.
+#
+# Differences from the Compose file: the image is the version :12 resolved to
+# at conversion (12.0.4); /etc/timezone is not mounted (normandy, an Arch
+# host, has none) and TZ says the same thing; the restart delay is longer,
+# because Forgejo registers its Authentik login source at boot and Authentik
+# may still be starting after a node restart (phase 3 carry).
+
+services:
+  server:
+    image: codeberg.org/forgejo/forgejo:12.0.4
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      TZ: US/Pacific
+      # Git over SSH. The container's sshd listens on 22; the stack publishes
+      # it as 2222, and SSH_PORT is what Forgejo prints in clone URLs.
+      FORGEJO__server__DISABLE_SSH: "false"
+      FORGEJO__server__SSH_DOMAIN: git.ryzhkov.dev
+      FORGEJO__server__SSH_PORT: "2222"
+      FORGEJO__server__SSH_LISTEN_PORT: "22"
+      # A push to a repository that does not exist creates it, private.
+      FORGEJO__repository__ENABLE_PUSH_CREATE_USER: "true"
+      FORGEJO__repository__DEFAULT_PUSH_CREATE_PRIVATE: "true"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/forgejo/data
+        target: /data
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+    ports:
+      - "3500:3000"
+      - "2222:22"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.forgejo == true
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 320M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 15s

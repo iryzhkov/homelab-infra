@@ -1,0 +1,46 @@
+# Komga as a Swarm stack (phase 5, batch F2). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f2.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State lives in ${SWARM_STATE_ROOT}/komga/config on the node
+# labelled pin.komga; the manga library is the NAS share, mounted at the
+# same path on both workers.
+#
+# The image is the version the Compose project ran at conversion (26.04,
+# pinned by digest because its version tag was not checked), so the cutover
+# does not upgrade it.
+#
+# The JVM heap is capped below the memory limit (the plan's -Xmx768m with a
+# 1G limit), and CPU is limited because library scans burst.
+
+services:
+  komga:
+    image: gotson/komga@sha256:9cf102f5fb78e2e020700c53eca757e4f4d4e347121b0a16380822760337cca9
+    ports:
+      - "25600:25600"
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx768m
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/komga/config
+        target: /config
+      - type: bind
+        source: /mnt/shared/media/manga
+        target: /data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.komga == true
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2"
+        reservations:
+          memory: 480M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

@@ -1,0 +1,68 @@
+# cv-site (igor.ryzhkov.dev) as a Swarm stack (phase 5, batch F4). Deployed
+# by playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f4.yml; the Compose file beside this one (which builds the image
+# from the checkout in ~/cv-site) stays until the phase 5 cleanup. The image
+# is the one `--tags registry` pushes and pre-pulls on both workers; rebuild
+# and run `--tags registry` again to publish a change.
+#
+# State: ${SWARM_STATE_ROOT}/cv-site/data (analytics.jsonl, appended on every
+# request, and the contact and project files) on the node labelled
+# pin.cv-site. OLLAMA_URL and IMMICH_URL come from the inventory entry, so
+# they follow gaming-pc and the Immich stack. The Discord webhook and the
+# Immich key and album are Docker secrets; the application reads only plain
+# variables, so the command exports them from /run/secrets before it starts.
+# ADMIN_KEY keeps the Compose file's default, as it ran.
+
+services:
+  app:
+    image: git.ryzhkov.dev/igor/cv-site:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        export DISCORD_WEBHOOK="$$(cat /run/secrets/discord_webhook)"
+        IMMICH_API_KEY="$$(cat /run/secrets/immich_api_key)"
+        IMMICH_ALBUM_ID="$$(cat /run/secrets/immich_album_id)"
+        && exec ./cv-site
+    ports:
+      - "8091:8091"
+    environment:
+      PORT: "8091"
+      OLLAMA_URL: ${OLLAMA_URL:?set by env_extra}
+      IMMICH_URL: ${IMMICH_URL:?set by env_extra}
+      ADMIN_KEY: ${ADMIN_KEY:-changeme}
+    secrets:
+      - discord_webhook
+      - immich_api_key
+      - immich_album_id
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/cv-site/data
+        target: /app/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.cv-site == true
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 32M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+secrets:
+  discord_webhook:
+    name: cv-site_discord_webhook_${SECRET_HASH_DISCORD_WEBHOOK}
+    file: ./secrets/DISCORD_WEBHOOK
+  immich_api_key:
+    name: cv-site_immich_api_key_${SECRET_HASH_IMMICH_API_KEY}
+    file: ./secrets/IMMICH_API_KEY
+  immich_album_id:
+    name: cv-site_immich_album_id_${SECRET_HASH_IMMICH_ALBUM_ID}
+    file: ./secrets/IMMICH_ALBUM_ID

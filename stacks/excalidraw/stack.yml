@@ -1,0 +1,25 @@
+# Swarm stack for draw.ryzhkov.dev (phase 5, batch S1). Replaces
+# docker-compose.yml beside it, which stays until the phase 5 cleanup.
+#
+# Stateless: no state at all, so it runs on whichever worker Swarm picks and
+# the routing mesh answers on 5090 on both. The image is pinned to the digest
+# the Compose container ran at conversion, so the move changes nothing but the
+# scheduler; an update is an edit of the digest here.
+services:
+  excalidraw:
+    image: excalidraw/excalidraw:latest@sha256:f7ee194addd607bf831d2af0f0a34463dd4225e426cf35199ef0b12a803398e9
+    ports:
+      - "5090:80"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 4 MiB (nginx serving static files).
+        limits:
+          memory: 64M
+        reservations:
+          memory: 16M
+      restart_policy:
+        condition: any

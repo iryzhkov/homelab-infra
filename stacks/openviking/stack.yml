@@ -1,0 +1,56 @@
+# OpenViking as a Swarm stack (phase 5, batch F3). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f3.yml; the Compose file beside this one (which builds the image
+# locally) stays until the phase 5 cleanup. The image is the one
+# `--tags registry` pushes and pre-pulls on both workers.
+#
+# State lives in ${SWARM_STATE_ROOT}/openviking on the node labelled
+# pin.openviking: data/ (vector store and viking files) and config/ov.conf,
+# which holds the API keys and is not in this repository. The health check
+# reads the root API key from ov.conf instead of carrying it as a literal, as
+# the Compose file does.
+
+services:
+  openviking:
+    image: git.ryzhkov.dev/igor/openviking:latest
+    ports:
+      - "1933:1933"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/openviking/config/ov.conf
+        target: /app/ov.conf
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/openviking/data
+        target: /app/data
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import json, urllib.request as u;
+          key = json.load(open('/app/ov.conf'))['server']['root_api_key'];
+          u.urlopen(u.Request('http://127.0.0.1:1933/health',
+          headers={'Authorization': 'Bearer ' + key}), timeout=4)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.openviking == true
+      resources:
+        limits:
+          memory: 1536M
+          cpus: "2"
+        reservations:
+          memory: 256M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

@@ -1,0 +1,71 @@
+---
+# Phase 5 batch F4 (files): cv-site, lubelogger, obsidian.
+# docs/transition/phase5/migration-plan.md; evidence and cutover record in
+# docs/transition/phase5/2026-10-03-F4.md.
+#
+# NOT ACTIVE YET: the entries are in pending_swarm_stacks_f4, which nothing
+# reads (only swarm_stacks_* variables are). Activate one stack at its
+# cutover by moving its entry into a list named swarm_stacks_f4 in this file,
+# then run, in order:
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name> -e swarm_cutover=<name>
+#   ansible-playbook playbooks/traefik.yml
+#   ansible-playbook playbooks/site.yml -l homelab,normandy -e only=gatus
+#   ansible-playbook playbooks/backup.yml -l homelab,normandy
+# None of the three holds SQLite: the hourly job mirrors their directories
+# to the other worker, and a move copies them cold.
+
+pending_swarm_stacks_f4:
+  - name: cv-site
+    pin: homelab
+    secrets: homelab-cv-site
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/cv-site
+      project: cv-site
+    env_extra:
+      IMMICH_URL: "http://{{ hostvars | stack_host_ip(groups, 'immich') }}:2283"
+      OLLAMA_URL: "http://{{ hostvars['gaming-pc'].ansible_host }}:11434"
+    routes:
+      - host: igor.ryzhkov.dev
+        port: 8091
+    snapshot:
+      class: files
+      files:
+        - /srv/swarm/cv-site/data
+
+  - name: lubelogger
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "{{ hostvars['homelab'].stack_root }}/lubelogger"
+      project: lubelogger
+    routes:
+      - host: garage.ryzhkov.dev
+        port: 8095
+    snapshot:
+      # LiteDB (data/cartracker.db), which the SQLite tool cannot snapshot.
+      class: files
+      files:
+        - /srv/swarm/lubelogger/app
+      exclude: [temp/**, log/**]
+
+  - name: obsidian
+    pin: homelab
+    secrets: homelab-obsidian
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "{{ hostvars['homelab'].stack_root }}/obsidian"
+      project: obsidian
+    routes:
+      - host: obsidian.ryzhkov.dev
+        port: 5984
+    snapshot:
+      # CouchDB: append-only .couch files, so the hourly mirror is
+      # crash-consistent.
+      class: files
+      files:
+        - /srv/swarm/obsidian/data
+        - /srv/swarm/obsidian/etc

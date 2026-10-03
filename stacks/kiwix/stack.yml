@@ -1,0 +1,32 @@
+# Swarm stack for wiki.ryzhkov.dev (phase 5, batch S1). Replaces
+# docker-compose.yml beside it, which stays until the phase 5 cleanup.
+#
+# Stateless: the ZIM archives are on the NAS share mounted at /mnt/shared on
+# both workers (192.168.40.40:/var/nfs/shared/media, 222 files, 3.6 GB,
+# checked 2026-10-02), and kiwix only reads them, so the mount is read-only
+# here.
+services:
+  kiwix:
+    image: ghcr.io/kiwix/kiwix-serve:3.7.0@sha256:e63549867bc2bdcb94fb90a952f1bfbf9d23245bebafa4b04d33faf0c1518031
+    command: "*.zim"
+    ports:
+      - "3151:8080"
+    volumes:
+      - type: bind
+        source: /mnt/shared/kiwix
+        target: /data
+        read_only: true
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 16 MiB; archives are read through the page
+        # cache, which the limit does not need to hold.
+        limits:
+          memory: 256M
+        reservations:
+          memory: 32M
+      restart_policy:
+        condition: any

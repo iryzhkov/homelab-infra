@@ -1,0 +1,60 @@
+# LubeLogger as a Swarm stack (phase 5, batch F4). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f4.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State: the eight directories the Compose file bind-mounted, under
+# ${SWARM_STATE_ROOT}/lubelogger/app on the node labelled pin.lubelogger.
+# Its database is LiteDB (data/cartracker.db), not SQLite, so the hourly job
+# mirrors the files rather than taking a SQLite snapshot.
+#
+# The image is the version :latest resolved to at conversion (v1.7.3).
+
+services:
+  lubelogger:
+    image: ghcr.io/hargata/lubelogger:v1.7.3
+    ports:
+      - "8095:8080"
+    environment:
+      TZ: US/Pacific
+      LC_ALL: en_US.UTF-8
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/config
+        target: /App/config
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/data
+        target: /App/data
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/documents
+        target: /App/wwwroot/documents
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/images
+        target: /App/wwwroot/images
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/temp
+        target: /App/wwwroot/temp
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/translations
+        target: /App/wwwroot/translations
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/log
+        target: /App/log
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lubelogger/app/keys
+        target: /root/.aspnet/DataProtection-Keys
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.lubelogger == true
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 112M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

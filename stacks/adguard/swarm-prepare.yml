@@ -1,0 +1,47 @@
+---
+# adguardhome-sync's configuration on every worker, for the Swarm stack
+# (phase 5, batch S2). Included by roles/swarm/tasks/stack.yml on the
+# bootstrap manager, before the deploy.
+#
+# The file holds the AdGuard admin login, so it is owned by the container's
+# uid (1001) and readable by nobody else. Swarm does not restart a service when
+# a bind-mounted file changes, so a changed file forces an update here.
+
+- name: Load adguardhome-sync's credentials
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/homelab-adguard-sync.sops.yaml"
+    name: stack_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Create adguard's directory on every worker
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/adguard"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_workers'] }}"
+
+- name: Render adguardhome-sync's configuration on every worker
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../stacks/adguard/templates/adguardhome-sync.yaml.j2"
+    dest: "{{ swarm_state_root }}/adguard/adguardhome-sync.yaml"
+    owner: "1001"
+    group: root
+    mode: "0400"
+  become: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_workers'] }}"
+  no_log: true
+  register: adguard_sync_config
+
+- name: Restart adguardhome-sync when its configuration changed
+  ansible.builtin.command:
+    argv: [docker, service, update, --force, --detach=false, adguard_adguardhome-sync]
+  changed_when: true
+  when:
+    - adguard_sync_config is changed
+    - swarm_stack.name in swarm_stack_list.stdout_lines

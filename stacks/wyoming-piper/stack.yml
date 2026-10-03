@@ -1,0 +1,34 @@
+# Swarm stack for Piper text-to-speech, Home Assistant Assist's voice (phase 5,
+# batch S2). Replaces docker-compose.yml beside it, which stays until the
+# phase 5 cleanup.
+#
+# Stateless with a cache: /data holds the voice models Home Assistant asked
+# for (671 MB on 2026-10-02), all re-downloadable. swarm-prepare.yml seeds
+# /srv/swarm/wyoming-piper/data on both workers from the Compose volume, so a
+# move does not download them again. Home Assistant names
+# 192.168.70.223:10200, which the routing mesh keeps answering while homelab
+# is up.
+services:
+  wyoming-piper:
+    image: rhasspy/wyoming-piper:latest@sha256:7d39aafac409c2b6b09d999ed04d84c311d632e558b35baa60fad6aac722af7a
+    command: --voice en_US-lessac-medium
+    ports:
+      - "10200:10200"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/wyoming-piper/data
+        target: /data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 35 MiB idle; a loaded voice model adds 60 to
+        # 120 MB, and Home Assistant can ask for several.
+        limits:
+          memory: 768M
+        reservations:
+          memory: 128M
+      restart_policy:
+        condition: any

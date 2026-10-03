@@ -1,0 +1,37 @@
+---
+# Phase 5 batch P2: Authentik, SSO for every route behind forward auth and the
+# OIDC provider of Miniflux, Forgejo, Immich and the others. Cut over last,
+# after P1, at night. See docs/transition/phase5/migration-plan.md and
+# docs/transition/phase5/2026-10-03-P2.md.
+#
+# DRAFT, NOT ACTIVE. The list is named draft_swarm_stacks_p2 so that nothing
+# reads it: playbooks/swarm.yml, site.yml, the Traefik generator (routes and
+# the authentik-forwardauth middleware), Gatus, the backup role and
+# roles/authentik_watchdog all look for variables named swarm_stacks_*. The
+# cutover activates it by renaming the variable to swarm_stacks_p2, in the
+# same change as the cutover run (batch 0 rule), and runs
+# playbooks/traefik.yml, site.yml -l homelab,normandy -e only=gatus (which
+# also retires the watchdog on homelab) and backup.yml straight after.
+draft_swarm_stacks_p2:
+  - name: authentik
+    secrets: homelab-authentik
+    pin: homelab
+    compose:
+      host: homelab
+      dir: "{{ hostvars['homelab'].stack_root }}/authentik"
+    prepare_tasks: swarm-prepare.yml
+    routes:
+      - host: auth.ryzhkov.dev
+        port: 4080
+    # Hourly pg_dump on the node holding pin.authentik, kept 48, and the small
+    # file directories mirrored, all copied to the other worker. Redis holds
+    # sessions and the task queue only, and is not backed up; a move takes a
+    # cold copy of the whole directory, Redis included.
+    snapshot:
+      class: postgres
+      postgres:
+        - { service: authentik_postgresql, database: authentik, user: authentik, keep: 48 }
+      files:
+        - /srv/swarm/authentik/media
+        - /srv/swarm/authentik/templates
+        - /srv/swarm/authentik/certs
