@@ -222,7 +222,7 @@
       no_log: true
 
 - name: Install the base role
-  hosts: hypervisors:docker_hosts
+  hosts: hypervisors:docker_hosts:agent_workers
   gather_facts: false
   roles:
     - base

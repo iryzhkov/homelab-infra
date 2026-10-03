@@ -1,0 +1,139 @@
+---
+# What the agent VMs need before the base role can mount their data disk: an
+# ext4 filesystem on it, made once. The base role then mounts it by UUID
+# (host_vars local_mounts) and puts Docker on it; the directories below are
+# made after that mount.
+#
+#   ansible-playbook playbooks/agent-workers.yml -l agent-a,agent-b
+#
+# Run it before playbooks/base.yml on a new agent VM, read the UUID it
+# reports into the host's local_mounts, then run base.yml and this again.
+# A disk that already holds any filesystem is never formatted.
+
+- name: Prepare the agent VMs' data disks
+  hosts: agent_workers
+  gather_facts: false
+  tasks:
+    - name: Look for a filesystem on the data disk
+      ansible.builtin.command:
+        argv: [blkid, -o, value, -s, TYPE, "{{ agent_data_device }}"]
+      become: true
+      register: agent_data_fs
+      changed_when: false
+      failed_when: agent_data_fs.rc not in [0, 2]
+      check_mode: false
+
+    - name: Make the filesystem on an empty data disk
+      ansible.builtin.command:
+        argv: [mkfs.ext4, -q, -L, agent-data, "{{ agent_data_device }}"]
+      become: true
+      changed_when: true
+      when: agent_data_fs.rc == 2
+
+    - name: Read the data disk's UUID
+      ansible.builtin.command:
+        argv: [blkid, -o, value, -s, UUID, "{{ agent_data_device }}"]
+      become: true
+      register: agent_data_uuid
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Compare it with the inventory
+      ansible.builtin.debug:
+        msg: >-
+          The data disk's UUID is {{ agent_data_uuid.stdout | trim }};
+          local_mounts in host_vars/{{ inventory_hostname }}.yml names
+          {{ local_mounts | selectattr('path', 'equalto', agent_data_mount)
+             | map(attribute='uuid') | first | default('nothing') }}.
+
+    - name: Look for the data disk's mount
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, "{{ agent_data_mount }}"]
+      register: agent_data_mounted
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Only on the mounted disk, so the directories never land on the root disk.
+    - name: Make the agents' directories on the data disk
+      ansible.builtin.file:
+        path: "{{ agent_data_mount }}/{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0750"
+      become: true
+      loop: "{{ agent_data_dirs }}"
+      when: agent_data_mounted.rc == 0
+
+- name: Prepare the agent VMs for UpKeeper and the steward worker
+  hosts: agent_workers
+  gather_facts: false
+  tasks:
+    # UpKeeper (component agent-tooling) runs `mise upgrade` and then requires
+    # node, claude, codex and opencode as mise shims; it does not install mise
+    # or choose the tools. mise comes from its own Debian repository, so it is
+    # on PATH for non-interactive SSH as well.
+    - name: Install mise's repository key
+      ansible.builtin.get_url:
+        url: https://mise.jdx.dev/gpg-key.pub
+        dest: /etc/apt/keyrings/mise-archive-keyring.asc
+        mode: "0644"
+        force: false
+      become: true
+
+    - name: Add mise's repository
+      ansible.builtin.copy:
+        content: |
+          Types: deb
+          URIs: https://mise.jdx.dev/deb
+          Suites: stable
+          Components: main
+          Signed-By: /etc/apt/keyrings/mise-archive-keyring.asc
+        dest: /etc/apt/sources.list.d/mise.sources
+        mode: "0644"
+      become: true
+      register: agent_mise_repo
+
+    - name: Install mise
+      ansible.builtin.apt:
+        name: mise
+        state: present
+        update_cache: "{{ agent_mise_repo is changed }}"
+      become: true
+
+    - name: Create the mise configuration directory
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.config/mise"
+        state: directory
+        mode: "0755"
+
+    # The global tools, as on homelab. UpKeeper upgrades the floating ones.
+    - name: Declare the global mise tools
+      ansible.builtin.copy:
+        content: |
+          # Written by homelab-infra playbooks/agent-workers.yml.
+          [tools]
+          {% for tool, version in agent_mise_tools.items() %}
+          {{ tool }} = "{{ version }}"
+          {% endfor %}
+        dest: "/home/{{ ansible_user }}/.config/mise/config.toml"
+        mode: "0644"
+
+    # Installs only what is missing, so an interrupted run is finished by the
+    # next one; mise ends with "installed N tools" on stderr.
+    - name: Install the global mise tools
+      ansible.builtin.command:
+        cmd: mise install --yes
+        chdir: "/home/{{ ansible_user }}"
+      register: agent_mise_install
+      changed_when: agent_mise_install.stderr is not search('installed 0 tools')
+
+    # The steward worker and t3code run as systemd user units, which need the
+    # user manager to outlive SSH sessions.
+    - name: Keep the user's systemd manager running
+      ansible.builtin.command:
+        cmd: loginctl enable-linger {{ ansible_user }}
+        creates: /var/lib/systemd/linger/{{ ansible_user }}
+      become: true

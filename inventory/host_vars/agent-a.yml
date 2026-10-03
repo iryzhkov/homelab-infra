@@ -1,0 +1,13 @@
+---
+# VM 111 on proxmox-a, created 2026-10-03 from template 9000. Shared settings
+# are in group_vars/agent_workers.yml.
+
+# The data disk: scsi1, a 400 GB sparse zvol on proxmox-a's tank (backup=0).
+# Formatted by playbooks/agent-workers.yml on 2026-10-03; a rebuilt disk has a
+# new UUID, which that playbook reports.
+local_mounts:
+  - path: /srv/agent
+    uuid: 05c3c336-e0b8-4b08-8d37-142626367ca7
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=10
+    before_docker: true

@@ -33,7 +33,19 @@
     docker_daemon_settings: >-
       {{ ((docker_daemon_json_current.content | b64decode | from_json)
           if docker_daemon_json_stat.stat.exists else {})
-         | combine({'data-root': docker_data_root}) }}
+         | combine({'data-root': docker_data_root})
+         | combine(docker_daemon_extra_settings, recursive=true) }}
+
+# On a host where Docker is installed later in this role (docker_install), so
+# that the daemon's first start is already on the new root.
+- name: Ensure /etc/docker exists
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
 
 # Only the file: no handler, no restart, no reload.
 - name: Write daemon.json
