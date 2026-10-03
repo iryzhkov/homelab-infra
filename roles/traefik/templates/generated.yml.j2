@@ -25,10 +25,13 @@
                   Sonarr and adguardhome-sync do — must be probed somewhere
                   else or its router starts returning 503.
 #}
-{% set ns = namespace(routes=[], authentik_url='') %}
+{% set ns = namespace(routes=[], authentik_url='', hosts=[]) %}
 {% for h in groups['docker_hosts'] | sort %}
 {%   for stack in hostvars[h].stacks | default([]) %}
 {%     for route in stack.routes | default([]) %}
+{%       if h not in ns.hosts %}
+{%         set ns.hosts = ns.hosts + [h] %}
+{%       endif %}
 {#       A route that borrows another route's service carries no port of its
          own; the Authentik outpost path is the one that does this. #}
 {%       set url = route.url | default(((route.scheme | default('http')) ~ '://' ~ hostvars[h].ansible_host ~ ':' ~ route.port) if route.port is defined else '') %}
@@ -48,7 +51,7 @@
 # Generated from the `routes` entries in inventory/host_vars/ by
 # roles/traefik. Do not edit on the host: the next playbook run overwrites it.
 #
-# {{ routes | length }} routers, from {{ groups['docker_hosts'] | length }} hosts.
+# {{ routes | length }} routers, from {{ ns.hosts | length }} hosts.
 # Hand-written dynamic configuration lives beside this file, one YAML per
 # subject; see traefik_static_files.
 
@@ -69,8 +72,7 @@ http:
         - {{ middleware }}
 {% endfor %}
 {% endif %}
-      tls:
-        certResolver: "{{ traefik_cert_resolver }}"
+{% include 'router-tls.j2' %}
 
 {% endfor %}
   services:

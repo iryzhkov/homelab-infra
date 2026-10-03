@@ -1,0 +1,19 @@
+---
+# Install Nebula itself: the binary, its systemd unit and the host's
+# certificates. Off by default; the existing nodes were set up by hand and this
+# role only holds their configuration. On for edge VMs built from a template.
+nebula_install: false
+
+# The release public-api runs (1.11.1, installed by hand in /usr/local/bin).
+nebula_version: 1.11.1
+nebula_release_sha256: 2bcca0887d9c6b4c376e98cbf80fa2912b2583c61983d9553f46c97efda71439
+
+# The certificate authority and the host certificates live on the laptop, the
+# only machine that holds the CA key (see docs/offsite-bundle.md). A host's
+# certificate is signed there by hand before its first converge:
+#   cd ~/.nebula/new-certs
+#   nebula-cert sign -version 2 -ca-crt ../ca-new.crt -ca-key ../ca-new.key \
+#     -name <host> -networks <mesh_host>/24 -groups server \
+#     -out-crt <host>.crt -out-key <host>.key
+# ca-combined.crt carries both the current and the rotated CA, as on every node.
+nebula_pki_dir: "{{ lookup('env', 'HOME') }}/.nebula"

@@ -1,0 +1,14 @@
+---
+# The edge VIP: keepalived on every edge_proxy member.
+#
+#   ansible-playbook playbooks/keepalived.yml --check --diff
+#
+# keepalived_enabled (default false) decides whether the service runs. Until
+# the cutover in docs/transition/phase4/runbook-vip-cutover.md it is false
+# everywhere, and the role only installs the package and writes the files.
+
+- name: Configure the edge VIP
+  hosts: edge_proxy
+  gather_facts: false
+  roles:
+    - keepalived

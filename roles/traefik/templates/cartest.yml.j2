@@ -1,0 +1,29 @@
+# Bellerophon feedback-round test instance (WP0e of garage/plans/bellerophon-feedback-round.md).
+# Added by hand 2026-10-02, not from Ansible.
+#
+# A simulated car on gaming-pc (user service bellerophon-cartest, port 18800), so the
+# control page can be tried as an installed PWA over real HTTPS. LAN-only: no Cloudflare
+# Tunnel hostname exists for it; AdGuard's *.ryzhkov.dev wildcard resolves it on the LAN.
+# gaming-pc's ufw admits 18800 from 192.168.20.33 only. WebSockets pass through unchanged.
+# Remove this file when the test instance is retired.
+{#
+  Adopted into the repository 2026-10-02 (phase 4) byte for byte from public-api, so
+  that every edge serves it; the backend address now comes from the inventory. To
+  retire it, drop cartest.yml from traefik_rendered_files and add it to the removal
+  list in tasks/main.yml.
+#}
+
+http:
+  routers:
+    cartest-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`cartest.ryzhkov.dev`)"
+      service: cartest-service
+{% include 'router-tls.j2' %}
+
+  services:
+    cartest-service:
+      loadBalancer:
+        servers:
+          - url: "http://{{ hostvars['gaming-pc'].ansible_host }}:18800"

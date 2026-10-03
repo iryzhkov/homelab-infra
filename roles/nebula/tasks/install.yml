@@ -1,0 +1,80 @@
+---
+# Nebula on a host that does not have it yet, laid out as on public-api:
+# /usr/local/bin/nebula, /etc/systemd/system/nebula.service, and
+# /etc/nebula/{ca.crt,<host>.crt,<host>.key}. The configuration itself is
+# written by main.yml, as for every other node.
+
+- name: Download the Nebula release
+  ansible.builtin.get_url:
+    url: https://github.com/slackhq/nebula/releases/download/v{{ nebula_version }}/nebula-linux-amd64.tar.gz
+    dest: /root/nebula-{{ nebula_version }}-linux-amd64.tar.gz
+    checksum: sha256:{{ nebula_release_sha256 }}
+    mode: "0644"
+  become: true
+
+- name: Unpack the binary
+  ansible.builtin.unarchive:
+    src: /root/nebula-{{ nebula_version }}-linux-amd64.tar.gz
+    dest: /usr/local/bin
+    remote_src: true
+    include:
+      - nebula
+    owner: root
+    group: root
+    mode: "0755"
+    creates: /usr/local/bin/nebula
+  become: true
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: /etc/nebula
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install the certificate authorities
+  ansible.builtin.copy:
+    src: "{{ nebula_pki_dir }}/ca-combined.crt"
+    dest: /etc/nebula/ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Install the host certificate
+  ansible.builtin.copy:
+    src: "{{ nebula_pki_dir }}/new-certs/{{ inventory_hostname }}.crt"
+    dest: /etc/nebula/{{ inventory_hostname }}.crt
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Install the host key
+  ansible.builtin.copy:
+    src: "{{ nebula_pki_dir }}/new-certs/{{ inventory_hostname }}.key"
+    dest: /etc/nebula/{{ inventory_hostname }}.key
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+
+- name: Install the service unit
+  ansible.builtin.template:
+    src: nebula.service.j2
+    dest: /etc/systemd/system/nebula.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: nebula_unit
+
+- name: Enable the service
+  ansible.builtin.systemd_service:
+    name: nebula
+    enabled: true
+    daemon_reload: "{{ nebula_unit is changed }}"
+  become: true

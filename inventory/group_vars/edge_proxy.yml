@@ -1,0 +1,13 @@
+---
+# The edge VMs, public-api and public-api-b: 2 GB each since phase 4.
+
+# 1 GB of swap. On 2026-10-02 public-api-b had none, and a runaway process
+# made the OOM killer take Traefik.
+swapfile_size_mb: 1024
+
+# No automatic upgrades, as on public-api: an unattended docker-ce or
+# containerd upgrade restarts Traefik on both edges at whatever hour it runs,
+# which keepalived cannot cover when both do it the same night.
+unattended_upgrades_absent: true
+
+resolved_llmnr: "no"

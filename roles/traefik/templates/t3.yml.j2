@@ -36,32 +36,28 @@ http:
         - websecure
       rule: "Host(`t3-laptop.ryzhkov.dev`)"
       service: t3-laptop-service
-      tls:
-        certResolver: "letencrypt"
+{% include 'router-tls.j2' %}
 
     t3-homelab-router:
       entryPoints:
         - websecure
       rule: "Host(`t3-homelab.ryzhkov.dev`)"
       service: t3-homelab-service
-      tls:
-        certResolver: "letencrypt"
+{% include 'router-tls.j2' %}
 
     t3-gaming-pc-router:
       entryPoints:
         - websecure
       rule: "Host(`t3-gaming-pc.ryzhkov.dev`)"
       service: t3-gaming-pc-service
-      tls:
-        certResolver: "letencrypt"
+{% include 'router-tls.j2' %}
 
     t3-normandy-router:
       entryPoints:
         - websecure
       rule: "Host(`t3-normandy.ryzhkov.dev`)"
       service: t3-normandy-service
-      tls:
-        certResolver: "letencrypt"
+{% include 'router-tls.j2' %}
 
   services:
     # LAN first, Nebula once the laptop is off the LAN.

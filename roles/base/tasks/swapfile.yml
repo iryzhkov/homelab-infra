@@ -1,0 +1,47 @@
+---
+# A plain swapfile, so a burst of memory on a small VM is paged out rather
+# than answered by the OOM killer. Sized once: a different size later needs
+# the file swapped off and removed by hand first.
+
+- name: Look for the swapfile
+  ansible.builtin.stat:
+    path: /swapfile
+  register: swapfile_stat
+
+- name: Create the swapfile
+  when: not swapfile_stat.stat.exists
+  become: true
+  block:
+    # Created 0600 by the umask, so it is never readable by anyone but root.
+    - name: Allocate it
+      ansible.builtin.shell:
+        cmd: umask 077 && dd if=/dev/zero of=/swapfile bs=1M count={{ swapfile_size_mb | int }} status=none
+        creates: /swapfile
+
+    - name: Format it
+      ansible.builtin.command:
+        cmd: mkswap /swapfile
+      changed_when: true
+
+- name: Keep it in /etc/fstab
+  ansible.posix.mount:
+    src: /swapfile
+    path: none
+    fstype: swap
+    opts: sw
+    state: present
+  become: true
+
+- name: Read the active swap
+  ansible.builtin.command:
+    cmd: cat /proc/swaps
+  register: swapfile_active
+  changed_when: false
+  check_mode: false
+
+- name: Turn it on
+  ansible.builtin.command:
+    cmd: swapon /swapfile
+  become: true
+  changed_when: true
+  when: "'/swapfile' not in swapfile_active.stdout"

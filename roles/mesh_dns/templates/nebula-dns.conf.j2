@@ -1,0 +1,19 @@
+# DNS for Nebula mesh clients.
+# Resolves *.ryzhkov.dev (and the apex) to this node itself over the mesh,
+# where Traefik serves the home services. Everything else is forwarded to
+# the LAN resolvers. bind-dynamic lets dnsmasq pick up the nebula1 address
+# even if the interface comes up after dnsmasq starts at boot.
+{#
+  Adopted 2026-10-02 byte for byte from public-api's hand-written file. Each
+  edge_proxy member answers with its own mesh address, so an answer only ever
+  names an edge that is up; the upstreams are the AdGuard instances.
+#}
+bind-dynamic
+listen-address={{ mesh_host }}
+listen-address=127.0.0.1
+no-resolv
+{% for instance in adguard_instances %}
+server={{ instance.ip }}
+{% endfor %}
+address=/ryzhkov.dev/{{ mesh_host }}
+cache-size=1000

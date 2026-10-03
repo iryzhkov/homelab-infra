@@ -7,6 +7,9 @@
 # scripts/compare-traefik.py compares the rendered routes against the
 # hand-written files they replace, host by host, and is the thing to run before
 # applying a change to routing.
+#
+# Every edge_proxy member gets the same configuration. A new member gets its
+# certificate from playbooks/edge-bootstrap.yml first; see that file.
 
 - name: Configure Traefik routing
   hosts: edge_proxy

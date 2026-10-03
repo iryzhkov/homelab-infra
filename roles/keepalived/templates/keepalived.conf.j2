@@ -1,0 +1,41 @@
+# {{ ansible_managed }}
+# The edge VIP. Rendered by roles/keepalived from the edge_proxy group.
+
+global_defs {
+    router_id {{ inventory_hostname }}
+    enable_script_security
+    script_user root
+}
+
+vrrp_script chk_traefik {
+    script "/etc/keepalived/check-traefik"
+    interval {{ keepalived_check_interval }}
+    timeout {{ keepalived_check_interval + 1 }}
+    fall {{ keepalived_check_fall }}
+    rise {{ keepalived_check_rise }}
+}
+
+vrrp_instance edge {
+    # Both members start as BACKUP: nopreempt is ignored on a MASTER.
+    state BACKUP
+    nopreempt
+    interface {{ keepalived_interface }}
+    virtual_router_id {{ keepalived_router_id }}
+    priority {{ keepalived_priority }}
+    advert_int 1
+    unicast_src_ip {{ ansible_host }}
+    # Ignore any advertisement whose source is not a listed peer, so nothing
+    # else on VLAN 20 (the AdGuard CTs share it) can take part in the election.
+    check_unicast_src
+    unicast_peer {
+{% for peer in groups['edge_proxy'] if peer != inventory_hostname %}
+        {{ hostvars[peer].ansible_host }}
+{% endfor %}
+    }
+    virtual_ipaddress {
+        {{ keepalived_vip }}/{{ keepalived_vip_prefix }} dev {{ keepalived_interface }}
+    }
+    track_script {
+        chk_traefik
+    }
+}

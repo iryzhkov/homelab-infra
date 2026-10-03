@@ -1,0 +1,49 @@
+---
+# dnsmasq on an edge VM, answering mesh clients: *.ryzhkov.dev with this
+# host's own mesh address, everything else through AdGuard. Mesh clients (the
+# travel router) list every edge as a resolver, since a VRRP address cannot
+# float on Nebula. Needs mesh_host, so Nebula comes first (playbooks/nebula.yml).
+
+# bind9-dnsutils for the probe below; public-api already has it.
+- name: Install dnsmasq
+  ansible.builtin.apt:
+    name:
+      - dnsmasq
+      - bind9-dnsutils
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+
+- name: Write the mesh DNS configuration
+  ansible.builtin.template:
+    src: nebula-dns.conf.j2
+    dest: /etc/dnsmasq.d/nebula-dns.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: mesh_dns_conf
+
+- name: Run dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    enabled: true
+    state: started
+  become: true
+
+- name: Restart dnsmasq after a configuration change
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    state: restarted
+  become: true
+  when: mesh_dns_conf is changed
+
+- name: Resolve a home name through it
+  ansible.builtin.command:
+    cmd: dig +short +timeout=2 @{{ mesh_host }} {{ adguard_probe_name }}
+  register: mesh_dns_probe
+  changed_when: false
+  check_mode: false
+  failed_when: mesh_dns_probe.stdout | trim != mesh_host
+  when: not (ansible_check_mode and mesh_dns_conf is changed)
