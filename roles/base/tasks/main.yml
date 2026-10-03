@@ -19,6 +19,8 @@
 #                           written but never applied by a restart
 #   containerd_root         containerd's root in /etc/containerd/config.toml,
 #                           the same way
+#   qemu_guest_agent: true  qemu-guest-agent installed and running
+#   docker_install: true    Docker Engine and Compose from download.docker.com
 #
 # Everything reports to InfluxDB with write-only tokens decrypted here, on the
 # controller, from secrets/hardware-metrics.sops.yaml.
@@ -80,3 +82,11 @@
 - name: Keep containerd's root
   ansible.builtin.include_tasks: containerd_root.yml
   when: containerd_root | length > 0
+
+- name: Keep the QEMU guest agent
+  ansible.builtin.include_tasks: qemu_guest_agent.yml
+  when: qemu_guest_agent | bool
+
+- name: Install Docker
+  ansible.builtin.include_tasks: docker_install.yml
+  when: docker_install | bool

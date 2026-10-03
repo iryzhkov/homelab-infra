@@ -1,0 +1,6 @@
+---
+# Every router asks for the wildcard certificate rather than one for its own
+# host name; see templates/router-tls.j2. Set per host while the edges are
+# moved over one at a time, then here for all of them.
+traefik_wildcard_only: false
+traefik_wildcard_domain: ryzhkov.dev

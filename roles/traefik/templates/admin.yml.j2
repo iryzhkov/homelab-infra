@@ -8,8 +8,7 @@ http:
         - websecure
       rule: "Host(`proxmox.ryzhkov.dev`)"
       service: proxmox-service
-      tls:
-        certResolver: "letencrypt"
+{% include 'router-tls.j2' %}
 
   services:
    proxmox-service:

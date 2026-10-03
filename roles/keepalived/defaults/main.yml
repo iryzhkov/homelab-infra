@@ -1,0 +1,31 @@
+---
+# One floating address in front of the edge_proxy group, held by whichever
+# member keepalived elects. See docs/transition/phase4/runbook-vip-cutover.md.
+
+# Off by default: the role installs keepalived and writes its configuration,
+# but leaves the service stopped and disabled. A single member running it
+# with no peer would claim the VIP at once. The cutover runbook turns it on,
+# public-api first.
+keepalived_enabled: false
+
+# Reserved on VLAN 20 outside the DHCP pool (.6-.254); .2 is left free. The
+# cutover declares edge_vip in group_vars/all.yml, where AdGuard's play can
+# read it too, and points edge_proxy_ip at it.
+keepalived_vip: "{{ edge_vip | default('192.168.20.3') }}"
+keepalived_vip_prefix: 24
+
+# Unique among the VRRP routers on VLAN 20; nothing else there speaks VRRP
+# today. 20 for the VLAN.
+keepalived_router_id: 20
+
+# Priority falls with the position in the edge_proxy group, so the first
+# member (public-api) is preferred at an election. With nopreempt it does not
+# take the address back from a healthy holder when it returns.
+keepalived_priority: "{{ 150 - 50 * groups['edge_proxy'].index(inventory_hostname) }}"
+
+# Traefik's API, published on loopback only; an answer means the process is
+# up and its configuration loaded. 2 s between checks, two failures to drop.
+keepalived_check_url: http://127.0.0.1:8080/api/version
+keepalived_check_interval: 2
+keepalived_check_fall: 2
+keepalived_check_rise: 2

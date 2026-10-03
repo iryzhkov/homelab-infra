@@ -33,8 +33,7 @@ http:
       service: whisper-service
       middlewares:
         - whisper-openai-path
-      tls:
-        certResolver: "letencrypt"
+{% include 'router-tls.j2' %}
 
   services:
     whisper-service:

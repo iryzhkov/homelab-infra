@@ -1,3 +1,10 @@
+{#
+  The second argument is every edge_proxy member that is on the mesh, joined
+  with commas, which iptables -s takes as a list. Members without a mesh_host
+  (public-api-b, until it joins Nebula) are left out, so with one mesh member
+  this renders exactly as the single-address form did.
+#}
+{% set jocasta_ingress = groups['edge_proxy'] | map('extract', hostvars) | selectattr('mesh_host', 'defined') | map(attribute='mesh_host') | join(',') %}
 [Unit]
 Description=Restrict Jocasta backend to the TLS ingress
 Requires=docker.service nebula.service
@@ -8,8 +15,8 @@ Before=jocasta-backup.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/sbin/jocasta-firewall {{ mesh_host }} {{ hostvars[groups['edge_proxy'][0]].mesh_host }} {{ ansible_host }}
-ExecReload=/usr/local/sbin/jocasta-firewall {{ mesh_host }} {{ hostvars[groups['edge_proxy'][0]].mesh_host }} {{ ansible_host }}
+ExecStart=/usr/local/sbin/jocasta-firewall {{ mesh_host }} {{ jocasta_ingress }} {{ ansible_host }}
+ExecReload=/usr/local/sbin/jocasta-firewall {{ mesh_host }} {{ jocasta_ingress }} {{ ansible_host }}
 
 [Install]
 WantedBy=multi-user.target

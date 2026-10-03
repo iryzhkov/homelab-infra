@@ -1,0 +1,111 @@
+---
+# keepalived on every edge_proxy member: VRRP unicast between the members'
+# LAN addresses, one VIP, a check on Traefik, and nopreempt.
+#
+# No authentication block: VRRPv2's PASS type sends the password in clear on
+# the same VLAN it protects, and AH is deprecated in keepalived. Unicast to the
+# peers' addresses and the AdGuard CTs' firewall (no VRRP from them) are the
+# controls; see the phase 4 evidence file.
+#
+# Traefik publishes 80 and 443 on 0.0.0.0, so it answers on the VIP without
+# net.ipv4.ip_nonlocal_bind.
+
+- name: Find the interface that carries the host's address
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - network
+
+- name: Pick the VRRP interface
+  ansible.builtin.set_fact:
+    keepalived_interface: >-
+      {{ (ansible_interfaces
+          | map('regex_replace', '-', '_')
+          | map('regex_replace', '^', 'ansible_')
+          | map('extract', hostvars[inventory_hostname])
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.address', 'equalto', ansible_host)
+          | first).device }}
+
+# The package's unit has ConditionFileNotEmpty on the configuration file, so
+# installing it before the file exists does not start it.
+- name: Install keepalived
+  ansible.builtin.apt:
+    name: keepalived
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  register: keepalived_package
+
+# In check mode on a host without the package the unit, its directory and its
+# binary do not exist yet, so the steps that need them are reported, not run.
+- name: Note whether this is a check run on a host without keepalived
+  ansible.builtin.set_fact:
+    keepalived_absent_in_check: "{{ ansible_check_mode and keepalived_package is changed }}"
+
+# Before the configuration is written, so that a disabled member never has a
+# running keepalived with a VIP block.
+- name: Keep keepalived stopped and disabled until the cutover
+  ansible.builtin.systemd_service:
+    name: keepalived
+    enabled: false
+    state: stopped
+  become: true
+  when:
+    - not keepalived_enabled | bool
+    - not keepalived_absent_in_check
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: /etc/keepalived
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install the Traefik check
+  ansible.builtin.template:
+    src: check-traefik.j2
+    dest: /etc/keepalived/check-traefik
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Write the keepalived configuration
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: "0640"
+    # --use-file names the file to test. Not --config-test=%s: that argument
+    # is the log file, so the test appends its errors to the file it is
+    # reading and grows it without end.
+    validate: keepalived --config-test --use-file=%s
+  become: true
+  register: keepalived_conf
+
+- name: Run keepalived
+  ansible.builtin.systemd_service:
+    name: keepalived
+    enabled: true
+    state: started
+  become: true
+  when:
+    - keepalived_enabled | bool
+    - not keepalived_absent_in_check
+
+# A reload re-reads the file without dropping the VIP from a holder.
+- name: Reload keepalived after a configuration change
+  ansible.builtin.systemd_service:
+    name: keepalived
+    state: reloaded
+  become: true
+  when:
+    - keepalived_enabled | bool
+    - keepalived_conf is changed
+    - not keepalived_absent_in_check

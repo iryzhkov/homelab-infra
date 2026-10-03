@@ -1,0 +1,17 @@
+---
+# Directories the Traefik Compose file bind-mounts, created before the first
+# `docker compose up` so that they belong to the deploying user. Docker would
+# otherwise create them as root, and roles/traefik, which writes into
+# file_provider/ without sudo, could not install the dynamic configuration.
+#
+# Used by the edge VMs built from the template. public-api's directories
+# predate this repository and its stack entry does not name this file.
+
+- name: Create Traefik's bind-mounted directories
+  ansible.builtin.file:
+    path: "{{ stack_dir }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - file_provider
+    - certs

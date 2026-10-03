@@ -1,0 +1,53 @@
+---
+# The second edge proxy, VM 108 on proxmox-b, created 2026-10-02 from template
+# 9001 (Debian 13 cloud image) for phase 4 of the serviceable transition. See
+# docs/transition/phase4/2026-10-02-public-api-b.md.
+#
+# It runs the same Traefik with the same dynamic configuration as public-api,
+# and issues its own certificate over DNS-01. Until the UniFi policies that
+# name public-api's address also name this one, it cannot reach any backend,
+# and until docs/transition/phase4/runbook-vip-cutover.md has been run nothing
+# sends it traffic.
+
+ansible_host: 192.168.20.4
+# Joined the mesh 2026-10-02; Nebula is installed by roles/nebula.
+mesh_host: 10.42.0.10
+nebula_install: true
+ssh_user: igor
+stack_root: /home/igor/apps
+description: Second edge reverse proxy, VM 108 on proxmox-b
+
+# The genericcloud image has neither; public-api had both installed by hand.
+# Docker comes from download.docker.com, as on public-api.
+qemu_guest_agent: true
+docker_install: true
+
+# Every router asks for the wildcard, never a single-name certificate
+# (decided 2026-10-02). public-api follows at the VIP cutover.
+traefik_wildcard_only: true
+
+# The same machine-to-machine access as public-api.
+fleet_ssh_authorized:
+  - homelab
+
+# keepalived is installed and configured but not started; starting it before
+# public-api runs it too would claim the VIP with no peer. The cutover runbook
+# turns it on.
+keepalived_enabled: false
+
+stacks:
+  # No routes: the routes are declared once, on public-api, and every edge_proxy
+  # member serves all of them. A route here would render a second router with
+  # the same name.
+  - name: traefik
+    secrets: public-api-traefik
+    # Creates file_provider/ and certs/ owned by the deploying user before
+    # Compose starts, so Docker does not create them as root.
+    prepare_tasks: prepare.yml
+    # The static configuration, a copy of public-api's hand-written file.
+    config_templates:
+      - src: traefik.yml.j2
+        dest: traefik.yml
+    # The image is pulled on first deploy; afterwards it stays as it is, as on
+    # every other adopted stack.
+    pull: missing

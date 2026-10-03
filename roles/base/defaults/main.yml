@@ -39,3 +39,20 @@ docker_data_root: ""
 containerd_root: ""
 # First line of a config.toml this role wrote; any other file is left alone.
 containerd_root_marker: "# Written by homelab-infra roles/base (containerd_root)."
+
+# qemu-guest-agent, installed and running. For VMs cloned from the Debian
+# genericcloud templates, which do not include it. Off by default: the older
+# VMs had it installed by hand.
+qemu_guest_agent: false
+
+# Docker Engine and the Compose plugin from download.docker.com, the way
+# public-api's was installed by hand. For a Debian VM cloned from a template.
+# Off by default, so that the hosts whose Docker predates this repository are
+# not touched. Installing never restarts a running daemon.
+docker_install: false
+docker_install_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin

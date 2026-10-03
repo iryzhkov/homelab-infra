@@ -32,5 +32,10 @@ stacks:
       - host: proxy.ryzhkov.dev
         url: http://127.0.0.1:8080
     secrets: public-api-traefik
+    # The static configuration, adopted 2026-10-02 byte for byte from the
+    # hand-written file, so both edge VMs get the same one.
+    config_templates:
+      - src: traefik.yml.j2
+        dest: traefik.yml
   - name: diun
     source: diun-public-api

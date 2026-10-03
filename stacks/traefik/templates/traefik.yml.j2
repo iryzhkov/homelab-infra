@@ -1,0 +1,32 @@
+api:
+  dashboard: true
+  insecure: true
+  debug: false
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+serversTransport:
+  insecureSkipVerify: true
+providers:
+  file:
+    directory: "/file_provider"
+certificatesResolvers:
+  letencrypt:
+    acme:
+      email: igor.o.ryzhkov@gmail.com
+      storage: /certs/acme.json
+      caServer: https://acme-v02.api.letsencrypt.org/directory # prod (default)
+      # caServer: https://acme-staging-v02.api.letsencrypt.org/directory # staging
+      dnsChallenge:
+        provider: cloudflare
+        delayBeforeCheck: 10
+        resolvers:
+          - 1.1.1.1:53
+          - 8.8.8.8:53

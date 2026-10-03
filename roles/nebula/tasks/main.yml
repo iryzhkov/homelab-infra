@@ -14,6 +14,10 @@
       - "!min"
       - env
 
+- name: Install Nebula
+  ansible.builtin.include_tasks: install.yml
+  when: nebula_install | bool
+
 - name: Render the candidate configuration
   ansible.builtin.template:
     src: "{{ inventory_hostname }}.yml.j2"
@@ -41,12 +45,19 @@
         cmd: nebula -test -config /etc/nebula/config.yml.new
       changed_when: false
 
+    - name: Look for a configuration to replace
+      ansible.builtin.stat:
+        path: /etc/nebula/config.yml
+      register: nebula_current
+
+    # A first install has nothing to keep.
     - name: Keep the configuration being replaced
       ansible.builtin.copy:
         src: /etc/nebula/config.yml
         dest: /etc/nebula/config.yml.ansible-bak
         remote_src: true
         mode: "0644"
+      when: nebula_current.stat.exists
 
     - name: Move the new configuration into place
       ansible.builtin.command:
