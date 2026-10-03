@@ -8,12 +8,29 @@
 # writer when the NAS is slow, which corrupts torrent data, where a hard mount
 # waits. Docker starts only once it is mounted, so the stack never writes into
 # an empty /mnt/shared. Replaces a hand-written automount line for the same
-# path. The services_backup automount at /mnt/apps is still hand-written.
+# path.
+#
+# nosuid,nodev,noexec on both mounts (phase 3, from the phase 1 security
+# review): the share holds untrusted downloads, and nothing on this host runs
+# a program or opens a device node from either export. Changing the options
+# unmounts and remounts, which stops docker.service, so this is converged only
+# in black-pearl's stop-and-start window
+# (docs/transition/phase3/runbook-blackpearl.md).
 nfs_mounts:
   - path: /mnt/shared
     src: 192.168.40.40:/var/nfs/shared/media
-    opts: nconnect=8,rsize=1048576,wsize=1048576,async,noatime,_netdev,hard,timeo=50,retrans=3
+    opts: nconnect=8,rsize=1048576,wsize=1048576,async,noatime,_netdev,hard,timeo=50,retrans=3,nosuid,nodev,noexec
     before_docker: true
+  # The services_backup export, where two cron jobs copy ~/app (qBittorrent
+  # and gluetun configuration) and ~/apps (stack definitions) every night.
+  # homelab ships that copy offsite as /mnt/backup/blackpearl, so this mount is
+  # black-pearl's only backup path and cannot be retired until that changes
+  # (docs/transition/phase3/2026-10-02-blackpearl-prep.md). Taken over from the
+  # hand-written line with the same options, soft automount included, plus
+  # nosuid,nodev,noexec; the redundant `defaults` was dropped.
+  - path: /mnt/apps
+    src: 192.168.40.40:/var/nfs/shared/services_backup
+    opts: nconnect=8,rsize=1048576,wsize=1048576,async,noatime,_netdev,soft,timeo=50,retrans=3,noauto,x-systemd.automount,x-systemd.idle-timeout=600,nosuid,nodev,noexec
 
 # The 1.8 TB scratch disk (VM 102 scsi1), retired on 2026-10-02 once the
 # incomplete folder had moved to the NAS. Its fstab line had no nofail, so a

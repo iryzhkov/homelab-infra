@@ -63,6 +63,26 @@ authentik_watchdog_enabled: true
 # busy time (playbooks/base.yml).
 gpu_metrics: true
 
+# Weekly trim. VM 101's root disk gets discard=on at the phase 3 stop and
+# start; until then the host drops the trims.
+fstrim_timer_enabled: true
+
+# The Docker data disk: VM 101's virtio1, a 300 GB sparse zvol on
+# proxmox-a's `tank` (backup=0, so a restore of the VM drops it and nofail
+# keeps the guest booting), hot-added 2026-10-02 for phase 3. Docker's
+# data-root has lived on it since the phase 3 window, so Docker requires it.
+local_mounts:
+  - path: /mnt/docker-data
+    uuid: d8d9a50f-7121-48d8-8ad3-ee3f3f5c3caa
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=10
+    before_docker: true
+
+# Moved from /var/lib/docker in the phase 3 window, 2026-10-02, with Docker
+# stopped (docs/transition/phase3/2026-10-02-homelab-window.md). The old
+# /var/lib/docker is kept on the root disk as the rollback copy.
+docker_data_root: /mnt/docker-data/docker
+
 # Built from the exact source commit validated by Jocasta CI.
 jocasta_image: jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63
 

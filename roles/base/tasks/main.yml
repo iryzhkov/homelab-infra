@@ -14,6 +14,11 @@
 #                           before docker.service; mounts_absent retires mounts
 #   local_mounts            local filesystems in /etc/fstab by UUID, optionally
 #                           ordered before docker.service
+#   fstrim_timer_enabled    the weekly fstrim.timer, enabled and started
+#   docker_data_root        Docker's data-root in /etc/docker/daemon.json,
+#                           written but never applied by a restart
+#   containerd_root         containerd's root in /etc/containerd/config.toml,
+#                           the same way
 #
 # Everything reports to InfluxDB with write-only tokens decrypted here, on the
 # controller, from secrets/hardware-metrics.sops.yaml.
@@ -59,3 +64,19 @@
       {{ local_mounts | selectattr('before_docker', 'defined')
          | selectattr('before_docker') | map(attribute='path') | list }}
   when: local_mounts | length > 0
+
+- name: Keep the weekly trim
+  ansible.builtin.systemd_service:
+    name: fstrim.timer
+    enabled: true
+    state: started
+  become: true
+  when: fstrim_timer_enabled | bool
+
+- name: Keep Docker's data-root
+  ansible.builtin.include_tasks: docker_data_root.yml
+  when: docker_data_root | length > 0
+
+- name: Keep containerd's root
+  ansible.builtin.include_tasks: containerd_root.yml
+  when: containerd_root | length > 0

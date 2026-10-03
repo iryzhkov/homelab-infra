@@ -26,6 +26,9 @@
   gather_facts: false
   vars:
     influx_api: http://127.0.0.1:8087/api/v2
+    # InfluxDB answers here while the `logging` stack is up. Override it (for
+    # example with a closed port) to exercise the skip below.
+    influx_health_url: "{{ influx_api | regex_replace('/api/v2$', '') }}/health"
     metrics_secret_file: "{{ playbook_dir }}/../secrets/hardware-metrics.sops.yaml"
     # One bucket per writer, each with a token that can write only it.
     influx_write_tokens:
@@ -40,6 +43,31 @@
         description: proxmox-write
         key: PROXMOX_INFLUX_TOKEN
   tasks:
+    # InfluxDB runs in Docker on homelab, so it is down whenever homelab's
+    # Docker is (a data-root move, a maintenance window). This play then has
+    # nothing to do and must not stop the base role in the next play, which
+    # is what a maintenance window converges.
+    - name: Ask InfluxDB whether it is up
+      ansible.builtin.uri:
+        url: "{{ influx_health_url }}"
+        timeout: 5
+      register: influx_health
+      failed_when: false
+      check_mode: false
+
+    - name: Report that the bucket and token play is skipped
+      ansible.builtin.debug:
+        msg: >-
+          InfluxDB at {{ influx_health_url }} did not answer 200
+          ({{ influx_health.status | default('no response') }}), so the
+          buckets and tokens are left as they are; the base role still runs.
+          Run this playbook again once the logging stack is up.
+      when: influx_health.status | default(-1) != 200
+
+    - name: Skip the rest of this play while InfluxDB is down
+      ansible.builtin.meta: end_play
+      when: influx_health.status | default(-1) != 200
+
     - name: Load the InfluxDB admin token and the metric tokens on the controller
       community.sops.load_vars:
         file: "{{ item.file }}"
