@@ -38,8 +38,13 @@ of each `offsite` source that holds anything.
 With no stack in the configuration the run does nothing at all: no SSH, no
 rclone, no output.
 
-Exit status is non-zero when any step failed; the caller reports it to the
-feed and the phone.
+A deployed stack pinned to this node whose .swarm-owner is missing or names
+another host is reported as a warning: it would otherwise never be
+snapshotted, silently.
+
+Exit status: 1 when any step failed, 3 when there were only warnings, 0
+otherwise. The caller posts 1 to the feed and the phone as `fail`, and 3 to
+the feed as `warn`.
 """
 
 import argparse
@@ -58,6 +63,7 @@ class Run:
         self.config = config
         self.dry_run = dry_run
         self.failures = 0
+        self.warnings = 0
         self.stamp = time.strftime("%Y-%m-%d_%H%M")
 
     def log(self, message):
@@ -66,6 +72,15 @@ class Run:
     def fail(self, message):
         print("FAILED: " + message, file=sys.stderr, flush=True)
         self.failures += 1
+
+    def warn(self, message):
+        print("WARNING: " + message, file=sys.stderr, flush=True)
+        self.warnings += 1
+
+    def query(self, argv):
+        """A read-only command, run even in a dry run; None when it fails."""
+        result = subprocess.run(argv, text=True, capture_output=True)
+        return result.stdout if result.returncode == 0 else None
 
     def run(self, argv, **kwargs):
         """Run a command; a dry run prints it instead."""
@@ -227,17 +242,57 @@ class Run:
         stacks = self.config.get("stacks", [])
         if not stacks:
             return 0
+        not_owned = []
         for stack in stacks:
             name, snapshot = stack["name"], stack["snapshot"]
             if not self.owned_here(name):
+                not_owned.append(name)
                 continue
             if snapshot.get("sqlite"):
                 self.sqlite(name, snapshot["sqlite"])
             if snapshot.get("postgres"):
                 self.postgres(name, snapshot["postgres"])
             self.to_peer(name, snapshot)
+        if not_owned:
+            self.check_unowned(not_owned)
         self.offsite()
-        return 1 if self.failures else 0
+        if self.failures:
+            return 1
+        # 3: only warnings. homelab-backup-run posts them as `warn`, not `fail`.
+        return 3 if self.warnings else 0
+
+    def check_unowned(self, names):
+        """Warn about deployed stacks pinned here whose state names no owner.
+
+        .swarm-owner is written by a cutover, the move playbook, or
+        roles/backup (swarm_owner.yml). A stack that runs here without it,
+        after a Swarm rebuild or a new stateful stack's first deploy, would
+        otherwise never be snapshotted and nothing would say so. A stack that
+        is pinned but not deployed yet (its Compose project still runs) is
+        not reported; one pinned to the other node is that node's to report.
+        """
+        labels = self.query(["docker", "node", "inspect", "self",
+                             "--format", "{{json .Spec.Labels}}"])
+        deployed = self.query(["docker", "stack", "ls", "--format", "{{.Name}}"])
+        if labels is None or deployed is None:
+            self.warn("cannot read this node's pin labels or the deployed stacks "
+                      "(manager locked or Swarm down?); unowned stacks not checked")
+            return
+        labels = json.loads(labels or "null") or {}
+        deployed = set(deployed.split())
+        host = self.config["host"]
+        for name in names:
+            if labels.get(f"pin.{name}") != "true" or name not in deployed:
+                continue
+            try:
+                with open(os.path.join(self.state_dir(name), ".swarm-owner")) as handle:
+                    owner = "'" + handle.read().strip() + "'"
+            except FileNotFoundError:
+                owner = "missing"
+            self.warn(f"{name}: deployed and pinned to {host}, but "
+                      f"{self.state_dir(name)}/.swarm-owner is {owner}, so it is not "
+                      f"snapshotted. Run `ansible-playbook playbooks/backup.yml -l {host}` "
+                      f"to claim it, or write {host} into that file.")
 
 
 def files_relative(state_dir, directory):

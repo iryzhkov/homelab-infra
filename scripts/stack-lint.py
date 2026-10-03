@@ -16,6 +16,11 @@ Errors (exit 1):
   - a published port bound to a host address
   - update_config.order: start-first on a service with a volume or bind
     mount, which would run two writers on the same data
+  - any `$` in command, entrypoint or healthcheck.test: the rendered file is
+    interpolated again by `docker stack deploy`, so even `$$` ends up as an
+    empty variable (cv-site, 2026-10-03)
+
+Also warned: `$` in a value of an env_file found beside the stack file.
 
 Warnings (printed, exit 0): keys Swarm ignores (container_name, depends_on,
 restart, shm_size, mem_limit, cpus), and more than one replica of a service
@@ -24,6 +29,7 @@ with a mount.
     scripts/stack-lint.py stacks/*/stack.yml
 """
 
+import os
 import re
 import sys
 
@@ -97,7 +103,48 @@ def lint(path):
         for key in IGNORED:
             if key in service:
                 warnings.append(f"{where}: {key} is ignored by Swarm")
+        # The rendered deployed.yml is interpolated a second time by
+        # `docker stack deploy`, so `$$` in the stack file becomes `$` and then
+        # an empty variable (cv-site, 2026-10-03). Commands carry no `$` at
+        # all; put shell variables in a script or the image.
+        test = (service.get("healthcheck") or {}).get("test")
+        for key, value in (("command", service.get("command")),
+                           ("entrypoint", service.get("entrypoint")),
+                           ("healthcheck.test", test)):
+            if "$" in _text(value):
+                errors.append(f"{where}: {key} contains '$'; the rendered file is"
+                              " interpolated again at deploy, so it is lost")
+        for env_path in _env_files(path, service):
+            try:
+                with open(env_path) as env_handle:
+                    for number, line in enumerate(env_handle, 1):
+                        if "$" in line.partition("=")[2]:
+                            warnings.append(f"{where}: {env_path}:{number} has '$' in a value;"
+                                            " it is interpolated again at deploy")
+            except OSError:
+                pass  # written by swarm-prepare.yml on the host, not in the repository
     return errors, warnings
+
+
+def _text(value):
+    """Flatten a string or list value to one string."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(item) for item in value)
+    return str(value)
+
+
+def _env_files(stack_path, service):
+    """Yield the env_file paths of a service, relative to the stack file."""
+    entries = service.get("env_file") or []
+    if isinstance(entries, (str, dict)):
+        entries = [entries]
+    base = os.path.dirname(os.path.abspath(stack_path))
+    for entry in entries:
+        name = entry.get("path") if isinstance(entry, dict) else entry
+        if name:
+            yield os.path.join(base, name)
 
 
 def main(paths):

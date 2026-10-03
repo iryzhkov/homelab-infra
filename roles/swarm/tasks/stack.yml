@@ -43,7 +43,9 @@
 #      forgets it while the Compose project still exists.
 #   5. render, compare with deployed.yml
 #   6. cutover only: remove the Compose project
-#   7. deploy, when deployed.yml changed or the stack is not deployed
+#   7. deploy, when the rendering differs from deployed.yml or the stack is
+#      not deployed: from deployed.yml.pending, renamed to deployed.yml only
+#      after `docker stack deploy` succeeded, so a failed deploy is retried
 #
 # The stack file is rendered with `docker stack config`, which reads
 # env_file: itself and interpolates from the environment given to it here.
@@ -357,14 +359,34 @@
   no_log: true
   when: swarm_stack_rendered.rc | int == 0
 
-- name: Install the rendered file
+# deployed.yml is what the cluster last accepted. A new rendering is written
+# to deployed.yml.pending, deployed from there, and renamed over
+# deployed.yml only when `docker stack deploy` succeeded, so a failed deploy
+# leaves the old file and the next converge tries again.
+- name: Read what was last deployed
+  ansible.builtin.slurp:
+    src: "{{ swarm_stack_dir }}/deployed.yml"
+  register: swarm_stack_last
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Decide whether {{ swarm_stack.name }} needs a deploy
+  ansible.builtin.set_fact:
+    swarm_stack_needs_deploy: >-
+      {{ swarm_stack_rendered.rc | int == 0
+         and ((swarm_stack_last.content | default('') | b64decode) != swarm_stack_deployed
+              or swarm_stack.name not in swarm_stack_list.stdout_lines) }}
+
+- name: Install the rendered file as pending
   ansible.builtin.copy:
     content: "{{ swarm_stack_deployed }}"
-    dest: "{{ swarm_stack_dir }}/deployed.yml"
+    dest: "{{ swarm_stack_dir }}/deployed.yml.pending"
     mode: "0600"
-  register: swarm_stack_file
   no_log: true
-  when: swarm_stack_rendered.rc | int == 0
+  when:
+    - not ansible_check_mode
+    - swarm_stack_needs_deploy | bool
 
 - name: Stop and remove the Compose project, keeping its volumes
   ansible.builtin.command:
@@ -392,9 +414,7 @@
   changed_when: true
   when:
     - ansible_check_mode
-    - >-
-      swarm_stack_file is changed
-      or swarm_stack.name not in swarm_stack_list.stdout_lines
+    - swarm_stack_needs_deploy | bool
 
 - name: Deploy {{ swarm_stack.name }}
   ansible.builtin.command:
@@ -403,7 +423,7 @@
       - stack
       - deploy
       - --compose-file
-      - deployed.yml
+      - deployed.yml.pending
       - --with-registry-auth
       - --prune
       - --detach=false
@@ -412,6 +432,13 @@
   changed_when: true
   when:
     - not ansible_check_mode
-    - >-
-      swarm_stack_file is changed
-      or swarm_stack.name not in swarm_stack_list.stdout_lines
+    - swarm_stack_needs_deploy | bool
+
+- name: Record the deployed file
+  ansible.builtin.command:
+    argv: [mv, -f, deployed.yml.pending, deployed.yml]
+    chdir: "{{ swarm_stack_dir }}"
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - swarm_stack_needs_deploy | bool

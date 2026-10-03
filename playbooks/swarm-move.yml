@@ -26,6 +26,20 @@
 #    report healthy, probe the stack's routes on <to> and through Traefik.
 # 8. Post to the feed.
 #
+# 9. Tidy, once the stack is healthy on <to>: the material the move made
+#    obsolete is removed (playbooks/tasks/swarm-move-tidy.yml). On <to>, the
+#    old owner's peer copy of the stack (its hourly snapshots, files mirror,
+#    sync stamp and the final/ cold copy just restored) and any older
+#    .moved/<stack>-* left when the stack last left <to>; on the old node,
+#    its own snapshots/<stack>, which the hourly job stops pruning once the
+#    node no longer owns the stack, and any final/ left there by an earlier
+#    move towards it. The old node's fresh .moved/<stack>-<stamp>
+#    stays as the rollback copy. The same tidy runs alone, for a stack that
+#    already sits where it should, with
+#      ansible-playbook playbooks/swarm-move.yml -e stack=<name> -e to=<owner> -e tidy_only=true
+#
+# Stacks that must never move are refused (swarm_move_unmovable below).
+#
 # Runs on <to>, which is a manager; nothing is done by hand on either node.
 # The crash path (old node gone) is the manual procedure in docs/backups.md.
 
@@ -48,6 +62,14 @@
       {{.Spec.Name}} {{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{else}}global{{end}}
     swarm_move_status_format: !unsafe '{{.Status}}'
     swarm_move_name_format: !unsafe '{{.Name}}'
+    # Stacks that stay where they are, with the reason the refusal gives.
+    swarm_move_unmovable:
+      logging: >-
+        Loki publishes 3100 in host mode on homelab and every log client names
+        homelab's address (docs/transition/phase5/2026-10-03-F5.md); logging
+        stays on homelab, and while homelab is down logs are dropped (containers
+        log non-blocking). Accepted exception, docs/transition/phase7.
+    swarm_move_other: "{{ groups['swarm_workers'] | difference([to]) | first }}"
   tasks:
     # 1. Preconditions ------------------------------------------------------
 
@@ -60,6 +82,23 @@
         fail_msg: >-
           Usage: -e stack=<name> -e to=<one of {{ groups['swarm_workers'] | join(', ') }}>.
         quiet: true
+
+    - name: Refuse a stack that must not move
+      ansible.builtin.assert:
+        that: stack not in swarm_move_unmovable
+        fail_msg: "{{ stack }} does not move: {{ swarm_move_unmovable[stack] | default('') }}"
+        quiet: true
+
+    - name: Tidy only, for a stack already on {{ to }}
+      ansible.builtin.include_tasks: tasks/swarm-move-tidy.yml
+      vars:
+        swarm_tidy_owner: "{{ to }}"
+        swarm_tidy_other: "{{ swarm_move_other }}"
+      when: tidy_only | default(false) | bool
+
+    - name: Stop after the tidy
+      ansible.builtin.meta: end_host
+      when: tidy_only | default(false) | bool
 
     - name: Read the managers' state
       ansible.builtin.command:
@@ -393,6 +432,15 @@
       until: swarm_move_route is succeeded
       retries: 12
       delay: 5
+      when: not ansible_check_mode
+
+    # 9. Tidy (before the record, so the feed post means the move is finished)
+
+    - name: Remove what the move made obsolete
+      ansible.builtin.include_tasks: tasks/swarm-move-tidy.yml
+      vars:
+        swarm_tidy_owner: "{{ to }}"
+        swarm_tidy_other: "{{ swarm_move_from }}"
       when: not ansible_check_mode
 
     # 8. Record -----------------------------------------------------------------

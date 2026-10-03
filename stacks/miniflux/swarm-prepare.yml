@@ -4,9 +4,10 @@
 # project is retired and the stack deployed. Twin of
 # stacks/authentik/swarm-prepare.yml; keep the two in step.
 #
-# Every run makes sure /srv/swarm/miniflux exists on the pinned node, and
-# refuses to let a stack be deployed onto a data directory that holds no
-# database.
+# The pinned node is the one carrying the label pin.miniflux (the inventory's
+# `pin` only before the first cutover), so a converge after a move looks on
+# the node the stack moved to. Every run refuses to let the stack be deployed
+# onto a data directory on that node that holds no database.
 #
 # A cutover run (-e swarm_cutover=miniflux) that finds the Compose project
 # also, in this order:
@@ -25,11 +26,48 @@
 # The Compose data directory is only read, never changed: it is the rollback
 # copy (docs/transition/phase5/2026-10-03-P1.md, "Rollback").
 
+# The node is the one holding the pin label, as in every other prepare file
+# (stacks/actual/swarm-prepare.yml): after playbooks/swarm-move.yml the label,
+# not the inventory's `pin`, says where the state lives. Before the first
+# cutover no node carries the label, and the inventory's pin is the answer.
+- name: Find the node holding pin.{{ swarm_stack.name }}
+  ansible.builtin.command:
+    argv: [docker, node, ls, -q, --filter, "node.label=pin.{{ swarm_stack.name }}=true"]
+  register: p1_pinned
+  changed_when: false
+  check_mode: false
+
+- name: Read the pinned node's inventory name
+  ansible.builtin.command:
+    argv: [docker, node, inspect, --format, "{{ p1_host_format }}", "{{ p1_pinned.stdout_lines[0] }}"]
+  vars:
+    p1_host_format: !unsafe '{{index .Spec.Labels "host"}}'
+  register: p1_pin_host
+  changed_when: false
+  check_mode: false
+  when: p1_pinned.stdout_lines | length == 1
+
+# swarm_prep_pin_override names another node as if it held the label, to
+# rehearse a post-move converge without moving anything; check mode only.
+- name: Refuse a simulated pin outside check mode
+  ansible.builtin.assert:
+    that: ansible_check_mode
+    fail_msg: swarm_prep_pin_override is for check-mode rehearsals only.
+    quiet: true
+  when: swarm_prep_pin_override is defined
+
+- name: Remember where the state lives
+  ansible.builtin.set_fact:
+    p1_node: >-
+      {{ swarm_prep_pin_override
+         if swarm_prep_pin_override is defined
+         else ((p1_pin_host.stdout | trim)
+               if p1_pinned.stdout_lines | length == 1 else swarm_stack.pin) }}
+
 - name: Describe the miniflux cutover
   ansible.builtin.set_fact:
-    p1_node: "{{ swarm_stack.pin }}"
     p1_dir: "{{ swarm_state_root }}/miniflux"
-    p1_dump_dir: "{{ hostvars[swarm_stack.pin].swarm_pool_path }}/snapshots/miniflux/cutover"
+    p1_dump_dir: "{{ hostvars[p1_node].swarm_pool_path }}/snapshots/miniflux/cutover"
     p1_project: "{{ swarm_stack.compose.project | default(swarm_stack.name) }}"
     p1_scratch: swarm-restore-check-miniflux
     # The stack's own db image (Docker Hub postgres:17.11-alpine, from the
@@ -48,26 +86,6 @@
         dest: postgres
     # The file that proves a copied Postgres data directory is not empty.
     p1_marker: postgres/PG_VERSION
-
-# The cold copy below is a local rsync, and the dump is written to the pinned
-# node's pool: both need the Compose project on the node the stack is pinned to.
-- name: Require the Compose project on the pinned node
-  ansible.builtin.assert:
-    that: swarm_stack.compose.host == p1_node
-    fail_msg: >-
-      miniflux runs under Compose on {{ swarm_stack.compose.host }} but is pinned to
-      {{ p1_node }}; this preparation copies locally and cannot cross nodes.
-    quiet: true
-
-- name: Create the state directory on {{ p1_node }}
-  ansible.builtin.file:
-    path: "{{ p1_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  delegate_to: "{{ p1_node }}"
-  become: true
 
 - name: Find the Compose project's containers, running or stopped
   ansible.builtin.command:
@@ -92,6 +110,33 @@
       {{ swarm_cutover | default('') == swarm_stack.name
          and p1_compose_all.stdout | trim | length > 0 }}
     p1_db_running: "{{ p1_compose_db.stdout | trim | length > 0 }}"
+
+# The cold copy below is a local rsync, and the dump is written to the pinned
+# node's pool: a cutover needs the Compose project on the node holding the pin.
+# After the cutover (the Compose project gone) the stack may live anywhere.
+- name: Require the Compose project on the pinned node
+  ansible.builtin.assert:
+    that: swarm_stack.compose.host == p1_node
+    fail_msg: >-
+      miniflux runs under Compose on {{ swarm_stack.compose.host }} but is pinned to
+      {{ p1_node }}; this preparation copies locally and cannot cross nodes.
+    quiet: true
+  when: p1_cutting_over
+
+- name: Create the state directory on {{ p1_node }}
+  ansible.builtin.file:
+    path: "{{ p1_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  delegate_to: "{{ p1_node }}"
+  become: true
+  when: p1_cutting_over
+
+- name: Say where the state lives
+  ansible.builtin.debug:
+    msg: "miniflux state: {{ p1_dir }} on {{ p1_node }}"
 
 - name: Say what the cutover would do
   ansible.builtin.debug:

@@ -1,0 +1,359 @@
+---
+# Bring a drained Proxmox host back into service (plan phase 7; runbook
+# docs/transition/phase7/runbook-host-maintenance.md). Works after a power-off
+# and after a drain without one.
+#
+#   ansible-playbook playbooks/host-return.yml -e host=proxmox-b --check   # dry run
+#   ansible-playbook playbooks/host-return.yml -e host=proxmox-b
+#
+# Power the host on first (by hand: neither node wakes from power-off over the
+# network). Then, each step refusing when its check fails:
+#  1. The host answers SSH; the cluster is quorate with three votes and the
+#     QDevice connected.
+#  2. tank imported, ONLINE and mounted, the Proxmox storage active, the ARC
+#     cap in place (docs/storage-pools.md, "After a host reboot").
+#  3. Every guest the plan lists is running (onboot starts them).
+#  4. On the returning worker: its pool disk mounted, Docker requiring it, and
+#     the mount active before Docker started.
+#  5. Swarm: the returning manager unlocked through the nodes play (autolock),
+#     then all three managers Ready and Reachable.
+#  6. Undrain the worker.
+#  7. Start the Compose-pinned stacks that the drain stopped.
+#  8. Move every stateful stack whose inventory pin names the returning worker
+#     back to it with swarm-move.yml (after a fresh hourly snapshot on the
+#     other worker, which the move's freshness check needs); restore a shed
+#     tier with -e shed=<stack,...>.
+#  9. Verify: both Gatus instances without failures, every route through the
+#     VIP, keepalived active on both edges with the VIP on exactly one.
+
+- name: Return a Proxmox host to service
+  hosts: "{{ host | default('no-host-given') }}"
+  gather_facts: false
+  vars_files:
+    - vars/host-maintenance.yml
+  vars:
+    hm: "{{ host_maintenance[host] }}"
+    hm_check_flag: "{{ ['--check'] if ansible_check_mode else [] }}"
+    hm_shed: "{{ (shed | default('')).split(',') | map('trim') | select | list }}"
+    hm_node_format: !unsafe '{{.Hostname}}|{{.Status}}|{{.ManagerStatus}}|{{.Availability}}'
+    hm_label_format: !unsafe '{{json .Spec.Labels}}'
+    hm_host_label_format: !unsafe '{{index .Spec.Labels "host"}}'
+    # The swarm_stacks_* lists are group variables of the workers, not of the
+    # hypervisor this play runs on, so they are read through the worker.
+    hm_all_stacks: >-
+      {{ hostvars[hm.worker].keys() | select('match', '^swarm_stacks_') | sort
+         | map('extract', hostvars[hm.worker]) | flatten }}
+  tasks:
+    # 1. Host and quorum --------------------------------------------------------
+
+    - name: Require a known host
+      ansible.builtin.assert:
+        that: host is defined and host in host_maintenance
+        fail_msg: "Usage: -e host=<{{ host_maintenance.keys() | join('|') }}>"
+        quiet: true
+
+    - name: Wait for {{ host }} to answer
+      ansible.builtin.wait_for_connection:
+        timeout: 1200
+
+    - name: Read quorum
+      ansible.builtin.shell:
+        cmd: pvecm status; corosync-qdevice-tool -s
+      register: hr_pvecm
+      until: >-
+        hr_pvecm.stdout is search('Flags:\s+Quorate')
+        and hr_pvecm.stdout is search('Total votes:\s+3')
+        and hr_pvecm.stdout is search('State:\s+Connected')
+      retries: 30
+      delay: 10
+      changed_when: false
+      check_mode: false
+
+    # 2. tank --------------------------------------------------------------------
+
+    - name: Read tank, its storage and the ARC cap
+      ansible.builtin.shell:
+        cmd: |
+          zpool status -x tank
+          zfs get -H -o value mounted tank
+          pvesm status --storage tank | awk 'NR>1 {print $3}'
+          cat /sys/module/zfs/parameters/zfs_arc_max
+          systemctl is-enabled zfs-import@tank.service zfs-import-cache.service zfs-mount.service | sort -u
+      register: hr_tank
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse unless tank is healthy, mounted and active with the ARC cap
+      ansible.builtin.assert:
+        that:
+          - hr_tank.stdout_lines[0] == "pool 'tank' is healthy"
+          - hr_tank.stdout_lines[1] == 'yes'
+          - hr_tank.stdout_lines[2] == 'active'
+          - hr_tank.stdout_lines[3] | int == hm.zfs_arc_max
+          - hr_tank.stdout_lines[4:] == ['enabled']
+        fail_msg: "{{ hr_tank.stdout_lines }} (docs/storage-pools.md, 'After a host reboot')"
+        quiet: true
+
+    # 3. Guests --------------------------------------------------------------------
+
+    - name: Wait until every listed guest runs
+      ansible.builtin.shell:
+        cmd: |
+          set -eu -o pipefail
+          qm list | awk 'NR>1 && $3=="running" {print "qm " $1}'
+          pct list | awk 'NR>1 && $2=="running" {print "pct " $1}'
+        executable: /bin/bash
+      register: hr_running
+      until: missing | length == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+      check_mode: false
+      vars:
+        missing: >-
+          {{ hm.guests | map(attribute='type') | zip(hm.guests | map(attribute='id') | map('string'))
+             | map('join', ' ') | list | difference(hr_running.stdout_lines | default([])) }}
+
+    # 4. The worker's pool disk before Docker ------------------------------------
+
+    - name: Wait for {{ hm.worker }} to answer
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+      delegate_to: "{{ hm.worker }}"
+
+    - name: Read the mount order on {{ hm.worker }}
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          unit=$(systemd-escape --path --suffix=mount {{ hostvars[hm.worker].swarm_pool_path }})
+          findmnt -n -o TARGET {{ hostvars[hm.worker].swarm_pool_path }}
+          systemctl show docker -p RequiresMountsFor --value
+          systemctl show "$unit" -p ActiveEnterTimestampMonotonic --value
+          systemctl show docker -p ActiveEnterTimestampMonotonic --value
+      delegate_to: "{{ hm.worker }}"
+      register: hr_mount
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse unless the pool disk was mounted before Docker started
+      ansible.builtin.assert:
+        that:
+          - hr_mount.stdout_lines[0] == hostvars[hm.worker].swarm_pool_path
+          - hostvars[hm.worker].swarm_pool_path in hr_mount.stdout_lines[1]
+          - hr_mount.stdout_lines[2] | int > 0
+          - hr_mount.stdout_lines[2] | int <= hr_mount.stdout_lines[3] | int
+        fail_msg: >-
+          {{ hm.worker }}: {{ hr_mount.stdout_lines }}. If Docker started on an empty
+          mount point, stop Docker, mount the disk and start Docker (runbook).
+        quiet: true
+
+    # 5. Swarm unlock ----------------------------------------------------------
+
+    - name: Unlock {{ hm.worker }} through the nodes play
+      ansible.builtin.command:
+        argv: "{{ ['ansible-playbook', playbook_dir ~ '/swarm.yml', '--tags', 'nodes', '-l', hm.worker] + hm_check_flag }}"
+        chdir: "{{ playbook_dir }}/.."
+        stdin: ""
+      delegate_to: localhost
+      register: hr_unlock
+      changed_when: not ansible_check_mode
+      check_mode: false
+
+    - name: Wait until all three managers are Ready and Reachable
+      ansible.builtin.command:
+        argv: [docker, node, ls, --format, "{{ hm_node_format }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hr_nodes
+      until: hr_nodes.stdout_lines | select('search', '[|]Ready[|](Leader|Reachable)[|]') | list | length == groups['swarm'] | length
+      retries: 30
+      delay: 5
+      changed_when: false
+      check_mode: false
+
+    # 6. Undrain ---------------------------------------------------------------------
+
+    - name: Find {{ hm.worker }}'s Swarm node
+      ansible.builtin.command:
+        argv: [docker, node, ls, -q, --filter, "node.label=host={{ hm.worker }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hr_worker_id
+      changed_when: false
+      check_mode: false
+
+    - name: Undrain {{ hm.worker }}
+      ansible.builtin.command:
+        argv: [docker, node, update, --availability, active, "{{ hr_worker_id.stdout | trim }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+
+    # 7. Compose -----------------------------------------------------------------
+
+    # A container stopped by `docker stop` stays stopped across a reboot when
+    # its policy is unless-stopped; start every container of each project.
+    - name: Start the Compose projects the drain stopped
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          ids=$(docker ps -aq --filter label=com.docker.compose.project={{ item.1 }} --filter status=exited --filter status=created)
+          [ -z "$ids" ] || docker start $ids
+      delegate_to: "{{ item.0.key }}"
+      loop: "{{ hm.compose_stop | dict2items | subelements('value') }}"
+      loop_control:
+        label: "{{ item.0.key }}: {{ item.1 }}"
+
+    - name: Wait until no container of those projects is down or unhealthy
+      ansible.builtin.shell:
+        cmd: >-
+          docker ps -a --filter label=com.docker.compose.project={{ item.1 }}
+          --format '{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}'
+      delegate_to: "{{ item.0.key }}"
+      loop: "{{ hm.compose_stop | dict2items | subelements('value') }}"
+      loop_control:
+        label: "{{ item.0.key }}: {{ item.1 }}"
+      register: hr_compose
+      until: >-
+        hr_compose.stdout_lines | length > 0 and
+        hr_compose.stdout_lines | select('search', 'Exited|Created|starting|unhealthy') | list | length == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+      check_mode: false
+
+    # 8. Stateful stacks home ----------------------------------------------------
+
+    - name: Read every node's pin labels
+      ansible.builtin.shell:
+        cmd: |
+          for n in $(docker node ls -q); do
+            echo "$(docker node inspect --format '{{ hm_host_label_format }}' $n) $(docker node inspect --format '{{ hm_label_format }}' $n)"
+          done
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hr_labels
+      changed_when: false
+      check_mode: false
+
+    - name: Work out the stacks to move home, in order
+      ansible.builtin.set_fact:
+        hr_moves: >-
+          {%- set away = [] -%}
+          {%- for line in hr_labels.stdout_lines -%}
+          {%-   set node = line.split(' ', 1)[0] -%}
+          {%-   for k in (line.split(' ', 1)[1] | from_json).keys() if k is match('^pin[.]') -%}
+          {%-     set s = k[4:] -%}
+          {%-     set entry = hm_all_stacks | selectattr('name', 'equalto', s) | first | default({}) -%}
+          {%-     if entry.pin | default('') == hm.worker and node != hm.worker -%}
+          {%-       set _ = away.append(s) -%}
+          {%-     endif -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ (away | difference(host_maintenance_move_last) | sort)
+             + (host_maintenance_move_last | select('in', away) | list) }}
+
+    - name: Say what moves home
+      ansible.builtin.debug:
+        msg: "to {{ hm.worker }}, in order: {{ hr_moves }}"
+
+    # The move refuses a peer copy older than two hours; while the worker was
+    # away, the other worker's hourly copies to it failed.
+    - name: Take a fresh hourly snapshot on {{ hm.survivor_worker }}
+      ansible.builtin.command:
+        argv: [systemctl, --user, start, homelab-backup-hourly.service]
+      delegate_to: "{{ hm.survivor_worker }}"
+      when: hr_moves | length > 0
+
+    - name: Move each stack home
+      ansible.builtin.command:
+        argv: >-
+          {{ ['ansible-playbook', playbook_dir ~ '/swarm-move.yml', '-e', 'stack=' ~ item,
+              '-e', 'to=' ~ hm.worker] + hm_check_flag }}
+        chdir: "{{ playbook_dir }}/.."
+        stdin: ""
+      loop: "{{ hr_moves }}"
+      delegate_to: localhost
+      register: hr_move
+      changed_when: not ansible_check_mode
+      check_mode: false
+
+    - name: Restore the shed tier from its stack files
+      ansible.builtin.command:
+        argv: "{{ ['ansible-playbook', playbook_dir ~ '/swarm.yml', '--tags', 'stacks', '-e', 'only=' ~ item] + hm_check_flag }}"
+        chdir: "{{ playbook_dir }}/.."
+        stdin: ""
+      loop: "{{ hm_shed }}"
+      delegate_to: localhost
+      changed_when: not ansible_check_mode
+      check_mode: false
+
+    # 9. Verify ---------------------------------------------------------------------
+
+    - name: Wait until both Gatus instances report no failure
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[item].ansible_host }}:{{ host_maintenance_gatus_port }}/api/v1/endpoints/statuses"
+        return_content: true
+        timeout: 10
+      loop: "{{ groups['swarm_workers'] }}"
+      delegate_to: localhost
+      register: hr_gatus
+      until: >-
+        hr_gatus.json is defined and
+        hr_gatus.json | selectattr('results', 'defined') | rejectattr('results', 'equalto', [])
+        | map(attribute='results') | map('last') | rejectattr('success') | list | length == 0
+      retries: 30
+      delay: 20
+      check_mode: false
+
+    - name: Probe every household route through the VIP
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -s
+          - -o
+          - /dev/null
+          - -m
+          - "10"
+          - -w
+          - "%{http_code}"
+          - --resolve
+          - "{{ item.host }}:443:{{ edge_vip }}"
+          - "https://{{ item.host }}{{ item.path }}"
+      loop: "{{ host_maintenance_routes }}"
+      loop_control:
+        label: "{{ item.host }}"
+      delegate_to: localhost
+      register: hr_routes
+      changed_when: false
+      failed_when: hr_routes.stdout is not match('^(2|3|401)')
+      check_mode: false
+
+    - name: Read keepalived and the VIP on both edges
+      ansible.builtin.shell:
+        cmd: echo "$(systemctl is-active keepalived) $(ip -4 -o addr show | grep -c ' {{ edge_vip }}/')"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['edge_proxy'] }}"
+      register: hr_edges
+      changed_when: false
+      check_mode: false
+
+    - name: Start keepalived where the drain stopped it
+      ansible.builtin.systemd_service:
+        name: keepalived
+        state: started
+      delegate_to: "{{ item.item }}"
+      become: true
+      loop: "{{ hr_edges.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout.split()[0] != 'active'
+
+    - name: Refuse unless exactly one edge holds the VIP
+      ansible.builtin.assert:
+        that: hr_edges.results | map(attribute='stdout') | map('split') | map('last') | map('int') | sum == 1
+        fail_msg: "keepalived and VIP per edge: {{ hr_edges.results | map(attribute='stdout') | list }}"
+        quiet: true
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: >-
+          {{ host }} is back: quorate, tank imported, guests up, {{ hm.worker }} unlocked
+          and active, Compose stacks up, {{ hr_moves | length }} stacks moved home,
+          every route answers through the VIP. Swarm does not rebalance stateless
+          tasks by itself; `docker service update --force <service>` moves one back.

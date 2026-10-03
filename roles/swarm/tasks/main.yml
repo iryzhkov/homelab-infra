@@ -72,16 +72,27 @@
           every Swarm service; run with -e swarm_rebuild=true to do it.
         quiet: true
 
+    # Swarm tasks of images built with `docker compose build` (openviking,
+    # cv-site) carry the Compose label too; they go with the cluster and
+    # cannot be restarted, so only lines without a service ID are kept.
     - name: List the running Compose containers before leaving
       ansible.builtin.command:
         argv:
           - docker
           - ps
-          - --quiet
           - --filter
           - label=com.docker.compose.project
-      register: swarm_compose_running
+          - --format
+          - "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Label \"com.docker.swarm.service.id\"{{ '}}' }}"
+      register: swarm_compose_listed
       changed_when: false
+
+    - name: Keep the containers that are not Swarm tasks
+      ansible.builtin.set_fact:
+        swarm_compose_running:
+          stdout_lines: >-
+            {{ swarm_compose_listed.stdout_lines | map('trim')
+               | reject('search', ' ') | reject('equalto', '') | list }}
 
     - name: Leave the old cluster
       ansible.builtin.command:

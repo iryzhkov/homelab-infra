@@ -1,0 +1,587 @@
+---
+# Drain one Proxmox host and, with -e power_off=true, shut it down (plan phase
+# 7; procedure, exceptions and rollback per step in
+# docs/transition/phase7/runbook-host-maintenance.md).
+#
+#   ansible-playbook playbooks/host-drain.yml -e host=proxmox-b --check   # dry run
+#   ansible-playbook playbooks/host-drain.yml -e host=proxmox-b           # drain only
+#   ansible-playbook playbooks/host-drain.yml -e host=proxmox-b -e power_off=true
+#
+# Undo, after a drain only or after the host is back on: playbooks/host-return.yml.
+#
+# Steps, each refusing before it changes anything when its check fails:
+#  1. Pre-checks: the host name; only the listed guests run on it; all three
+#     Swarm managers Ready and Reachable and OCI answering on the mesh from
+#     both workers (no drain while OCI is unreachable); the Proxmox cluster
+#     quorate with the QDevice connected; both Gatus instances without a
+#     failing endpoint; last night's vzdump OK on the host; nobody home and
+#     nothing playing on Emby (best effort, see the runbook; -e allow_home=true
+#     and -e allow_playing=true override); memory on the surviving worker for
+#     what moves there.
+#  2. The VIP onto the surviving edge if the host's edge holds it (keepalived
+#     stopped on the leaving edge; nopreempt keeps it on the survivor after).
+#  3. Shed the optional tier: -e shed=<stack,stack> scales those stacks to 0.
+#  4. playbooks/swarm-move.yml for every stateful stack pinned to the leaving
+#     worker, one at a time, in host_maintenance order; logging stays.
+#  5. docker node update --availability drain on the leaving worker; wait
+#     until it runs no Swarm task and every other service has a running task.
+#  6. Stop the Compose-pinned stacks on the host's Docker VMs.
+#  7. Every household route answers through the VIP, except those that are
+#     down by design; DNS answers for a VLAN 70 client; Gatus on the
+#     surviving worker fails only where expected.
+#  8. With -e power_off=true: stop the guests in order, then shut the host
+#     down, and check that the survivor stays quorate.
+#
+# In check mode every read-only check runs, each move runs swarm-move.yml in
+# check mode, and nothing is changed.
+
+- name: Drain a Proxmox host
+  # The play runs on the hypervisor being drained (up until the last step);
+  # checks that belong to the laptop are delegated to localhost, the rest to
+  # the host they read.
+  hosts: "{{ host | default('no-host-given') }}"
+  gather_facts: false
+  vars_files:
+    - vars/host-maintenance.yml
+  vars:
+    hm: "{{ host_maintenance[host] }}"
+    hm_check_flag: "{{ ['--check'] if ansible_check_mode else [] }}"
+    hm_shed: "{{ (shed | default('')).split(',') | map('trim') | select | list }}"
+    hm_node_format: !unsafe '{{.Hostname}}|{{.Status}}|{{.ManagerStatus}}|{{.Availability}}'
+    hm_label_format: !unsafe '{{json .Spec.Labels}}'
+    hm_id_format: !unsafe '{{.ID}}'
+    hm_reserve_format: !unsafe '{{.Spec.Name}} {{.Spec.TaskTemplate.Resources.Reservations.MemoryBytes}}'
+    hm_stack_format: !unsafe '{{index .Spec.Labels "com.docker.stack.namespace"}}'
+    hm_repl_format: !unsafe '{{.Name}} {{.Replicas}}'
+  tasks:
+    # 1. Pre-checks -------------------------------------------------------------
+
+    - name: Require a known host
+      ansible.builtin.assert:
+        that: host is defined and host in host_maintenance
+        fail_msg: "Usage: -e host=<{{ host_maintenance.keys() | join('|') }}>"
+        quiet: true
+
+    - name: Read the guests running on {{ host }}
+      ansible.builtin.shell:
+        cmd: |
+          set -eu -o pipefail
+          qm list | awk 'NR>1 && $3=="running" {print "qm " $1}'
+          pct list | awk 'NR>1 && $2=="running" {print "pct " $1}'
+        executable: /bin/bash
+      register: hm_running
+      changed_when: false
+      check_mode: false
+      failed_when: hm_running.rc != 0 or hm_running.stdout_lines | length == 0
+
+    - name: Refuse while a guest runs that the plan does not know
+      ansible.builtin.assert:
+        that: unknown | length == 0
+        fail_msg: >-
+          Running on {{ host }} but not in playbooks/vars/host-maintenance.yml:
+          {{ unknown }}. Add it with its shutdown order first.
+        quiet: true
+      vars:
+        known: "{{ hm.guests | map(attribute='type') | zip(hm.guests | map(attribute='id') | map('string')) | map('join', ' ') | list }}"
+        unknown: "{{ hm_running.stdout_lines | difference(known) }}"
+
+    - name: Read the Swarm managers
+      ansible.builtin.command:
+        argv: [docker, node, ls, --format, "{{ hm_node_format }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hm_nodes
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse unless all three managers are Ready and Reachable
+      ansible.builtin.assert:
+        that: hm_nodes.stdout_lines | select('search', '[|]Ready[|](Leader|Reachable)[|]') | list | length == groups['swarm'] | length
+        fail_msg: >-
+          docker node ls: {{ hm_nodes.stdout_lines }}. A locked manager is unlocked
+          with `ansible-playbook playbooks/swarm.yml --tags nodes -l <host>`.
+        quiet: true
+
+    - name: Ping OCI's mesh address from both workers
+      ansible.builtin.command:
+        argv: [ping, -c, "2", -W, "3", "{{ hostvars['oci'].mesh_host }}"]
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['swarm_workers'] }}"
+      register: hm_oci
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to drain while OCI is unreachable
+      ansible.builtin.assert:
+        that: hm_oci.results | rejectattr('rc', 'equalto', 0) | list | length == 0
+        fail_msg: >-
+          OCI does not answer from {{ hm_oci.results | rejectattr('rc', 'equalto', 0)
+          | map(attribute='item') | list }}. OCI is the third Swarm manager and the
+          Proxmox QDevice: a drain now would leave one vote of three in both.
+        quiet: true
+
+    - name: Read Proxmox quorum on {{ hm.survivor }}
+      ansible.builtin.shell:
+        cmd: pvecm status; corosync-qdevice-tool -s
+      delegate_to: "{{ hm.survivor }}"
+      register: hm_pvecm
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse unless the cluster is quorate with three votes and the QDevice connected
+      ansible.builtin.assert:
+        that:
+          - hm_pvecm.stdout is search('Flags:\s+Quorate')
+          - hm_pvecm.stdout is search('Total votes:\s+3')
+          - hm_pvecm.stdout is search('State:\s+Connected')
+        fail_msg: "{{ hm_pvecm.stdout_lines | select('search', 'Flags|votes|State') | list }}"
+        quiet: true
+
+    - name: Read both Gatus instances
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[item].ansible_host }}:{{ host_maintenance_gatus_port }}/api/v1/endpoints/statuses"
+        return_content: true
+        timeout: 10
+      loop: "{{ groups['swarm_workers'] }}"
+      register: hm_gatus
+      delegate_to: localhost
+      check_mode: false
+
+    - name: Refuse while Gatus reports a failure
+      ansible.builtin.assert:
+        that: failing | length == 0
+        fail_msg: "Gatus reports failing: {{ failing }}. Fix or explain them first."
+        quiet: true
+      vars:
+        failing: >-
+          {%- set out = [] -%}
+          {%- for e in hm_gatus.results | map(attribute='json') | flatten -%}
+          {%-   if e.results | default([]) | length > 0 and not e.results[-1].success -%}
+          {%-     set _ = out.append(e.key) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Read the last backup task on {{ host }}
+      ansible.builtin.shell:
+        cmd: >-
+          pvesh get /nodes/{{ hm.node_name }}/tasks --typefilter vzdump --limit 1
+          --output-format json
+      register: hm_vzdump
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse unless the last vzdump is OK and under 26 hours old
+      ansible.builtin.assert:
+        that:
+          - last.status == 'OK'
+          - (now(utc=true).timestamp() - last.starttime) < 93600
+        fail_msg: "Last vzdump on {{ host }}: {{ last }}"
+        quiet: true
+      vars:
+        last: "{{ (hm_vzdump.stdout | from_json)[0] }}"
+
+    # Presence: Home Assistant writes every entity it restores to
+    # .storage/core.restore_state every 15 minutes; person.* is in it, media
+    # players are not. There is no HA API token (the SSH add-on's supervisor
+    # token gets 401 from the core API), so this is the reliable read.
+    - name: Read presence from Home Assistant
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -o
+          - BatchMode=yes
+          - home-assistant
+          - >-
+            f=/config/.storage/core.restore_state; echo $(( $(date +%s) - $(stat -c %Y $f) ));
+            jq -r '.data[].state | select(.entity_id|startswith("person.")) | "\(.entity_id) \(.state)"' $f
+      register: hm_presence
+      delegate_to: localhost
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Media: Emby's activity log (playback.start / playback.stop, type 14 / 15)
+    # says who is watching, including remote users. HA's media players (the
+    # TVs) are not readable without an API token; see the runbook.
+    - name: Read Emby's playback sessions
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import sqlite3, time
+            c = sqlite3.connect('file:/home/iryzhkov/app/emby/data/activitylog.db?mode=ro', uri=True)
+            last = {}
+            for user, t, ms, name in c.execute("select InternalUserId, TypeId, DateCreatedMs, Name from ActivityLog where TypeId in (14, 15) order by DateCreatedMs"):
+                last[user] = (t, ms, name)
+            now = time.time() * 1000
+            for user, (t, ms, name) in last.items():
+                if t == 14 and now - ms < 4 * 3600 * 1000:
+                    print(name)
+      delegate_to: homelab
+      become: true
+      register: hm_playing
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report presence and playback
+      ansible.builtin.debug:
+        msg:
+          - "restore_state age {{ hm_presence.stdout_lines[0] | default('unreadable') }} s; {{ hm_presence.stdout_lines[1:] }}"
+          - "Emby playing: {{ hm_playing.stdout_lines | default(['unreadable']) }}"
+
+    # Best effort, and a warning only in check mode so a dry run reports
+    # everything: someone home, presence unknown or older than 30 minutes, or
+    # Emby playing refuses the real run unless overridden.
+    - name: Refuse while someone is home or something plays
+      ansible.builtin.assert:
+        that:
+          - (allow_home | default(false) | bool) or (presence_known and not someone_home)
+          - (allow_playing | default(false) | bool) or (hm_playing.rc == 0 and hm_playing.stdout_lines | length == 0)
+        fail_msg: >-
+          Presence {{ hm_presence.stdout_lines | default([]) }} (known: {{ presence_known }}),
+          Emby {{ hm_playing.stdout_lines | default([]) }} (rc {{ hm_playing.rc | default('-') }}).
+          The plan powers a host off when nobody is home; -e allow_home=true and
+          -e allow_playing=true override.
+        quiet: true
+      ignore_errors: "{{ ansible_check_mode }}"
+      vars:
+        presence_known: >-
+          {{ hm_presence.rc == 0 and hm_presence.stdout_lines | length > 1
+             and hm_presence.stdout_lines[0] | int < 1800 }}
+        someone_home: "{{ hm_presence.stdout_lines[1:] | select('search', ' home$') | list | length > 0 }}"
+
+    - name: Find the leaving worker's Swarm node
+      ansible.builtin.command:
+        argv: [docker, node, ls, -q, --filter, "node.label=host={{ hm.worker }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hm_worker_id
+      changed_when: false
+      check_mode: false
+
+    - name: Read its labels
+      ansible.builtin.command:
+        argv: [docker, node, inspect, --format, "{{ hm_label_format }}", "{{ hm_worker_id.stdout | trim }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hm_worker_labels
+      changed_when: false
+      check_mode: false
+
+    - name: Work out the stacks to move, in order
+      ansible.builtin.set_fact:
+        hm_moves: >-
+          {%- set pinned = (hm_worker_labels.stdout | from_json).keys()
+                | select('match', '^pin[.]') | map('regex_replace', '^pin[.]', '') | list -%}
+          {%- set movable = pinned | difference(host_maintenance_unmovable) | difference(hm_shed) -%}
+          {{ (movable | difference(host_maintenance_move_last) | sort)
+             + (host_maintenance_move_last | select('in', movable) | list) }}
+        hm_worker_node: "{{ hm_worker_id.stdout | trim }}"
+        hm_stays: >-
+          {{ (hm_worker_labels.stdout | from_json).keys() | select('match', '^pin[.]')
+             | map('regex_replace', '^pin[.]', '') | select('in', host_maintenance_unmovable) | list }}
+
+    - name: Read memory reservations of the services running on {{ hm.worker }}
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          for s in $(docker node ps {{ hm_worker_node }} --filter desired-state=running --format '{{ '{{' }}.Name{{ '}}' }}' | sed 's/[.][0-9]*$//' | sort -u); do
+            docker service inspect --format '{{ hm_stack_format }} {{ hm_reserve_format }}' "$s"
+          done
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hm_reserve
+      changed_when: false
+      check_mode: false
+
+    - name: Read memory available on {{ hm.survivor_worker }}
+      ansible.builtin.command:
+        argv: [awk, '/MemAvailable/ {print $2 * 1024}', /proc/meminfo]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hm_avail
+      changed_when: false
+      check_mode: false
+
+    - name: Add up what moves to {{ hm.survivor_worker }}
+      ansible.builtin.set_fact:
+        # Lines are "<stack> <service> <reservation bytes>".
+        hm_need: >-
+          {%- set total = namespace(n=0) -%}
+          {%- for l in hm_reserve.stdout_lines -%}
+          {%-   set f = l.split() -%}
+          {%-   if f | length == 3 and f[0] not in host_maintenance_unmovable + hm_shed -%}
+          {%-     set total.n = total.n + (f[2] | int) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ total.n }}
+
+    - name: Refuse unless what moves fits on {{ hm.survivor_worker }} with 2 GiB to spare
+      ansible.builtin.assert:
+        that: hm_avail.stdout | int - hm_need | int > 2147483648
+        fail_msg: >-
+          {{ hm.survivor_worker }} has {{ (hm_avail.stdout | int / 1048576) | int }} MiB
+          available; the services moving there reserve {{ (hm_need | int / 1048576) | int }} MiB.
+          Shed the optional tier with -e shed=<stack,...> (runbook) and try again.
+        quiet: true
+
+    - name: Say what will happen
+      ansible.builtin.debug:
+        msg:
+          - "{{ host }} ({{ hm.node_name }}): worker {{ hm.worker }} -> {{ hm.survivor_worker }}, edge {{ hm.edge }} -> {{ hm.survivor_edge }}"
+          - "memory: {{ (hm_avail.stdout | int / 1048576) | int }} MiB available on {{ hm.survivor_worker }}; {{ (hm_need | int / 1048576) | int }} MiB reserved by what moves there"
+          - "shed: {{ hm_shed }}"
+          - "moves, in order: {{ hm_moves }}"
+          - "stays (down while {{ hm.worker }} is): {{ hm_stays }}"
+          - "compose stopped: {{ hm.compose_stop }}"
+          - "guests stopped in order: {{ hm.guests | map(attribute='name') | list }} (only with power_off=true)"
+
+    # 2. VIP ------------------------------------------------------------------------
+
+    - name: Find which edge holds the VIP
+      ansible.builtin.shell:
+        cmd: ip -4 -o addr show | grep -c ' {{ edge_vip }}/' || true
+      delegate_to: "{{ item }}"
+      loop: "{{ [hm.edge, hm.survivor_edge] }}"
+      register: hm_vip
+      changed_when: false
+      check_mode: false
+
+    - name: Move the VIP to {{ hm.survivor_edge }} by stopping keepalived on {{ hm.edge }}
+      ansible.builtin.systemd_service:
+        name: keepalived
+        state: stopped
+      delegate_to: "{{ hm.edge }}"
+      become: true
+      when: hm_vip.results[0].stdout | int > 0
+
+    - name: Wait until {{ hm.survivor_edge }} holds the VIP
+      ansible.builtin.shell:
+        cmd: ip -4 -o addr show | grep -c ' {{ edge_vip }}/' || true
+      delegate_to: "{{ hm.survivor_edge }}"
+      register: hm_vip_after
+      until: hm_vip_after.stdout | int == 1
+      retries: 15
+      delay: 2
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode or hm_vip.results[0].stdout | int == 0
+
+    # 3. Shed the optional tier -----------------------------------------------------
+
+    - name: Read the shed stacks' services
+      ansible.builtin.command:
+        argv: [docker, service, ls, --filter, "label=com.docker.stack.namespace={{ item }}", --format, "{{ hm_repl_format }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      loop: "{{ hm_shed }}"
+      register: hm_shed_services
+      changed_when: false
+      check_mode: false
+
+    - name: Scale the optional tier to 0
+      ansible.builtin.command:
+        argv: "{{ ['docker', 'service', 'scale', '--detach=false'] + (item.stdout_lines | map('split') | map('first') | map('regex_replace', '$', '=0') | list) }}"
+      delegate_to: "{{ hm.survivor_worker }}"
+      loop: "{{ hm_shed_services.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout_lines | length > 0
+
+    # 4. Move the stateful stacks -----------------------------------------------
+
+    - name: Move each stateful stack to {{ hm.survivor_worker }}
+      ansible.builtin.command:
+        argv: >-
+          {{ ['ansible-playbook', playbook_dir ~ '/swarm-move.yml', '-e', 'stack=' ~ item,
+              '-e', 'to=' ~ hm.survivor_worker] + hm_check_flag }}
+        chdir: "{{ playbook_dir }}/.."
+        stdin: ""
+      loop: "{{ hm_moves }}"
+      register: hm_move
+      delegate_to: localhost
+      changed_when: not ansible_check_mode
+      check_mode: false
+
+    - name: Report the moves
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ item.stdout_lines | select('search', 'Moving |PLAY RECAP|ok=') | list }}"
+      loop: "{{ hm_move.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # 5. Drain ------------------------------------------------------------------
+
+    - name: Drain {{ hm.worker }}
+      ansible.builtin.command:
+        argv: [docker, node, update, --availability, drain, "{{ hm_worker_node }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+
+    - name: Wait until {{ hm.worker }} runs no Swarm task
+      ansible.builtin.command:
+        argv: [docker, ps, -q, --filter, label=com.docker.swarm.service.id]
+      delegate_to: "{{ hm.worker }}"
+      register: hm_left
+      until: hm_left.stdout | trim | length == 0
+      retries: 36
+      delay: 5
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Wait until every service but the unmovable and the shed has a running task
+      ansible.builtin.command:
+        argv: [docker, service, ls, --format, "{{ hm_repl_format }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hm_services
+      until: >-
+        hm_services.stdout_lines
+        | reject('match', '^(' ~ (host_maintenance_unmovable + hm_shed + ['-']) | join('|') ~ ')_')
+        | select('search', ' 0/') | list | length == 0
+      retries: 36
+      delay: 5
+      changed_when: false
+      check_mode: false
+
+    # 6. Stop the Compose-pinned stacks -----------------------------------------
+
+    - name: Stop the Compose projects on {{ hm.compose_stop.keys() | join(', ') }}
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          ids=$(docker ps -q --filter label=com.docker.compose.project={{ item.1 }})
+          [ -z "$ids" ] || docker stop -t 60 $ids
+      delegate_to: "{{ item.0.key }}"
+      loop: "{{ hm.compose_stop | dict2items | subelements('value') }}"
+      loop_control:
+        label: "{{ item.0.key }}: {{ item.1 }}"
+
+    # 7. Verify -----------------------------------------------------------------
+
+    - name: Probe every household route through the VIP
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -s
+          - -o
+          - /dev/null
+          - -m
+          - "10"
+          - -w
+          - "%{http_code}"
+          - --resolve
+          - "{{ item.host }}:443:{{ edge_vip }}"
+          - "https://{{ item.host }}{{ item.path }}"
+      loop: "{{ host_maintenance_routes }}"
+      loop_control:
+        label: "{{ item.host }}"
+      register: hm_routes
+      delegate_to: localhost
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to go on while a route that should answer does not
+      ansible.builtin.assert:
+        that: bad | length == 0
+        fail_msg: "Not answering through the VIP: {{ bad }}"
+        quiet: true
+      vars:
+        bad: >-
+          {%- set out = [] -%}
+          {%- for r in hm_routes.results -%}
+          {%-   if r.item.down_with | default('') != host and r.stdout is not match('^(2|3|401)') -%}
+          {%-     set _ = out.append(r.item.host ~ ' ' ~ r.stdout) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Report the routes that are down by design
+      ansible.builtin.debug:
+        msg: "{{ item.item.host }} {{ item.stdout }} (down with {{ item.item.down_with }})"
+      loop: "{{ hm_routes.results | selectattr('item.down_with', 'defined') | selectattr('item.down_with', 'equalto', host) | list }}"
+      loop_control:
+        label: "{{ item.item.host }}"
+
+    - name: Resolve a household name as a VLAN 70 client on {{ hm.survivor_worker }}
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, vault.ryzhkov.dev]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hm_dns
+      changed_when: false
+      check_mode: false
+      failed_when: hm_dns.stdout is not search(edge_vip | regex_escape)
+
+    - name: Read Gatus on {{ hm.survivor_worker }}
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[hm.survivor_worker].ansible_host }}:{{ host_maintenance_gatus_port }}/api/v1/endpoints/statuses"
+        return_content: true
+      register: hm_gatus_after
+      delegate_to: localhost
+      check_mode: false
+
+    - name: Report Gatus failures outside the expected set
+      ansible.builtin.debug:
+        msg: "unexpected failures: {{ unexpected }}"
+      vars:
+        unexpected: >-
+          {%- set out = [] -%}
+          {%- for e in hm_gatus_after.json -%}
+          {%-   if e.results | default([]) | length > 0 and not e.results[-1].success
+                 and e.key is not search(host_maintenance_gatus_expected[host] | trim) -%}
+          {%-     set _ = out.append(e.key) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+      failed_when: unexpected | length > 0 and not ansible_check_mode
+
+    - name: Stop here unless the host is to be powered off
+      ansible.builtin.meta: end_play
+      when: not (power_off | default(false) | bool)
+
+    # 8. Guests and host ----------------------------------------------------------
+
+    - name: Shut the guests down in order
+      ansible.builtin.command:
+        argv: "{{ [item.type, 'shutdown', item.id | string, '--timeout', '300' if item.type == 'qm' else '120'] }}"
+      loop: "{{ hm.guests }}"
+      loop_control:
+        label: "{{ item.type }} {{ item.id }} {{ item.name }}"
+      when: (item.type ~ ' ' ~ item.id) in hm_running.stdout_lines
+
+    - name: Refuse to power off while a guest still runs
+      ansible.builtin.shell:
+        cmd: |
+          qm list | awk 'NR>1 && $3=="running"'
+          pct list | awk 'NR>1 && $2=="running"'
+      register: hm_still
+      changed_when: false
+      failed_when: hm_still.stdout | trim | length > 0
+      when: not ansible_check_mode
+
+    - name: Shut {{ host }} down
+      ansible.builtin.command:
+        argv: [systemd-run, --on-active=10, /sbin/shutdown, -h, now]
+
+    - name: Wait until {{ host }} is off the network
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[host].ansible_host }}"
+        port: 22
+        state: stopped
+        timeout: 600
+      delegate_to: localhost
+      when: not ansible_check_mode
+
+    - name: Check that {{ hm.survivor }} stays quorate
+      ansible.builtin.command:
+        argv: [pvecm, status]
+      delegate_to: "{{ hm.survivor }}"
+      register: hm_after
+      changed_when: false
+      failed_when: hm_after.stdout is not search('Flags:\s+Quorate')
+      when: not ansible_check_mode
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: >-
+          {{ host }} is off; {{ hm.survivor }} quorate. If the survivor ever loses
+          quorum (OCI gone too), the emergency step is `pvecm expected 1` on
+          {{ hm.survivor }} (runbook). Bring {{ host }} back with
+          playbooks/host-return.yml -e host={{ host }}.

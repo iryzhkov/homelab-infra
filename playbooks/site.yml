@@ -16,14 +16,20 @@
 # would bring back the Compose project its cutover retired, and with it a
 # second claim on the same published ports.
 
+#
+# Two plays with the same tasks (a YAML anchor): every Docker host except the
+# edge proxies at once, then the edge proxies one at a time, so a change to
+# Traefik's static configuration never restarts both edges together and the
+# VIP always has a live Traefik to move to.
+
 - name: Deploy Compose stacks
-  hosts: docker_hosts
+  hosts: docker_hosts:!edge_proxy
   gather_facts: false
 
-  vars:
+  vars: &site_vars
     site_swarm_stack_names: "{{ hostvars | swarm_stack_names(groups) }}"
 
-  tasks:
+  tasks: &site_tasks
     - name: Deploy each stack
       ansible.builtin.include_role:
         name: compose_stack
@@ -85,3 +91,10 @@
       when:
         - drift_check_enabled | default(false)
         - only is not defined
+
+- name: Deploy Compose stacks on the edge proxies, one at a time
+  hosts: edge_proxy:&docker_hosts
+  serial: 1
+  gather_facts: false
+  vars: *site_vars
+  tasks: *site_tasks

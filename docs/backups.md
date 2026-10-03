@@ -103,7 +103,11 @@ Every hour `homelab-backup-run hourly` (both workers) runs
   normandy.
 
 With no stack listed the run does nothing at all. A failure goes to the feed
-and the phone with the other hourly tier.
+and the phone with the other hourly tier. A deployed stack pinned to the
+worker whose `.swarm-owner` is missing or names another host would never be
+snapshotted, so it is posted to the feed as a `warn`; `backup.yml`
+(`tasks/swarm_owner.yml`) claims such a stack when its state directory exists
+and no owner file does, and never overwrites one.
 
 **Transport.** root on each worker sends with `/etc/swarm-sync/id_ed25519`
 (one key per sender, in `secrets/swarm-sync.sops.yaml`) and its own

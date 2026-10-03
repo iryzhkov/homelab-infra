@@ -252,6 +252,55 @@ Mesh pushes to Loki: toolfeedback, which UpKeeper ships to every fleet host in h
 
 Checks: `base.yml --check` changed=0 on all seven hosts. `swarm.yml --check`: normandy and oci changed=0; homelab reports five stacks (vaultwarden, navidrome, sonarr-tv, radarr-movie and one more) whose `deployed.yml` would change, all from another executor's uncommitted `swarm_stack_logging` addition to `roles/swarm/tasks/stack.yml`, not from this section. `site.yml --check`: changed=0 on blackpearl, normandy, public-api and public-api-b; homelab fails at dsh as above until the dsh and jocasta recreates are approved.
 
+## 9. Review fixes (Ansible review, 2026-10-03)
+
+1. Failed deploys are retried: `roles/swarm/tasks/stack.yml` compares the new rendering with `deployed.yml` (read with `slurp`), writes it to `deployed.yml.pending`, deploys from that file and renames it over `deployed.yml` only after `docker stack deploy` succeeded. A failed deploy leaves the old `deployed.yml`, so the next converge deploys again.
+2. The rebuild leave path no longer restarts Swarm tasks: `roles/swarm/tasks/main.yml` lists Compose-labelled containers with their `com.docker.swarm.service.id` label and keeps only those without one (images built with `docker compose build`, such as openviking and cv-site, carry the Compose label into their Swarm tasks).
+3. `scripts/stack-lint.py` refuses any `$` in `command`, `entrypoint` or `healthcheck.test` (`deployed.yml` is interpolated a second time at deploy, so even `$$` ends up as an empty variable, the cv-site lesson) and warns on `$` in the values of an env_file it can read beside the stack file. All 31 stack files pass (one warning: hugo's two replicas share a mount, by design); a test file with `$$HOME` in `command` and `$URL` in `healthcheck.test` is refused.
+4. `playbooks/site.yml` is two plays sharing their vars and tasks through YAML anchors: `docker_hosts:!edge_proxy` at once, then `edge_proxy:&docker_hosts` with `serial: 1` (public-api, then public-api-b), so a Traefik static-configuration change never restarts both edges together.
+
+Checks after the fixes: `swarm.yml --check` changed=0 on homelab, normandy and oci (the new pending/rename logic sees every deployed stack as unchanged); `site.yml --check` changed=0 on blackpearl, homelab, normandy, public-api and public-api-b. Nothing was converged for these fixes.
+
+Recorded for the runbook:
+
+- A cold rebuild of the Swarm (both workers lost, or `--force-new-cluster` with no stacks left) deploys `forgejo` first: it holds the registry, including every `mirror/*` image the other stacks name by digest. Until it answers, only nodes that already hold the images can start tasks.
+- hugo's webhook handler (`roles/forgejo_webhooks/files/handlers/igor/blog.sh`) copies the built site to `normandy:/srv/swarm/hugo/public`. The `normandy` alias is already in the repository: homelab's `fleet_ssh_peers` includes normandy, so `roles/fleet_ssh` writes `Host normandy` (192.168.70.234, user igor) into homelab's `~/.ssh/config` block `ANSIBLE MANAGED: fleet peers`, and normandy's `fleet_ssh_authorized: [homelab]` authorises the key with `from="192.168.70.223"`. An older hand-written `Host normandy` entry higher in the same file is identical (plus the default `IdentityFile ~/.ssh/id_ed25519`); ssh uses the first match, so removing the hand-written one changes nothing.
+
+## 10. Security review items (2026-10-03): survey only, nothing changed yet
+
+### `/srv/swarm` permissions
+
+Read-only survey on homelab and normandy (`stat`, `find -printf`, `docker inspect` of every Swarm task: configured user, PID 1 UID, bind mounts under `/srv/swarm`). Today `<pool>/swarm` and every stack directory are 0755 and most files 0644: other local users can read, among others, `vaultwarden/data/db.sqlite3` and `rsa_key.pem`, the *arr databases and `config.xml` files (API keys), forgejo's data, openviking's data, influxdb's and grafana's data.
+
+Who writes each directory, and the proposed mode of the stack directory (the root `<pool>/swarm` becomes 0711 root:root on both workers):
+
+| Stack directory | Writer (process UID) | Proposed |
+|---|---|---|
+| vaultwarden, actual, cv-site, gatus-public, lubelogger, openviking, komga, autobrr | root (PID 1 UID 0; komga's and autobrr's older files belong to 1000, which root still reads) | root:root 0700 |
+| forgejo | the Forgejo server runs as `git`, UID 1000 (files owned by 1000); sshd as root | 1000:1000 0700 |
+| bazarr, lidarr-music, ombi, prowlarr, radarr-movie, sonarr-tv | linuxserver `abc`, UID 911 (files 911:911) | 911:911 0700 |
+| navidrome | 1000:988 (`user:` in the stack) | 1000:988 0700 |
+| thelounge | `node`, UID 1000 | 1000:1000 0700 |
+| obsidian | CouchDB, UID 5984 | 5984:5984 0700 |
+| adguard (normandy) | UID 1001; its one file is already 0400 1001 | 1001:root 0700 |
+| miniflux | Postgres, UID 70 | 70:70 0700 |
+| authentik | Postgres 70 (`postgres/`), Redis 999 (`redis/`), server and worker 1000 (`media/`, `templates/`, `certs/`) | stack directory root:root 0711; each subdirectory owned by its writer, 0700 |
+| logging | Loki 10001 (`loki/`), Grafana 472 (`grafana/`), InfluxDB 1000 (`influxdb/`); `config/loki-config.yml` read by 10001 | stack directory root:root 0711; data subdirectories owned by their writer, 0700; `config/` 0755 (no secrets) |
+| hugo, voice, whisper, wyoming-piper | public content (the site, a static page, model files, voices) written by the deploying user and read by nginx (101) or caddy | unchanged, 0755 |
+
+Root readers are unaffected: the hourly snapshot, the peer copy and the move playbook run as root. Plan: a per-stack map in `roles/swarm` defaults applied by `state_root.yml` on whichever node holds the directory, applied one stack at a time with the service's health check and a write test after each (a vaultwarden login, an *arr config save, a Forgejo push, a Grafana dashboard save). Waiting for the lead's go.
+
+### Built images in Forgejo pulled anonymously
+
+Anonymous `GET /v2/igor/<image>/manifests/<tag>` with an anonymous token answers 200 for cv-site, dsh, openviking, whisper-server and jocasta (and for the `mirror/*` images). `git.ryzhkov.dev` is published through the Cloudflare tunnel, so this is anonymous from the Internet.
+
+Secrets check, read-only (`docker image inspect` env and labels; `docker save` of each image with every layer's file list searched for `.env`, `*.pem`, `*.key`, SSH keys, `credentials`, `tokens.json`, `ov.conf`, `*secret*`, `.netrc`, `.npmrc`, `.docker/config.json`, outside library and certificate paths; `docker history --no-trunc` for ARG and secret-looking build steps):
+
+- dsh, openviking, whisper-server, jocasta: no secret found. Environment keys are PATH and runtime versions only (openviking's `GPG_KEY` is the Python base image's public signing-key fingerprint); labels are Compose or OCI metadata; no key or credential files; no secret build arguments.
+- cv-site: no key or token (`app/data/tokens.json` is 2 bytes, an empty JSON value), but the image bakes the site's whole `app/data` directory as it was at build time (2026-09-09): `analytics.jsonl` (79.8 MB of visitor analytics), `contacts.jsonl` (750 bytes, contact-form submissions) and `contacts.json`, `projects.json`. That is personal data, publicly pullable. The running service bind-mounts `/srv/swarm/cv-site/data` over that directory, so the baked copy is not needed.
+
+Making the packages private: Forgejo package visibility follows the owner, and `igor` is a public user that also owns the public repositories, so it means a private organisation, re-pushing five images (about 2.7 GB) under it, changing the references (`swarm_registry_images`, `jocasta_image`, the cv-site, openviking and whisper stack files, the dsh Compose file), a pull token valid for the organisation on normandy, and redeploying cv-site, openviking and whisper and recreating dsh and jocasta, each a service restart needing the lead's go. That is more than an hour with its restarts, so per the brief it is carried, not done. Recommended first step regardless, and cheap: rebuild cv-site with `data/` in `.dockerignore` and delete the old cv-site package versions from Forgejo, which removes the public copy of the personal data.
+
 ## Autolock and OCI rules
 
 The migration plan carries the operating rules (unlock after a manager restart, no drain while OCI is unreachable). With three managers one may be down or locked and the cluster keeps quorum. Because OCI is also the Proxmox QDevice and the Nebula lighthouse, and the control plane now runs over Nebula, an OCI outage removes one Swarm vote and the QDevice vote together; the two workers still hold 2 of 3.

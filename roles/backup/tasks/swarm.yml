@@ -166,6 +166,14 @@
            | map('selectattr', 'key', 'in', ['name', 'snapshot'])
            | map('items2dict') | list }}
 
+# A stack whose state was created without an owner file (a Swarm rebuild, a
+# new stateful stack) is claimed here, so a converge repairs what the hourly
+# job warns about.
+- name: Claim unowned stacks pinned to this worker
+  ansible.builtin.include_tasks: swarm_owner.yml
+  vars:
+    swarm_owner_stacks: "{{ swarm_backup_stacks | map(attribute='name') | list }}"
+
 # homelab already has the hourly timer and its wrapper from tiers.yml; the
 # other worker gets the same entry point, which there runs only the Swarm part.
 - name: Install the hourly entry point where tiers.yml does not

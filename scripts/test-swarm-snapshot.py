@@ -28,7 +28,13 @@ class SwarmSnapshotTests(unittest.TestCase):
         self.fake("rsync", 'printf "rsync %s\\n" "$*" >>"$CALLS"; exit "${RSYNC_STATUS:-0}"')
         self.fake("rclone", 'printf "rclone %s\\n" "$*" >>"$CALLS"')
         self.fake("sqlite-backup", 'printf "sqlite %s\\n" "$*" >>"$CALLS"')
-        self.fake("docker", 'printf "docker %s\\n" "$*" >>"$CALLS"\n'
+        # Read-only label and stack queries answer from the environment and
+        # are not recorded; everything else is.
+        self.fake("docker", 'case "$1 $2" in\n'
+                            '  "node inspect") [ -z "$NODE_FAIL" ] || exit 1; echo "${NODE_LABELS:-null}"; exit 0;;\n'
+                            '  "stack ls") for s in $STACKS; do echo "$s"; done; exit 0;;\n'
+                            'esac\n'
+                            'printf "docker %s\\n" "$*" >>"$CALLS"\n'
                             'case "$1 $2" in "service inspect") echo "${REPLICAS:-1}";; esac')
 
     def tearDown(self):
@@ -80,6 +86,50 @@ class SwarmSnapshotTests(unittest.TestCase):
             "files": [str(self.state / "vaultwarden/data")]}}])
         self.assertEqual(run.returncode, 0)
         self.assertEqual(calls, [])
+
+    def unowned_case(self, owner=None, labels='{"pin.cv-site": "true"}', stacks="cv-site", **env):
+        (self.state / "cv-site" / "data").mkdir(parents=True)
+        if owner:
+            (self.state / "cv-site" / ".swarm-owner").write_text(owner + "\n")
+        return self.run_case([{"name": "cv-site", "snapshot": {
+            "class": "files", "files": [str(self.state / "cv-site/data")]}}],
+            NODE_LABELS=labels, STACKS=stacks, **env)
+
+    def test_deployed_stack_pinned_here_without_owner_is_a_warning(self):
+        run, calls = self.unowned_case()
+        self.assertEqual(run.returncode, 3, run.stderr)
+        self.assertIn("WARNING: cv-site: deployed and pinned to homelab", run.stderr)
+        self.assertIn(".swarm-owner is missing", run.stderr)
+        self.assertEqual(calls, [])
+
+    def test_owner_naming_the_other_node_while_pinned_here_is_a_warning(self):
+        run, _ = self.unowned_case(owner="normandy")
+        self.assertEqual(run.returncode, 3)
+        self.assertIn(".swarm-owner is 'normandy'", run.stderr)
+
+    def test_pinned_but_not_yet_deployed_is_quiet(self):
+        run, _ = self.unowned_case(stacks="excalidraw")
+        self.assertEqual((run.returncode, run.stderr), (0, ""))
+
+    def test_pinned_to_the_other_node_is_quiet(self):
+        run, _ = self.unowned_case(labels='{"pin.other": "true"}')
+        self.assertEqual((run.returncode, run.stderr), (0, ""))
+
+    def test_unreadable_labels_are_a_warning(self):
+        run, _ = self.unowned_case(NODE_FAIL="1")
+        self.assertEqual(run.returncode, 3)
+        self.assertIn("cannot read this node's pin labels", run.stderr)
+
+    def test_a_failure_outranks_a_warning(self):
+        self.own("vaultwarden")
+        (self.state / "cv-site" / "data").mkdir(parents=True)
+        run, _ = self.run_case([
+            {"name": "vaultwarden", "snapshot": {"class": "files",
+                                                "files": [str(self.state / "vaultwarden/gone")]}},
+            {"name": "cv-site", "snapshot": {"class": "files", "files": []}}],
+            NODE_LABELS='{"pin.cv-site": "true"}', STACKS="cv-site")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("WARNING: cv-site", run.stderr)
 
     def test_sqlite_stack_is_snapshotted_and_sent(self):
         self.own("vaultwarden")
