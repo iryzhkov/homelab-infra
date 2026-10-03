@@ -36,6 +36,13 @@ local_mounts:
 # (rd.luks.options=tpm2-device=auto only), so trims of / stop at dm-crypt.
 fstrim_timer_enabled: true
 
+# Docker's and containerd's roots on the data disk since the phase 3 window,
+# 2026-10-02. Docker uses the containerd image store, so the images and
+# container layers live under containerd's root and only the volumes under
+# Docker's. The old roots under /var/lib stay as the rollback copy for a week.
+docker_data_root: /mnt/data/docker
+containerd_root: /mnt/data/containerd
+
 # Immich's Postgres dump, daily since 2026-10-02 (it was Mon and Thu). With
 # /mnt/data at backup=0, vzdump no longer holds the database's data directory,
 # so this dump is the only offsite copy of it. roles/backup (nas_dump.yml)

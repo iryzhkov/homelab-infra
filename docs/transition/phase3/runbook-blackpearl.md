@@ -85,7 +85,7 @@ The play does the following:
 Check the result:
 
 ```
-ssh blackpearl 'findmnt -o TARGET,FSTYPE,OPTIONS /mnt/shared /mnt/apps; systemctl is-active docker'
+ssh blackpearl 'for m in /mnt/shared /mnt/apps; do findmnt -o TARGET,FSTYPE,OPTIONS --mountpoint $m; done; systemctl is-active docker'
 ```
 
 Both NFS mounts must show `nosuid,nodev,noexec`. Docker is expected to be `inactive`. Then start Docker and check the containers:
