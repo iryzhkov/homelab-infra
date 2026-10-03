@@ -1,0 +1,82 @@
+# cv-site (igor.ryzhkov.dev) as a Swarm stack (phase 5, batch F4). Deployed
+# by playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f4.yml; the Compose file beside this one (which builds the image
+# from the checkout in ~/cv-site) stays until the phase 5 cleanup. The image
+# is the one `--tags registry` pushes and pre-pulls on both workers; rebuild
+# and run `--tags registry` again to publish a change.
+#
+# State: ${SWARM_STATE_ROOT}/cv-site/data (analytics.jsonl, appended on every
+# request, and the contact and project files) on the node labelled
+# pin.cv-site. OLLAMA_URL and IMMICH_URL come from the inventory entry, so
+# they follow gaming-pc and the Immich stack. The Discord webhook and the
+# Immich key and album and ADMIN_KEY are Docker secrets; the application
+# reads only plain variables (no _FILE support), so the command exports them
+# from /run/secrets before it starts. ADMIN_KEY ran as the code's default
+# `changeme` until 2026-10-03; it is now a generated key in
+# secrets/homelab-cv-site.sops.yaml. (The code reads it but, at commit
+# 4b88ec2, no handler checks it: /admin is guarded by LocalOnly, a
+# client-address check.)
+
+services:
+  app:
+    # Pinned to the build without baked data (2026-10-03, commit 4b88ec2 of
+    # the checkout); a rebuild is pushed by --tags registry and pinned here.
+    image: git.ryzhkov.dev/igor/cv-site:latest@sha256:22709eb93e941a822c7b1403b64da018a6bd5ef2d25202bd010e5c6040f4351d
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        export DISCORD_WEBHOOK="`cat /run/secrets/discord_webhook`"
+        IMMICH_API_KEY="`cat /run/secrets/immich_api_key`"
+        IMMICH_ALBUM_ID="`cat /run/secrets/immich_album_id`"
+        ADMIN_KEY="`cat /run/secrets/admin_key`"
+        && exec ./cv-site
+    ports:
+      - "8091:8091"
+    environment:
+      PORT: "8091"
+      OLLAMA_URL: ${OLLAMA_URL:?set by env_extra}
+      IMMICH_URL: ${IMMICH_URL:?set by env_extra}
+    secrets:
+      - discord_webhook
+      - immich_api_key
+      - immich_album_id
+      - admin_key
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/cv-site/data
+        target: /app/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.cv-site == true
+      # 14 MiB idle, but /admin reads all of data/analytics.jsonl (about
+      # 107 MB, growing) into memory: at 256M every admin page view was
+      # OOM-killed (2026-10-03). Three admin views in a row peaked at 758 MiB
+      # under a 1G limit; 1536M leaves room for two at once and for growth.
+      resources:
+        limits:
+          memory: 1536M
+        reservations:
+          memory: 32M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+secrets:
+  discord_webhook:
+    name: cv-site_discord_webhook_${SECRET_HASH_DISCORD_WEBHOOK}
+    file: ./secrets/DISCORD_WEBHOOK
+  immich_api_key:
+    name: cv-site_immich_api_key_${SECRET_HASH_IMMICH_API_KEY}
+    file: ./secrets/IMMICH_API_KEY
+  immich_album_id:
+    name: cv-site_immich_album_id_${SECRET_HASH_IMMICH_ALBUM_ID}
+    file: ./secrets/IMMICH_ALBUM_ID
+  admin_key:
+    name: cv-site_admin_key_${SECRET_HASH_ADMIN_KEY}
+    file: ./secrets/ADMIN_KEY

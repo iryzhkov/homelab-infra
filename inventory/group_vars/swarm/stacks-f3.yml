@@ -1,0 +1,84 @@
+---
+# Phase 5 batch F3 (sqlite-agent-infra): forgejo, openviking, thelounge.
+# docs/transition/phase5/migration-plan.md; evidence and cutover record in
+# docs/transition/phase5/2026-10-03-F3.md.
+#
+# jocasta is not here: it stays a Compose project on homelab (compose-pinned).
+# Its port is bound to homelab's mesh address and filtered per source by
+# jocasta-firewall; a Swarm port is published on every interface of both
+# workers through the routing mesh, which the ingress filter drops on
+# nebula1, the only interface the edge proxies reach it on. Reasons in full
+# in the F3 evidence file.
+#
+# Active: all three were cut over on 2026-10-02 (23:28 to 23:37 PDT); forgejo's
+# bulk-sqlite entry was removed at the same time. Deploy a change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name>
+
+swarm_stacks_f3:
+  - name: forgejo
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/forgejo"
+      project: forgejo
+    routes:
+      - host: git.ryzhkov.dev
+        port: 3500
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: forgejo, path: /srv/swarm/forgejo/data/gitea/gitea.db, keep: 48 }
+      # Repositories, LFS, attachments, the registry's packages, app.ini and
+      # the SSH host keys. Logs, temporary files and generated archives are
+      # left out.
+      files:
+        - /srv/swarm/forgejo/data
+      exclude: [gitea/gitea.db, gitea/gitea.db-*, gitea/log/**, gitea/tmp/**, gitea/repo-archive/**]
+
+  - name: openviking
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/openviking"
+      project: openviking
+    # https://ov.ryzhkov.dev through the edges, with both workers as backends,
+    # so agent memory keeps answering when it moves (phase 7, 2026-10-03).
+    # The name is internal only: AdGuard answers the VIP on the LAN and each
+    # edge's dnsmasq its own mesh address; there is no public DNS record and
+    # no tunnel hostname for it. OpenViking's own API key still guards every
+    # call but /health. Clients that still name 192.168.70.223:1933 lose
+    # OpenViking whenever homelab is down (runbook-host-maintenance.md lists
+    # them).
+    routes:
+      - host: ov.ryzhkov.dev
+        port: 1933
+        health_check:
+          path: /health
+    snapshot:
+      class: files
+      # A vector store and plain files, no SQLite: mirrored hourly, copied
+      # cold on a move.
+      files:
+        - /srv/swarm/openviking/data
+        - /srv/swarm/openviking/config
+
+  - name: thelounge
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/thelounge"
+      project: thelounge
+    routes:
+      - host: irc.ryzhkov.dev
+        port: 9009
+    snapshot:
+      # files, not sqlite: logs/igor.sqlite3 is 1.4 GB, and an hourly gzipped
+      # copy would send about half a gigabyte an hour to the other worker and
+      # to Backblaze for IRC history. The mirror's copy of it is
+      # crash-consistent at best; a move copies it cold.
+      class: files
+      files:
+        - /srv/swarm/thelounge/data

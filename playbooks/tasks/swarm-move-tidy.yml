@@ -1,0 +1,100 @@
+---
+# Remove what a move of a stateful Swarm stack made obsolete. Included by
+# playbooks/swarm-move.yml after a move has started the stack healthy on its
+# new node, and on its own with -e tidy_only=true. Runs on the owner.
+#
+#   swarm_tidy_owner  the worker that holds pin.<stack> and the live data
+#   swarm_tidy_other  the other worker
+#
+# Removed, only once the owner is proved by the pin label and .swarm-owner:
+#   owner: <pool>/peer-snapshots/<other>/<stack>   (the other node's hourly
+#          snapshots, files mirror, sync stamp and final/ cold copy, from when
+#          it owned the stack; nothing refreshes them any more)
+#   owner: /srv/swarm/.moved/<stack>-*             (older than the live data)
+#   other: <pool>/snapshots/<stack>                 (its own snapshots from
+#          when it owned the stack; the hourly job no longer prunes them)
+#   other: <pool>/peer-snapshots/<owner>/<stack>/final   (the cold copy of an
+#          earlier move towards the other node; the hourly job never sends
+#          final/, so nothing refreshes or removes it)
+# Kept: the other node's /srv/swarm/.moved/<stack>-<stamp>, the rollback
+# copy of the move, until the stack next leaves the owner.
+
+- name: Tidy | find the node holding pin.{{ stack }}
+  ansible.builtin.shell:
+    cmd: >-
+      for id in $(docker node ls -q --filter node.label=pin.{{ stack }}=true); do
+      docker node inspect --format '{{ '{{' }}index .Spec.Labels "host"{{ '}}' }}' "$id"; done
+  register: swarm_tidy_pin
+  changed_when: false
+  check_mode: false
+
+- name: Tidy | read the ownership marks on both workers
+  ansible.builtin.shell:
+    cmd: cat {{ swarm_state_root }}/{{ stack }}/.swarm-owner 2>/dev/null || echo absent
+  delegate_to: "{{ item }}"
+  loop: "{{ [swarm_tidy_owner, swarm_tidy_other] }}"
+  become: true
+  register: swarm_tidy_marks
+  changed_when: false
+  check_mode: false
+
+- name: Tidy | refuse unless {{ swarm_tidy_owner }} owns {{ stack }} alone
+  ansible.builtin.assert:
+    that:
+      - swarm_tidy_pin.stdout_lines == [swarm_tidy_owner]
+      - (swarm_tidy_marks.results[0].stdout | trim) == swarm_tidy_owner
+      - (swarm_tidy_marks.results[1].stdout | trim) == 'absent'
+    fail_msg: >-
+      pin.{{ stack }} is on {{ swarm_tidy_pin.stdout_lines }}; .swarm-owner on
+      {{ swarm_tidy_owner }} says '{{ swarm_tidy_marks.results[0].stdout | trim }}' and
+      {{ swarm_tidy_other }} has '{{ swarm_tidy_marks.results[1].stdout | trim }}'.
+      Nothing is removed unless {{ swarm_tidy_owner }} holds the pin and the live
+      data and {{ swarm_tidy_other }} has no live copy.
+    quiet: true
+
+- name: Tidy | list the obsolete copies on {{ swarm_tidy_owner }}
+  ansible.builtin.shell:
+    cmd: >-
+      ls -d {{ swarm_state_root }}/.moved/{{ stack }}-*
+      {{ hostvars[swarm_tidy_owner].swarm_pool_path }}/peer-snapshots/{{ swarm_tidy_other }}/{{ stack }}
+      2>/dev/null || true
+  delegate_to: "{{ swarm_tidy_owner }}"
+  become: true
+  register: swarm_tidy_owner_list
+  changed_when: false
+  check_mode: false
+
+- name: Tidy | list the obsolete snapshots on {{ swarm_tidy_other }}
+  ansible.builtin.shell:
+    cmd: >-
+      ls -d {{ hostvars[swarm_tidy_other].swarm_pool_path }}/snapshots/{{ stack }}
+      {{ hostvars[swarm_tidy_other].swarm_pool_path }}/peer-snapshots/{{ swarm_tidy_owner }}/{{ stack }}/final
+      2>/dev/null || true
+  delegate_to: "{{ swarm_tidy_other }}"
+  become: true
+  register: swarm_tidy_other_list
+  changed_when: false
+  check_mode: false
+
+- name: Tidy | say what goes
+  ansible.builtin.debug:
+    msg: >-
+      {{ swarm_tidy_owner }}: {{ swarm_tidy_owner_list.stdout_lines | default([]) }};
+      {{ swarm_tidy_other }}: {{ swarm_tidy_other_list.stdout_lines | default([]) }}.
+      {{ 'Check mode: nothing is removed.' if ansible_check_mode else '' }}
+
+- name: Tidy | remove them on {{ swarm_tidy_owner }}
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ swarm_tidy_owner_list.stdout_lines }}"
+  delegate_to: "{{ swarm_tidy_owner }}"
+  become: true
+
+- name: Tidy | remove them on {{ swarm_tidy_other }}
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ swarm_tidy_other_list.stdout_lines }}"
+  delegate_to: "{{ swarm_tidy_other }}"
+  become: true

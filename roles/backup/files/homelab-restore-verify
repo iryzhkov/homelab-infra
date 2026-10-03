@@ -3,25 +3,48 @@
 set -euo pipefail
 umask 077
 max_age_hours="${1:-6}"
-remote=b2:igor-offsite-backup/apps/homelab/backups
+apps=b2:igor-offsite-backup/apps
+remote=$apps/homelab/backups
 scratch=$(mktemp -d)
 suffix="${scratch##*.}"
 vw_container="vw-restore-verify-$suffix"
 pg_container="pg-restore-verify-$suffix"
 cleanup() {
-    docker rm -f "$vw_container" "$pg_container" >/dev/null 2>&1 || true
+    # -v: postgres declares VOLUME for its data directory, so every run used
+    # to leave an anonymous volume behind (phase 0 carry).
+    docker rm -f -v "$vw_container" "$pg_container" >/dev/null 2>&1 || true
     rm -rf "$scratch"
 }
 trap cleanup EXIT
 fail() { echo "FAIL $*" >&2; exit 1; }
-newest=$(rclone lsf --files-only "$remote/sqlite/vaultwarden" | sort | tail -1)
-[ -n "$newest" ] || fail "vaultwarden: no offsite snapshot"
-rclone copyto "$remote/sqlite/vaultwarden/$newest" "$scratch/vw.sqlite3.gz"
+
+# The newest file matching a pattern across several offsite directories, by
+# the timestamp in its name, as a full remote path. A service's snapshots are
+# in the Compose-era tier until its Swarm cutover and in the Swarm tier after
+# it (apps/<worker>/swarm, roles/backup tasks/swarm.yml), under whichever
+# worker holds it, so the check follows the service rather than one path.
+newest_of() {
+    local pattern="$1" dir
+    shift
+    for dir in "$@"; do
+        rclone lsf --files-only --include "$pattern" "$dir" 2>/dev/null | sed "s|^|$dir/|" || true
+    done | sed -nE 's/.*_([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{4})[^/]*$/\1 &/p' | sort | tail -1 | cut -d' ' -f2-
+}
+
+newest_path=$(newest_of 'vaultwarden_*.sqlite3.gz' "$remote/sqlite/vaultwarden" \
+    "$apps/homelab/swarm/vaultwarden/vaultwarden" \
+    "$apps/normandy/swarm/vaultwarden/snapshots/vaultwarden")
+[ -n "$newest_path" ] || fail "vaultwarden: no offsite snapshot"
+newest=${newest_path##*/}
+rclone copyto "$newest_path" "$scratch/vw.sqlite3.gz"
+# The live database: the Swarm stack's when it runs here, else Compose's.
+live_db=/srv/swarm/vaultwarden/data/db.sqlite3
+sudo -n test -e "$live_db" || live_db=/home/iryzhkov/app/vaultwarden/data/db.sqlite3
 # Vaultwarden opens db.sqlite3. Any other filename silently tests an empty DB.
 gunzip -c "$scratch/vw.sqlite3.gz" >"$scratch/db.sqlite3"
-counts=$(sudo -n python3 - "$scratch/db.sqlite3" "$newest" "$max_age_hours" <<'PY'
+counts=$(sudo -n python3 - "$scratch/db.sqlite3" "$newest" "$max_age_hours" "$live_db" <<'PY'
 import datetime, re, sqlite3, sys
-path, name, max_age = sys.argv[1:]
+path, name, max_age, live_db = sys.argv[1:]
 match = re.search(r'(\d{4}-\d{2}-\d{2}_\d{4})', name)
 if not match:
     raise SystemExit("FAIL vaultwarden: invalid snapshot timestamp")
@@ -33,7 +56,7 @@ with sqlite3.connect("file:" + path + "?mode=ro", uri=True) as restored:
     if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
         raise SystemExit("FAIL vaultwarden: integrity check")
     count = restored.execute("select count(*) from ciphers").fetchone()[0]
-with sqlite3.connect("file:/home/iryzhkov/app/vaultwarden/data/db.sqlite3?mode=ro", uri=True) as live:
+with sqlite3.connect("file:" + live_db + "?mode=ro", uri=True) as live:
     current = live.execute("select count(*) from ciphers").fetchone()[0]
 if count <= 0 or count < current * .9 - 1:
     raise SystemExit("FAIL vaultwarden: restored row count is unexpectedly low")
@@ -52,8 +75,13 @@ done
 [ "$ok" = yes ] || fail "vaultwarden: restored service did not become healthy"
 echo "ok vaultwarden: $counts; restored database served"
 
-dump=$(rclone lsf --files-only --include "authentik_*" "$remote/postgres" | sort | tail -1)
-[ -n "$dump" ] || fail "authentik: no offsite dump"
+# A plain SQL dump (pg_backup.sh in homelab's crontab, Compose era) or a
+# custom-format pg_dump -Fc (the Swarm tier, after the P2 cutover).
+dump_path=$(newest_of 'authentik_*' "$remote/postgres" \
+    "$apps/homelab/swarm/authentik/snapshots" "$apps/homelab/swarm/authentik" \
+    "$apps/normandy/swarm/authentik/snapshots")
+[ -n "$dump_path" ] || fail "authentik: no offsite dump"
+dump=${dump_path##*/}
 python3 - "$dump" <<'PY'
 import datetime, re, sys
 match = re.search(r'(\d{4}-\d{2}-\d{2}_\d{4})', sys.argv[1])
@@ -64,7 +92,7 @@ age = datetime.datetime.now() - datetime.datetime.strptime(match[1], "%Y-%m-%d_%
 if age.total_seconds() < -3600 or age.total_seconds() > 5 * 86400:
     raise SystemExit("FAIL authentik: dump is stale")
 PY
-rclone copyto "$remote/postgres/$dump" "$scratch/authentik.sql.gz"
+rclone copyto "$dump_path" "$scratch/$dump"
 docker run -d --name "$pg_container" -e POSTGRES_PASSWORD=verify \
     -e POSTGRES_USER=authentik -e POSTGRES_DB=authentik postgres:16-alpine >/dev/null
 ready=no
@@ -73,8 +101,14 @@ for _ in $(seq 30); do
     sleep 1
 done
 [ "$ready" = yes ] || fail "authentik: scratch Postgres did not become ready"
-zcat "$scratch/authentik.sql.gz" | docker exec -i "$pg_container" \
-    psql -v ON_ERROR_STOP=1 -q -U authentik -d authentik >/dev/null
+case "$dump" in
+    *.dump)
+        docker exec -i "$pg_container" pg_restore --exit-on-error --no-owner \
+            -U authentik -d authentik <"$scratch/$dump" >/dev/null ;;
+    *)
+        zcat "$scratch/$dump" | docker exec -i "$pg_container" \
+            psql -v ON_ERROR_STOP=1 -q -U authentik -d authentik >/dev/null ;;
+esac
 users=$(docker exec "$pg_container" psql -tAU authentik -d authentik \
     -c "select count(*) from authentik_core_user" | tr -d ' \r\n')
 [[ "$users" =~ ^[0-9]+$ ]] && [ "$users" -gt 0 ] || fail "authentik: restored database has no users"

@@ -1,0 +1,42 @@
+# Swarm stack for uptime.ryzhkov.dev, the public status page (phase 5, batch
+# S2). Replaces docker-compose.yml beside it, which stays until the phase 5
+# cleanup.
+#
+# Stateless: its history is in the named volume gatus-data, which Swarm keeps
+# per node. On homelab the stack reuses the Compose volume of the same name
+# (gatus-public_gatus-data), so history continues there; on normandy it starts
+# empty, which the plan accepts. The Compose file published on homelab's
+# address only; Swarm publishes 3001 on every interface of both workers, and
+# the ingress filter keeps it off VLAN 60 and the mesh.
+#
+# config.yaml is rendered by swarm-prepare.yml onto both workers from
+# templates/config.yaml.j2, which restarts the service when it changes.
+services:
+  gatus:
+    image: ghcr.io/twin/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e
+    read_only: true
+    cap_drop: [ALL]
+    ports:
+      - "3001:8080"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/gatus-public/config.yaml
+        target: /config/config.yaml
+        read_only: true
+      - gatus-data:/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 21 MiB.
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+      restart_policy:
+        condition: any
+
+volumes:
+  gatus-data:

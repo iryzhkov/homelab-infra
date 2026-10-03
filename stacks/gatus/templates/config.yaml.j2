@@ -17,9 +17,37 @@ default-endpoint: &alerted
     - type: discord
 
 endpoints:
+{#
+  Internal probes: one per route on the host whose `stacks` list carries it,
+  and for a Swarm stack (swarm_stacks_* in inventory/group_vars/swarm/) one
+  per worker, since the routing mesh publishes its ports on every worker. A
+  Swarm entry wins over the host_vars entry of the same stack name, which
+  stays until the phase 5 cleanup.
+#}
+{% set gatus_swarm_stacks = hostvars | swarm_stacks(groups) %}
+{% set gatus_swarm_names = gatus_swarm_stacks | map(attribute='name') | list %}
+{% set gatus_probes = [] %}
+{% set gatus_routes = [] %}
 {% for host_name in groups['docker_hosts'] %}
-{% for stack in hostvars[host_name].stacks | default([]) %}
+{% for stack in hostvars[host_name].stacks | default([]) if stack.name not in gatus_swarm_names %}
 {% for route in stack.routes | default([]) %}
+{% set _ = gatus_probes.append({'host_name': host_name, 'route': route}) %}
+{% set _ = gatus_routes.append(route) %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% for stack in gatus_swarm_stacks %}
+{% set stack_hosts = hostvars | stack_hosts(groups, stack.name) %}
+{% for route in stack.routes | default([]) %}
+{% for host_name in (stack_hosts if route.port is defined else stack_hosts[:1]) %}
+{% set _ = gatus_probes.append({'host_name': host_name, 'route': route}) %}
+{% endfor %}
+{% set _ = gatus_routes.append(route) %}
+{% endfor %}
+{% endfor %}
+{% for probe in gatus_probes %}
+{% set host_name = probe.host_name %}
+{% set route = probe.route %}
 {% if route.port is defined %}
   - name: {{ route.host }}
 {% if inventory_hostname == 'normandy' %}
@@ -59,8 +87,6 @@ endpoints:
       - "[STATUS] < 300"
 {% endif %}
 {% endfor %}
-{% endfor %}
-{% endfor %}
 {% for route in traefik_static_routes %}
   - name: {{ route.host }}
 {% if inventory_hostname == 'normandy' %}
@@ -73,9 +99,7 @@ endpoints:
       - "[STATUS] >= 200"
       - "[STATUS] < 300"
 {% endfor %}
-{% for host_name in groups['docker_hosts'] %}
-{% for stack in hostvars[host_name].stacks | default([]) %}
-{% for route in stack.routes | default([]) %}
+{% for route in gatus_routes %}
 {% if route.host in gatus_public_from_lan %}
   - name: {{ route.host }}
 {% if inventory_hostname == 'normandy' %}
@@ -90,8 +114,6 @@ endpoints:
       - "[STATUS] >= 200"
       - "[STATUS] < 300"
 {% endif %}
-{% endfor %}
-{% endfor %}
 {% endfor %}
 {% for instance in adguard_instances %}
   - name: AdGuard {{ instance.name }}

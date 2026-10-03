@@ -1,0 +1,393 @@
+---
+# Preparation for the miniflux Swarm stack, run by roles/swarm (tasks/stack.yml)
+# on the bootstrap manager, after the pin label is set and before the Compose
+# project is retired and the stack deployed. Twin of
+# stacks/authentik/swarm-prepare.yml; keep the two in step.
+#
+# The pinned node is the one carrying the label pin.miniflux (the inventory's
+# `pin` only before the first cutover), so a converge after a move looks on
+# the node the stack moved to. Every run refuses to let the stack be deployed
+# onto a data directory on that node that holds no database.
+#
+# A cutover run (-e swarm_cutover=miniflux) that finds the Compose project
+# also, in this order:
+#
+#   1. while Compose still serves: pg_dump -Fc of the database into
+#      <pool>/snapshots/miniflux/cutover/ (shipped to the peer and offsite by
+#      the hourly job, never pruned by it), restored into a throwaway Postgres
+#      container (same image, tmpfs data directory, no network) whose row
+#      counts are compared with the live ones; the container is removed
+#      whatever the result, and the run stops if the restore failed;
+#   2. stops the Compose project: the interruption starts here;
+#   3. copies the stopped data directory to /srv/swarm/miniflux/postgres with
+#      rsync -a --numeric-ids (Postgres's uid 70 kept), checks that a second
+#      rsync pass finds nothing to change, and writes .swarm-owner.
+#
+# The Compose data directory is only read, never changed: it is the rollback
+# copy (docs/transition/phase5/2026-10-03-P1.md, "Rollback").
+
+# The node is the one holding the pin label, as in every other prepare file
+# (stacks/actual/swarm-prepare.yml): after playbooks/swarm-move.yml the label,
+# not the inventory's `pin`, says where the state lives. Before the first
+# cutover no node carries the label, and the inventory's pin is the answer.
+- name: Find the node holding pin.{{ swarm_stack.name }}
+  ansible.builtin.command:
+    argv: [docker, node, ls, -q, --filter, "node.label=pin.{{ swarm_stack.name }}=true"]
+  register: p1_pinned
+  changed_when: false
+  check_mode: false
+
+- name: Read the pinned node's inventory name
+  ansible.builtin.command:
+    argv: [docker, node, inspect, --format, "{{ p1_host_format }}", "{{ p1_pinned.stdout_lines[0] }}"]
+  vars:
+    p1_host_format: !unsafe '{{index .Spec.Labels "host"}}'
+  register: p1_pin_host
+  changed_when: false
+  check_mode: false
+  when: p1_pinned.stdout_lines | length == 1
+
+# swarm_prep_pin_override names another node as if it held the label, to
+# rehearse a post-move converge without moving anything; check mode only.
+- name: Refuse a simulated pin outside check mode
+  ansible.builtin.assert:
+    that: ansible_check_mode
+    fail_msg: swarm_prep_pin_override is for check-mode rehearsals only.
+    quiet: true
+  when: swarm_prep_pin_override is defined
+
+- name: Remember where the state lives
+  ansible.builtin.set_fact:
+    p1_node: >-
+      {{ swarm_prep_pin_override
+         if swarm_prep_pin_override is defined
+         else ((p1_pin_host.stdout | trim)
+               if p1_pinned.stdout_lines | length == 1 else swarm_stack.pin) }}
+
+- name: Describe the miniflux cutover
+  ansible.builtin.set_fact:
+    p1_dir: "{{ swarm_state_root }}/miniflux"
+    p1_dump_dir: "{{ hostvars[p1_node].swarm_pool_path }}/snapshots/miniflux/cutover"
+    p1_project: "{{ swarm_stack.compose.project | default(swarm_stack.name) }}"
+    p1_scratch: swarm-restore-check-miniflux
+    # The stack's own db image (Docker Hub postgres:17.11-alpine, from the
+    # Forgejo mirror), already on both workers.
+    p1_image: git.ryzhkov.dev/igor/mirror/docker.io/library/postgres@sha256:be3e03840bb22a93ac0c3b0003d88887e015d4d1707b06913bbf437d564a0e73
+    p1_database: miniflux
+    p1_user: miniflux
+    # exact: the restored count must equal the live one; at_most: entries
+    # keep arriving while the dump runs, so the restore may hold fewer.
+    p1_checks:
+      - { name: users, query: "select count(*) from users", compare: exact }
+      - { name: feeds, query: "select count(*) from feeds", compare: exact }
+      - { name: entries, query: "select count(*) from entries", compare: at_most }
+    p1_copies:
+      - source: "{{ swarm_stack.compose.dir }}/data"
+        dest: postgres
+    # The file that proves a copied Postgres data directory is not empty.
+    p1_marker: postgres/PG_VERSION
+
+- name: Find the Compose project's containers, running or stopped
+  ansible.builtin.command:
+    argv: [docker, ps, -aq, --filter, "label=com.docker.compose.project={{ p1_project }}"]
+  delegate_to: "{{ swarm_stack.compose.host }}"
+  register: p1_compose_all
+  changed_when: false
+  check_mode: false
+
+- name: Find the running Compose database container
+  ansible.builtin.command:
+    argv: [docker, ps, -q, --filter, "label=com.docker.compose.project={{ p1_project }}",
+           --filter, label=com.docker.compose.service=db]
+  delegate_to: "{{ swarm_stack.compose.host }}"
+  register: p1_compose_db
+  changed_when: false
+  check_mode: false
+
+- name: Decide what this run does
+  ansible.builtin.set_fact:
+    p1_cutting_over: >-
+      {{ swarm_cutover | default('') == swarm_stack.name
+         and p1_compose_all.stdout | trim | length > 0 }}
+    p1_db_running: "{{ p1_compose_db.stdout | trim | length > 0 }}"
+
+# The cold copy below is a local rsync, and the dump is written to the pinned
+# node's pool: a cutover needs the Compose project on the node holding the pin.
+# After the cutover (the Compose project gone) the stack may live anywhere.
+- name: Require the Compose project on the pinned node
+  ansible.builtin.assert:
+    that: swarm_stack.compose.host == p1_node
+    fail_msg: >-
+      miniflux runs under Compose on {{ swarm_stack.compose.host }} but is pinned to
+      {{ p1_node }}; this preparation copies locally and cannot cross nodes.
+    quiet: true
+  when: p1_cutting_over
+
+- name: Create the state directory on {{ p1_node }}
+  ansible.builtin.file:
+    path: "{{ p1_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  delegate_to: "{{ p1_node }}"
+  become: true
+  when: p1_cutting_over
+
+- name: Say where the state lives
+  ansible.builtin.debug:
+    msg: "miniflux state: {{ p1_dir }} on {{ p1_node }}"
+
+- name: Say what the cutover would do
+  ansible.builtin.debug:
+    msg: >-
+      Check mode: the cutover would dump {{ p1_database }}, prove the dump in
+      {{ p1_scratch }}, stop the Compose project and copy
+      {{ p1_copies | map(attribute='source') | list }} into {{ p1_dir }}.
+  when: ansible_check_mode and p1_cutting_over
+
+# 1. Dump and prove the dump, while Compose still serves ---------------------
+# Not in check mode: the commands would be skipped and the checks after them
+# (until:, the count comparison) would run against nothing.
+
+- name: Create the cutover dump directory
+  ansible.builtin.file:
+    path: "{{ p1_dump_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  delegate_to: "{{ p1_node }}"
+  become: true
+  when: p1_cutting_over and not ansible_check_mode
+
+# A re-run after a failure past the stop finds the database stopped; the dump
+# the first run made and proved is then the one that stands.
+- name: Find an earlier cutover dump
+  ansible.builtin.find:
+    paths: "{{ p1_dump_dir }}"
+    patterns: "{{ p1_database }}_*.dump"
+  delegate_to: "{{ p1_node }}"
+  become: true
+  register: p1_earlier_dumps
+  when: p1_cutting_over and not p1_db_running and not ansible_check_mode
+
+- name: Refuse to go on without a proved dump
+  ansible.builtin.assert:
+    that: p1_earlier_dumps.matched | default(0) > 0
+    fail_msg: >-
+      The Compose database is stopped and {{ p1_dump_dir }} holds no dump.
+      Start the Compose project again (site.yml -l {{ swarm_stack.compose.host }}
+      -e only={{ swarm_stack.name }}) and repeat the cutover.
+    quiet: true
+  when: p1_cutting_over and not p1_db_running and not ansible_check_mode
+
+- name: Dump {{ p1_database }} and prove the dump
+  when: p1_cutting_over and p1_db_running and not ansible_check_mode
+  block:
+    - name: Name the dump
+      ansible.builtin.set_fact:
+        p1_dump: "{{ p1_dump_dir }}/{{ p1_database }}_{{ lookup('pipe', 'date +%Y-%m-%d_%H%M%S') }}.dump"
+
+    - name: Dump {{ p1_database }} from the running Compose database
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          docker exec {{ p1_compose_db.stdout_lines[0] }} \
+              pg_dump -Fc -U {{ p1_user }} {{ p1_database }} > {{ p1_dump }}.partial
+          test -s {{ p1_dump }}.partial
+          mv {{ p1_dump }}.partial {{ p1_dump }}
+          stat -c '%s bytes' {{ p1_dump }}
+        executable: /bin/bash
+      delegate_to: "{{ swarm_stack.compose.host }}"
+      become: true
+      changed_when: true
+
+    - name: Count rows in the live database
+      ansible.builtin.command:
+        argv: [docker, exec, "{{ p1_compose_db.stdout_lines[0] }}", psql, -At, -U, "{{ p1_user }}",
+               -d, "{{ p1_database }}", -c, "{{ item.query }}"]
+      delegate_to: "{{ swarm_stack.compose.host }}"
+      loop: "{{ p1_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: p1_live_counts
+      changed_when: false
+
+    - name: Restore into a scratch Postgres and compare
+      block:
+        - name: Start the scratch Postgres
+          ansible.builtin.command:
+            argv:
+              - docker
+              - run
+              - --detach
+              - --rm
+              - --name
+              - "{{ p1_scratch }}"
+              - --network
+              - none
+              # Not the daemon's Loki driver: a blocked Loki push can hang the
+              # container's removal (gatus, 2026-10-03).
+              - --log-driver
+              - local
+              # A tmpfs at the image's VOLUME path: no anonymous volume is
+              # left behind (the nightly restore check's phase 0 carry).
+              - --tmpfs
+              - /var/lib/postgresql/data:rw,size=2g
+              - --env
+              - POSTGRES_USER={{ p1_user }}
+              - --env
+              - POSTGRES_DB={{ p1_database }}
+              - --env
+              - POSTGRES_PASSWORD=restore-check
+              - "{{ p1_image }}"
+          delegate_to: "{{ swarm_stack.compose.host }}"
+          changed_when: true
+
+        # Over TCP: the entrypoint's initialisation server listens on the
+        # socket only, so this answers once the real server is up.
+        - name: Wait for the scratch Postgres
+          ansible.builtin.command:
+            argv: [docker, exec, "{{ p1_scratch }}", pg_isready, -h, 127.0.0.1, -U, "{{ p1_user }}"]
+          delegate_to: "{{ swarm_stack.compose.host }}"
+          register: p1_scratch_ready
+          until: p1_scratch_ready.rc == 0
+          retries: 30
+          delay: 2
+          changed_when: false
+
+        - name: Restore the dump
+          ansible.builtin.shell:
+            cmd: >-
+              docker exec -i {{ p1_scratch }}
+              pg_restore -U {{ p1_user }} -d {{ p1_database }} --exit-on-error --no-owner
+              < {{ p1_dump }}
+          delegate_to: "{{ swarm_stack.compose.host }}"
+          become: true
+          changed_when: true
+
+        - name: Count rows in the restored database
+          ansible.builtin.command:
+            argv: [docker, exec, "{{ p1_scratch }}", psql, -At, -U, "{{ p1_user }}",
+                   -d, "{{ p1_database }}", -c, "{{ item.query }}"]
+          delegate_to: "{{ swarm_stack.compose.host }}"
+          loop: "{{ p1_checks }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: p1_restored_counts
+          changed_when: false
+
+        - name: Compare the restored counts with the live ones
+          ansible.builtin.assert:
+            that:
+              - restored | int > 0
+              - (restored | int == live | int) if item.0.compare == 'exact' else (restored | int <= live | int)
+            fail_msg: "{{ item.0.name }}: restored {{ restored }}, live {{ live }} ({{ item.0.compare }})"
+            success_msg: "{{ item.0.name }}: restored {{ restored }}, live {{ live }}"
+          loop: "{{ p1_checks | zip(p1_restored_counts.results, p1_live_counts.results) | list }}"
+          loop_control:
+            label: "{{ item.0.name }}"
+          vars:
+            restored: "{{ item.1.stdout | trim }}"
+            live: "{{ item.2.stdout | trim }}"
+
+      always:
+        - name: Remove the scratch Postgres
+          ansible.builtin.command:
+            argv: [docker, rm, --force, --volumes, "{{ p1_scratch }}"]
+          delegate_to: "{{ swarm_stack.compose.host }}"
+          register: p1_scratch_rm
+          changed_when: p1_scratch_rm.rc == 0
+          failed_when: p1_scratch_rm.rc != 0 and 'No such container' not in p1_scratch_rm.stderr
+
+        - name: Make sure the scratch Postgres is gone
+          ansible.builtin.command:
+            argv: [docker, ps, -aq, --filter, "name=^{{ p1_scratch }}$"]
+          delegate_to: "{{ swarm_stack.compose.host }}"
+          register: p1_scratch_left
+          changed_when: false
+          failed_when: p1_scratch_left.stdout | trim | length > 0
+
+# 2. Stop Compose: the interruption starts ------------------------------------
+
+- name: Stop Compose and copy its state
+  when: p1_cutting_over and not ansible_check_mode
+  block:
+    - name: Record the start of the interruption
+      ansible.builtin.debug:
+        msg: "miniflux interruption starts {{ lookup('pipe', 'date -Is') }}"
+
+    - name: Stop the Compose project, giving Postgres time to shut down cleanly
+      ansible.builtin.command:
+        argv: [docker, compose, --project-name, "{{ p1_project }}", stop, --timeout, "60"]
+        chdir: "{{ swarm_stack.compose.dir }}"
+      delegate_to: "{{ swarm_stack.compose.host }}"
+      changed_when: true
+
+    - name: Make sure no container of the project still runs
+      ansible.builtin.command:
+        argv: [docker, ps, -q, --filter, "label=com.docker.compose.project={{ p1_project }}"]
+      delegate_to: "{{ swarm_stack.compose.host }}"
+      register: p1_still_running
+      changed_when: false
+      failed_when: p1_still_running.stdout | trim | length > 0
+
+    # 3. Cold copy ----------------------------------------------------------
+
+    - name: Copy the stopped state into {{ p1_dir }}
+      ansible.builtin.command:
+        argv: [rsync, -a, --numeric-ids, --delete, "{{ item.source }}/", "{{ p1_dir }}/{{ item.dest }}/"]
+      delegate_to: "{{ p1_node }}"
+      become: true
+      loop: "{{ p1_copies }}"
+      loop_control:
+        label: "{{ item.dest }}"
+      changed_when: true
+
+    - name: Check that the copy is exact
+      ansible.builtin.command:
+        argv: [rsync, -a, --numeric-ids, --delete, --dry-run, --itemize-changes,
+               "{{ item.source }}/", "{{ p1_dir }}/{{ item.dest }}/"]
+      delegate_to: "{{ p1_node }}"
+      become: true
+      loop: "{{ p1_copies }}"
+      loop_control:
+        label: "{{ item.dest }}"
+      register: p1_copy_check
+      changed_when: false
+      failed_when: p1_copy_check.rc != 0 or p1_copy_check.stdout | trim | length > 0
+
+    - name: Make {{ p1_node }} the owner for the hourly snapshot
+      ansible.builtin.copy:
+        content: "{{ p1_node }}\n"
+        dest: "{{ p1_dir }}/.swarm-owner"
+        owner: root
+        group: root
+        mode: "0644"
+      delegate_to: "{{ p1_node }}"
+      become: true
+
+# Never deploy onto an empty data directory: Postgres would initialise a new
+# database and Miniflux would start with no feeds. Skipped while the Compose
+# project still exists and no cutover was asked for, because the role refuses
+# that run next anyway.
+- name: Look for the copied database
+  ansible.builtin.stat:
+    path: "{{ p1_dir }}/{{ p1_marker }}"
+  delegate_to: "{{ p1_node }}"
+  become: true
+  register: p1_marker_stat
+  check_mode: false
+
+- name: Refuse to deploy without the copied database
+  ansible.builtin.assert:
+    that: p1_marker_stat.stat.exists
+    fail_msg: >-
+      {{ p1_dir }}/{{ p1_marker }} is missing on {{ p1_node }}: the state was never
+      copied. Cut over with -e swarm_cutover={{ swarm_stack.name }}, or restore it
+      from <pool>/snapshots/miniflux/ first.
+    quiet: true
+  when:
+    - not ansible_check_mode
+    - p1_cutting_over or p1_compose_all.stdout | trim | length == 0

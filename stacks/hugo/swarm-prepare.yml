@@ -1,0 +1,59 @@
+---
+# The built blog and its nginx gzip settings on every worker, for the Swarm
+# stack (phase 5, batch S3). Included by roles/swarm/tasks/stack.yml on the
+# bootstrap manager, before the deploy.
+#
+# The source is the blog checkout on the bootstrap manager
+# ({{ stack_root }}/hugo/blog), where the Forgejo webhook builds it. Between
+# deploys the webhook's handler keeps public/ in step itself. The bootstrap
+# manager pushes to the other worker with its own SSH alias for it.
+
+# The deploy user owns both levels: the webhook's handler writes public/ as
+# that user, and the copies below run as that user too.
+- name: Create hugo's directories on every worker
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/hugo{{ item.1 }}"
+    state: directory
+    owner: "{{ hostvars[item.0].ssh_user }}"
+    group: "{{ hostvars[item.0].ssh_user }}"
+    mode: "0755"
+  become: true
+  delegate_to: "{{ item.0 }}"
+  loop: "{{ groups['swarm_workers'] | product(['', '/public']) | list }}"
+
+- name: Mirror the built site to every worker
+  ansible.builtin.command:
+    argv: >-
+      {{ ['rsync', '-a', '--delete', '--itemize-changes']
+         + (['--dry-run'] if ansible_check_mode else [])
+         + [stack_root ~ '/hugo/blog/public/',
+            ('' if item == inventory_hostname else item ~ ':') ~ swarm_state_root ~ '/hugo/public/'] }}
+  loop: "{{ groups['swarm_workers'] }}"
+  register: hugo_public
+  changed_when: hugo_public.stdout | trim | length > 0
+  failed_when: hugo_public.rc != 0 and not ansible_check_mode
+  check_mode: false
+
+- name: Copy the gzip settings to every worker
+  ansible.builtin.command:
+    argv: >-
+      {{ ['rsync', '-a', '--itemize-changes']
+         + (['--dry-run'] if ansible_check_mode else [])
+         + [stack_root ~ '/hugo/blog/deploy/nginx-gzip.conf',
+            ('' if item == inventory_hostname else item ~ ':') ~ swarm_state_root ~ '/hugo/nginx-gzip.conf'] }}
+  loop: "{{ groups['swarm_workers'] }}"
+  register: hugo_gzip
+  changed_when: hugo_gzip.stdout | trim | length > 0
+  failed_when: hugo_gzip.rc != 0 and not ansible_check_mode
+  check_mode: false
+
+# nginx reads its configuration at start only. Two replicas update one at a
+# time, so the site stays up.
+- name: Restart hugo when the gzip settings changed
+  ansible.builtin.command:
+    argv: [docker, service, update, --force, --detach=false, hugo_hugo-frontend]
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - hugo_gzip is changed
+    - swarm_stack.name in swarm_stack_list.stdout_lines

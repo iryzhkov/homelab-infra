@@ -1,0 +1,78 @@
+---
+# The node's labels, set through the bootstrap manager. Only the labels in
+# swarm_node_labels are managed; others, such as the pin.<stack> labels the
+# drain script moves between nodes, are left alone.
+
+- name: Read this node's ID
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{' }}.Swarm.NodeID{{ '}}' }}"]
+  register: swarm_node_id
+  changed_when: false
+  check_mode: false
+
+- name: Set the labels
+  when: swarm_node_id.stdout | trim | length > 0
+  block:
+    - name: Read the node's labels
+      ansible.builtin.command:
+        argv:
+          - docker
+          - node
+          - inspect
+          - --format
+          - "{{ '{{' }}json .Spec.Labels{{ '}}' }}"
+          - "{{ swarm_node_id.stdout | trim }}"
+      delegate_to: "{{ swarm_bootstrap_manager }}"
+      register: swarm_labels_raw
+      changed_when: false
+      check_mode: false
+
+    - name: Work out which managed labels are missing or different
+      ansible.builtin.set_fact:
+        swarm_label_changes: >-
+          {%- set now = (swarm_labels_raw.stdout | from_json) or {} -%}
+          {%- set out = [] -%}
+          {%- for key, value in swarm_node_labels | dictsort -%}
+          {%-   if now.get(key) != value | string -%}
+          {%-     set _ = out.append(key ~ '=' ~ value) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Add or correct the managed labels
+      ansible.builtin.command:
+        argv: >-
+          {{ ['docker', 'node', 'update']
+             + (swarm_label_changes | map('regex_replace', '^', '--label-add=') | list)
+             + [swarm_node_id.stdout | trim] }}
+      delegate_to: "{{ swarm_bootstrap_manager }}"
+      changed_when: true
+      when: swarm_label_changes | length > 0
+
+    # OCI is a manager only: drained, it runs no task and carries no VXLAN.
+    - name: Read the node's availability
+      ansible.builtin.command:
+        argv:
+          - docker
+          - node
+          - inspect
+          - --format
+          - "{{ '{{' }}.Spec.Availability{{ '}}' }}"
+          - "{{ swarm_node_id.stdout | trim }}"
+      delegate_to: "{{ swarm_bootstrap_manager }}"
+      register: swarm_availability_now
+      changed_when: false
+      check_mode: false
+
+    - name: Set the node's availability
+      ansible.builtin.command:
+        argv:
+          - docker
+          - node
+          - update
+          - --availability
+          - "{{ swarm_availability | default('active') }}"
+          - "{{ swarm_node_id.stdout | trim }}"
+      delegate_to: "{{ swarm_bootstrap_manager }}"
+      changed_when: true
+      when: swarm_availability_now.stdout | trim != swarm_availability | default('active')

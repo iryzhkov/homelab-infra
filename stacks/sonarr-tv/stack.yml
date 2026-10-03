@@ -1,0 +1,44 @@
+# Sonarr as a Swarm stack (phase 5, batch F2). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f2.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State lives in ${SWARM_STATE_ROOT}/sonarr-tv/config on the node
+# labelled pin.sonarr-tv; the NAS share is mounted at the same path on both
+# workers.
+#
+# The image is the version the Compose project ran at conversion
+# (4.0.20.3014-ls326, the digest :latest resolved to then), from lscr.io
+# rather than Docker Hub (the same image; Hub's anonymous pull limit was hit
+# on normandy on 2026-10-02), so the cutover does not upgrade it.
+
+services:
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:4.0.20.3014-ls326
+    ports:
+      - "8989:8989"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/sonarr-tv/config
+        target: /config
+      - type: bind
+        source: /mnt/shared
+        target: /mnt/shared
+      - type: bind
+        source: "/mnt/shared/media/tv shows"
+        target: /tv
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.sonarr-tv == true
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 448M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

@@ -40,6 +40,22 @@ containerd_root: ""
 # First line of a config.toml this role wrote; any other file is left alone.
 containerd_root_marker: "# Written by homelab-infra roles/base (containerd_root)."
 
+# Where every Docker daemon's Loki log driver pushes (tasks/docker_logging.yml,
+# phase 5 batch F5). Empty leaves daemon.json alone, which is the case until
+# the `logging` stack is a Swarm stack; from then on it is Loki's port on the
+# address stack_host_ip gives for it (the bootstrap manager, through the
+# routing mesh), replacing homelab's loopback URL and the literal elsewhere.
+# Only hosts whose daemon already uses the loki driver are changed, and only
+# the file: the daemon reads it when it next starts.
+docker_loki_push_url: >-
+  {{ ('http://' ~ (hostvars | stack_host_ip(groups, 'logging')) ~ ':3100/loki/api/v1/push')
+     if 'logging' in (hostvars | swarm_stack_names(groups)) else '' }}
+# non-blocking: a container's writes to stdout never wait for the driver; with
+# Loki unreachable the per-container buffer fills and lines are dropped rather
+# than the application stalling.
+docker_log_mode: non-blocking
+docker_log_max_buffer_size: 4m
+
 # qemu-guest-agent, installed and running. For VMs cloned from the Debian
 # genericcloud templates, which do not include it. Off by default: the older
 # VMs had it installed by hand.

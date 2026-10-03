@@ -1,0 +1,38 @@
+# Actual Budget as a Swarm stack (phase 5, batch F1). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f1.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State lives in ${SWARM_STATE_ROOT}/actual/data (server-files/,
+# user-files/, .migrate; root-owned, copied with numeric ids) on the node
+# labelled pin.actual.
+#
+# The image is the version the Compose project ran at conversion (26.9.0, the
+# digest :latest resolved to then), so the cutover does not upgrade it.
+
+services:
+  actual-server:
+    # Docker Hub actualbudget/actual-server:26.9.0 (sha256:552beab3dec8c93d46b8b9245612d63c3f123b8a45063a474f53e229b17621d3),
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/actualbudget/actual-server@sha256:b84e08e4e94a225f39a7e001fc2c364500a976a40be2cefc18e45561b4056fba
+    ports:
+      - "5006:5006"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/actual/data
+        target: /data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.actual == true
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 80M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

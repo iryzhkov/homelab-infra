@@ -1,0 +1,40 @@
+#!/bin/sh
+# {{ ansible_managed }}
+#
+# Docker Swarm's control ports only from the other managers' mesh addresses,
+# its VXLAN port only from the other worker on VLAN 70, and the routing mesh
+# kept off {{ swarm_ingress_blocked_ifaces | join(', ') }}. Rebuilt from scratch on every run, so
+# the rules are always exactly these.
+set -eu
+
+# Swarm's own ports, before anything else in INPUT.
+iptables -N SWARM-INPUT 2>/dev/null || true
+iptables -F SWARM-INPUT
+{% for peer in swarm_manager_peers %}
+{% for p in swarm_control_ports %}
+iptables -A SWARM-INPUT -i {{ swarm_mesh_iface }} -s {{ hostvars[peer].swarm_advertise_addr }} -p {{ p.proto }} --dport {{ p.port }} -j ACCEPT
+{% endfor %}
+{% endfor %}
+{% for peer in swarm_worker_peers %}
+{% for p in swarm_data_ports %}
+iptables -A SWARM-INPUT -i {{ swarm_iface }} -s {{ hostvars[peer].swarm_data_path_addr }} -p {{ p.proto }} --dport {{ p.port }} -j ACCEPT
+{% endfor %}
+{% endfor %}
+{% for p in swarm_control_ports + swarm_data_ports %}
+iptables -A SWARM-INPUT -p {{ p.proto }} --dport {{ p.port }} -j DROP
+{% endfor %}
+iptables -C INPUT -j SWARM-INPUT 2>/dev/null || iptables -I INPUT 1 -j SWARM-INPUT
+
+# The routing mesh is forwarded, not delivered, so it is filtered in
+# DOCKER-USER by the interface the connection arrived on. Docker keeps an
+# existing DOCKER-USER chain and its rules when it starts.
+iptables -N SWARM-INGRESS 2>/dev/null || true
+iptables -F SWARM-INGRESS
+{% for p in swarm_mesh_published_ports %}
+iptables -A SWARM-INGRESS -i {{ swarm_mesh_iface }} -o docker_gwbridge -s {{ swarm_mesh_cidr }} -p {{ p.proto }} --dport {{ p.port }} -j RETURN
+{% endfor %}
+{% for iface in swarm_ingress_blocked_ifaces %}
+iptables -A SWARM-INGRESS -i {{ iface }} -o docker_gwbridge -j DROP
+{% endfor %}
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -C DOCKER-USER -j SWARM-INGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -j SWARM-INGRESS

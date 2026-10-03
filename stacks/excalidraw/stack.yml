@@ -1,0 +1,39 @@
+# Swarm stack for draw.ryzhkov.dev (phase 5, batch S1). Replaces
+# docker-compose.yml beside it, which stays until the phase 5 cleanup.
+#
+# Stateless: no state at all, so it runs on whichever worker Swarm picks and
+# the routing mesh answers on 5090 on both. The image is pinned to the digest
+# the Compose container ran at conversion, so the move changes nothing but the
+# scheduler; an update is an edit of the digest here.
+services:
+  excalidraw:
+    # Docker Hub excalidraw/excalidraw:latest@sha256:f7ee194addd607bf831d2af0f0a34463dd4225e426cf35199ef0b12a803398e9,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/excalidraw/excalidraw@sha256:8f46c86c80e6d2d3e166bef9f9bdc09da12ec0533d548d4de7317a15fa9e6675
+    ports:
+      - "5090:80"
+    # The image's own check, probed every 2 s while the task starts. Swarm
+    # keeps a task out of the routing mesh until it is healthy, and with the
+    # image's default (first probe after 30 s) every move cost about 30 s of
+    # 502/503 through Traefik (drain rehearsal, 2026-10-02).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost || exit 1"]
+      interval: 30s
+      start_period: 30s
+      start_interval: 2s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 4 MiB (nginx serving static files).
+        limits:
+          memory: 64M
+        reservations:
+          memory: 16M
+      restart_policy:
+        condition: any
+      # No mount, so the new task can start before the old one stops.
+      update_config:
+        order: start-first

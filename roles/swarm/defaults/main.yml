@@ -1,0 +1,67 @@
+---
+# Swarm's control-plane ports, allowed only from the other managers' mesh
+# addresses on nebula1.
+swarm_control_ports:
+  - { port: 2377, proto: tcp }   # cluster management (raft, joins)
+  - { port: 7946, proto: tcp }   # node gossip
+  - { port: 7946, proto: udp }
+
+# The VXLAN data path, unauthenticated: allowed only between the two workers
+# on their VLAN 70 interface, never on nebula1 and never to OCI.
+swarm_data_ports:
+  - { port: 4789, proto: udp }
+
+# Stack directories under <pool>/swarm that hold only public content and keep
+# the deploying user's 0755 (tasks/state_root.yml closes every other one).
+swarm_state_public_stacks: [hugo, voice, whisper, wyoming-piper]
+
+# The interface the control plane uses.
+swarm_mesh_iface: nebula1
+
+# Published Swarm ports that mesh clients may reach on a worker's nebula1,
+# as exceptions to the routing-mesh block on that interface, and only from
+# Nebula addresses. Loki's 3100 (host mode on homelab since batch F5):
+# toolfeedback, which UpKeeper installs on every fleet host, pushes to
+# http://10.42.0.2:3100.
+swarm_mesh_cidr: 10.42.0.0/24
+swarm_mesh_published_ports:
+  - { port: 3100, proto: tcp }
+
+# The cluster's secrets: the autolock unlock key and the registry tokens.
+swarm_secret_file: "{{ playbook_dir }}/../secrets/swarm.sops.yaml"
+
+# Forgejo access tokens for the registry, created on the first run. Builders
+# log in with the push token, every other node with the pull token.
+swarm_registry_tokens:
+  - { key: swarm_registry_push_token, name: swarm-registry-push, scopes: "write:package" }
+  - { key: swarm_registry_pull_token, name: swarm-registry-pull, scopes: "read:package" }
+
+# The host that mirrors external images into Forgejo's registry (it holds
+# most of them already), and Forgejo's Swarm service once batch F3 has
+# converted it (stack forgejo, service server).
+swarm_registry_mirror_host: homelab
+
+# The log settings tasks/stack.yml gives every service that names none: the
+# Loki driver at Loki's address on the Swarm (stacks/logging publishes 3100
+# in host mode on homelab), never blocking a container's writes or its stop
+# when Loki is unreachable. The same values roles/base writes into
+# daemon.json; spelled out per service so they apply without a daemon
+# restart (phase 5, F5 follow-up).
+swarm_stack_logging:
+  driver: loki
+  options:
+    loki-url: "http://{{ hostvars[swarm_bootstrap_manager].ansible_host }}:3100/loki/api/v1/push"
+    loki-retries: "3"
+    loki-batch-size: "400"
+    mode: non-blocking
+    max-buffer-size: 4m
+    max-size: 50m
+    max-file: "3"
+swarm_forgejo_service: forgejo_server
+
+# The other managers, whose mesh addresses may reach the control ports here,
+# and the other workers, whose VLAN 70 addresses may reach the data port.
+# Sorted: a group built from child groups has no stable order between runs,
+# and the firewall script must render the same every time.
+swarm_manager_peers: "{{ groups['swarm'] | difference([inventory_hostname]) | sort }}"
+swarm_worker_peers: "{{ groups['swarm_workers'] | difference([inventory_hostname]) | sort }}"

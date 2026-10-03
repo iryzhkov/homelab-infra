@@ -1,0 +1,222 @@
+# Authentik as a Swarm stack (phase 5 batch P2), replacing docker-compose.yml
+# beside it. Deployed by playbooks/swarm.yml from the entry in
+# inventory/group_vars/swarm/stacks-p2.yml; see
+# docs/transition/phase5/2026-10-03-P2.md for the cutover and the rollback.
+#
+# All four services are pinned to the node labelled pin.authentik=true, beside
+# their state in /srv/swarm/authentik/{postgres,redis,media,templates,certs}
+# (until the cutover: the named volumes authentik_database and authentik_redis
+# and ~/app/authentik/{media,custom-templates,certs} on homelab). The hourly
+# snapshot job dumps the database with pg_dump and mirrors media, templates
+# and certs to the other worker; a move goes through playbooks/swarm-move.yml.
+#
+# Credentials are Docker secrets. Postgres reads POSTGRES_PASSWORD_FILE;
+# Authentik reads any setting from a file when its value is a file:// URI
+# (authentik/lib/config.py parse_uri and the Go server's parseScheme, both in
+# 2025.8.6).
+#
+# The worker has no Docker socket and runs as the image's own user (1000).
+# The socket and `user: root` were there for Docker-managed outposts; the
+# only outpost is the embedded one, which runs inside the server
+# (authentik_outposts_outpost, checked 2026-10-02). The unused "Local Docker
+# connection" will show as unhealthy in the admin interface.
+#
+# Compose's depends_on is gone: server and worker retry the database
+# connection until it answers. Swarm restarts a task whose health check fails,
+# which is what roles/authentik_watchdog did for the Compose containers; the
+# watchdog retires when this stack is active.
+#
+# Logs stay on the local driver, as in the Compose file, so that Authentik
+# stays debuggable when Loki is down.
+#
+# Images are pinned to the exact builds the Compose project ran at the
+# cutover (2026-10-02), tag and digest.
+
+x-local-logging: &local-logging
+  driver: local
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+x-authentik-environment: &authentik-environment
+  AUTHENTIK_POSTGRESQL__HOST: postgresql
+  AUTHENTIK_POSTGRESQL__NAME: authentik
+  AUTHENTIK_POSTGRESQL__USER: authentik
+  AUTHENTIK_POSTGRESQL__PASSWORD: file:///run/secrets/pg_pass
+  AUTHENTIK_REDIS__HOST: redis
+  AUTHENTIK_SECRET_KEY: file:///run/secrets/secret_key
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
+
+services:
+  postgresql:
+    # Docker Hub postgres:16.15-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/postgres@sha256:49c0be96b8c1cc13508a297288dee13b874298bf2ae34a81c392acd9c0f052b7
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_pass
+    secrets:
+      - pg_pass
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/postgres
+        target: /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d authentik -U authentik"]
+      interval: 30s
+      retries: 5
+      start_period: 20s
+      start_interval: 2s
+      timeout: 5s
+    # Swarm's default of 10 s can kill Postgres in the middle of its shutdown
+    # checkpoint.
+    stop_grace_period: 60s
+    logging: *local-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.authentik == true
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 160M
+
+  redis:
+    # Docker Hub redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/redis@sha256:9edcda8e020021e916e9bd26acc90c61103cc93b6dedbb757cc206ddb320df6f
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/redis
+        target: /data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 30s
+      retries: 5
+      start_period: 20s
+      start_interval: 2s
+      timeout: 3s
+    logging: *local-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.authentik == true
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
+
+  server:
+    image: ghcr.io/goauthentik/server:2025.8.6@sha256:f162a2664fc54337be65f796130443e19d038caa82be572b7d44aa8b1a895af2
+    command: server
+    environment: *authentik-environment
+    secrets:
+      - pg_pass
+      - secret_key
+    ports:
+      - "4080:9000"
+      - "4443:9443"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/media
+        target: /media
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/templates
+        target: /templates
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:9000/-/health/ready/", timeout=5)
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    logging: *local-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.authentik == true
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        # Measured 627 MiB on 2026-10-02; twice that, rounded up.
+        limits:
+          memory: 1280M
+        reservations:
+          memory: 640M
+
+  worker:
+    image: ghcr.io/goauthentik/server:2025.8.6@sha256:f162a2664fc54337be65f796130443e19d038caa82be572b7d44aa8b1a895af2
+    command: worker
+    environment: *authentik-environment
+    secrets:
+      - pg_pass
+      - secret_key
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/media
+        target: /media
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/certs
+        target: /certs
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/templates
+        target: /templates
+    # The image's own check (ak healthcheck), started sooner.
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    logging: *local-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.authentik == true
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        # Measured 478 MiB on 2026-10-02. Background tasks burst.
+        limits:
+          memory: 1G
+          cpus: "2"
+        reservations:
+          memory: 480M
+
+secrets:
+  pg_pass:
+    name: authentik_pg_pass_${SECRET_HASH_PG_PASS}
+    file: ./secrets/PG_PASS
+  secret_key:
+    name: authentik_secret_key_${SECRET_HASH_AUTHENTIK_SECRET_KEY}
+    file: ./secrets/AUTHENTIK_SECRET_KEY

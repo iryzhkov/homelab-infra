@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Dump homelab's Postgres databases (Authentik, Miniflux) as plain SQL, gzipped,
+# into {{ backup_pg_dump.dir }}. Deployed by roles/backup (pg_dump.yml) from
+# backup_pg_dump in inventory/group_vars/swarm/backup.yml; edit it there, not
+# here. It replaced the hand-written ~/app/pg_backup.sh on 2026-10-02 and keeps
+# its schedule ({{ backup_pg_dump.cron }}), destination and {{ backup_pg_dump.keep_days }}-day retention.
+#
+# The twice-weekly `homelab-bulk-backup app` copies the directory to
+# b2:igor-offsite-backup/apps/homelab/backups/postgres, where the monthly
+# homelab-restore-verify restores the newest Authentik dump.
+#
+# Each database is found by its Swarm service (<stack>_<service>, after the
+# P1/P2 cutovers) and otherwise by its Compose container name, so the cutover
+# does not silently break the dump. A database whose stack is pinned to the
+# other worker is not here: that is reported as a failure, and the Swarm tier
+# (homelab-swarm-snapshot) holds its hourly dumps.
+#
+# Each dump is written to a .partial file, checked with gzip -t, and only then
+# renamed. Quiet apart from its log; a failure goes to the feed and the phone.
+
+set -uo pipefail
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+backup_dir="{{ backup_pg_dump.dir }}"
+keep_days={{ backup_pg_dump.keep_days }}
+stamp=$(date +%Y-%m-%d_%H%M)
+failures=0
+
+output=$(mktemp)
+trap 'rm -f "$output"' EXIT
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$output"
+}
+
+fail() {
+    log "FAILED: $1"
+    failures=$((failures + 1))
+}
+
+resolve_container() {
+    local service="$1" name="$2" id
+    id=$(docker ps -q --filter label=com.docker.swarm.service.name="$service" | head -1)
+    [ -n "$id" ] || id=$(docker ps -q --filter name="^${name}\$" | head -1)
+    echo "$id"
+}
+
+backup_db() {
+    local service="$1" name="$2" db="$3" user="$4" container
+    local dump="$backup_dir/${db}_${stamp}.sql.gz"
+
+    container=$(resolve_container "$service" "$name")
+    if [ -z "$container" ]; then
+        fail "$db: no running Swarm task of $service and no container $name on $(hostname -s)"
+        return
+    fi
+    log "Backing up $db from $(docker inspect -f '{{ '{{' }}.Name{{ '}}' }}' "$container" | tr -d /)..."
+    if ! docker exec "$container" pg_dump -U "$user" -d "$db" | gzip >"$dump.partial"; then
+        rm -f "$dump.partial"
+        fail "pg_dump of $db"
+        return
+    fi
+    if [ ! -s "$dump.partial" ] || ! gzip -t "$dump.partial"; then
+        rm -f "$dump.partial"
+        fail "$db dump is empty or not valid gzip"
+        return
+    fi
+    mv "$dump.partial" "$dump"
+    log "OK: $dump ($(du -h "$dump" | cut -f1))"
+}
+
+mkdir -p "$backup_dir"
+find "$backup_dir" -name '*.partial' -delete
+
+{% for db in backup_pg_dump.databases %}
+backup_db "{{ db.service }}" "{{ db.container }}" "{{ db.name }}" "{{ db.user }}"
+{% endfor %}
+
+log "Cleaning up backups older than $keep_days days..."
+find "$backup_dir" -name '*.sql.gz' -mtime +"$keep_days" -print -delete | tee -a "$output"
+
+if [ "$failures" -gt 0 ]; then
+    log "Completed with $failures failure(s)"
+    feed post "postgres dump failed on $(hostname -s)" \
+        --severity fail --source backup --tag "backup infra" \
+        --body-file "$output" || true
+    homelab-notify -t "postgres dump failed on $(hostname -s)" -p high -i "backup-pg-dump" - <"$output" || true
+    exit 1
+fi
+log "All backups complete."

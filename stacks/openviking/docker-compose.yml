@@ -1,5 +1,6 @@
 services:
   openviking:
+    image: git.ryzhkov.dev/igor/openviking:latest
     build: .
     container_name: openviking
     ports:

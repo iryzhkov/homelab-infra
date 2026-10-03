@@ -1,0 +1,112 @@
+---
+# Forgejo's container registry: the two tokens, a login on every node, and a
+# push of every locally built image from the host that builds it.
+#
+# Pushing goes to https://git.ryzhkov.dev (the LAN resolves it to the edge
+# Traefik), so the edge proxy has to be up; pulls during a drain do not need
+# it, because every node pre-pulls (registry_pull.yml).
+
+- name: Load the Swarm secrets
+  community.sops.load_vars:
+    file: "{{ swarm_secret_file }}"
+    name: swarm_secrets
+  delegate_to: localhost
+  no_log: true
+
+# Tokens are created with Forgejo's admin CLI inside its container, which
+# prints a new token once and never again, so each is written into the
+# secret the moment it exists. To replace one, delete it in Forgejo (user
+# settings, Applications) and its key in the secret, then run this again.
+- name: Find Forgejo's container
+  ansible.builtin.include_tasks: forgejo_container.yml
+  when:
+    - swarm_registry_tokens | map(attribute='key') | reject('in', swarm_secrets) | list | length > 0
+    - not ansible_check_mode
+
+- name: Create the registry tokens that the secret lacks
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - -u
+      - git
+      - "{{ swarm_forgejo_container | default('forgejo') }}"
+      - forgejo
+      - admin
+      - user
+      - generate-access-token
+      - --username
+      - "{{ swarm_registry_owner }}"
+      - --token-name
+      - "{{ item.name }}"
+      - --scopes
+      - "{{ item.scopes }}"
+      - --raw
+  delegate_to: "{{ swarm_forgejo_host | default(forgejo_host) }}"
+  run_once: true
+  register: swarm_registry_new_tokens
+  changed_when: true
+  no_log: true
+  loop: "{{ swarm_registry_tokens }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.key not in swarm_secrets
+    - not ansible_check_mode
+
+- name: Record each new token in the secret
+  ansible.builtin.command:
+    argv: [sops, set, --value-stdin, "{{ swarm_secret_file }}", '["{{ item.item.key }}"]']
+    stdin: "{{ item.stdout | trim | to_json }}"
+  delegate_to: localhost
+  run_once: true
+  changed_when: true
+  no_log: true
+  loop: "{{ swarm_registry_new_tokens.results | default([]) | selectattr('stdout', 'defined') | list }}"
+
+- name: Load the secrets again with the new tokens
+  community.sops.load_vars:
+    file: "{{ swarm_secret_file }}"
+    name: swarm_secrets
+  delegate_to: localhost
+  no_log: true
+  when: swarm_registry_new_tokens is changed
+
+- name: Decide which token this node logs in with
+  ansible.builtin.set_fact:
+    swarm_registry_builder: >-
+      {{ swarm_registry_images | selectattr('build_host', 'equalto', inventory_hostname)
+         | list | length > 0 }}
+
+- name: Read the Docker client configuration
+  ansible.builtin.slurp:
+    src: "{{ stack_root | dirname }}/.docker/config.json"
+  register: swarm_docker_config
+  failed_when: false
+  check_mode: false
+
+# Docker stores the token base64-encoded in ~/.docker/config.json (no
+# credential helper on these hosts), readable by this user only.
+- name: Log in to the registry
+  ansible.builtin.command:
+    argv: [docker, login, "{{ swarm_registry }}", -u, "{{ swarm_registry_owner }}", --password-stdin]
+    stdin: >-
+      {{ swarm_secrets.swarm_registry_push_token if swarm_registry_builder
+         else swarm_secrets.swarm_registry_pull_token }}
+  no_log: true
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - >-
+      swarm_registry not in ((swarm_docker_config.content | default('e30=') | b64decode
+                              | from_json).auths | default({}))
+
+- name: Mirror the external images the stacks use
+  ansible.builtin.include_tasks: registry_mirror.yml
+
+- name: Push the images this node builds
+  ansible.builtin.include_tasks: registry_push_one.yml
+  loop: "{{ swarm_registry_images | selectattr('build_host', 'equalto', inventory_hostname) | list }}"
+  loop_control:
+    loop_var: image
+    label: "{{ image.name }}"

@@ -22,7 +22,7 @@ services:
     #
     # Rebuild against current upstream with:
     #   docker compose build --no-cache && docker compose up -d
-    image: whisper-cpp-dispatch:local
+    image: git.ryzhkov.dev/igor/whisper-server:latest
     build:
       context: .
       args:

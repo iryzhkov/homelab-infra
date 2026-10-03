@@ -3,3 +3,15 @@
 # project sits outside the host's usual stack root, as hugo
 # (~/app/hugo/blog/deploy) and cv-site (~/cv-site) do.
 stack_dir: "{{ stack.dir | default(stack_root ~ '/' ~ stack.name) }}"
+
+# Give every service that names no log driver of its own an explicit copy of
+# this host's daemon.json Loki settings, in docker-compose.override.yml beside
+# the Compose file (which Compose reads by itself). The daemon's defaults are
+# read only when the daemon starts, and are copied into a container only when
+# it is created, so after roles/base wrote the shared Loki URL and
+# non-blocking mode (phase 5, F5) every existing container kept localhost
+# and blocking mode; this applies the new settings with a recreate instead of
+# a daemon restart. Only where daemon.json already says loki and
+# non-blocking. Off on the edge proxies: phase 4 owns them, and their Loki
+# client stops with proxmox-a anyway.
+compose_logging_override: "{{ inventory_hostname not in groups.get('edge_proxy', []) }}"

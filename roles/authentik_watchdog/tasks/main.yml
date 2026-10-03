@@ -1,30 +1,81 @@
 ---
+# Restart the Compose Authentik's server and worker after three failed
+# readiness checks in a row.
+#
+# Retired once Authentik runs as a Swarm stack (an `authentik` entry in any
+# swarm_stacks_* list, phase 5 batch P2): Swarm itself replaces a task whose
+# health check fails, the container names the script restarts no longer
+# exist, and the 2026-10-02 incident showed that restarting server and worker
+# does not help when what failed is their peers' name resolution. The run
+# that sees the Swarm entry stops and removes the timer, service and script.
+
+- name: Decide whether the watchdog still has a job
+  ansible.builtin.set_fact:
+    authentik_watchdog_retired: "{{ 'authentik' in (hostvars | swarm_stack_names(groups)) }}"
+
 - name: Install the Authentik watchdog
-  ansible.builtin.copy:
-    src: authentik-watchdog
-    dest: /usr/local/sbin/authentik-watchdog
-    owner: root
-    group: root
-    mode: "0755"
-  become: true
+  when: not authentik_watchdog_retired
+  block:
+    - name: Install the Authentik watchdog
+      ansible.builtin.copy:
+        src: authentik-watchdog
+        dest: /usr/local/sbin/authentik-watchdog
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
 
-- name: Install the Authentik watchdog units
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "/etc/systemd/system/{{ item }}"
-    owner: root
-    group: root
-    mode: "0644"
-  loop:
-    - authentik-watchdog.service
-    - authentik-watchdog.timer
-  register: authentik_watchdog_units
-  become: true
+    - name: Install the Authentik watchdog units
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - authentik-watchdog.service
+        - authentik-watchdog.timer
+      register: authentik_watchdog_units
+      become: true
 
-- name: Enable the Authentik watchdog timer
-  ansible.builtin.systemd_service:
-    name: authentik-watchdog.timer
-    enabled: true
-    state: started
-    daemon_reload: "{{ authentik_watchdog_units is changed }}"
-  become: true
+    - name: Enable the Authentik watchdog timer
+      ansible.builtin.systemd_service:
+        name: authentik-watchdog.timer
+        enabled: true
+        state: started
+        daemon_reload: "{{ authentik_watchdog_units is changed }}"
+      become: true
+
+- name: Retire the Authentik watchdog
+  when: authentik_watchdog_retired
+  block:
+    - name: Look for the watchdog timer
+      ansible.builtin.stat:
+        path: /etc/systemd/system/authentik-watchdog.timer
+      register: authentik_watchdog_timer
+
+    - name: Stop and disable the watchdog timer
+      ansible.builtin.systemd_service:
+        name: authentik-watchdog.timer
+        enabled: false
+        state: stopped
+      become: true
+      when: authentik_watchdog_timer.stat.exists
+
+    - name: Remove the watchdog's script and units
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/authentik-watchdog.timer
+        - /etc/systemd/system/authentik-watchdog.service
+        - /usr/local/sbin/authentik-watchdog
+        - /run/authentik-watchdog.failures
+      register: authentik_watchdog_removed
+      become: true
+
+    - name: Reload systemd after removing the units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      become: true
+      when: authentik_watchdog_removed is changed

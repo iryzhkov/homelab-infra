@@ -1,0 +1,59 @@
+---
+# The Loki log driver's settings in /etc/docker/daemon.json (phase 5, batch
+# F5): `loki-url` from docker_loki_push_url, and `mode: non-blocking` with a
+# bounded buffer, so a container's writes never wait for an unreachable Loki
+# (lines are dropped instead). Merged into the keys the file already holds,
+# and only where the daemon already uses the loki driver: a host on another
+# driver is left alone.
+#
+# Like docker_data_root.yml this never restarts or reloads Docker. The
+# settings apply when the daemon next starts (on a Swarm manager, unlock it
+# afterwards: playbooks/swarm.yml --tags nodes -l <host>). Until then every
+# run reports the restart as pending.
+
+- name: Look for daemon.json
+  ansible.builtin.stat:
+    path: /etc/docker/daemon.json
+  become: true
+  register: docker_logging_json_stat
+
+- name: Read daemon.json
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  become: true
+  register: docker_logging_json_file
+  when: docker_logging_json_stat.stat.exists
+
+- name: Merge the Loki driver's settings into it
+  ansible.builtin.set_fact:
+    docker_logging_current: "{{ docker_logging_json_file.content | b64decode | from_json }}"
+    docker_logging_settings: >-
+      {{ (docker_logging_json_file.content | b64decode | from_json)
+         | combine({'log-opts': {'loki-url': docker_loki_push_url,
+                                 'mode': docker_log_mode,
+                                 'max-buffer-size': docker_log_max_buffer_size}},
+                   recursive=true) }}
+  when: docker_logging_json_stat.stat.exists
+
+# Only the file: no handler, no restart, no reload.
+- name: Write daemon.json
+  ansible.builtin.copy:
+    content: "{{ docker_logging_settings | to_nice_json(indent=2) }}\n"
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: docker_logging_written
+  when:
+    - docker_logging_json_stat.stat.exists
+    - docker_logging_current['log-driver'] | default('') == 'loki'
+    - docker_logging_current != docker_logging_settings
+
+- name: Report a Docker restart pending
+  ansible.builtin.debug:
+    msg: >-
+      daemon.json now sends container logs to {{ docker_loki_push_url }} in
+      {{ docker_log_mode }} mode. The running daemon keeps its old settings
+      until it next starts; on a Swarm manager, unlock it afterwards.
+  when: docker_logging_written is changed

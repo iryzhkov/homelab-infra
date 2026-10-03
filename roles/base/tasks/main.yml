@@ -19,6 +19,9 @@
 #                           written but never applied by a restart
 #   containerd_root         containerd's root in /etc/containerd/config.toml,
 #                           the same way
+#   docker_loki_push_url    the Loki log driver's URL and non-blocking mode in
+#                           daemon.json, the same way; set by itself once the
+#                           logging stack runs on the Swarm
 #   qemu_guest_agent: true  qemu-guest-agent installed and running
 #   docker_install: true    Docker Engine and Compose from download.docker.com
 #   swapfile_size_mb        a swapfile of that size
@@ -85,6 +88,11 @@
 - name: Keep containerd's root
   ansible.builtin.include_tasks: containerd_root.yml
   when: containerd_root | length > 0
+
+# After the data-root task, which writes the same file.
+- name: Keep the Loki log driver's address and mode
+  ansible.builtin.include_tasks: docker_logging.yml
+  when: docker_loki_push_url | length > 0
 
 - name: Keep the QEMU guest agent
   ansible.builtin.include_tasks: qemu_guest_agent.yml

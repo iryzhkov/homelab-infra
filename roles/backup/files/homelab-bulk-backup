@@ -54,6 +54,26 @@ else
         --exclude-from "$base/app/rclone_exclude.txt" \
         --stats 1m --stats-one-line --stats-log-level NOTICE >>"$log" 2>&1 || status=$?
     fi
+    # normandy's daily dumps are rolling sets (14 days on the NAS), but
+    # `rclone copy` never removes anything, so the bucket grew by about 185 MB
+    # a day. Keep 30 days there. Only when a dump from the last three days is
+    # in the bucket, so a dump job that stopped never lets this empty it.
+    # `delete` hides the object; the bucket's lifecycle rule removes it 30
+    # days later, so a mistaken prune stays recoverable for a month.
+    if [ "$status" -eq 0 ] && [ "$job" = normandy ]; then
+        for rolling in postgres config; do
+            recent=$(/usr/bin/rclone lsf --files-only --max-age 3d \
+                --config "$base/.config/rclone/rclone.conf" \
+                "$destination/$rolling" 2>>"$log") || { status=1; break; }
+            if [ -z "$recent" ]; then
+                echo "no $rolling dump newer than 3 days in the bucket; not pruning" >>"$log"
+                continue
+            fi
+            /usr/bin/rclone delete --min-age 30d \
+                --config "$base/.config/rclone/rclone.conf" \
+                "$destination/$rolling" >>"$log" 2>&1 || status=$?
+        done
+    fi
 fi
 cat "$log"
 printf '%s exit=%s\n' "$(date -Is)" "$status" >"$state/bulk-$job.last-run"

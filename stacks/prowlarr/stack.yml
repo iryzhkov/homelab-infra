@@ -1,0 +1,40 @@
+# Prowlarr as a Swarm stack (phase 5, batch F2). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f2.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State lives in ${SWARM_STATE_ROOT}/prowlarr/config on the node
+# labelled pin.prowlarr; the NAS share is mounted at the same path on both
+# workers.
+#
+# The image is the version the Compose project ran at conversion
+# (2.6.5.5623-ls162, the digest :latest resolved to then), so the cutover
+# does not upgrade it.
+
+services:
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:2.6.5.5623-ls162
+    ports:
+      - "9696:9696"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/prowlarr/config
+        target: /config
+      - type: bind
+        source: /mnt/shared
+        target: /mnt/shared
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.prowlarr == true
+      resources:
+        limits:
+          memory: 384M
+        reservations:
+          memory: 176M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

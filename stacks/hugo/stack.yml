@@ -1,0 +1,40 @@
+# Swarm stack for blog.ryzhkov.dev (phase 5, batch S3). Replaces
+# docker-compose.yml beside it (deployed in the blog checkout's deploy/
+# directory on homelab), which stays until the phase 5 cleanup.
+#
+# Stateless, replicated content: the blog is built on homelab by the Forgejo
+# webhook (roles/forgejo_webhooks/files/handlers/igor/blog.sh), which mirrors
+# the built public/ to /srv/swarm/hugo/public on both workers after each build.
+# swarm-prepare.yml does the same at every deploy, and places the blog
+# repository's deploy/nginx-gzip.conf beside it. Two replicas, one per worker,
+# so the site answers while either worker is down.
+services:
+  hugo-frontend:
+    # Docker Hub nginx:latest@sha256:abe47724e466aeab9a345d8e46a221c2fa8953c7848bb4a3bd9976a7199f8cf2,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/nginx@sha256:4e4863e5f038304761ced85e0511553c88ea268650ee4bf85b759a3e7dc1c325
+    ports:
+      - "4580:80"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/hugo/public
+        target: /usr/share/nginx/html
+        read_only: true
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/hugo/nginx-gzip.conf
+        target: /etc/nginx/conf.d/00-gzip.conf
+        read_only: true
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+        max_replicas_per_node: 1
+      resources:
+        # Measured working set 4 MiB.
+        limits:
+          memory: 64M
+        reservations:
+          memory: 16M
+      restart_policy:
+        condition: any

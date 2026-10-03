@@ -1,0 +1,37 @@
+---
+# One image: tag it for the registry and push it, unless the registry already
+# holds this exact image (its RepoDigests then name the registry repository).
+
+- name: Read {{ image.name }}'s local image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - --format
+      - "{{ '{{' }}.Id{{ '}}' }} {{ '{{' }}json .RepoDigests{{ '}}' }}"
+      - "{{ image.source }}"
+  register: swarm_image_local
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Report a missing source image
+  ansible.builtin.debug:
+    msg: "{{ image.source }} is not on {{ inventory_hostname }}; build it first."
+  when: swarm_image_local.rc != 0
+
+- name: Tag and push {{ image.name }}
+  when:
+    - swarm_image_local.rc == 0
+    - (swarm_registry ~ '/' ~ swarm_registry_owner ~ '/' ~ image.name ~ '@') not in swarm_image_local.stdout
+  block:
+    - name: Tag {{ image.name }} for the registry
+      ansible.builtin.command:
+        argv: [docker, tag, "{{ image.source }}", "{{ swarm_registry }}/{{ swarm_registry_owner }}/{{ image.name }}:{{ image.tag }}"]
+      changed_when: true
+
+    - name: Push {{ image.name }}
+      ansible.builtin.command:
+        argv: [docker, push, --quiet, "{{ swarm_registry }}/{{ swarm_registry_owner }}/{{ image.name }}:{{ image.tag }}"]
+      changed_when: true

@@ -1,0 +1,28 @@
+---
+# Sets swarm_mirror_images: one swarm_mirror_ref dict (filter_plugins/
+# swarm_images.py) per distinct external image named by any stack file of an
+# entry in swarm_stacks_* or pending_swarm_stacks_*: external images, and
+# references already rewritten to the mirror (pre-pulled by digest). The
+# locally built images in Forgejo's registry are left to registry_pull.yml.
+
+- name: List the images the Swarm stacks reference
+  ansible.builtin.set_fact:
+    swarm_mirror_images: "{{ swarm_mirror_list }}"
+  vars:
+    swarm_mirror_list: >-
+      {%- set out = [] -%}
+      {%- for var in query('varnames', '^(pending_)?swarm_stacks_') | sort -%}
+      {%-   for entry in lookup('vars', var) -%}
+      {%-     set path = playbook_dir ~ '/../stacks/' ~ (entry.source | default(entry.name)) ~ '/stack.yml' -%}
+      {%-     for svc in (lookup('file', path) | from_yaml).services.values() -%}
+      {%-       if svc.image is defined and (not svc.image.startswith(swarm_registry ~ '/')
+                    or svc.image.startswith(swarm_registry ~ '/' ~ swarm_registry_owner ~ '/mirror/')) -%}
+      {%-         set ref = svc.image | swarm_mirror_ref(swarm_registry, swarm_registry_owner) -%}
+      {%-         if ref.source not in out | map(attribute='source') -%}
+      {%-           set _ = out.append(ref) -%}
+      {%-         endif -%}
+      {%-       endif -%}
+      {%-     endfor -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out | sort(attribute='source') }}

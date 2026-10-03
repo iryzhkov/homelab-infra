@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run one backup tier and put its result offsite.
 #
-#   homelab-backup-run hourly    the small SQLite databases
+#   homelab-backup-run hourly    the small SQLite databases, and on a Swarm
+#                                worker its pinned stacks' snapshots
 #   homelab-backup-run daily     InfluxDB
 #   homelab-backup-run weekly    remove superseded Backblaze versions
 #   homelab-backup-run verify    restore the offsite copies and check them
@@ -42,13 +43,22 @@ trap 'rm -f "$output"' EXIT
 
 case "$tier" in
     hourly)
-        sudo -n "$HOME/.local/bin/homelab-sqlite-backup" \
-            --config "$config_dir/sqlite-sources.json" \
-            --out "$root/sqlite" >>"$output" 2>&1
-        status=$?
+        # The Compose-era databases, where this host has any
+        # (backup_sqlite_sources: homelab only).
+        status=0
         subject="sqlite"
-        local_dir="$root/sqlite"
-        remote_dir="$remote/sqlite"
+        local_dir=""
+        remote_dir=""
+        if [ -r "$config_dir/sqlite-sources.json" ]; then
+            # The log stays the invoking user's; only the databases need root.
+            # shellcheck disable=SC2024
+            sudo -n "$HOME/.local/bin/homelab-sqlite-backup" \
+                --config "$config_dir/sqlite-sources.json" \
+                --out "$root/sqlite" >>"$output" 2>&1
+            status=$?
+            local_dir="$root/sqlite"
+            remote_dir="$remote/sqlite"
+        fi
         ;;
     daily)
         "$HOME/.local/bin/homelab-influx-backup" "$root/influxdb" 7 >>"$output" 2>&1
@@ -88,9 +98,37 @@ if [ "$status" -eq 0 ] && [ -n "$local_dir" ]; then
     [ "$status" -ne 0 ] && echo "rclone sync to $remote_dir failed" >>"$output"
 fi
 
+# The stateful Swarm stacks pinned to this worker: their snapshots, the copy
+# on the other worker and, from homelab, the offsite copy. Only on a Swarm
+# worker (roles/backup, tasks/swarm.yml), after the tier above so a failure
+# here never holds up the databases it already covers. Silent, and touches
+# nothing, while no stack is listed.
+if [ "$tier" = hourly ] && [ -x /usr/local/sbin/homelab-swarm-snapshot ]; then
+    # Exit 3 means warnings only, such as a deployed stack pinned here that no
+    # .swarm-owner claims: posted as `warn` unless something else failed.
+    # shellcheck disable=SC2024
+    sudo -n /usr/local/sbin/homelab-swarm-snapshot >>"$output" 2>&1
+    swarm_status=$?
+    if [ "$swarm_status" -eq 3 ] && [ "$status" -eq 0 ]; then
+        warn_only=yes
+        status=3
+    elif [ "$swarm_status" -ne 0 ]; then
+        if [ "$status" -ne 0 ]; then
+            subject="$subject and swarm snapshots"
+        else
+            subject="swarm snapshots"
+        fi
+        status=1
+    fi
+fi
+
 cat "$output"
 
-if [ "$status" -ne 0 ]; then
+if [ "${warn_only:-no}" = yes ]; then
+    feed post "swarm snapshots incomplete on $(hostname -s)" \
+        --severity warn --source backup --tag "backup infra" \
+        --body-file "$output"
+elif [ "$status" -ne 0 ]; then
     feed post "$subject failed on $(hostname -s)" \
         --severity fail --source backup --tag "backup infra" \
         --body-file "$output"

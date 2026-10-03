@@ -1,0 +1,126 @@
+# Miniflux as a Swarm stack (phase 5 batch P1), replacing docker-compose.yml
+# beside it. Deployed by playbooks/swarm.yml from the entry in
+# inventory/group_vars/swarm/stacks-p1.yml; see
+# docs/transition/phase5/2026-10-03-P1.md for the cutover and the rollback.
+#
+# Both services are pinned to the node labelled pin.miniflux=true, so the
+# application and its database always run on the same worker, beside the
+# Postgres data directory in /srv/swarm/miniflux/postgres. The hourly
+# snapshot job dumps the database with pg_dump; a move to the other worker
+# goes through playbooks/swarm-move.yml.
+#
+# Every credential is a Docker secret read through a *_FILE variable, which
+# both images support (Miniflux 2.3.3 reads DATABASE_URL_FILE,
+# ADMIN_PASSWORD_FILE, OAUTH2_CLIENT_ID_FILE and OAUTH2_CLIENT_SECRET_FILE).
+# DATABASE_URL names the host `db`, the database service below.
+#
+# Compose's `depends_on: service_healthy` has no Swarm equivalent: Miniflux
+# exits when the database is not ready yet and the restart policy starts it
+# again a few seconds later.
+#
+# Images are pinned to the exact builds the Compose project ran at the
+# cutover (2026-10-02), tag and digest, so the cutover changes where the
+# containers run and nothing else.
+
+services:
+  db:
+    # Docker Hub postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/postgres@sha256:be3e03840bb22a93ac0c3b0003d88887e015d4d1707b06913bbf437d564a0e73
+    environment:
+      POSTGRES_USER: miniflux
+      POSTGRES_DB: miniflux
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/miniflux/postgres
+        target: /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "miniflux"]
+      interval: 10s
+      start_period: 30s
+      start_interval: 2s
+    # Swarm's default of 10 s can kill Postgres in the middle of its shutdown
+    # checkpoint.
+    stop_grace_period: 60s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.miniflux == true
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  miniflux:
+    # Docker Hub miniflux/miniflux:2.3.3@sha256:49d7b60987616387c306a8023087b31f2c9b7b21288b523026cb04058e8b6dbb,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/miniflux/miniflux@sha256:bb06d6abea8c2a8bd7b78d7b02d8ddc24425aab4d1afec8e3b87655242977a54
+    ports:
+      - "5080:8080"
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      RUN_MIGRATIONS: "1"
+      FETCHER_ALLOW_PRIVATE_NETWORKS: "1"
+      CREATE_ADMIN: "1"
+      ADMIN_USERNAME: iryzhkov
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      OAUTH2_PROVIDER: oidc
+      OAUTH2_CLIENT_ID_FILE: /run/secrets/oauth2_client_id
+      OAUTH2_CLIENT_SECRET_FILE: /run/secrets/oauth2_client_secret
+      OAUTH2_REDIRECT_URL: https://rss.ryzhkov.dev/oauth2/oidc/callback
+      OAUTH2_OIDC_DISCOVERY_ENDPOINT: https://auth.ryzhkov.dev/application/o/rss/
+      OAUTH2_USER_CREATION: "1"
+    secrets:
+      - database_url
+      - admin_password
+      - oauth2_client_id
+      - oauth2_client_secret
+    healthcheck:
+      test: ["CMD", "/usr/bin/miniflux", "-healthcheck", "auto"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.miniflux == true
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 48M
+
+secrets:
+  postgres_password:
+    name: miniflux_postgres_password_${SECRET_HASH_POSTGRES_PASSWORD}
+    file: ./secrets/POSTGRES_PASSWORD
+  database_url:
+    name: miniflux_database_url_${SECRET_HASH_DATABASE_URL}
+    file: ./secrets/DATABASE_URL
+  admin_password:
+    name: miniflux_admin_password_${SECRET_HASH_ADMIN_PASSWORD}
+    file: ./secrets/ADMIN_PASSWORD
+  oauth2_client_id:
+    name: miniflux_oauth2_client_id_${SECRET_HASH_OAUTH2_CLIENT_ID}
+    file: ./secrets/OAUTH2_CLIENT_ID
+  oauth2_client_secret:
+    name: miniflux_oauth2_client_secret_${SECRET_HASH_OAUTH2_CLIENT_SECRET}
+    file: ./secrets/OAUTH2_CLIENT_SECRET

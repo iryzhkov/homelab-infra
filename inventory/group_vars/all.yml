@@ -210,6 +210,87 @@ smart_gatus_group: SMART
 # Three missed 15-minute runs before Gatus calls a silent drive unhealthy.
 smart_heartbeat: 45m
 
+# Compose stacks that can run on either household worker (plan phase 7: Emby
+# and Immich follow a host drain, without the other host's iGPU). Every other
+# Compose stack is a literal entry in its host's `host_stacks` (or `stacks`)
+# list. A host's `stacks`, which every consumer reads (site.yml, the Traefik
+# generator and the stacks filters, Gatus, the drift manifest), is its own
+# list plus the movable stacks placed on it, so moving one is a change of
+# placement and nothing else.
+#
+# compose_placement_home is where each one lives normally. During a host
+# drain, playbooks/compose-move.yml writes the temporary placement to
+# compose_placement_override_file on the controller (the laptop), and
+# playbooks/host-return.yml removes it, so every playbook run from the laptop
+# in between converges the stack where it actually runs. A run from another
+# machine does not see the override: run nothing that converges these stacks
+# from elsewhere while the file exists (runbook-host-maintenance.md).
+compose_placement_home:
+  emby: homelab
+  immich: normandy
+compose_placement_override_file: "{{ lookup('env', 'HOME') }}/.local/state/homelab-infra/compose-placement.yml"
+compose_placement: >-
+  {{ compose_placement_home
+     | combine(lookup('ansible.builtin.file', compose_placement_override_file, errors='ignore')
+               | default('', true) | from_yaml | default({}, true)) }}
+
+# The directories that hold each movable stack's state, per worker. They are
+# copied by compose-move.yml (warm while running, then cold while stopped).
+# On the home host they are where the state always was; on the other worker
+# they are on its pool disk, out of the root disk.
+compose_data_dirs:
+  emby:
+    homelab: /home/iryzhkov/app/emby
+    normandy: /mnt/data/compose/emby
+  immich:
+    normandy: /mnt/data/immich/postgres
+    homelab: /mnt/docker-data/compose/immich/postgres
+
+# The stack entries themselves, in the shape of a host_vars `stacks` entry.
+# Everything host-specific is templated from the host the entry lands on:
+# HOST_IP (compose_stack), stack_root, the data directory above, and the
+# iGPU's group IDs and udev path (`igpu` in each worker's host_vars).
+compose_movable_stacks:
+  emby:
+    name: emby
+    routes:
+      - host: emby.ryzhkov.dev
+        port: 8096
+    prepare_tasks: prepare.yml
+    env_extra:
+      EMBY_CONFIG: "{{ compose_data_dirs.emby[inventory_hostname] }}"
+      EMBY_GIDLIST: "1000,{{ igpu.render_gid }},{{ igpu.video_gid }}"
+  immich:
+    name: immich
+    routes:
+      - host: photos.ryzhkov.dev
+        port: 2283
+    # immich keeps its upstream layout: the project directory is immich-stack
+    # and the Compose file reads stack.env rather than .env.
+    dir: "{{ stack_root }}/immich-stack"
+    env_file: stack.env
+    secrets: normandy-immich
+    prepare_tasks: prepare.yml
+    env_extra:
+      DB_DATA_LOCATION: "{{ compose_data_dirs.immich[inventory_hostname] }}"
+    config_templates:
+      # Read by the Compose file's `extends:` for the ML container.
+      - src: hwaccel.ml.yml
+        dest: hwaccel.ml.yml
+
+# Every Docker host's stack list: its own entries plus the movable stacks
+# placed on it, in name order (the order the host lists were written in, so
+# generated files such as Gatus's configuration do not change when a stack
+# merely moves). Hosts that spell out `stacks` in host_vars override this.
+stacks: >-
+  {{ ((host_stacks | default([]))
+      + (compose_movable_stacks | dict2items
+         | selectattr('key', 'in', compose_placement | dict2items
+                      | selectattr('value', 'equalto', inventory_hostname)
+                      | map(attribute='key') | list)
+         | map(attribute='value') | list))
+     | sort(attribute='name') }}
+
 # Proxmox's built-in external metric server (node and guest CPU, memory, disk
 # and network, every 10 seconds) writes here with its own write-only token.
 # 90 days rather than 400: this is the high-volume one, and homelab's disk is

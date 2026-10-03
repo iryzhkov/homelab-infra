@@ -1,5 +1,8 @@
 services:
   dsh:
+    # Built here under its registry name, which a prune cannot strip the way
+    # it stripped the old Compose default dsh-dsh:latest (2026-10-03).
+    image: git.ryzhkov.dev/igor/dsh:latest
     build: .
     container_name: dsh
     restart: unless-stopped

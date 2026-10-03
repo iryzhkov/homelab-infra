@@ -1,0 +1,63 @@
+# Navidrome as a Swarm stack (phase 5, batch F1). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f1.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State lives in ${SWARM_STATE_ROOT}/navidrome/{data,cache} on the
+# node labelled pin.navidrome; the music library is the NAS share, mounted
+# read-only, which both workers mount at the same path.
+#
+# The Compose file published on homelab's address only; a Swarm port is
+# published on every interface of both workers (the ingress filter keeps it
+# off the mesh and VLAN 60). The container runs as 1000:988 by number, which
+# is the same on both workers whatever the group is called there.
+
+services:
+  navidrome:
+    # Docker Hub deluan/navidrome:0.64.0 (sha256:a384948b81bd1529986c5960169e7fc4fa00f46bde6bd517971a4c36671db2af),
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/deluan/navidrome@sha256:9a847e6f168cbde48358cd2069ffaf45f5a487d71a8ad081c501cbd28f382575
+    user: "${NAVIDROME_UID}:${NAVIDROME_GID}"
+    ports:
+      - "4533:4533"
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_CACHEFOLDER: /cache
+      ND_SCANNER_SCHEDULE: "@every 5m"
+      ND_LOGLEVEL: info
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      ND_ENABLESHARING: "false"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/navidrome/data
+        target: /data
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/navidrome/cache
+        target: /cache
+      - type: bind
+        source: ${MUSIC_PATH}
+        target: /music
+        read_only: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4533/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.navidrome == true
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

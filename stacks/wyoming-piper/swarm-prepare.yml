@@ -1,0 +1,61 @@
+---
+# Piper's voice cache on every worker, for the Swarm stack (phase 5, batch
+# S2). Included by roles/swarm/tasks/stack.yml on the bootstrap manager,
+# before the deploy.
+#
+# The cache is seeded once from the Compose project's named volume on the
+# bootstrap manager, then copied to the other worker without --delete: it is a
+# cache, and either copy may have gained a voice the other lacks. The
+# bootstrap manager pushes with its own SSH alias for the other worker.
+
+- name: Create the cache directory on every worker
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/wyoming-piper/data"
+    state: directory
+    owner: "{{ hostvars[item].ssh_user }}"
+    group: "{{ hostvars[item].ssh_user }}"
+    mode: "0755"
+  become: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_workers'] }}"
+
+- name: Find the Compose project's voice volume
+  ansible.builtin.command:
+    argv: [docker, volume, inspect, --format, "{{ '{{' }}.Mountpoint{{ '}}' }}", wyoming-piper_piper-data]
+  register: piper_volume
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Files the container wrote are root's; the copy is handed to the deploy user
+# so that the push below, which runs as that user, can read it.
+- name: Seed the cache from the Compose volume
+  ansible.builtin.command:
+    argv: >-
+      {{ ['rsync', '-a', '--ignore-existing', '--itemize-changes',
+          '--chown=' ~ ssh_user ~ ':' ~ ssh_user]
+         + (['--dry-run'] if ansible_check_mode else [])
+         + [piper_volume.stdout | trim ~ '/', swarm_state_root ~ '/wyoming-piper/data/'] }}
+  become: true
+  register: piper_seed
+  changed_when: piper_seed.stdout | trim | length > 0
+  failed_when: piper_seed.rc != 0 and not ansible_check_mode
+  check_mode: false
+  # Reading the Compose project's volume is allowed only on the cutover run
+  # (roles/swarm/tasks/stack.yml, "Order").
+  when:
+    - swarm_stack_cutover | bool
+    - piper_volume.rc == 0
+
+- name: Copy the cache to the other workers
+  ansible.builtin.command:
+    argv: >-
+      {{ ['rsync', '-a', '--itemize-changes']
+         + (['--dry-run'] if ansible_check_mode else [])
+         + [swarm_state_root ~ '/wyoming-piper/data/',
+            item ~ ':' ~ swarm_state_root ~ '/wyoming-piper/data/'] }}
+  loop: "{{ groups['swarm_workers'] | difference([inventory_hostname]) }}"
+  register: piper_push
+  changed_when: piper_push.stdout | trim | length > 0
+  failed_when: piper_push.rc != 0 and not ansible_check_mode
+  check_mode: false

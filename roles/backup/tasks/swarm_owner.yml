@@ -1,0 +1,47 @@
+---
+# Write /srv/swarm/<stack>/.swarm-owner for each stack in swarm_owner_stacks
+# that is deployed, pinned to this worker, has its state directory here and
+# names no owner yet. The hourly job snapshots only stacks whose owner file
+# names the host, so a stack whose state was created without one (a Swarm
+# rebuild, a new stateful stack whose preparation does not write it) would
+# never be snapshotted; it warns about such a stack, and this claims it.
+#
+# Never overwrites an owner file: one naming another host is a conflict for a
+# person (or playbooks/swarm-move.yml) to settle, and is left to the hourly
+# warning. Runs in check mode too, without writing, and reports what it would
+# claim.
+#
+# Included by swarm.yml for every stack with a snapshot spec. A stack's
+# swarm-prepare.yml can include it for its own stack once its state is in
+# place, delegated to the pinned node:
+#
+#   - ansible.builtin.include_role:
+#       name: backup
+#       tasks_from: swarm_owner.yml
+#       apply: { delegate_to: "{{ pinned_host }}" }
+#     vars:
+#       swarm_owner_stacks: ["{{ swarm_stack.name }}"]
+
+- name: Claim the deployed stacks pinned here that name no owner
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      labels=$(docker node inspect self --format '{{ '{{' }}json .Spec.Labels{{ '}}' }}')
+      deployed=$(docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}')
+      for stack in {{ swarm_owner_stacks | map('quote') | join(' ') }}; do
+          dir={{ swarm_state_root }}/$stack
+          grep -q "\"pin.$stack\":\"true\"" <<<"$labels" || continue
+          grep -qx "$stack" <<<"$deployed" || continue
+          [ -d "$dir" ] && [ ! -e "$dir/.swarm-owner" ] || continue
+          echo "claimed $stack"
+          {% if not ansible_check_mode %}
+          echo {{ inventory_hostname | quote }} >"$dir/.swarm-owner"
+          chmod 0644 "$dir/.swarm-owner"
+          {% endif %}
+      done
+  become: true
+  register: swarm_owner_claim
+  changed_when: "'claimed' in swarm_owner_claim.stdout"
+  check_mode: false
+  when: swarm_owner_stacks | length > 0

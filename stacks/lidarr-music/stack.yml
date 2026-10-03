@@ -1,0 +1,44 @@
+# Lidarr as a Swarm stack (phase 5, batch F2). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f2.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State lives in ${SWARM_STATE_ROOT}/lidarr-music/config on the
+# node labelled pin.lidarr-music; the NAS share is mounted at the same path
+# on both workers.
+#
+# The image is the version the Compose project ran at conversion
+# (3.1.0.4875-ls42, the digest :latest resolved to then), from lscr.io
+# rather than Docker Hub (the same image; Hub's anonymous pull limit was hit
+# on normandy on 2026-10-02), so the cutover does not upgrade it.
+
+services:
+  lidarr:
+    image: lscr.io/linuxserver/lidarr:3.1.0.4875-ls42
+    ports:
+      - "8686:8686"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/lidarr-music/config
+        target: /config
+      - type: bind
+        source: /mnt/shared
+        target: /mnt/shared
+      - type: bind
+        source: /mnt/shared/media/music
+        target: /music
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.lidarr-music == true
+      resources:
+        limits:
+          memory: 384M
+        reservations:
+          memory: 128M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

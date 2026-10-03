@@ -1,0 +1,74 @@
+# Vaultwarden as a Swarm stack (phase 5, batch F1). Deployed by
+# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
+# stacks-f1.yml; the Compose file beside this one stays until the phase 5
+# cleanup. State lives in ${SWARM_STATE_ROOT}/vaultwarden on the node
+# labelled pin.vaultwarden, seeded at cutover by swarm-prepare.yml and moved
+# only by playbooks/swarm-move.yml.
+#
+# The image is the version the Compose project ran at conversion (1.37.3,
+# the digest :latest resolved to then), so the cutover does not upgrade it.
+# The SSO client id and secret are Docker secrets read through Vaultwarden's
+# <VAR>_FILE support. ADMIN_TOKEN stays out, as in the Compose file: the admin
+# panel is disabled.
+
+services:
+  vaultwarden:
+    # Docker Hub vaultwarden/server:1.37.3 (sha256:1587c45feaa479f1f5e8af3b00eded36bff77bcf1880cf8dbf0541706dd470e0),
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/vaultwarden/server@sha256:39894b6d6148d0b2583e4da429a61065f2b08dc3afbbc00f7265b5676e04f9b9
+    ports:
+      - "8099:80"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/vaultwarden/data
+        target: /data
+    environment:
+      SIGNUPS_ALLOWED: "false"
+      INVITATIONS_ALLOWED: "false"
+      DOMAIN: https://vault.ryzhkov.dev
+      SSO_ENABLED: "true"
+      SSO_CLIENT_ID_FILE: /run/secrets/sso_client_id
+      SSO_CLIENT_SECRET_FILE: /run/secrets/sso_client_secret
+      SSO_AUTHORITY: https://auth.ryzhkov.dev/application/o/vaultwarden/
+      SSO_SCOPES: email profile offline_access
+      SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION: "false"
+      SSO_CLIENT_CACHE_EXPIRATION: "0"
+      SSO_ONLY: "false"
+      SSO_SIGNUPS_MATCH_EMAIL: "true"
+    secrets:
+      - sso_client_id
+      - sso_client_secret
+    # The image's own check, probed every 2 s while starting: with only the
+    # image's 60 s interval, Swarm keeps a new task out of the routing mesh
+    # for up to a minute after it is ready.
+    healthcheck:
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+      start_interval: 2s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.vaultwarden == true
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 48M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+secrets:
+  sso_client_id:
+    name: vaultwarden_sso_client_id_${SECRET_HASH_SSO_CLIENT_ID}
+    file: ./secrets/SSO_CLIENT_ID
+  sso_client_secret:
+    name: vaultwarden_sso_client_secret_${SECRET_HASH_SSO_CLIENT_SECRET}
+    file: ./secrets/SSO_CLIENT_SECRET

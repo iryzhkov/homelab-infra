@@ -1,0 +1,46 @@
+# Swarm stack for Piper text-to-speech, Home Assistant Assist's voice (phase 5,
+# batch S2). Replaces docker-compose.yml beside it, which stays until the
+# phase 5 cleanup.
+#
+# Stateless with a cache: /data holds the voice models Home Assistant asked
+# for (671 MB on 2026-10-02), all re-downloadable. swarm-prepare.yml seeds
+# /srv/swarm/wyoming-piper/data on both workers from the Compose volume, so a
+# move does not download them again. Home Assistant names
+# 192.168.70.223:10200, which the routing mesh keeps answering while homelab
+# is up.
+services:
+  wyoming-piper:
+    # Docker Hub rhasspy/wyoming-piper:latest@sha256:7d39aafac409c2b6b09d999ed04d84c311d632e558b35baa60fad6aac722af7a,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/rhasspy/wyoming-piper@sha256:1a32035b5a9c2efe19eae63aade8b07a57209d96da7e04bbc1176a71d912c7dd
+    command: --voice en_US-lessac-medium
+    ports:
+      - "10200:10200"
+    # The image's own check, probed every 2 s during its 300 s start period
+    # rather than every 30 s, so a moved task joins the routing mesh as soon
+    # as it answers (see stacks/excalidraw/stack.yml).
+    healthcheck:
+      test: ["CMD", "/usr/src/.venv/bin/python3", "-m", "wyoming_piper.health_check"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 300s
+      start_interval: 2s
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/wyoming-piper/data
+        target: /data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 35 MiB idle; a loaded voice model adds 60 to
+        # 120 MB, and Home Assistant can ask for several.
+        limits:
+          memory: 768M
+        reservations:
+          memory: 128M
+      restart_policy:
+        condition: any

@@ -1,7 +1,9 @@
 ---
 # Backups this repository owns: homelab's hourly SQLite snapshots and daily
 # InfluxDB archive, normandy's daily Postgres dump onto the NAS, and the
-# schedule of the job on homelab that ships that dump to Backblaze. homelab's
+# schedule of the job on homelab that ships that dump to Backblaze, and on
+# both Swarm workers the stateful stacks' hourly snapshots and their copy on
+# the other worker. homelab's
 # other twice-weekly rclone jobs stay in its crontab. See docs/backups.md.
 #
 #   ansible-playbook playbooks/backup.yml --check --diff
@@ -16,4 +18,5 @@
       when: >-
         backup_sqlite_sources is defined
         or backup_nas_dump is defined
+        or inventory_hostname in groups.get('swarm_workers', [])
         or inventory_hostname == (backup_bulk_shipper | default('homelab'))

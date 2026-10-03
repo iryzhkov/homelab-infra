@@ -1,0 +1,38 @@
+# Ombi as a Swarm stack (phase 5, batch F2). Deployed by playbooks/swarm.yml
+# from its entry in inventory/group_vars/swarm/ stacks-f2.yml; the Compose
+# file beside this one stays until the phase 5 cleanup. State lives in
+# ${SWARM_STATE_ROOT}/ombi/config on the node labelled pin.ombi; it uses no
+# NAS share.
+#
+# The image is the version the Compose project ran at conversion
+# (v4.53.10-ls269, the digest :latest resolved to then), so the cutover does
+# not upgrade it.
+
+services:
+  ombi:
+    image: lscr.io/linuxserver/ombi:v4.53.10-ls269
+    ports:
+      - "3579:3579"
+    environment:
+      TZ: America/Los_Angeles
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/ombi/config
+        target: /config
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.ombi == true
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 344M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s

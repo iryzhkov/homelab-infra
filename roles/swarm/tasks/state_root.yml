@@ -1,0 +1,75 @@
+---
+# <pool>/swarm holds the state of the stateful Swarm services pinned to this
+# node, and /srv/swarm points at it, so every stack file names one path that
+# exists on both workers.
+#
+# Permissions (security review, 2026-10-03; everything was 0755 with 0644
+# files, so any local user could read Vaultwarden's database and key, the
+# *arr API keys, Forgejo's and Authentik's data):
+#   <pool>/swarm                 root 0755. Not 0711: rsync 3.5.0 (normandy,
+#                                Arch) opens every directory of a receiving
+#                                path for reading, so with 0711 the deploying
+#                                user's copies into the public stacks (hugo's
+#                                site from the Forgejo webhook, voice, whisper,
+#                                wyoming-piper) failed with `change_dir#1 ...
+#                                Permission denied` (2026-10-03). The stack
+#                                names it lists are no secret; the 0700 below
+#                                is what protects the data.
+#   <pool>/swarm/<stack>         root 0700 for every stack with private state
+#   swarm_state_public_stacks    left as they are: public content written by
+#                                the deploying user (the blog, a static page,
+#                                model and voice files)
+# A container never traverses these directories: dockerd (root) resolves a
+# bind mount's source when it creates the task, and inside the container only
+# the mounted directory's own mode counts. The writer-owned subdirectories
+# (Postgres 70, the linuxserver apps 911, Loki 10001 and so on) keep their
+# owners and modes. Everything on the host that reads the state (the hourly
+# snapshot, the peer copy, the move playbook, the restore check) runs as root.
+#
+# -e swarm_state_only=<stack> limits the per-stack step to one stack, to
+# apply the change a stack at a time; swarm_state_only=none applies only the
+# state directory's own mode. A stack directory created later (by a cutover's
+# swarm-prepare.yml, as root 0755) is corrected by the next nodes play.
+
+- name: Create the state directory on the pool disk
+  ansible.builtin.file:
+    path: "{{ swarm_pool_path }}/swarm"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Point the state root at it
+  ansible.builtin.file:
+    src: "{{ swarm_pool_path }}/swarm"
+    dest: "{{ swarm_state_root }}"
+    state: link
+    # Only so a check run, which did not create the directory, can report
+    # the link; a real run never needs force.
+    force: "{{ ansible_check_mode }}"
+  become: true
+
+- name: List the stack directories on this node
+  ansible.builtin.find:
+    paths: "{{ swarm_pool_path }}/swarm"
+    file_type: directory
+    recurse: false
+    hidden: false
+  become: true
+  register: swarm_state_dirs
+  check_mode: false
+
+- name: Close each private stack directory
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+  loop: >-
+    {{ swarm_state_dirs.files | map(attribute='path')
+       | reject('search', '/(' ~ (swarm_state_public_stacks | join('|')) ~ ')$')
+       | select('search', '/' ~ (swarm_state_only | default('[^/]+')) ~ '$')
+       | sort | list }}

@@ -1,0 +1,201 @@
+---
+# Steps 5 to 9 of playbooks/compose-move.yml: stop, cold copy, placement,
+# converge, verify. Included inside a block whose rescue
+# (compose-move-rollback.yml) puts the stack back on <from> if any of these
+# fails, so a failure after the stop never leaves the service down.
+
+# 5. Stop ----------------------------------------------------------------------
+
+- name: Stop and remove the stack's containers on {{ cm_from }}
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      ids=$(docker ps -aq --filter label=com.docker.compose.project={{ cm_project }})
+      [ -z "$ids" ] || { docker stop -t 60 $ids; docker rm $ids; }
+  delegate_to: "{{ cm_from }}"
+  register: cm_stopped
+
+# 6. Cold copy and comparison ----------------------------------------------------
+
+- name: Cold copy, {{ cm_from }} to {{ to }}'s peer directory
+  ansible.builtin.command:
+    argv: [rsync, -a, --numeric-ids, --delete, --mkpath, -e, "{{ cm_ssh }}", "{{ cm_src }}/",
+           "{{ swarm_sync_user }}@{{ ansible_host }}:compose/{{ stack }}/"]
+  delegate_to: "{{ cm_from }}"
+  become: true
+  # Retried while <from>'s hourly job holds rrsync's lock (see the warm copy).
+  register: cm_cold_copy
+  until: cm_cold_copy.rc == 0 or 'Another instance of rrsync' not in cm_cold_copy.stderr | default('')
+  retries: 30
+  delay: 10
+
+- name: Cold copy, into {{ cm_dst }}
+  ansible.builtin.command:
+    argv: [rsync, -a, --numeric-ids, --delete, --mkpath, "{{ cm_stage }}/", "{{ cm_dst }}/"]
+  become: true
+
+- name: Compare {{ cm_from }}'s copy with the peer directory (must list nothing)
+  ansible.builtin.command:
+    argv: [rsync, -a, -n, -i, --numeric-ids, --delete, -e, "{{ cm_ssh }}", "{{ cm_src }}/",
+           "{{ swarm_sync_user }}@{{ ansible_host }}:compose/{{ stack }}/"]
+  delegate_to: "{{ cm_from }}"
+  become: true
+  register: cm_cmp1
+  until: cm_cmp1.rc == 0 or 'Another instance of rrsync' not in cm_cmp1.stderr | default('')
+  retries: 30
+  delay: 10
+  changed_when: false
+  failed_when: cm_cmp1.rc != 0 or cm_cmp1.stdout_lines | reject('match', '^created ') | list | length > 0
+  when: not ansible_check_mode
+
+- name: Compare the peer directory with {{ cm_dst }} (must list nothing)
+  ansible.builtin.command:
+    argv: [rsync, -a, -n, -i, --numeric-ids, --delete, "{{ cm_stage }}/", "{{ cm_dst }}/"]
+  become: true
+  register: cm_cmp2
+  changed_when: false
+  failed_when: cm_cmp2.rc != 0 or cm_cmp2.stdout | trim | length > 0
+  when: not ansible_check_mode
+
+- name: Cold data check on both copies
+  ansible.builtin.command:
+    cmd: "{{ cm_checks[stack].cold | replace('{dir}', item.dir) }}"
+  delegate_to: "{{ item.host }}"
+  become: true
+  loop:
+    - { host: "{{ cm_from }}", dir: "{{ cm_src }}" }
+    - { host: "{{ to }}", dir: "{{ cm_dst }}" }
+  register: cm_cold
+  changed_when: false
+  failed_when: cm_cold.rc != 0
+  when: cm_checks[stack].cold is defined and not ansible_check_mode
+
+- name: Refuse unless both copies agree
+  ansible.builtin.assert:
+    that: cm_cold.results[0].stdout == cm_cold.results[1].stdout
+    fail_msg: "{{ cm_cold.results | map(attribute='stdout') | list }}"
+    quiet: true
+  when: cm_checks[stack].cold is defined and not ansible_check_mode
+
+# 7. Placement -------------------------------------------------------------------
+
+- name: Work out the placements that differ from home
+  ansible.builtin.set_fact:
+    cm_override: >-
+      {%- set out = {} -%}
+      {%- for k, v in (compose_placement | combine({stack: to})).items() -%}
+      {%-   if v != compose_placement_home[k] | default('') -%}
+      {%-     set _ = out.update({k: v}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Record the new placement on the controller
+  ansible.builtin.copy:
+    content: |
+      # Written by playbooks/compose-move.yml: movable Compose stacks that are
+      # away from their home host (compose_placement_home). Removed when the
+      # last of them returns. Every playbook run from this machine reads it.
+      {{ cm_override | to_nice_yaml }}
+    dest: "{{ compose_placement_override_file }}"
+    mode: "0644"
+  delegate_to: localhost
+  when: cm_override | length > 0
+
+- name: Remove the placement file when every stack is home
+  ansible.builtin.file:
+    path: "{{ compose_placement_override_file }}"
+    state: absent
+  delegate_to: localhost
+  when: cm_override | length == 0
+
+# Test hook: -e cm_test_fail_at_flip=true fails here, right after the
+# placement is written, to prove the rescue (use it with --check).
+- name: Fail on purpose after the placement write (test hook)
+  ansible.builtin.fail:
+    msg: cm_test_fail_at_flip is set
+  when: cm_test_fail_at_flip | default(false) | bool
+
+# 8. Converge --------------------------------------------------------------------
+
+# Each run is a fresh ansible-playbook on the controller, so it reads the
+# placement file just written.
+- name: Converge, in order
+  ansible.builtin.command:
+    argv: "{{ ['ansible-playbook'] + item }}"
+    chdir: "{{ playbook_dir }}/.."
+    stdin: ""
+  delegate_to: localhost
+  loop:
+    - [playbooks/site.yml, -l, "{{ to }}", -e, "only={{ stack }}"]
+    - [playbooks/site.yml, -l, "{{ cm_from }}", -e, "only={{ stack }}"]
+    - [playbooks/traefik.yml]
+    - [playbooks/site.yml, -l, "{{ groups['swarm_workers'] | join(',') }}", -e, only=gatus]
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  register: cm_converge
+  when: not ansible_check_mode
+
+# 9. Verify ----------------------------------------------------------------------
+
+- name: Wait until every container of {{ stack }} runs, and is healthy, on {{ to }}
+  ansible.builtin.command:
+    argv: [docker, ps, -a, --filter, "label=com.docker.compose.project={{ cm_project }}", --format, "{{ cm_status_format }}"]
+  register: cm_up
+  until: >-
+    cm_up.stdout_lines | length == cm_from_ps.stdout_lines | length
+    and cm_up.stdout_lines | select('search', 'Exited|Created|Restarting|starting|unhealthy') | list | length == 0
+  retries: 60
+  delay: 5
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Probe the route through the VIP
+  ansible.builtin.command:
+    argv:
+      - curl
+      - -s
+      - -o
+      - /dev/null
+      - -m
+      - "10"
+      - -w
+      - "%{http_code}"
+      - --resolve
+      - "{{ cm_checks[stack].probe.host }}:443:{{ edge_vip }}"
+      - "https://{{ cm_checks[stack].probe.host }}{{ cm_checks[stack].probe.path }}"
+  delegate_to: localhost
+  register: cm_probe
+  until: cm_probe.stdout == '200'
+  retries: 24
+  delay: 5
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Live data check on {{ to }}
+  ansible.builtin.command:
+    cmd: "{{ cm_checks[stack].live }}"
+  register: cm_live_after
+  changed_when: false
+  until: cm_live_after.rc == 0
+  retries: 12
+  delay: 5
+  when: cm_checks[stack].live is defined and not ansible_check_mode
+
+# The staging copy sits in <to>'s peer-snapshots/<from>/, which homelab's
+# hourly job ships to B2 (rclone sync of peer-snapshots/normandy): left there
+# after a move to homelab on 2026-10-03, it started uploading Emby's 16 GB
+# config and Immich's raw Postgres directory. It is removed as soon as the
+# stack runs on <to>; the rollback removes it too.
+- name: Remove the staging copy on {{ to }}
+  ansible.builtin.file:
+    path: "{{ cm_stage }}"
+    state: absent
+  become: true
+
+- name: Refuse unless the live data check agrees
+  ansible.builtin.assert:
+    that: cm_live_before.stdout == cm_live_after.stdout
+    fail_msg: "before on {{ cm_from }}: {{ cm_live_before.stdout_lines }}; after on {{ to }}: {{ cm_live_after.stdout_lines }}"
+    quiet: true
+  when: cm_checks[stack].live is defined and not ansible_check_mode

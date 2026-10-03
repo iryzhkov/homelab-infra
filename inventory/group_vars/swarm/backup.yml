@@ -1,0 +1,68 @@
+---
+# Hourly snapshots of the stateful Swarm stacks and their copy on the other
+# worker (phase 5 batch B). Read by roles/backup (tasks/swarm.yml) and
+# playbooks/swarm-move.yml. See docs/backups.md and
+# docs/transition/phase5/migration-plan.md, "Batch B".
+#
+# Each stack entry in inventory/group_vars/swarm/stacks-<batch>.yml may carry
+# a `snapshot` key:
+#
+#   snapshot:
+#     class: sqlite        # sqlite | postgres | files
+#     sqlite:              # as backup_sqlite_sources, one entry per database
+#       - { name: vaultwarden, path: /srv/swarm/vaultwarden/data/db.sqlite3, keep: 48 }
+#     postgres:            # the Swarm service name, the database and its user
+#       - { service: miniflux_db, database: miniflux, user: miniflux, keep: 48 }
+#     files:               # directories under /srv/swarm/<stack> mirrored to the peer
+#       - /srv/swarm/vaultwarden/data
+#     exclude: [MediaCover/**, logs/**]
+#
+# The stack list is the union of every swarm_stacks_* variable, as
+# playbooks/swarm.yml builds it, so a stack batch never edits a backup file.
+swarm_backup_stacks: >-
+  {{ query('varnames', '^swarm_stacks_') | sort
+     | map('extract', hostvars[inventory_hostname]) | flatten
+     | selectattr('snapshot', 'defined') | list }}
+
+# Where snapshots and the other worker's copies live on this worker's pool
+# disk (a backup=0 zvol on the host's second drive, outside vzdump).
+swarm_snapshot_dir: "{{ swarm_pool_path }}/snapshots"
+swarm_peer_snapshot_dir: "{{ swarm_pool_path }}/peer-snapshots"
+
+# The other household worker, the only host this one sends snapshots to and
+# accepts them from. Two workers, so exactly one peer.
+swarm_sync_peer: "{{ groups['swarm_workers'] | difference([inventory_hostname]) | first }}"
+
+# The receiving account and root's sending key. The keys are in
+# secrets/swarm-sync.sops.yaml, one per sender.
+swarm_sync_user: swarmsync
+swarm_sync_dir: /etc/swarm-sync
+swarm_sync_secret_file: "{{ playbook_dir }}/../secrets/swarm-sync.sops.yaml"
+
+# Offsite copies, made only by the worker that holds the Backblaze
+# credentials (homelab): its own snapshots, and the copy normandy sends it, so
+# normandy needs no rclone credentials. While homelab is down normandy's
+# snapshots stay local only (accepted in the migration plan).
+swarm_backup_offsite_host: homelab
+swarm_backup_offsite_remote: b2:igor-offsite-backup/apps
+
+# homelab's plain-SQL Postgres dumps, twice weekly, which the hand-written
+# ~/app/pg_backup.sh made until 2026-10-02 (roles/backup, pg_dump.yml). Same
+# schedule, directory and retention; the twice-weekly `homelab-bulk-backup app`
+# ships the directory to apps/homelab/backups/postgres, and the monthly restore
+# check reads the Authentik dump from there. Each database is found by its
+# Swarm service first and its Compose container second, so it survives the
+# P1 and P2 cutovers. On the worker named by `host` only.
+backup_pg_dump:
+  host: homelab
+  dir: /home/iryzhkov/app/backups/postgres
+  log: /home/iryzhkov/app/backups/postgres/backup.log
+  cron: "30 1 * * 1,4"
+  keep_days: 14
+  databases:
+    - { service: authentik_postgresql, container: authentik-postgresql-1, name: authentik, user: authentik }
+    - { service: miniflux_db, container: miniflux-db-1, name: miniflux, user: miniflux }
+  # The hand-written script this replaced; its crontab line is rewritten to
+  # run the managed one, and the file is removed so nobody edits the copy
+  # that no longer runs. Its last version is in the bucket under apps/homelab.
+  retired_script: /home/iryzhkov/app/pg_backup.sh

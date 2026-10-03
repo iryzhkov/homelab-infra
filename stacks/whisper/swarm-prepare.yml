@@ -1,0 +1,42 @@
+---
+# whisper's model on every worker, for the Swarm stack (phase 5, batch S2).
+# Included by roles/swarm/tasks/stack.yml on the bootstrap manager, before the
+# deploy.
+#
+# The source is the Compose directory on the bootstrap manager
+# ({{ stack_root }}/whisper/models), where the model was downloaded when the
+# image was built. The bootstrap manager pushes to the other worker with its
+# own SSH alias for it.
+
+- name: Create the model directory on every worker
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/whisper/models"
+    state: directory
+    owner: "{{ hostvars[item].ssh_user }}"
+    group: "{{ hostvars[item].ssh_user }}"
+    mode: "0755"
+  become: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_workers'] }}"
+
+- name: Mirror the model to every worker
+  ansible.builtin.command:
+    argv: >-
+      {{ ['rsync', '-a', '--delete', '--itemize-changes']
+         + (['--dry-run'] if ansible_check_mode else [])
+         + [stack_root ~ '/whisper/models/',
+            ('' if item == inventory_hostname else item ~ ':') ~ swarm_state_root ~ '/whisper/models/'] }}
+  loop: "{{ groups['swarm_workers'] }}"
+  register: whisper_models
+  changed_when: whisper_models.stdout | trim | length > 0
+  failed_when: whisper_models.rc != 0 and not ansible_check_mode
+  check_mode: false
+
+- name: Restart whisper when the model changed
+  ansible.builtin.command:
+    argv: [docker, service, update, --force, --detach=false, whisper_whisper]
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - whisper_models is changed
+    - swarm_stack.name in swarm_stack_list.stdout_lines

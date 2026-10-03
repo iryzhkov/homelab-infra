@@ -1,0 +1,43 @@
+---
+# Phase 5 batch S1, stateless-trivial: excalidraw, librespeed, kiwix,
+# flaresolverr. See docs/transition/phase5/migration-plan.md and the batch's
+# evidence file, docs/transition/phase5/2026-10-03-S1.md.
+#
+# Entries wait in pending_swarm_stacks_s1, a name playbooks/swarm.yml,
+# playbooks/site.yml, roles/traefik and the Gatus template do not read (they
+# read swarm_stacks_*). A stack is activated in the change that cuts it over:
+# its entry moves from pending_swarm_stacks_s1 to swarm_stacks_s1, and
+# swarm.yml (with -e swarm_cutover=<name>), traefik.yml and the Gatus deploy
+# run straight after. When every entry has moved, pending_swarm_stacks_s1 is
+# deleted and this file defines swarm_stacks_s1 alone.
+
+swarm_stacks_s1:
+  - name: excalidraw
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/excalidraw
+    routes:
+      - host: draw.ryzhkov.dev
+        port: 5090
+
+  - name: librespeed
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/librespeed
+    routes:
+      - host: speed.ryzhkov.dev
+        port: 7080
+
+  - name: kiwix
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/kiwix
+    routes:
+      - host: wiki.ryzhkov.dev
+        port: 3151
+
+  # No route: Prowlarr calls it at 192.168.70.223:8191.
+  - name: flaresolverr
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/flaresolverr

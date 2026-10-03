@@ -1,0 +1,221 @@
+---
+# The stateful Swarm stacks' hourly snapshots and their copy on the other
+# worker (phase 5 batch B; docs/backups.md, "Swarm stacks"). Included from
+# main.yml on both Swarm workers. Variables: inventory/group_vars/swarm/
+# backup.yml.
+#
+# - root sends with /etc/swarm-sync/id_ed25519 (one key per sender, from
+#   secrets/swarm-sync.sops.yaml) to swarmsync@<peer>;
+# - swarmsync on the receiver accepts that key only from the sender's VLAN 70
+#   address, only as `sudo -n rrsync -wo <pool>/peer-snapshots/<sender>`: the
+#   sender can write its own peer directory there and read nothing;
+# - homelab-swarm-snapshot, run as root by `homelab-backup-run hourly`,
+#   snapshots the stacks whose /srv/swarm/<stack>/.swarm-owner names this
+#   host and sends them. With no stack listed it does nothing.
+
+- name: Load the transport keys
+  community.sops.load_vars:
+    file: "{{ swarm_sync_secret_file }}"
+    name: swarm_sync_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Create the snapshot directories on the pool disk
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - "{{ swarm_sync_dir }}"
+    - "{{ swarm_snapshot_dir }}"
+    - "{{ swarm_peer_snapshot_dir }}"
+    - "{{ swarm_peer_snapshot_dir }}/{{ swarm_sync_peer }}"
+  become: true
+
+# Sending side ------------------------------------------------------------
+
+- name: Install root's sending key
+  ansible.builtin.copy:
+    content: "{{ swarm_sync_secrets.swarm_sync_keys[inventory_hostname].private }}"
+    dest: "{{ swarm_sync_dir }}/id_ed25519"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+
+- name: Read the peer's host key
+  ansible.builtin.slurp:
+    src: /etc/ssh/ssh_host_ed25519_key.pub
+  delegate_to: "{{ swarm_sync_peer }}"
+  register: swarm_sync_peer_host_key
+
+# Its own known_hosts, so the transport never depends on root's, and a
+# changed host key stops the copy instead of being accepted.
+- name: Pin the peer's host key
+  ansible.builtin.copy:
+    content: >
+      {{ hostvars[swarm_sync_peer].ansible_host }}
+      {{ (swarm_sync_peer_host_key.content | b64decode).split()[:2] | join(' ') }}
+    dest: "{{ swarm_sync_dir }}/known_hosts"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+# Receiving side ----------------------------------------------------------
+
+# '*' rather than a locked '!': no password can match it, and sshd still
+# accepts the key (a locked account is refused under UsePAM no).
+- name: Create the receiving account
+  ansible.builtin.user:
+    name: "{{ swarm_sync_user }}"
+    system: true
+    shell: /bin/sh
+    home: /var/lib/{{ swarm_sync_user }}
+    create_home: true
+    password: "*"
+    comment: Swarm peer snapshots (roles/backup)
+  become: true
+
+- name: Create its .ssh directory
+  ansible.builtin.file:
+    path: /var/lib/{{ swarm_sync_user }}/.ssh
+    state: directory
+    owner: "{{ swarm_sync_user }}"
+    group: "{{ swarm_sync_user }}"
+    mode: "0700"
+  become: true
+
+- name: Authorise the peer's key for rrsync into the peer's directory only
+  ansible.builtin.copy:
+    content: >
+      from="{{ hostvars[swarm_sync_peer].ansible_host }}",restrict,command="sudo -n
+      /usr/bin/rrsync -wo {{ swarm_peer_snapshot_dir }}/{{ swarm_sync_peer }}"
+      {{ swarm_sync_secrets.swarm_sync_keys[swarm_sync_peer].public }}
+    dest: /var/lib/{{ swarm_sync_user }}/.ssh/authorized_keys
+    owner: "{{ swarm_sync_user }}"
+    group: "{{ swarm_sync_user }}"
+    mode: "0600"
+  become: true
+
+# rrsync reads the client's rsync arguments from SSH_ORIGINAL_COMMAND, which
+# sudo would otherwise drop. Root on the receiver keeps the sender's numeric
+# ownership (--numeric-ids), which swarmsync itself could not.
+- name: Allow swarmsync the one rrsync command as root
+  ansible.builtin.copy:
+    content: |
+      # roles/backup (tasks/swarm.yml): the Swarm peer-snapshot transport.
+      Defaults:{{ swarm_sync_user }} env_keep += "SSH_ORIGINAL_COMMAND"
+      {{ swarm_sync_user }} ALL=(root) NOPASSWD: /usr/bin/rrsync -wo {{ swarm_peer_snapshot_dir }}/{{ swarm_sync_peer }}
+    dest: /etc/sudoers.d/{{ swarm_sync_user }}
+    owner: root
+    group: root
+    mode: "0440"
+    validate: visudo -cf %s
+  become: true
+
+# The hourly job ------------------------------------------------------------
+
+# Root-owned copies: these run as root through sudo, so they must not be
+# writable by the login user the way ~/.local/bin is.
+- name: Install the snapshot scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /usr/local/sbin/{{ item }}
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - homelab-swarm-snapshot
+    - homelab-sqlite-backup
+  become: true
+
+- name: Describe the stacks to snapshot
+  ansible.builtin.copy:
+    content: "{{ swarm_snapshot_config | to_nice_json }}\n"
+    dest: "{{ swarm_sync_dir }}/config.json"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  vars:
+    swarm_snapshot_config:
+      host: "{{ inventory_hostname }}"
+      pool: "{{ swarm_pool_path }}"
+      state_root: "{{ swarm_state_root }}"
+      peer:
+        name: "{{ swarm_sync_peer }}"
+        address: "{{ hostvars[swarm_sync_peer].ansible_host }}"
+        user: "{{ swarm_sync_user }}"
+      key: "{{ swarm_sync_dir }}/id_ed25519"
+      known_hosts: "{{ swarm_sync_dir }}/known_hosts"
+      rclone_config: "{{ ansible_env.HOME }}/.config/rclone/rclone.conf"
+      offsite: >-
+        {{ [
+             {'source': swarm_snapshot_dir,
+              'remote': swarm_backup_offsite_remote ~ '/' ~ inventory_hostname ~ '/swarm'},
+             {'source': swarm_peer_snapshot_dir ~ '/' ~ swarm_sync_peer,
+              'remote': swarm_backup_offsite_remote ~ '/' ~ swarm_sync_peer ~ '/swarm'}
+           ] if inventory_hostname == swarm_backup_offsite_host else [] }}
+      stacks: >-
+        {{ swarm_backup_stacks
+           | map('dict2items')
+           | map('selectattr', 'key', 'in', ['name', 'snapshot'])
+           | map('items2dict') | list }}
+
+# A stack whose state was created without an owner file (a Swarm rebuild, a
+# new stateful stack) is claimed here, so a converge repairs what the hourly
+# job warns about.
+- name: Claim unowned stacks pinned to this worker
+  ansible.builtin.include_tasks: swarm_owner.yml
+  vars:
+    swarm_owner_stacks: "{{ swarm_backup_stacks | map(attribute='name') | list }}"
+
+# homelab already has the hourly timer and its wrapper from tiers.yml; the
+# other worker gets the same entry point, which there runs only the Swarm part.
+- name: Install the hourly entry point where tiers.yml does not
+  when: backup_sqlite_sources is not defined
+  block:
+    - name: Ensure the user directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ ansible_env.HOME }}/.local/bin"
+        - "{{ ansible_env.HOME }}/.config/systemd/user"
+
+    - name: Install the backup wrapper
+      ansible.builtin.copy:
+        src: homelab-backup-run
+        dest: "{{ ansible_env.HOME }}/.local/bin/homelab-backup-run"
+        mode: "0755"
+
+    - name: Install the hourly units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "{{ ansible_env.HOME }}/.config/systemd/user/{{ item }}"
+        mode: "0644"
+      loop:
+        - homelab-backup-hourly.service
+        - homelab-backup-hourly.timer
+      register: swarm_backup_units
+
+    - name: Reload the user manager when a unit changed
+      ansible.builtin.systemd_service:
+        scope: user
+        daemon_reload: true
+      when:
+        - swarm_backup_units is changed
+        - not ansible_check_mode
+
+    - name: Enable the hourly timer
+      ansible.builtin.systemd_service:
+        scope: user
+        name: homelab-backup-hourly.timer
+        enabled: true
+        state: started
+      when: not ansible_check_mode

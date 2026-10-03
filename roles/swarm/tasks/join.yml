@@ -1,0 +1,64 @@
+---
+# Every node but the bootstrap one joins as a manager, through the bootstrap
+# manager's mesh address, with its own mesh address for the control plane and
+# its data-path address for VXLAN.
+
+- name: Report the join a real run would make
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} would join as a manager through
+      {{ hostvars[swarm_bootstrap_manager].swarm_advertise_addr }}:2377.
+  changed_when: true
+  when:
+    - swarm_state == 'inactive'
+    - ansible_check_mode
+
+- name: Join as a manager
+  when:
+    - swarm_state == 'inactive'
+    - not ansible_check_mode
+  block:
+    - name: Read the manager join token
+      ansible.builtin.command:
+        argv: [docker, swarm, join-token, -q, manager]
+      delegate_to: "{{ swarm_bootstrap_manager }}"
+      register: swarm_join_token
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Join the Swarm
+      ansible.builtin.command:
+        argv:
+          - docker
+          - swarm
+          - join
+          - --token
+          - "{{ swarm_join_token.stdout | trim }}"
+          - --advertise-addr
+          - "{{ swarm_advertise_addr }}"
+          - --listen-addr
+          - "{{ swarm_advertise_addr }}:2377"
+          - --data-path-addr
+          - "{{ swarm_data_path_addr }}"
+          - "{{ hostvars[swarm_bootstrap_manager].swarm_advertise_addr }}:2377"
+      no_log: true
+      changed_when: true
+
+- name: Read this node's role and address
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+      - --format
+      - "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }} {{ '{{' }}.Swarm.ControlAvailable{{ '}}' }} {{ '{{' }}.Swarm.NodeAddr{{ '}}' }}"
+  register: swarm_join_state
+  changed_when: false
+  check_mode: false
+
+- name: Require a manager on the mesh address
+  ansible.builtin.assert:
+    that: swarm_join_state.stdout | trim == 'active true ' ~ swarm_advertise_addr
+    fail_msg: "{{ inventory_hostname }} reports '{{ swarm_join_state.stdout | trim }}'."
+    quiet: true
+  when: not ansible_check_mode or swarm_state == 'active'

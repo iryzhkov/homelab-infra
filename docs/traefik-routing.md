@@ -63,6 +63,52 @@ Three things do **not** follow the stack, and are worth stating plainly:
   address, so a move needs no Cloudflare change at all — but a brand new public
   hostname still has to be added in the dashboard.
 
+## Swarm stacks
+
+From phase 5 a stack may run as a Docker Swarm stack instead of a Compose
+project. Its entry, with the same `routes` shape, is in one of the
+`swarm_stacks_*` lists in `inventory/group_vars/swarm/stacks-<batch>.yml`
+(see `docs/transition/phase5/migration-plan.md`). The Swarm routing mesh
+publishes the stack's ports on every worker, so the generator lists every
+host of group `swarm_workers` as a server of the route's service, each probed
+by the route's health check:
+
+```yaml
+    draw-service:
+      loadBalancer:
+        healthCheck: ...
+        servers:
+          - url: "http://192.168.70.223:5090"
+          - url: "http://192.168.70.234:5090"
+```
+
+The rules that come with it:
+
+- A Swarm entry wins over a host_vars entry of the same stack name. The
+  host_vars entries of converted stacks stay until the phase 5 cleanup; their
+  routes are dropped from the generated file, and `playbooks/site.yml` no
+  longer converges their Compose projects.
+- A route with an explicit `url` keeps it, as one server.
+- The Authentik forward-auth middleware takes a single address. While Authentik
+  is a Compose stack it is homelab's; once Authentik is a Swarm stack it is the
+  first worker's (homelab's again, by name order), which serves through the
+  mesh wherever the task runs, but not while homelab is down.
+- `whisper.yml`'s CPU fallback lists every worker once whisper is a Swarm
+  stack.
+- The filters in `filter_plugins/stacks.py` follow the same rule:
+  `stack_host_ip` gives the bootstrap manager's address for a Swarm stack (one
+  address, for consumers that can hold only one), `stack_host_ips` every
+  worker's.
+- Gatus probes each Swarm route on every worker.
+- UniFi lets the edge proxy reach normandy only on the ports in
+  `traefik-normandy-ports`. Until a Swarm stack's port is in that group,
+  Traefik's health check marks the normandy server down and serves through
+  homelab's address alone, which works through the mesh while homelab is up.
+
+Add a stack's Swarm entry in the same change that cuts it over, and run
+`playbooks/traefik.yml` after the cutover: from the moment the entry exists the
+route names both workers, and Gatus probes both.
+
 ## What stays hand-written
 
 Four files express things the generator has no shape for, each being a single

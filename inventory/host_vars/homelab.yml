@@ -33,21 +33,11 @@ offsite_enabled: true
 # 2026-09-06 restore test found the SQLite databases were being copied live as
 # three separate files, and InfluxDB not at all.
 backup_root: /home/iryzhkov/app/backups
-backup_sqlite_sources:
-  vaultwarden:
-    path: /home/iryzhkov/app/vaultwarden/data/db.sqlite3
-    keep: 48
-  navidrome:
-    path: /home/iryzhkov/app/navidrome/data/navidrome.db
-    keep: 48
-  actual-account:
-    path: /home/iryzhkov/app/actual/server-files/account.sqlite
-    keep: 48
-  # One database per budget, named after a UUID. A glob so that a budget added
-  # later is backed up without an edit here.
-  actual-budget:
-    glob: /home/iryzhkov/app/actual/user-files/*.sqlite
-    keep: 48
+# Empty since phase 5 batch F1 (2026-10-02): vaultwarden, navidrome and actual
+# are Swarm stacks, snapshotted hourly by roles/backup tasks/swarm.yml. Kept
+# defined, because it is what makes this host run tiers.yml (the daily
+# InfluxDB archive, the weekly and verify tiers).
+backup_sqlite_sources: {}
 
 # public-api cannot reach the feed from its VLAN, so homelab runs its check
 # over SSH and reports for both.
@@ -83,10 +73,25 @@ local_mounts:
 # /var/lib/docker is kept on the root disk as the rollback copy.
 docker_data_root: /mnt/docker-data/docker
 
-# Built from the exact source commit validated by Jocasta CI.
-jocasta_image: jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63
+# Built from the exact source commit validated by Jocasta CI, and loaded on
+# homelab under its registry name (the local-only tag jocasta:<commit> was
+# pruned on 2026-10-03; the .env had been set to this name by hand that day).
+jocasta_image: git.ryzhkov.dev/igor/jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63
 
-stacks:
+# The iGPU passed through to this VM (UHD 770, hostpci0 0000:00:02 on
+# proxmox-a), as Compose stacks that may land here need it: the render and
+# video group IDs for Emby's GIDLIST, and the udev path that names
+# /dev/dri/igpu-render for Immich (stacks/immich/prepare.yml).
+igpu:
+  name: Intel UHD 770
+  id_path: pci-0000:00:10.0
+  render_gid: 105
+  video_gid: 44
+
+# This host's own Compose stacks. Emby is not listed: it is one of the
+# movable stacks in group_vars/all.yml (compose_placement), which adds it to
+# `stacks` wherever it is placed.
+host_stacks:
   - name: actual
     routes:
       - host: budget.ryzhkov.dev
@@ -156,10 +161,6 @@ stacks:
         priority: 100
         service: auth
     secrets: homelab-dsh
-  - name: emby
-    routes:
-      - host: emby.ryzhkov.dev
-        port: 8096
   - name: excalidraw
     routes:
       - host: draw.ryzhkov.dev

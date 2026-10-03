@@ -1,0 +1,42 @@
+---
+# The public status page's configuration on every worker, for the Swarm stack
+# (phase 5, batch S2). Included by roles/swarm/tasks/stack.yml on the
+# bootstrap manager, before the deploy. The template reads the inventory's
+# routes, so it is rendered with the bootstrap manager's variables, the same
+# on both workers.
+
+- name: Create gatus-public's directory on every worker
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/gatus-public"
+    state: directory
+    owner: root
+    group: root
+    # Closed like every private stack directory (roles/swarm state_root.yml);
+    # the container sees only the mounted file.
+    mode: "0700"
+  become: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_workers'] }}"
+
+- name: Render gatus-public's configuration on every worker
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../stacks/gatus-public/templates/config.yaml.j2"
+    dest: "{{ swarm_state_root }}/gatus-public/config.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_workers'] }}"
+  register: gatus_public_config
+
+# Gatus re-reads its configuration on its own when the file changes, but a
+# bind mount of a single file keeps the old inode after an atomic replace, so
+# the service is restarted instead.
+- name: Restart gatus-public when its configuration changed
+  ansible.builtin.command:
+    argv: [docker, service, update, --force, --detach=false, gatus-public_gatus]
+  changed_when: true
+  when:
+    - gatus_public_config is changed
+    - swarm_stack.name in swarm_stack_list.stdout_lines

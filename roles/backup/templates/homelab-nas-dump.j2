@@ -36,14 +36,30 @@ fail() {
     failures=$((failures + 1))
 }
 
-backup_db() {
-    local container="$1" db="$2" user="$3"
-    local dump="$pg_dir/${db}_${stamp}.sql.gz"
+# A database's container by its Compose name or, should its stack become a
+# Swarm stack, by the Swarm service of that name (<stack>_<service>): Swarm
+# names its tasks <service>.<slot>.<id>, so the plain name would no longer
+# match.
+resolve_container() {
+    local name="$1" id
+    id=$(docker ps -q --filter label=com.docker.swarm.service.name="$name" | head -1)
+    [ -n "$id" ] || id=$(docker ps -q --filter name="^${name}\$" | head -1)
+    echo "$id"
+}
 
-    log "Dumping $db from $container..."
+backup_db() {
+    local name="$1" db="$2" user="$3" container
+    local dump="$pg_dir/${db}_${stamp}.sql.gz"
+    container=$(resolve_container "$name")
+    if [ -z "$container" ]; then
+        fail "no running container or Swarm task named $name for $db"
+        return
+    fi
+
+    log "Dumping $db from $name..."
     if ! docker exec "$container" pg_dump -U "$user" -d "$db" | gzip >"$dump.partial"; then
         rm -f "$dump.partial"
-        fail "pg_dump of $db from $container"
+        fail "pg_dump of $db from $name"
         return
     fi
     if [ ! -s "$dump.partial" ] || ! gzip -t "$dump.partial"; then

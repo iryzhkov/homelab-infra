@@ -1,0 +1,61 @@
+# CouchDB for Obsidian LiveSync as a Swarm stack (phase 5, batch F4).
+# Deployed by playbooks/swarm.yml from its entry in inventory/group_vars/
+# swarm/stacks-f4.yml; the Compose file beside this one stays until the
+# phase 5 cleanup. State: ${SWARM_STATE_ROOT}/obsidian/data and
+# etc/local.ini on the node labelled pin.obsidian. CouchDB's .couch files
+# are append-only, so the hourly mirror is crash-consistent; a move copies
+# them cold.
+#
+# The admin user and password are Docker secrets. The image's entrypoint
+# reads only COUCHDB_USER and COUCHDB_PASSWORD, so the command exports them
+# from /run/secrets and then runs the image's own entrypoint, under tini as
+# before. The image is 3.5.0, pinned to the digest that ran at conversion.
+
+services:
+  obsidian-livesync:
+    # Docker Hub couchdb:3.5.0@sha256:1c0a30a54535377bc9ae23f42efb1ca4e92abe796f78ec98b768ac1d5874cc1b,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/couchdb@sha256:33cade1ff68a3f191e2639a339957400cf825aba948eec57f696d28ae851a88d
+    entrypoint: ["tini", "--", "/bin/sh", "-c"]
+    command:
+      - >-
+        export COUCHDB_USER="`cat /run/secrets/couchdb_user`"
+        COUCHDB_PASSWORD="`cat /run/secrets/couchdb_password`"
+        && exec /docker-entrypoint.sh /opt/couchdb/bin/couchdb
+    ports:
+      - "5984:5984"
+    secrets:
+      - couchdb_user
+      - couchdb_password
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/obsidian/etc/local.ini
+        target: /opt/couchdb/etc/local.ini
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/obsidian/data
+        target: /opt/couchdb/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.obsidian == true
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 80M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+secrets:
+  couchdb_user:
+    name: obsidian_couchdb_user_${SECRET_HASH_COUCHDB_USER}
+    file: ./secrets/COUCHDB_USER
+  couchdb_password:
+    name: obsidian_couchdb_password_${SECRET_HASH_COUCHDB_PASSWORD}
+    file: ./secrets/COUCHDB_PASSWORD

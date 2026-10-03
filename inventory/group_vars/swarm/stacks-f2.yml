@@ -1,0 +1,170 @@
+---
+# Phase 5 batch F2 (sqlite-media): sonarr-tv, radarr-movie, lidarr-music,
+# prowlarr, bazarr, autobrr, ombi, komga. docs/transition/phase5/
+# migration-plan.md; evidence and cutover record in
+# docs/transition/phase5/2026-10-03-F2.md.
+#
+# Active: all eight were cut over on 2026-10-02 (23:08 to 23:27 PDT), and
+# their entries in roles/backup/files/bulk-sqlite-sources.json were removed
+# at the same time. Deploy a change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name>
+#
+# Snapshots: each application's main database hourly, the rest of the config
+# directory mirrored to the other worker. Media covers, logs and the log databases are left out:
+# they are rebuilt or disposable, and covers are 1.5 GB of the 2.4 GB.
+
+swarm_stacks_f2:
+  - name: sonarr-tv
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/sonarr-tv"
+      project: sonarr-tv
+    routes:
+      - host: sonarr.ryzhkov.dev
+        port: 8989
+        health_check:
+          path: /ping
+    snapshot:
+      class: sqlite
+      sqlite:
+        # 330 MB live; 24 hourly copies rather than 48.
+        - { name: sonarr, path: /srv/swarm/sonarr-tv/config/sonarr.db, keep: 24 }
+      files:
+        - /srv/swarm/sonarr-tv/config
+      exclude: [sonarr.db, sonarr.db-*, logs.db, logs.db-*, logs/**, MediaCover/**, "*.pid"]
+
+  - name: radarr-movie
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/radarr-movie"
+      project: radarr-movie
+    routes:
+      - host: radarr.ryzhkov.dev
+        port: 7878
+        health_check:
+          path: /ping
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: radarr, path: /srv/swarm/radarr-movie/config/radarr.db, keep: 24 }
+      files:
+        - /srv/swarm/radarr-movie/config
+      exclude: [radarr.db, radarr.db-*, logs.db, logs.db-*, logs/**, MediaCover/**, "*.pid"]
+
+  - name: lidarr-music
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/lidarr-music"
+      project: lidarr-music
+    routes:
+      - host: lidarr.ryzhkov.dev
+        port: 8686
+        health_check:
+          path: /ping
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: lidarr, path: /srv/swarm/lidarr-music/config/lidarr.db, keep: 48 }
+      files:
+        - /srv/swarm/lidarr-music/config
+      exclude: [lidarr.db, lidarr.db-*, logs.db, logs.db-*, logs/**, MediaCover/**, "*.pid"]
+
+  - name: prowlarr
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/prowlarr"
+      project: prowlarr
+    routes:
+      - host: prowlarr.ryzhkov.dev
+        port: 9696
+        health_check:
+          path: /ping
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: prowlarr, path: /srv/swarm/prowlarr/config/prowlarr.db, keep: 48 }
+      files:
+        - /srv/swarm/prowlarr/config
+      exclude: [prowlarr.db, prowlarr.db-*, logs.db, logs.db-*, logs/**, "*.pid"]
+
+  - name: bazarr
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/bazarr"
+      project: bazarr
+    routes:
+      - host: bazarr.ryzhkov.dev
+        port: 6767
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: bazarr, path: /srv/swarm/bazarr/config/db/bazarr.db, keep: 48 }
+      files:
+        - /srv/swarm/bazarr/config
+      exclude: [db/bazarr.db, db/bazarr.db-*, log/**, cache/**]
+
+  - name: autobrr
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/autobrr"
+      project: autobrr
+    routes:
+      - host: autobrr.ryzhkov.dev
+        port: 7474
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: autobrr, path: /srv/swarm/autobrr/config/autobrr.db, keep: 48 }
+      files:
+        - /srv/swarm/autobrr/config
+      exclude: [autobrr.db, autobrr.db-*]
+
+  - name: ombi
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/ombi"
+      project: ombi
+    routes:
+      - host: request.ryzhkov.dev
+        port: 3579
+    snapshot:
+      class: sqlite
+      sqlite:
+        # Ombi.db, OmbiExternal.db and OmbiSettings.db.
+        - { name: ombi, glob: /srv/swarm/ombi/config/*.db, keep: 48 }
+      files:
+        - /srv/swarm/ombi/config
+      exclude: ["*.db", "*.db-*", Logs/**]
+
+  - name: komga
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/komga"
+      project: komga
+    routes:
+      - host: manga.ryzhkov.dev
+        port: 25600
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: komga, path: /srv/swarm/komga/config/database.sqlite, keep: 48 }
+        - { name: komga-tasks, path: /srv/swarm/komga/config/tasks.sqlite, keep: 48 }
+      files:
+        - /srv/swarm/komga/config
+      exclude: ["*.sqlite", "*.sqlite-*", logs/**]

@@ -9,6 +9,11 @@
 # - nas_dump.yml, where backup_nas_dump is set (normandy): a daily dump of the
 #   host's Postgres databases and a tar of its stack configuration onto the
 #   NAS, which homelab then ships to Backblaze.
+# - pg_dump.yml, on backup_pg_dump.host (homelab): the twice-weekly plain-SQL
+#   dumps of Authentik and Miniflux that ~/app/pg_backup.sh used to make.
+# - swarm.yml, on both Swarm workers: hourly snapshots of the stateful Swarm
+#   stacks pinned to the worker, mirrored to the other worker over a
+#   restricted rrsync key, and from homelab to Backblaze.
 # - ship_schedule.yml, on the host that runs homelab-bulk-backup: the cron
 #   schedule of each NAS dump's shipping job, taken from the dumping host's
 #   backup_nas_dump.ship_cron.
@@ -34,6 +39,16 @@
 - name: Install this host's NAS dump job
   ansible.builtin.include_tasks: nas_dump.yml
   when: backup_nas_dump is defined
+
+- name: Install homelab's Postgres dumps
+  ansible.builtin.include_tasks: pg_dump.yml
+  when:
+    - backup_pg_dump is defined
+    - inventory_hostname == backup_pg_dump.host
+
+- name: Install the Swarm stacks' snapshots and their peer copy
+  ansible.builtin.include_tasks: swarm.yml
+  when: inventory_hostname in groups.get('swarm_workers', [])
 
 - name: Converge the shipping schedules of the NAS dumps
   ansible.builtin.include_tasks: ship_schedule.yml

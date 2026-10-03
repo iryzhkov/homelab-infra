@@ -1,0 +1,98 @@
+---
+# Caddy on OCI: the public entry for emby.ryzhkov.dev, whose A record points
+# at OCI rather than at the Cloudflare tunnel (Emby's streams are too large
+# for it). Until 2026-10-03 the Caddyfile was written by hand and proxied to
+# homelab's mesh address, so Emby was unreachable from outside whenever
+# homelab was down or Emby ran elsewhere. It now proxies to the edge proxies
+# over the mesh, first one first, with an active health check; Traefik there
+# routes to wherever Emby runs (compose_placement), so a move of Emby or the
+# loss of one edge needs no change here.
+#
+#   ansible-playbook playbooks/oci-caddy.yml --check --diff
+#   ansible-playbook playbooks/oci-caddy.yml
+#
+# Client addresses: Traefik's websecure entrypoint does not trust
+# X-Forwarded-For from OCI, so Emby sees OCI's mesh address (10.42.0.1) for
+# every outside client, exactly as it did when Caddy proxied to it directly.
+#
+# Caddy is /usr/local/bin/caddy run by caddy.service as root, reading
+# /etc/caddy/Caddyfile; `reload` applies a change without dropping
+# connections.
+
+- name: Caddy on OCI
+  hosts: oci
+  gather_facts: false
+  vars:
+    oci_caddy_sites:
+      - host: emby.ryzhkov.dev
+        # Answers 200 without a login, through Traefik, from Emby itself.
+        health_uri: /System/Info/Public
+  tasks:
+    - name: Write the Caddyfile
+      ansible.builtin.copy:
+        content: |
+          # Managed by homelab-infra (playbooks/oci-caddy.yml). Do not edit here.
+          {% for site in oci_caddy_sites %}
+          {{ site.host }} {
+          	reverse_proxy {% for e in groups['edge_proxy'] %}https://{{ hostvars[e].mesh_host }}{{ ' ' if not loop.last else '' }}{% endfor %} {
+          		lb_policy first
+          		lb_try_duration 10s
+          		fail_duration 30s
+          		health_uri {{ site.health_uri }}
+          		health_interval 15s
+          		health_timeout 5s
+          		health_headers {
+          			Host {{ site.host }}
+          		}
+          		# For an https upstream Caddy sends the upstream's address as Host,
+          		# which Traefik answers with its catch-all 404 (2026-10-03).
+          		header_up Host {host}
+          		transport http {
+          			tls_server_name {{ site.host }}
+          		}
+          	}
+          }
+          {% endfor %}
+        dest: /etc/caddy/Caddyfile
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        validate: /usr/local/bin/caddy validate --adapter caddyfile --config %s
+      become: true
+      register: oci_caddyfile
+
+    - name: Reload Caddy
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
+      become: true
+      when: oci_caddyfile is changed
+
+    # From the controller, by the site's public address (OCI): a request to
+    # 127.0.0.1 on OCI answers 404, because Caddy's site does not match it.
+    - name: Probe each site through Caddy on OCI
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -s
+          - -o
+          - /dev/null
+          - -m
+          - "10"
+          - -w
+          - "%{http_code}"
+          - --resolve
+          - "{{ item.host }}:443:{{ ansible_host }}"
+          - "https://{{ item.host }}{{ item.health_uri }}"
+      loop: "{{ oci_caddy_sites }}"
+      loop_control:
+        label: "{{ item.host }}"
+      delegate_to: localhost
+      register: oci_caddy_probe
+      until: oci_caddy_probe.stdout == '200' or ansible_check_mode
+      retries: 6
+      delay: 5
+      changed_when: false
+      check_mode: false
+      failed_when: oci_caddy_probe.stdout != '200' and not ansible_check_mode

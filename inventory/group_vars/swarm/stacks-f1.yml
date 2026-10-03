@@ -1,0 +1,79 @@
+---
+# Phase 5 batch F1 (sqlite-essential): vaultwarden, actual, navidrome.
+# docs/transition/phase5/migration-plan.md; evidence and cutover record in
+# docs/transition/phase5/2026-10-03-F1.md. Keys are documented at the top of
+# roles/swarm/tasks/stack.yml, `snapshot` in inventory/group_vars/swarm/
+# backup.yml.
+#
+# Active: all three were cut over on 2026-10-02 (23:01 to 23:07 PDT), and
+# their Compose-era backup_sqlite_sources entries were removed at the same
+# time. Deploy a change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=<name>
+# and move a stack between workers with playbooks/swarm-move.yml.
+
+swarm_stacks_f1:
+  - name: vaultwarden
+    pin: homelab
+    secrets: homelab-vaultwarden
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/vaultwarden"
+      project: vaultwarden
+    routes:
+      - host: vault.ryzhkov.dev
+        port: 8099
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: vaultwarden, path: /srv/swarm/vaultwarden/data/db.sqlite3, keep: 48 }
+      # Attachments, sends, the RSA keys and config.json; the database goes
+      # as the snapshot above, the icon cache is rebuilt on demand.
+      files:
+        - /srv/swarm/vaultwarden/data
+      exclude: [db.sqlite3, db.sqlite3-*, icon_cache/**, tmp/**]
+
+  - name: actual
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/actual"
+      project: actual
+    routes:
+      - host: budget.ryzhkov.dev
+        port: 5006
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: actual-account, path: /srv/swarm/actual/data/server-files/account.sqlite, keep: 48 }
+        # One database per budget, named after a UUID; a glob, so a budget
+        # added later is covered without an edit here.
+        - { name: actual-budget, glob: /srv/swarm/actual/data/user-files/*.sqlite, keep: 48 }
+      files:
+        - /srv/swarm/actual/data
+
+  - name: navidrome
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/navidrome"
+      project: navidrome
+    env_extra:
+      MUSIC_PATH: /mnt/shared/media/music
+      NAVIDROME_UID: "1000"
+      NAVIDROME_GID: "988"
+    routes:
+      - host: music.ryzhkov.dev
+        port: 4533
+        health_check:
+          path: /ping
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: navidrome, path: /srv/swarm/navidrome/data/navidrome.db, keep: 48 }
+      # Artwork and plugin state; cache/ is not mirrored (rebuilt on demand).
+      files:
+        - /srv/swarm/navidrome/data
+      exclude: [navidrome.db, navidrome.db-*]

@@ -1,0 +1,63 @@
+# Loki's configuration for the logging Swarm stack (phase 5, batch F5).
+# Installed into /srv/swarm/logging/config/ by stacks/logging/swarm-prepare.yml
+# on every deploy; its hash is in the loki service's environment
+# (LOKI_CONFIG_SHA256, inventory/group_vars/swarm/stacks-f5.yml), so a change
+# here redeploys Loki. Until the cutover this file lived only on homelab.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  # A Swarm task has the ingress network on eth0, and Loki advertised that
+  # address in its rings; it cannot reach itself there, so every push failed
+  # with "dial tcp 10.200.0.78:9095: i/o timeout" (cutover, 2026-10-02).
+  # Single binary: every component is in this process.
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+ingester:
+  # Loki takes an entry that arrives out of order only if it is within half of
+  # max_chunk_age behind the newest entry of its own stream. The default two
+  # hours is aimed at live tailing; `toolfeedback ship` sends days of spool at
+  # once when a machine has been offline, and a push that fails halfway leaves
+  # the rest of that day behind the stream's head. Twelve hours of slack is
+  # enough for those to land on the next run, at a volume where holding chunks
+  # open longer costs nothing.
+  max_chunk_age: 24h
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 30d
+  max_query_length: 720h
+  # `toolfeedback ship` sends whatever a machine spooled since it last ran, and
+  # a laptop can be shut for a fortnight. The default of 1w would reject those
+  # lines, and reject the whole push they arrived in. 30d matches the retention
+  # above: an entry older than that has nowhere to be kept anyway.
+  reject_old_samples_max_age: 720h
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  delete_request_cancel_period: 24h
+  delete_request_store: filesystem

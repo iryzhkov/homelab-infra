@@ -12,6 +12,14 @@ entryPoints:
           scheme: https
   websecure:
     address: ":443"
+  # Forward auth only: loopback inside Traefik's own network namespace, never
+  # published. It trusts X-Forwarded-* from 127.0.0.1, which is Traefik's
+  # forwardAuth client, so Authentik sees the protected request's host.
+  authloop:
+    address: "127.0.0.1:{{ traefik_authloop_port | default(8081) }}"
+    forwardedHeaders:
+      trustedIPs:
+        - "127.0.0.1/32"
 serversTransport:
   insecureSkipVerify: true
 providers:

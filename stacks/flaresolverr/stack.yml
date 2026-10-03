@@ -1,0 +1,35 @@
+# Swarm stack for FlareSolverr (phase 5, batch S1). Replaces
+# docker-compose.yml beside it, which stays until the phase 5 cleanup.
+#
+# No Traefik route. Prowlarr calls it as an indexer proxy at
+# http://192.168.70.223:8191, a literal in Prowlarr's database. Through the
+# routing mesh that address keeps answering wherever the task runs, as long as
+# homelab is up; during a homelab drain Prowlarr loses its proxy.
+#
+# The Compose file put it on the default bridge (network_mode: bridge); here it
+# gets the stack's own overlay network, which nothing else needs to join.
+# Its /config is an anonymous, disposable volume in the image.
+services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+    environment:
+      LOG_LEVEL: info
+      TZ: America/Los_Angeles
+    ports:
+      - "8191:8191"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == intel
+      resources:
+        # Measured working set 38 MiB idle; each solve starts a Chromium.
+        limits:
+          memory: 1G
+        reservations:
+          memory: 128M
+      restart_policy:
+        condition: any
+      # No mount, so the new task can start before the old one stops.
+      update_config:
+        order: start-first

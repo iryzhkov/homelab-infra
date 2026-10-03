@@ -1,0 +1,30 @@
+---
+# An autolocked manager that restarted holds its raft log encrypted until it
+# is given the unlock key. Compose containers on the host run regardless;
+# Swarm tasks on it do not start until this succeeds.
+
+- name: Require the unlock key
+  ansible.builtin.assert:
+    that: swarm_secrets.swarm_unlock_key | default('') | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }} is locked and secrets/swarm.sops.yaml holds no
+      swarm_unlock_key.
+    quiet: true
+
+- name: Unlock the manager
+  ansible.builtin.command:
+    argv: [docker, swarm, unlock]
+    stdin: "{{ swarm_secrets.swarm_unlock_key }}"
+  no_log: true
+  changed_when: true
+
+- name: Read the state again
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"]
+  register: swarm_state_raw
+  changed_when: false
+  check_mode: false
+
+- name: Remember it
+  ansible.builtin.set_fact:
+    swarm_state: "{{ swarm_state_raw.stdout | trim }}"

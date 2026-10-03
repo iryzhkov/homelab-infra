@@ -1,0 +1,44 @@
+---
+# Phase 5 batch F5 (logging): Loki, Grafana and InfluxDB as one stack.
+# docs/transition/phase5/migration-plan.md; evidence and cutover record in
+# docs/transition/phase5/2026-10-03-F5.md.
+#
+# Active: cut over on 2026-10-02 (23:49 PDT; Loki fixed at 00:00). Deploy a
+# change with
+#   ansible-playbook playbooks/swarm.yml --tags stacks -e only=logging
+# Do not move it with swarm-move.yml: Loki's 3100 is published in host mode
+# (stacks/logging/stack.yml), and every log client names homelab's address.
+# Since this entry exists, roles/base writes loki_push_url and the
+# non-blocking log mode into each Docker daemon's daemon.json
+# (tasks/docker_logging.yml; applied to homelab, normandy and blackpearl,
+# effective at each daemon's next restart). public-api is left to the phase
+# 4 owner.
+
+swarm_stacks_f5:
+  - name: logging
+    pin: homelab
+    secrets: homelab-logging
+    env_extra:
+      LOKI_CONFIG_SHA256: "{{ lookup('file', '../stacks/logging/files/loki-config.yml') | hash('sha256') }}"
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: "/home/iryzhkov/app/logging"
+      project: logging
+    routes:
+      - host: logs.ryzhkov.dev
+        port: 3200
+    snapshot:
+      class: sqlite
+      sqlite:
+        - { name: grafana, path: /srv/swarm/logging/grafana/grafana.db, keep: 48 }
+      # Loki's chunks and index, InfluxDB's TSM files and bolt database, and
+      # the configuration. Mirrored live, so InfluxDB's copy is
+      # crash-consistent at best; the daily `influx backup` archive is the
+      # consistent one, and a move copies everything cold.
+      files:
+        - /srv/swarm/logging/grafana
+        - /srv/swarm/logging/loki
+        - /srv/swarm/logging/config
+        - /srv/swarm/logging/influxdb
+      exclude: [grafana.db, grafana.db-*]
