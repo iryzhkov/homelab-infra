@@ -1,0 +1,27 @@
+---
+# Mirror every external image a Swarm stack uses (active and pending entries,
+# swarm_stacks_* and pending_swarm_stacks_*) into Forgejo's registry under
+# <registry>/<owner>/mirror/<registry host>/<repository>:<tag>, from the
+# mirror host (homelab), which already holds most of them. Both workers pull
+# from Docker Hub through one WAN address and hit its anonymous limit
+# (normandy at 21:16 on 2026-10-02); pulling from Forgejo does not count.
+#
+# A push from homelab's classic image store does NOT keep a multi-platform
+# image's pinned digest: the store keeps only the linux/amd64 image, and the
+# push writes a new single-platform manifest (excalidraw: pinned
+# sha256:f7ee194a..., mirrored sha256:8f46c86c...). The layers and config, and
+# so the image ID, are identical. registry_mirror_pull.yml therefore tags the
+# mirrored image under its original name only on a node that lacks it, and a
+# stack that pins a Docker Hub digest needs its reference changed to the
+# mirror (see docs/transition/phase5/2026-10-03-foundation.md, section 6).
+
+- name: List the images the Swarm stacks reference
+  ansible.builtin.include_tasks: registry_mirror_list.yml
+
+- name: Mirror each image
+  ansible.builtin.include_tasks: registry_mirror_one.yml
+  loop: "{{ swarm_mirror_images }}"
+  loop_control:
+    loop_var: image
+    label: "{{ image.source }}"
+  when: inventory_hostname == swarm_registry_mirror_host

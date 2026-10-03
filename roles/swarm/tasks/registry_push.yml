@@ -17,6 +17,12 @@
 # prints a new token once and never again, so each is written into the
 # secret the moment it exists. To replace one, delete it in Forgejo (user
 # settings, Applications) and its key in the secret, then run this again.
+- name: Find Forgejo's container
+  ansible.builtin.include_tasks: forgejo_container.yml
+  when:
+    - swarm_registry_tokens | map(attribute='key') | reject('in', swarm_secrets) | list | length > 0
+    - not ansible_check_mode
+
 - name: Create the registry tokens that the secret lacks
   ansible.builtin.command:
     argv:
@@ -24,7 +30,7 @@
       - exec
       - -u
       - git
-      - forgejo
+      - "{{ swarm_forgejo_container | default('forgejo') }}"
       - forgejo
       - admin
       - user
@@ -36,7 +42,7 @@
       - --scopes
       - "{{ item.scopes }}"
       - --raw
-  delegate_to: "{{ forgejo_host }}"
+  delegate_to: "{{ swarm_forgejo_host | default(forgejo_host) }}"
   run_once: true
   register: swarm_registry_new_tokens
   changed_when: true
@@ -94,6 +100,9 @@
     - >-
       swarm_registry not in ((swarm_docker_config.content | default('e30=') | b64decode
                               | from_json).auths | default({}))
+
+- name: Mirror the external images the stacks use
+  ansible.builtin.include_tasks: registry_mirror.yml
 
 - name: Push the images this node builds
   ansible.builtin.include_tasks: registry_push_one.yml

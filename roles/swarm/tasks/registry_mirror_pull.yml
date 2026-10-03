@@ -1,0 +1,17 @@
+---
+# On every worker but the mirror host: pull each mirrored image from Forgejo
+# and, where this node has no image under the original name, tag it so. A
+# node that already holds the original reference (with its pinned digest)
+# is left alone: retagging would point the name at the mirror's manifest and
+# break a pinned lookup that works today.
+
+- name: List the images the Swarm stacks reference
+  ansible.builtin.include_tasks: registry_mirror_list.yml
+
+- name: Pre-pull each mirrored image
+  ansible.builtin.include_tasks: registry_mirror_pull_one.yml
+  loop: "{{ swarm_mirror_images }}"
+  loop_control:
+    loop_var: image
+    label: "{{ image.source }}"
+  when: inventory_hostname != swarm_registry_mirror_host

@@ -1,0 +1,43 @@
+---
+# One image on the mirror host: have it locally (pulling only if missing),
+# then tag and push it to the mirror unless the registry already holds it.
+
+- name: Look for {{ image.source }} here
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{' }}json .RepoDigests{{ '}}' }}", "{{ image.source }}"]
+  register: swarm_mirror_local
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Not fatal: Docker Hub may be refusing pulls; the next run tries again.
+- name: Pull {{ image.source }}, which is not here
+  ansible.builtin.command:
+    argv: [docker, pull, --quiet, "{{ image.source }}"]
+  register: swarm_mirror_pulled
+  changed_when: swarm_mirror_pulled.rc == 0
+  failed_when: false
+  when: swarm_mirror_local.rc != 0
+
+- name: Report an image that could not be fetched
+  ansible.builtin.debug:
+    msg: "{{ image.source }} is not mirrored: {{ swarm_mirror_pulled.stderr | default('') | trim }}"
+  when:
+    - swarm_mirror_local.rc != 0
+    - swarm_mirror_pulled.rc | default(1) != 0
+    - not ansible_check_mode
+
+- name: Tag and push {{ image.source }} to the mirror
+  when:
+    - swarm_mirror_local.rc == 0 or swarm_mirror_pulled.rc | default(1) == 0
+    - (image.mirror_repo ~ '@') not in swarm_mirror_local.stdout | default('')
+  block:
+    - name: Tag it
+      ansible.builtin.command:
+        argv: [docker, tag, "{{ image.source }}", "{{ image.mirror }}"]
+      changed_when: true
+
+    - name: Push it
+      ansible.builtin.command:
+        argv: [docker, push, --quiet, "{{ image.mirror }}"]
+      changed_when: true

@@ -4,7 +4,7 @@
 # after P1, at night. See docs/transition/phase5/migration-plan.md and
 # docs/transition/phase5/2026-10-03-P2.md.
 #
-# DRAFT, NOT ACTIVE. The list is named draft_swarm_stacks_p2 so that nothing
+# PENDING, NOT ACTIVE. The list is named pending_swarm_stacks_p2 so that nothing
 # reads it: playbooks/swarm.yml, site.yml, the Traefik generator (routes and
 # the authentik-forwardauth middleware), Gatus, the backup role and
 # roles/authentik_watchdog all look for variables named swarm_stacks_*. The
@@ -12,13 +12,14 @@
 # same change as the cutover run (batch 0 rule), and runs
 # playbooks/traefik.yml, site.yml -l homelab,normandy -e only=gatus (which
 # also retires the watchdog on homelab) and backup.yml straight after.
-draft_swarm_stacks_p2:
+pending_swarm_stacks_p2:
   - name: authentik
     secrets: homelab-authentik
     pin: homelab
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/authentik"
+      dir: /home/iryzhkov/app/authentik
+      project: authentik
     prepare_tasks: swarm-prepare.yml
     routes:
       - host: auth.ryzhkov.dev

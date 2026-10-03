@@ -16,12 +16,34 @@
 #   pin        optional; stateful stacks only: the node that receives the
 #              label pin.<name>=true if no node carries it yet. After that the
 #              label is moved only by the drain script, never by this file
-#   compose    optional; {host, dir} of the Compose project this stack
-#              replaces. While that project exists, the deploy refuses unless
-#              the run says -e swarm_cutover=<name>, and then removes the
-#              project first (without its volumes): Compose and Swarm cannot
-#              publish the same port
+#   compose    optional; {host, dir, project} of the Compose project this
+#              stack replaces. While that project exists, the deploy refuses
+#              unless the run says -e swarm_cutover=<name>, and then removes
+#              the project (without its volumes) before deploying: Compose and
+#              Swarm cannot publish the same port
+#   prepare_tasks  optional; a task file under stacks/<source>/ (by convention
+#              swarm-prepare.yml), see "Order" below
 #   routes     Traefik routes, read by roles/traefik, not here
+#
+# Order, and what each step may assume:
+#   1. lint, deployment directory, stack file, secrets, environment
+#   2. the Compose project is looked for; if it exists and the run is not
+#      the authorised cutover, the deploy stops here (a check run only
+#      reports it), so nothing after this point runs for a stack whose
+#      cutover nobody asked for
+#   3. the pin label
+#   4. prepare_tasks. They run before the render, so they can create what
+#      the stack file needs (an env_file, rendered configuration, the
+#      /srv/swarm/<name> directories). Contract: on a run that is not the
+#      cutover (swarm_stack_cutover false) they may only create or update
+#      the stack's own files under /srv/swarm/<name> and its deployment
+#      directory; anything that stops, reads from or copies out of the
+#      Compose project, or touches a running service, is gated on
+#      swarm_stack_cutover. Step 2 makes that gate hold even for a file that
+#      forgets it while the Compose project still exists.
+#   5. render, compare with deployed.yml
+#   6. cutover only: remove the Compose project
+#   7. deploy, when deployed.yml changed or the stack is not deployed
 #
 # The stack file is rendered with `docker stack config`, which reads
 # env_file: itself and interpolates from the environment given to it here.
@@ -29,6 +51,13 @@
 # 29: compose renders published ports as strings and stack deploy refuses
 # them.) The rendered file is kept as deployed.yml, mode 0600, and the stack is
 # deployed only when it changed.
+#
+# Check mode renders too, in a scratch directory holding the stack file and
+# its secrets (the deployment directory may not exist yet), with the scratch
+# path rewritten to the deployment directory, so --check --diff shows the
+# deployed.yml a real run would write. Files that only prepare_tasks would
+# create cannot exist in a check run; a render that fails for that reason is
+# reported, not fatal.
 
 - name: Lint {{ swarm_stack.name }}
   ansible.builtin.command:
@@ -43,6 +72,8 @@
 - name: Set where {{ swarm_stack.name }} is deployed from
   ansible.builtin.set_fact:
     swarm_stack_dir: "{{ swarm_deploy_root }}/{{ swarm_stack.name }}"
+    swarm_stack_src: "{{ playbook_dir }}/../stacks/{{ swarm_stack.source | default(swarm_stack.name) }}"
+    swarm_stack_cutover: "{{ swarm_cutover | default('') == swarm_stack.name }}"
 
 - name: Create the deployment directory
   ansible.builtin.file:
@@ -56,7 +87,7 @@
 
 - name: Install the stack file
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../stacks/{{ swarm_stack.source | default(swarm_stack.name) }}/stack.yml"
+    src: "{{ swarm_stack_src }}/stack.yml"
     dest: "{{ swarm_stack_dir }}/stack.yml"
     mode: "0600"
 
@@ -91,30 +122,58 @@
       {{ env }}
   no_log: true
 
-- name: Render {{ swarm_stack.name }}
-  ansible.builtin.command:
-    argv: [docker, stack, config, -c, stack.yml]
-    chdir: "{{ swarm_stack_dir }}"
-  environment: "{{ swarm_stack_env }}"
-  register: swarm_stack_rendered
-  changed_when: false
-  check_mode: false
-  no_log: true
-
-- name: Install the rendered file
-  ansible.builtin.copy:
-    content: "{{ swarm_stack_rendered.stdout }}\n"
-    dest: "{{ swarm_stack_dir }}/deployed.yml"
-    mode: "0600"
-  register: swarm_stack_file
-  no_log: true
-
 - name: Ask whether {{ swarm_stack.name }} is deployed
   ansible.builtin.command:
     argv: [docker, stack, ls, --format, "{{ '{{' }}.Name{{ '}}' }}"]
   register: swarm_stack_list
   changed_when: false
   check_mode: false
+
+- name: Look for the Compose project this stack replaces
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - -aq
+      - --filter
+      - label=com.docker.compose.project={{ swarm_stack.compose.project | default(swarm_stack.name) }}
+  # delegate_to is templated before when, so it needs a value for a stack
+  # without a compose key too.
+  delegate_to: "{{ swarm_stack.compose.host | default(inventory_hostname) }}"
+  register: swarm_stack_compose
+  changed_when: false
+  check_mode: false
+  when: swarm_stack.compose is defined
+
+- name: Remember whether a Compose project still runs
+  ansible.builtin.set_fact:
+    swarm_stack_compose_present: >-
+      {{ swarm_stack.compose is defined
+         and swarm_stack_compose.stdout | default('') | trim | length > 0 }}
+
+- name: Report the cutover a real run would refuse
+  ansible.builtin.debug:
+    msg: >-
+      {{ swarm_stack.name }} still runs as a Compose project on
+      {{ swarm_stack.compose.host }}; a real run refuses without
+      -e swarm_cutover={{ swarm_stack.name }}. Previewing the rest.
+  when:
+    - ansible_check_mode
+    - swarm_stack_compose_present
+    - not swarm_stack_cutover
+
+- name: Refuse a cutover nobody asked for
+  ansible.builtin.assert:
+    that: swarm_stack_cutover
+    fail_msg: >-
+      {{ swarm_stack.name }} still runs as a Compose project on
+      {{ swarm_stack.compose.host }}. Cutting over interrupts it; run again
+      with -e swarm_cutover={{ swarm_stack.name }} once the lead has
+      cleared the window.
+    quiet: true
+  when:
+    - not ansible_check_mode
+    - swarm_stack_compose_present
 
 - name: Pin the stack to its first node
   when: swarm_stack.pin is defined
@@ -129,7 +188,7 @@
     - name: Read the first node's ID
       ansible.builtin.command:
         argv: [docker, info, --format, "{{ '{{' }}.Swarm.NodeID{{ '}}' }}"]
-      delegate_to: "{{ swarm_stack.pin }}"
+      delegate_to: "{{ swarm_stack.pin | default(inventory_hostname) }}"
       register: swarm_stack_pin_node
       changed_when: false
       check_mode: false
@@ -153,53 +212,167 @@
         fail_msg: More than one node carries pin.{{ swarm_stack.name }}=true.
         quiet: true
 
-# Stack-specific steps, such as seeding /srv/swarm/<stack> on the pinned
-# node from the Compose project's directory during a cutover. The file runs
-# on the bootstrap manager and delegates what it does on other nodes.
+# Before the render, so it can create what the stack file needs. See the
+# contract under "Order" at the top: outside the cutover it may only write
+# the stack's own /srv/swarm/<name> files and deployment directory.
 - name: Run the stack's own preparation
   ansible.builtin.include_tasks:
-    file: "{{ playbook_dir }}/../stacks/{{ swarm_stack.source | default(swarm_stack.name) }}/{{ swarm_stack.prepare_tasks }}"
+    file: "{{ swarm_stack_src }}/{{ swarm_stack.prepare_tasks }}"
   when: swarm_stack.prepare_tasks is defined
 
-- name: Retire the Compose project this stack replaces
-  when: swarm_stack.compose is defined
+- name: Render {{ swarm_stack.name }}
+  ansible.builtin.command:
+    argv: [docker, stack, config, -c, stack.yml]
+    chdir: "{{ swarm_stack_dir }}"
+  environment: "{{ swarm_stack_env }}"
+  register: swarm_stack_rendered
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Render {{ swarm_stack.name }} in a scratch directory (check mode)
+  when: ansible_check_mode
   block:
-    - name: Look for the Compose project
-      ansible.builtin.command:
-        argv:
-          - docker
-          - ps
-          - -aq
-          - --filter
-          - label=com.docker.compose.project={{ swarm_stack.compose.project | default(swarm_stack.name) }}
-      delegate_to: "{{ swarm_stack.compose.host }}"
-      register: swarm_stack_compose
+    - name: Create the scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: swarm-check-
+      register: swarm_stack_scratch
+      check_mode: false
+      # Scratch work changes nothing a real run would; it is not reported.
+      changed_when: false
+
+    - name: Create the scratch secrets directory
+      ansible.builtin.file:
+        path: "{{ swarm_stack_scratch.path }}/secrets"
+        state: directory
+        mode: "0700"
+      check_mode: false
+      changed_when: false
+
+    - name: Stage the stack file
+      ansible.builtin.copy:
+        src: "{{ swarm_stack_src }}/stack.yml"
+        dest: "{{ swarm_stack_scratch.path }}/stack.yml"
+        mode: "0600"
+      check_mode: false
+      changed_when: false
+      diff: false
+
+    - name: Stage the secrets
+      ansible.builtin.copy:
+        content: "{{ item.value }}"
+        dest: "{{ swarm_stack_scratch.path }}/secrets/{{ item.key }}"
+        mode: "0600"
+      loop: "{{ (swarm_stack_secrets | default({}) | dict2items) if swarm_stack.secrets is defined else [] }}"
+      loop_control:
+        label: "{{ item.key }}"
+      check_mode: false
+      changed_when: false
+      diff: false
+      no_log: true
+
+    - name: Copy what already exists in the deployment directory
+      ansible.builtin.shell:
+        cmd: >-
+          [ -d {{ swarm_stack_dir | quote }} ] &&
+          cp -an {{ swarm_stack_dir | quote }}/. {{ swarm_stack_scratch.path | quote }}/ || true
       changed_when: false
       check_mode: false
 
-    - name: Refuse a cutover nobody asked for
-      ansible.builtin.assert:
-        that: swarm_cutover | default('') == swarm_stack.name
-        fail_msg: >-
-          {{ swarm_stack.name }} still runs as a Compose project on
-          {{ swarm_stack.compose.host }}. Cutting over interrupts it; run again
-          with -e swarm_cutover={{ swarm_stack.name }} once the lead has
-          cleared the window.
-        quiet: true
-      when: swarm_stack_compose.stdout | trim | length > 0
-
-    - name: Stop and remove the Compose project, keeping its volumes
+    - name: Render
       ansible.builtin.command:
-        argv:
-          - docker
-          - compose
-          - --project-name
-          - "{{ swarm_stack.compose.project | default(swarm_stack.name) }}"
-          - down
-        chdir: "{{ swarm_stack.compose.dir }}"
-      delegate_to: "{{ swarm_stack.compose.host }}"
-      changed_when: true
-      when: swarm_stack_compose.stdout | trim | length > 0
+        argv: [docker, stack, config, -c, stack.yml]
+        chdir: "{{ swarm_stack_scratch.path }}"
+      environment: "{{ swarm_stack_env }}"
+      register: swarm_stack_rendered_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Report a render that needs files only a real run creates
+      ansible.builtin.debug:
+        msg: >-
+          {{ swarm_stack.name }} did not render in check mode
+          ({{ swarm_stack_rendered_check.stderr | default('') | trim }}). If
+          the missing file is one its prepare_tasks create, a real run renders
+          it; otherwise the stack file is wrong.
+      when: swarm_stack_rendered_check.rc != 0
+
+    - name: Use the check render as the real one would be
+      ansible.builtin.set_fact:
+        swarm_stack_rendered:
+          rc: "{{ swarm_stack_rendered_check.rc }}"
+          stdout: >-
+            {{ swarm_stack_rendered_check.stdout | default('')
+               | replace(swarm_stack_scratch.path, swarm_stack_dir) }}
+      no_log: true
+
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ swarm_stack_scratch.path }}"
+        state: absent
+      check_mode: false
+      changed_when: false
+      diff: false
+      when: swarm_stack_scratch.path is defined
+
+# The rendered file can hold values from env_file and is installed with
+# no_log, which also hides its diff; this shows it without any service's
+# environment.
+- name: Show the rendered stack without its environment
+  ansible.builtin.debug:
+    msg: >-
+      {%- set doc = swarm_stack_rendered.stdout | from_yaml -%}
+      {%- set services = {} -%}
+      {%- for name, svc in (doc.services | default({})).items() -%}
+      {%-   set _ = services.update({name: svc | dict2items | rejectattr('key', 'equalto', 'environment') | items2dict}) -%}
+      {%- endfor -%}
+      {{ doc | combine({'services': services}) }}
+  when:
+    - ansible_check_mode
+    - swarm_stack_rendered.rc | int == 0
+
+- name: Install the rendered file
+  ansible.builtin.copy:
+    content: "{{ swarm_stack_rendered.stdout }}\n"
+    dest: "{{ swarm_stack_dir }}/deployed.yml"
+    mode: "0600"
+  register: swarm_stack_file
+  no_log: true
+  when: swarm_stack_rendered.rc | int == 0
+
+- name: Stop and remove the Compose project, keeping its volumes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --project-name
+      - "{{ swarm_stack.compose.project | default(swarm_stack.name) }}"
+      - down
+    chdir: "{{ swarm_stack.compose.dir | default(omit) }}"
+  delegate_to: "{{ swarm_stack.compose.host | default(inventory_hostname) }}"
+  changed_when: true
+  # The command module checks chdir even when check mode skips the command.
+  when:
+    - not ansible_check_mode
+    - swarm_stack_compose_present
+    - swarm_stack_cutover
+
+- name: Report what a real run would deploy
+  ansible.builtin.debug:
+    msg: >-
+      {{ swarm_stack.name }}: a real run would
+      {{ 'remove the Compose project, then ' if swarm_stack_compose_present and swarm_stack_cutover else '' }}deploy
+      ({{ 'not deployed yet' if swarm_stack.name not in swarm_stack_list.stdout_lines else 'deployed.yml changed' }}).
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - >-
+      swarm_stack_file is changed
+      or swarm_stack.name not in swarm_stack_list.stdout_lines
 
 - name: Deploy {{ swarm_stack.name }}
   ansible.builtin.command:
@@ -215,6 +388,8 @@
       - "{{ swarm_stack.name }}"
     chdir: "{{ swarm_stack_dir }}"
   changed_when: true
-  when: >-
-    swarm_stack_file is changed
-    or swarm_stack.name not in swarm_stack_list.stdout_lines
+  when:
+    - not ansible_check_mode
+    - >-
+      swarm_stack_file is changed
+      or swarm_stack.name not in swarm_stack_list.stdout_lines

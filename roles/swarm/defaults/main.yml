@@ -23,6 +23,12 @@ swarm_registry_tokens:
   - { key: swarm_registry_push_token, name: swarm-registry-push, scopes: "write:package" }
   - { key: swarm_registry_pull_token, name: swarm-registry-pull, scopes: "read:package" }
 
+# The host that mirrors external images into Forgejo's registry (it holds
+# most of them already), and Forgejo's Swarm service once batch F3 has
+# converted it (stack forgejo, service server).
+swarm_registry_mirror_host: homelab
+swarm_forgejo_service: forgejo_server
+
 # The other managers, whose mesh addresses may reach the control ports here,
 # and the other workers, whose VLAN 70 addresses may reach the data port.
 # Sorted: a group built from child groups has no stable order between runs,

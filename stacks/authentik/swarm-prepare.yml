@@ -46,8 +46,8 @@
       - { name: applications, query: "select count(*) from authentik_core_application", compare: exact }
       - { name: flows, query: "select count(*) from authentik_flows_flow", compare: exact }
     p2_volumes:
-      - { volume: "{{ p2_project }}_database", dest: postgres }
-      - { volume: "{{ p2_project }}_redis", dest: redis }
+      - { volume: "{{ swarm_stack.compose.project | default(swarm_stack.name) }}_database", dest: postgres }
+      - { volume: "{{ swarm_stack.compose.project | default(swarm_stack.name) }}_redis", dest: redis }
     p2_directories:
       - { source: "{{ swarm_stack.compose.dir }}/media", dest: media }
       - { source: "{{ swarm_stack.compose.dir }}/custom-templates", dest: templates }

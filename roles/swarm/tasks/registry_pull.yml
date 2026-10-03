@@ -3,6 +3,9 @@
 # so a node can start any service with the registry (on homelab) down. A
 # node already holding the pushed digest pulls nothing.
 
+- name: Pre-pull the mirrored external images
+  ansible.builtin.include_tasks: registry_mirror_pull.yml
+
 - name: Pre-pull an image from the registry
   ansible.builtin.include_tasks: registry_pull_one.yml
   loop: "{{ swarm_registry_images | rejectattr('build_host', 'equalto', inventory_hostname) | list }}"

@@ -25,7 +25,7 @@ pending_swarm_stacks_f3:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/forgejo"
+      dir: "/home/iryzhkov/app/forgejo"
       project: forgejo
     routes:
       - host: git.ryzhkov.dev
@@ -46,7 +46,7 @@ pending_swarm_stacks_f3:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/openviking"
+      dir: "/home/iryzhkov/app/openviking"
       project: openviking
     # No Traefik route: agents and dsh call port 1933 on homelab's address
     # (dsh through stack_host_ip, which keeps answering through the mesh).
@@ -63,7 +63,7 @@ pending_swarm_stacks_f3:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/thelounge"
+      dir: "/home/iryzhkov/app/thelounge"
       project: thelounge
     routes:
       - host: irc.ryzhkov.dev

@@ -25,7 +25,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/sonarr-tv"
+      dir: "/home/iryzhkov/app/sonarr-tv"
       project: sonarr-tv
     routes:
       - host: sonarr.ryzhkov.dev
@@ -46,7 +46,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/radarr-movie"
+      dir: "/home/iryzhkov/app/radarr-movie"
       project: radarr-movie
     routes:
       - host: radarr.ryzhkov.dev
@@ -66,7 +66,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/lidarr-music"
+      dir: "/home/iryzhkov/app/lidarr-music"
       project: lidarr-music
     routes:
       - host: lidarr.ryzhkov.dev
@@ -86,7 +86,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/prowlarr"
+      dir: "/home/iryzhkov/app/prowlarr"
       project: prowlarr
     routes:
       - host: prowlarr.ryzhkov.dev
@@ -106,7 +106,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/bazarr"
+      dir: "/home/iryzhkov/app/bazarr"
       project: bazarr
     routes:
       - host: bazarr.ryzhkov.dev
@@ -124,7 +124,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/autobrr"
+      dir: "/home/iryzhkov/app/autobrr"
       project: autobrr
     routes:
       - host: autobrr.ryzhkov.dev
@@ -142,7 +142,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/ombi"
+      dir: "/home/iryzhkov/app/ombi"
       project: ombi
     routes:
       - host: request.ryzhkov.dev
@@ -161,7 +161,7 @@ pending_swarm_stacks_f2:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/komga"
+      dir: "/home/iryzhkov/app/komga"
       project: komga
     routes:
       - host: manga.ryzhkov.dev

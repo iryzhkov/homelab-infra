@@ -28,7 +28,7 @@ pending_swarm_stacks_f5:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/logging"
+      dir: "/home/iryzhkov/app/logging"
       project: logging
     routes:
       - host: logs.ryzhkov.dev

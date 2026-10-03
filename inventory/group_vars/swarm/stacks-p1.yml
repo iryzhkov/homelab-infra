@@ -3,19 +3,20 @@
 # which it logs in through. See docs/transition/phase5/migration-plan.md and
 # docs/transition/phase5/2026-10-03-P1.md.
 #
-# DRAFT, NOT ACTIVE. The list is named draft_swarm_stacks_p1 so that nothing
+# PENDING, NOT ACTIVE. The list is named pending_swarm_stacks_p1 so that nothing
 # reads it: playbooks/swarm.yml, site.yml, the Traefik generator, Gatus and
 # the backup role all look for variables named swarm_stacks_*. The cutover
 # activates it by renaming the variable to swarm_stacks_p1, in the same change
 # as the cutover run (batch 0 rule), and runs playbooks/traefik.yml,
 # site.yml -l homelab,normandy -e only=gatus and backup.yml straight after.
-draft_swarm_stacks_p1:
+pending_swarm_stacks_p1:
   - name: miniflux
     secrets: homelab-miniflux
     pin: homelab
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/miniflux"
+      dir: /home/iryzhkov/app/miniflux
+      project: miniflux
     prepare_tasks: swarm-prepare.yml
     routes:
       - host: rss.ryzhkov.dev

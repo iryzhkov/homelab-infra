@@ -27,7 +27,7 @@ pending_swarm_stacks_f1:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/vaultwarden"
+      dir: "/home/iryzhkov/app/vaultwarden"
       project: vaultwarden
     routes:
       - host: vault.ryzhkov.dev
@@ -47,7 +47,7 @@ pending_swarm_stacks_f1:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/actual"
+      dir: "/home/iryzhkov/app/actual"
       project: actual
     routes:
       - host: budget.ryzhkov.dev
@@ -67,7 +67,7 @@ pending_swarm_stacks_f1:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/navidrome"
+      dir: "/home/iryzhkov/app/navidrome"
       project: navidrome
     env_extra:
       MUSIC_PATH: /mnt/shared/media/music

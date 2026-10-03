@@ -156,6 +156,35 @@ Checks:
 - OCI runs Engine 29.1.3 against 29.7.2 on the workers. Swarm accepts mixed versions; OCI runs no task, so only the raft and gossip protocol must agree. Recorded as a risk: upgrade OCI's Docker when Ubuntu's package catches up, never the workers past a version OCI cannot follow.
 - `ansible-playbook playbooks/swarm.yml --check`, run twice: changed=0 on homelab, normandy and oci. `site.yml --check`: changed=0 on all four Docker hosts. `base.yml --check`: changed=0 on all six hosts.
 
+## 5. Fix to the stack deploy tasks (2026-10-02, about 22:00 PDT)
+
+Stack batch executors found two defects in `roles/swarm/tasks/stack.yml`; only that file changed.
+
+1. `prepare_tasks` ran after the render, so an env_file, rendered configuration or `/srv/swarm/<name>` directory that a stack's `swarm-prepare.yml` creates did not exist when `docker stack config` needed it. New order: lint, deployment directory, stack file, secrets, environment; look for the Compose project and refuse (real run) or report (check run) when it exists and the run is not `-e swarm_cutover=<name>`; pin label; `prepare_tasks`; render; install `deployed.yml`; cutover only, `docker compose down`; deploy. Because the refusal now comes before `prepare_tasks`, a prepare file never runs in a real run while a Compose project exists and its cutover was not authorised. The role sets `swarm_stack_cutover` (true only for the authorised cutover) and states the contract in the file's header: outside the cutover a prepare file may only write the stack's own `/srv/swarm/<name>` files and deployment directory, and anything touching the Compose project or a running service is gated on `swarm_stack_cutover`. The batch prepare files read so far (vaultwarden) gate on `swarm_cutover` already.
+2. Check mode failed for a stack never deployed: the render ran with `chdir` into a deployment directory that a check run does not create, and the deploy task's `chdir` failed the same way although the command itself is skipped. Check mode now renders in a scratch directory (`tempfile`, holding the stack file, the secrets and whatever already exists in the deployment directory; removed afterwards; not reported as a change), rewrites the scratch path to the deployment directory, shows the rendered stack with every service's `environment` removed (the install of `deployed.yml` is `no_log`, which hides its diff), compares it with `deployed.yml`, and reports "a real run would deploy" instead of running the deploy or `compose down`. A render that fails in check mode (for a file only a real run's prepare creates) is reported, not fatal. `delegate_to` of the Compose and pin lookups now defaults to the current host, because `delegate_to` is templated before `when` and failed for a stack without `compose` or `pin`.
+
+Tests, check mode only, nothing deployed:
+
+- a throwaway pending stack (`e20-throwaway`, source excalidraw, with a pin and a non-existent Compose project) through `-e @file`: rendered, "would deploy (not deployed yet)", changed=4 (all previews), failed=0;
+- the S1 entry for excalidraw passed as active through `-e @file`: the cutover a real run would refuse reported, rendered with `published: 5090, mode: ingress`, "would deploy", failed=0;
+- the F1 entry for vaultwarden (secrets, pin, `swarm-prepare.yml`) passed as active: its prepare ran in check mode (owner-marker lookup, seed block skipped without the cutover), rendered with its versioned secrets, failed=0;
+- afterwards on homelab: no `~/swarm`, no `/srv/swarm/vaultwarden`, no `/tmp/swarm-check-*`, no `pin.*` label on any node, `docker stack ls` empty, the vaultwarden Compose container still `Up 2 hours (healthy)`;
+- `ansible-playbook playbooks/swarm.yml --check` without extra vars: changed=0 on homelab, normandy and oci.
+
+Note for executors: an entry passed through `-e @file` cannot use `{{ hostvars[...] }}` (extra vars are templated without `hostvars`; the vaultwarden entry failed until its `compose.dir` was written literally). The same entry in `inventory/group_vars/swarm/` is fine.
+
+## 6. Image mirror and Forgejo lookup: checkpoint (2026-10-02, about 22:40 PDT, stopped for quota)
+
+Done, in `roles/swarm` only:
+
+- `registry_mirror*.yml` and `filter_plugins/swarm_images.py`: every external image named by a stack file of any `swarm_stacks_*` or `pending_swarm_stacks_*` entry is tagged on homelab and pushed to `git.ryzhkov.dev/igor/mirror/<registry>/<repo>:<tag>`; normandy pulls it and tags it under its original name only where it has none. Hooked into `registry_push.yml` and `registry_pull.yml` (no playbook change).
+- `forgejo_container.yml`: `docker exec` target resolved from the Swarm service `forgejo_server` (node via its `host` label), falling back to the Compose container `forgejo`.
+- `swarm.yml --tags registry --check`: changed=0 reported, failed=0. Not yet run for real.
+
+Finding: a push from homelab's classic store does not keep a multi-platform pinned digest. Test push of excalidraw: pinned `sha256:f7ee194a...`, mirror `sha256:8f46c86c...` (same image ID). A digest-pinned Docker Hub reference can therefore not be satisfied from the mirror; such stacks must switch to the mirror path and mirror digest. One test image exists: `git.ryzhkov.dev/igor/mirror/docker.io/excalidraw/excalidraw:latest`.
+
+Remaining: run `--tags registry` for real; Docker Hub images not on homelab (Hub refused homelab at 22:30) wait for the limit; tell executors which pinned Hub images need mirror references; confirm `swarm.yml --check` changed=0.
+
 ## Autolock and OCI rules
 
 The migration plan carries the operating rules (unlock after a manager restart, no drain while OCI is unreachable). With three managers one may be down or locked and the cluster keeps quorum. Because OCI is also the Proxmox QDevice and the Nebula lighthouse, and the control plane now runs over Nebula, an OCI outage removes one Swarm vote and the QDevice vote together; the two workers still hold 2 of 3.

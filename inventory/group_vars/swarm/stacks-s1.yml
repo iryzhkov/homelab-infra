@@ -11,7 +11,7 @@
 # run straight after. When every entry has moved, pending_swarm_stacks_s1 is
 # deleted and this file defines swarm_stacks_s1 alone.
 
-pending_swarm_stacks_s1:
+swarm_stacks_s1:
   - name: excalidraw
     compose:
       host: homelab

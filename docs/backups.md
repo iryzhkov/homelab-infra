@@ -8,10 +8,11 @@ Three tiers, two of which this repository owns.
 | Daily | InfluxDB, a full `influx backup` archive | 00:40 | `apps/homelab/backups/influxdb`, `rclone sync` |
 | Weekly | a check that the bucket's lifecycle rule is still sane | Sunday 03:20 | one API call |
 | Daily, normandy | Immich's Postgres dump and a tar of `~/app` | 01:30 on normandy, shipped 06:40 by homelab | `/mnt/backup/normandy` on the NAS, then `apps/normandy`, `rclone copy` |
+| Hourly, Swarm workers | the stateful Swarm stacks: SQLite snapshots, `pg_dump -Fc`, file mirrors | every hour, on the worker holding the stack | `<pool>/snapshots`, the other worker's `<pool>/peer-snapshots`, then `apps/<worker>/swarm` from homelab, `rclone sync` |
 | Twice weekly | everything else: `~/app`, `~/apps`, `~/cv-site`, the Immich library and black-pearl's NAS trees, homelab's own Postgres dumps (`pg_backup.sh`) | Mondays and Thursdays, 01:30–06:00 | various, `rclone copy`, still in cron |
 
-The hourly, daily and weekly tiers and normandy's daily dump are `roles/backup`,
-deployed by `playbooks/backup.yml`. That role also sets the schedule of
+The hourly, daily and weekly tiers, normandy's daily dump and the Swarm tier
+are `roles/backup`, deployed by `playbooks/backup.yml`. That role also sets the schedule of
 normandy's shipping line in homelab's crontab. The twice-weekly jobs are the
 pre-existing crontab on homelab and are otherwise untouched.
 
@@ -63,12 +64,83 @@ with the crontab line `homelab-bulk-backup normandy`. Its schedule comes from
 `backup_nas_dump.ship_cron` (`40 6 * * *`), and `roles/backup/tasks/ship_schedule.yml`
 rewrites that one line in place. The offsite RPO for Immich's database is about
 a day; it was up to four days when both jobs ran Mondays and Thursdays. Because
-the shipping job uses `rclone copy`, every daily dump stays in the bucket, about
-185 MB a day.
+the shipping job uses `rclone copy`, every daily dump used to stay in the
+bucket, about 185 MB a day. Since 2026-10-02 `homelab-bulk-backup normandy`
+follows the copy with `rclone delete --min-age 30d` on `apps/normandy/postgres`
+and `apps/normandy/config`, but only when the bucket holds a dump from the last
+three days, so a dump job that stopped can never empty it. The bucket's
+lifecycle rule then removes the hidden versions 30 days later: about 30 days of
+dumps are live and up to 30 more recoverable.
 
 Immich also writes its own nightly dump (02:00 UTC, 14 kept) to
 `/mnt/shared/immich/backups` on the media share. `rclone_exclude.txt` keeps
 those out of Backblaze, so they are a second NAS copy only.
+
+## Swarm stacks
+
+A stateful Swarm stack (phase 5) keeps its state under `/srv/swarm/<stack>`, a
+symlink to `<pool>/swarm` on whichever worker holds the stack's
+`pin.<stack>` label (`<pool>` is `/mnt/docker-data` on homelab, `/mnt/data` on
+normandy; both are `backup=0` zvols, outside vzdump). The tier is
+`roles/backup/tasks/swarm.yml`, configured in
+`inventory/group_vars/swarm/backup.yml`, and each stack declares what to
+snapshot in the `snapshot` key of its `swarm_stacks_*` entry.
+
+Every hour `homelab-backup-run hourly` (both workers) runs
+`/usr/local/sbin/homelab-swarm-snapshot` as root. For each stack whose
+`/srv/swarm/<stack>/.swarm-owner` names this host, it
+
+- snapshots the SQLite databases (`homelab-sqlite-backup`, 48 kept) and dumps
+  the Postgres databases (`pg_dump -Fc` inside the running task, 48 kept) into
+  `<pool>/snapshots/<stack>/`;
+- mirrors that directory to the other worker's
+  `<pool>/peer-snapshots/<this host>/<stack>/snapshots/`, and each `files:`
+  directory to `.../<stack>/files/<dir>/` (`--delete`, with the stack's
+  excludes), then writes `.../<stack>/sync/last-sync`;
+- on homelab only, `rclone sync`s `snapshots/` to `apps/homelab/swarm` and
+  normandy's copy to `apps/normandy/swarm`, so normandy needs no Backblaze
+  credentials. While homelab is down, normandy's snapshots exist only on
+  normandy.
+
+With no stack listed the run does nothing at all. A failure goes to the feed
+and the phone with the other hourly tier.
+
+**Transport.** root on each worker sends with `/etc/swarm-sync/id_ed25519`
+(one key per sender, in `secrets/swarm-sync.sops.yaml`) and its own
+`/etc/swarm-sync/known_hosts`. The receiver's `swarmsync` account accepts
+that key only from the sender's VLAN 70 address, only as
+`sudo -n /usr/bin/rrsync -wo <pool>/peer-snapshots/<sender>`
+(`/etc/sudoers.d/swarmsync` allows exactly that command and keeps
+`SSH_ORIGINAL_COMMAND`). A compromised sender can overwrite its own peer
+directory on the other worker and read nothing.
+
+**Planned move.** `playbooks/swarm-move.yml -e stack=<name> -e to=<host>`
+(dry-run with `--check`) refuses unless all three managers are Ready and
+Reachable, OCI answers on the mesh from both workers, exactly one node holds
+the pin, the old node's `.swarm-owner` agrees and the peer copy is under two
+hours old. It then scales the stack to 0, copies `/srv/swarm/<stack>/` cold to
+`peer-snapshots/<from>/<stack>/final/` on the target, restores it there,
+writes `.swarm-owner`, sets the old copy aside as
+`/srv/swarm/.moved/<stack>-<stamp>`, flips the pin label, scales back to the
+recorded replica counts (`.swarm-replicas`, kept with the data), waits for
+healthy tasks, probes the stack's routes and posts to the feed.
+
+**Crash (old node gone).** By hand, on the survivor: stop the stack's services
+(`docker service scale <svc>=0`); restore into `/srv/swarm/<stack>/` from
+`<pool>/peer-snapshots/<dead>/<stack>/`: `files/<dir>/` for the directories,
+then each SQLite snapshot gunzipped over its database, and for Postgres start
+the database service on an empty data directory and `pg_restore` the newest
+`.dump`; write `.swarm-owner`; move the pin label (needs quorum: the survivor
+and OCI); scale up. Up to an hour of loss. If OCI is unreachable too, the
+survivor first runs `docker swarm init --force-new-cluster` (see
+`docs/transition/phase5/migration-plan.md`).
+
+The Compose-era jobs find their containers by Swarm service label first and by
+Compose name second (`homelab-influx-backup`: `logging_influxdb` or
+`influxdb`; the NAS dump: the configured name as a service or a container),
+and the monthly restore check takes the newest Vaultwarden snapshot and
+Authentik dump from either the Compose-era paths or the Swarm tier, so the
+cutovers do not silently break them.
 
 ## Restoring
 

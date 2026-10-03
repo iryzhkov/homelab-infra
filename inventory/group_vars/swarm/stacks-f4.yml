@@ -23,9 +23,14 @@ pending_swarm_stacks_f4:
       host: homelab
       dir: /home/iryzhkov/cv-site
       project: cv-site
+    # Literal addresses: a swarm_stacks_* entry is read through
+    # hostvars[<host>], where `hostvars` itself is undefined, so the
+    # stack_host_ip filter cannot be used here (it fails every swarm.yml run).
+    # Immich is compose-pinned on normandy, Ollama runs on gaming-pc; change
+    # these if either moves.
     env_extra:
-      IMMICH_URL: "http://{{ hostvars | stack_host_ip(groups, 'immich') }}:2283"
-      OLLAMA_URL: "http://{{ hostvars['gaming-pc'].ansible_host }}:11434"
+      IMMICH_URL: http://192.168.70.234:2283
+      OLLAMA_URL: http://192.168.90.212:11434
     routes:
       - host: igor.ryzhkov.dev
         port: 8091
@@ -39,7 +44,7 @@ pending_swarm_stacks_f4:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/lubelogger"
+      dir: "/home/iryzhkov/app/lubelogger"
       project: lubelogger
     routes:
       - host: garage.ryzhkov.dev
@@ -57,7 +62,7 @@ pending_swarm_stacks_f4:
     prepare_tasks: swarm-prepare.yml
     compose:
       host: homelab
-      dir: "{{ hostvars['homelab'].stack_root }}/obsidian"
+      dir: "/home/iryzhkov/app/obsidian"
       project: obsidian
     routes:
       - host: obsidian.ryzhkov.dev

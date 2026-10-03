@@ -13,28 +13,7 @@
 # Every stack here keeps files under /srv/swarm/<name> on both workers,
 # written by its swarm-prepare.yml; none of them is state worth a snapshot.
 
-pending_swarm_stacks_s2:
-  - name: adguard
-    prepare_tasks: swarm-prepare.yml
-    compose:
-      host: homelab
-      dir: /home/iryzhkov/app/adguard
-    routes:
-      - host: dns-sync.ryzhkov.dev
-        port: 8321
-        # adguardhome-sync answers 401 on / and 200 on /healthz.
-        health_check:
-          path: /healthz
-
-  - name: gatus-public
-    prepare_tasks: swarm-prepare.yml
-    compose:
-      host: homelab
-      dir: /home/iryzhkov/app/gatus-public
-    routes:
-      - host: uptime.ryzhkov.dev
-        port: 3001
-
+swarm_stacks_s2:
   - name: voice
     prepare_tasks: swarm-prepare.yml
     compose:
@@ -58,6 +37,28 @@ pending_swarm_stacks_s2:
     compose:
       host: homelab
       dir: /home/iryzhkov/app/wyoming-piper
+
+pending_swarm_stacks_s2:
+  - name: adguard
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/adguard
+    routes:
+      - host: dns-sync.ryzhkov.dev
+        port: 8321
+        # adguardhome-sync answers 401 on / and 200 on /healthz.
+        health_check:
+          path: /healthz
+
+  - name: gatus-public
+    prepare_tasks: swarm-prepare.yml
+    compose:
+      host: homelab
+      dir: /home/iryzhkov/app/gatus-public
+    routes:
+      - host: uptime.ryzhkov.dev
+        port: 3001
 
   # No route here: roles/traefik/templates/whisper.yml.j2 lists the workers
   # as the CPU fallback of whisper.ryzhkov.dev.

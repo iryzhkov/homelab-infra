@@ -1,0 +1,66 @@
+---
+# homelab's twice-weekly plain-SQL Postgres dumps (Authentik, Miniflux),
+# taken over from the hand-written ~/app/pg_backup.sh on 2026-10-02, the way
+# nas_dump.yml took over normandy's. Included from main.yml on
+# backup_pg_dump.host. Variables: inventory/group_vars/swarm/backup.yml.
+
+- name: Install the Postgres dump script
+  ansible.builtin.template:
+    src: homelab-pg-dump.j2
+    dest: "{{ ansible_env.HOME }}/.local/bin/homelab-pg-dump"
+    mode: "0755"
+
+# The crontab predates this repository and its lines carry no Ansible marker,
+# so ansible.builtin.cron would add a second line. This rewrites the one line
+# that runs the old script or the managed one into the managed form, and
+# refuses when it finds none or several: which jobs exist is still decided in
+# the crontab, and a duplicate would dump twice. Runs in check mode too,
+# without writing, so --check --diff shows the change.
+- name: Point the crontab line at the managed script
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      saved=$(mktemp)
+      trap 'rm -f "$saved"' EXIT
+      crontab -l >"$saved"
+      python3 - "$saved" "{{ backup_pg_dump.retired_script }}" \
+          "{{ ansible_env.HOME }}/.local/bin/homelab-pg-dump" \
+          "{{ backup_pg_dump.cron }}" "{{ backup_pg_dump.log }}" \
+          "{{ 'check' if ansible_check_mode else 'apply' }}" <<'PY'
+      import pathlib, subprocess, sys
+      saved, old_script, script, schedule, log, mode = sys.argv[1:7]
+      assert len(schedule.split()) == 5, 'cron needs five fields: ' + schedule
+      wanted = f'{schedule} {script} >> {log} 2>&1'
+      old = pathlib.Path(saved).read_text()
+      lines, found, changed = [], 0, False
+      for line in old.splitlines():
+          parts = line.split(None, 5)
+          if (not line.lstrip().startswith('#') and len(parts) == 6
+                  and parts[5].split()[0] in (old_script, script)):
+              found += 1
+              if line != wanted:
+                  print('- ' + line)
+                  print('+ ' + wanted)
+                  line, changed = wanted, True
+          lines.append(line)
+      if found != 1:
+          sys.exit('expected one crontab line running %s or %s, found %d'
+                   % (old_script, script, found))
+      if changed and mode == 'apply':
+          backup = pathlib.Path.home() / 'crontab.before-pg-dump'
+          if not backup.exists():
+              backup.write_text(old)
+              backup.chmod(0o600)
+          subprocess.run(['crontab', '-'], input='\n'.join(lines) + '\n', text=True, check=True)
+      if changed:
+          print('changed')
+      PY
+  register: pg_dump_cron
+  changed_when: "'changed' in pg_dump_cron.stdout"
+  check_mode: false
+
+- name: Remove the hand-written script the role replaced
+  ansible.builtin.file:
+    path: "{{ backup_pg_dump.retired_script }}"
+    state: absent

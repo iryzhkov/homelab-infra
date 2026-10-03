@@ -1,0 +1,69 @@
+---
+# Where Forgejo's container runs and what it is called, for `docker exec`:
+# the running task of the Swarm service swarm_forgejo_service once batch F3
+# has moved Forgejo to Swarm (on whichever worker holds pin.forgejo), else
+# the Compose container `forgejo` on forgejo_host. Sets swarm_forgejo_host
+# and swarm_forgejo_container. Read-only.
+
+- name: Find the node running Forgejo's Swarm task
+  ansible.builtin.command:
+    argv:
+      - docker
+      - service
+      - ps
+      - "{{ swarm_forgejo_service }}"
+      - --filter
+      - desired-state=running
+      - --format
+      - "{{ '{{' }}.Node{{ '}}' }}"
+  delegate_to: "{{ swarm_bootstrap_manager }}"
+  run_once: true
+  register: swarm_forgejo_node
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read that node's inventory name
+  ansible.builtin.command:
+    argv:
+      - docker
+      - node
+      - inspect
+      - --format
+      - "{{ swarm_forgejo_host_format }}"
+      - "{{ swarm_forgejo_node.stdout_lines | first }}"
+  vars:
+    swarm_forgejo_host_format: !unsafe '{{index .Spec.Labels "host"}}'
+  delegate_to: "{{ swarm_bootstrap_manager }}"
+  run_once: true
+  register: swarm_forgejo_node_host
+  changed_when: false
+  check_mode: false
+  when:
+    - swarm_forgejo_node.rc == 0
+    - swarm_forgejo_node.stdout_lines | length > 0
+
+- name: Find the Swarm task's container on that node
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - -q
+      - --filter
+      - label=com.docker.swarm.service.name={{ swarm_forgejo_service }}
+  delegate_to: "{{ swarm_forgejo_node_host.stdout | default(forgejo_host) | trim }}"
+  run_once: true
+  register: swarm_forgejo_task
+  changed_when: false
+  check_mode: false
+  when: swarm_forgejo_node_host.stdout | default('') | trim | length > 0
+
+- name: Use the Swarm task, or the Compose container if there is none
+  ansible.builtin.set_fact:
+    swarm_forgejo_host: >-
+      {{ swarm_forgejo_node_host.stdout | trim
+         if swarm_forgejo_task.stdout_lines | default([]) | length > 0 else forgejo_host }}
+    swarm_forgejo_container: >-
+      {{ swarm_forgejo_task.stdout_lines | first
+         if swarm_forgejo_task.stdout_lines | default([]) | length > 0 else 'forgejo' }}
+  run_once: true
