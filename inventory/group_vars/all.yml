@@ -131,6 +131,13 @@ fleet_ssh_keys:
     comment: "homelab (ml-orchestrator)"
     key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDhU+leIj5YUWMbgyAD15iu4uvl7wfZaPWswPcp7Taiy"
     from: "192.168.70.223"
+  # The t3-steward coordinator on normandy, which opens a persistent SSH
+  # connection to each worker. It is normandy's general key, not one dedicated
+  # to the steward; the agent VMs accept no other fleet key.
+  steward:
+    comment: "normandy (t3-steward coordinator)"
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKm/OEz7CglgwvsF+vH0KgzkNzLsGuT5Tw9Qd7B3L+yc"
+    from: "192.168.70.234"
 
 # Forgejo, reached over SSH by the forgejo_clients group. The port is the one
 # stacks/forgejo publishes; the host key was read from the running container

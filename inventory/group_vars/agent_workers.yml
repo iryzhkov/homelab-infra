@@ -1,0 +1,63 @@
+---
+# The agent VMs, agent-a (VM 111, proxmox-a) and agent-b (VM 211, proxmox-b),
+# built 2026-10-03 for phase 6 of the serviceable transition from the Debian 13
+# templates. See docs/transition/phase6/2026-10-03-agent-vms.md.
+#
+# Each has a root disk on local-lvm and a data disk (scsi1) that is a sparse
+# zvol on the node's `tank` with backup=0: 400 GB on agent-a, 100 GB on
+# agent-b. The data disk holds Docker and the agents' workspaces, and is
+# declared disposable: nothing on it is backed up, and a VM restore drops it.
+# playbooks/agent-workers.yml makes its filesystem; each host's local_mounts
+# (host_vars) mounts it by UUID at agent_data_mount.
+#
+#   ansible-playbook playbooks/agent-workers.yml -l agent-a,agent-b
+#   ansible-playbook playbooks/base.yml -l agent-a,agent-b
+#   ansible-playbook playbooks/ssh.yml -l agent-a,agent-b
+#
+# No Nebula: see the agent_workers group in hosts.yml.
+
+# The data disk as the guest sees it, and where it is mounted.
+agent_data_device: /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi1
+agent_data_mount: /srv/agent
+# Directories on the data disk, owned by the SSH user: the agents' workspaces
+# and caches.
+agent_data_dirs:
+  - work
+  - cache
+
+# The global mise tools playbooks/agent-workers.yml declares, the set
+# UpKeeper requires of a steward worker; node is pinned as on homelab.
+agent_mise_tools:
+  node: "26.10.0"
+  claude: latest
+  codex: latest
+  opencode: latest
+
+# The genericcloud image has neither.
+qemu_guest_agent: true
+docker_install: true
+
+# Docker on the data disk from its first start: daemon.json is written before
+# Docker is installed, so it never runs on the root disk. The containerd image
+# store (the default for a fresh Docker 29 install) would keep images under
+# /var/lib/containerd on the root disk instead, so it is turned off and images
+# live under data-root with the overlay2 driver.
+docker_data_root: /srv/agent/docker
+docker_daemon_extra_settings:
+  features:
+    containerd-snapshotter: false
+
+# discard=on on both disks, so freed blocks go back to the thin pool and tank.
+fstrim_timer_enabled: true
+
+# As on the edges: some swap, so a burst is paged out rather than answered by
+# the OOM killer, and no unattended upgrades, so a docker-ce or containerd
+# upgrade never restarts a running agent container at an hour nobody chose.
+swapfile_size_mb: 2048
+unattended_upgrades_absent: true
+resolved_llmnr: "no"
+
+# Only the steward coordinator may log in from inside the fleet. The laptop's
+# key comes from cloud-init and is the administrative path.
+fleet_ssh_authorized:
+  - steward

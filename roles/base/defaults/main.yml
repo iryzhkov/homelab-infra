@@ -30,6 +30,12 @@ fstrim_timer_enabled: false
 # To roll back, set it to /var/lib/docker (Docker's own default).
 docker_data_root: ""
 
+# Further keys merged into daemon.json together with docker_data_root, and
+# under the same rule: written, never applied by a restart. Empty adds
+# nothing. The agent VMs use it to keep images under data-root (see
+# group_vars/agent_workers.yml).
+docker_daemon_extra_settings: {}
+
 # containerd's root, for a host whose Docker uses the containerd image store
 # and the system containerd.service (images and container layers live there,
 # not under Docker's data-root). Written into /etc/containerd/config.toml,

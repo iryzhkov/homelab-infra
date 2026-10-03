@@ -5,7 +5,7 @@
 #   ansible-playbook playbooks/ssh.yml --check --diff
 
 - name: Configure fleet SSH access
-  hosts: docker_hosts
+  hosts: docker_hosts:agent_workers
   gather_facts: false
   roles:
     - fleet_ssh
