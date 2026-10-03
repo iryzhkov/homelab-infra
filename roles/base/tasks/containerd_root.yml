@@ -1,0 +1,140 @@
+---
+# containerd's root (images, snapshots and container layers when Docker uses
+# the containerd image store), for a host whose dockerd talks to the system
+# containerd.service over /run/containerd/containerd.sock. No package is
+# installed, so this works on Debian and Arch alike.
+#
+# The role owns /etc/containerd/config.toml outright and writes only `version`
+# and `root`, the rest staying at containerd's built-in defaults. A file
+# without the role's marker line was written by someone else (Debian's
+# containerd.io ships one), so the run stops rather than overwrite it.
+#
+# containerd and Docker are never restarted or reloaded here: root is read
+# only when containerd starts, and a restart would stop every container on the
+# host. Moving the root is a window step (stop docker.socket, docker.service
+# and containerd.service, copy the old root across, converge this, start
+# them or the VM). Until containerd has been started on the new root, every
+# run reports that a restart is pending.
+
+- name: Require an absolute containerd root
+  ansible.builtin.assert:
+    that: containerd_root is match('^/')
+    fail_msg: containerd_root must be an absolute path, not {{ containerd_root }}.
+    quiet: true
+
+- name: Look for an existing containerd config.toml
+  ansible.builtin.stat:
+    path: /etc/containerd/config.toml
+  become: true
+  register: containerd_config_stat
+
+- name: Read the existing containerd config.toml
+  ansible.builtin.slurp:
+    src: /etc/containerd/config.toml
+  become: true
+  register: containerd_config_current
+  when: containerd_config_stat.stat.exists
+
+- name: Refuse to overwrite a config.toml this role did not write
+  ansible.builtin.assert:
+    that: >-
+      (containerd_config_current.content | b64decode).startswith(containerd_root_marker)
+    fail_msg: >-
+      /etc/containerd/config.toml exists and was not written by roles/base.
+      Merge root = "{{ containerd_root }}" into it by hand, or move it aside.
+    quiet: true
+  when: containerd_config_stat.stat.exists
+
+# The schema version containerd itself writes, so the file is never migrated
+# on load (containerd 2.3 writes 4, 2.0 writes 3, 1.x writes 2).
+- name: Read the config version this containerd uses
+  ansible.builtin.command:
+    argv: [containerd, config, default]
+  become: true
+  register: containerd_default_config
+  changed_when: false
+  check_mode: false
+
+- name: Ensure /etc/containerd exists
+  ansible.builtin.file:
+    path: /etc/containerd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# Only the file: no handler, no restart, no reload. copy compares checksums,
+# so an unchanged setting writes nothing.
+- name: Write containerd's config.toml
+  ansible.builtin.copy:
+    content: |
+      {{ containerd_root_marker }}
+      # containerd_root in the inventory; everything else is containerd's default.
+      version = {{ containerd_default_config.stdout
+                   | regex_search('(?m)^version = (\d+)', '\1') | first }}
+      root = "{{ containerd_root }}"
+    dest: /etc/containerd/config.toml
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Ensure containerd.service's drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/containerd.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# containerd must not start on an empty mount point either: with the data
+# disk missing it would build a fresh, empty root on the root disk.
+- name: Order containerd.service after the filesystem holding its root
+  ansible.builtin.copy:
+    content: |
+      # Written by homelab-infra roles/base (containerd_root).
+      [Unit]
+      RequiresMountsFor={{ containerd_root }}
+    dest: /etc/systemd/system/containerd.service.d/containerd-root.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: containerd_root_dropin
+
+# Only a reload: the ordering applies the next time containerd starts.
+- name: Reload systemd after the containerd.service drop-in changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  become: true
+  when: containerd_root_dropin is changed
+
+# The running daemon holds its metadata database open under its root.
+- name: Read the root the running containerd uses
+  ansible.builtin.shell: |
+    set -o pipefail
+    pid=$(systemctl show -p MainPID --value containerd.service)
+    [ "$pid" -gt 0 ] || exit 0
+    find /proc/$pid/fd -lname '*/io.containerd.metadata.v1.bolt/meta.db' -printf '%l\n' \
+      | head -n1 | sed 's#/io.containerd.metadata.v1.bolt/meta.db$##'
+  args:
+    executable: /bin/bash
+  become: true
+  register: containerd_running_root
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Report a containerd restart pending
+  ansible.builtin.debug:
+    msg: >-
+      containerd runs on {{ containerd_running_root.stdout | trim }} and
+      config.toml names {{ containerd_root }}. The new root applies only when
+      containerd next starts; restart it in the maintenance window, after the
+      old root has been copied across with Docker and containerd stopped.
+  when:
+    - containerd_running_root.rc == 0
+    - containerd_running_root.stdout | trim | length > 0
+    - containerd_running_root.stdout | trim != containerd_root

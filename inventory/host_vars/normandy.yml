@@ -30,6 +30,12 @@ local_mounts:
     opts: defaults,nofail,x-systemd.device-timeout=10
     before_docker: true
 
+# fstrim.timer was already enabled by the Arch preset; this keeps it so.
+# /mnt/data (plain ext4, discard=on) returns freed blocks to tank. The root
+# disk also has discard=on, but its LUKS mapping has no allow-discards flag
+# (rd.luks.options=tpm2-device=auto only), so trims of / stop at dm-crypt.
+fstrim_timer_enabled: true
+
 # Immich's Postgres dump, daily since 2026-10-02 (it was Mon and Thu). With
 # /mnt/data at backup=0, vzdump no longer holds the database's data directory,
 # so this dump is the only offsite copy of it. roles/backup (nas_dump.yml)

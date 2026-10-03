@@ -17,3 +17,25 @@ mounts_absent: []
 # Local filesystems kept in /etc/fstab by UUID, off unless a host lists some;
 # see tasks/local_mounts.yml for the shape of an item.
 local_mounts: []
+
+# Keep fstrim.timer enabled and running, so a guest returns freed blocks to a
+# thin pool or zvol every week. Useful only on a disk with discard=on.
+fstrim_timer_enabled: false
+
+# Docker's data-root, written into /etc/docker/daemon.json and merged with the
+# keys already there. Empty leaves the file alone. Writing it never restarts
+# Docker: the new root applies the next time the daemon starts, which belongs
+# to a maintenance window after the old root has been copied across with
+# Docker stopped. Until then every converge reports that a restart is pending.
+# To roll back, set it to /var/lib/docker (Docker's own default).
+docker_data_root: ""
+
+# containerd's root, for a host whose Docker uses the containerd image store
+# and the system containerd.service (images and container layers live there,
+# not under Docker's data-root). Written into /etc/containerd/config.toml,
+# which the role then owns, with RequiresMountsFor on containerd.service.
+# Empty leaves both alone. Like docker_data_root it never restarts anything;
+# set the two together, in the window. To roll back, set /var/lib/containerd.
+containerd_root: ""
+# First line of a config.toml this role wrote; any other file is left alone.
+containerd_root_marker: "# Written by homelab-infra roles/base (containerd_root)."

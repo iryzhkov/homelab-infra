@@ -45,7 +45,14 @@ services:
       - VPN_PORT_FORWARDING_STATUS_FILE=/tmp/gluetun/forwarded_port
       - TZ=UTC/UTC
       - UPDATER_PERIOD=24h
-      - FIREWALL_OUTBOUND_SUBNETS=192.168.1.0/24,192.168.20.0/24,10.0.0.0/16,172.21.0.0/16
+      # No FIREWALL_OUTBOUND_SUBNETS since phase 3. The value carried over from
+      # Portainer (192.168.1.0/24, 192.168.20.0/24, 10.0.0.0/16, 172.21.0.0/16)
+      # let qBittorrent open connections into those networks outside the
+      # tunnel, and nothing used it: the port manager talks to localhost, and
+      # the WebUI is reached inbound (the *arr apps on homelab, Traefik on
+      # public-api), whose replies gluetun passes as established traffic and
+      # routes back through eth0 without any entry here
+      # (docs/transition/phase3/2026-10-02-blackpearl-prep.md).
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://google.com"]
       interval: 30s

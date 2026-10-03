@@ -1,0 +1,71 @@
+---
+# Docker's data-root in /etc/docker/daemon.json, merged with whatever keys the
+# file already holds (log driver, address pools). No package is installed, so
+# this works on Debian and Arch alike.
+#
+# Docker is never restarted or reloaded here: data-root is read only when the
+# daemon starts, and a restart would stop every container on the host. Moving
+# the root is a window step (stop docker.socket and docker.service, copy the
+# old root across, converge this, start Docker or the VM). Until Docker has
+# been started on the new root, every run reports that a restart is pending.
+
+- name: Require an absolute data-root
+  ansible.builtin.assert:
+    that: docker_data_root is match('^/')
+    fail_msg: docker_data_root must be an absolute path, not {{ docker_data_root }}.
+    quiet: true
+
+- name: Look for an existing daemon.json
+  ansible.builtin.stat:
+    path: /etc/docker/daemon.json
+  become: true
+  register: docker_daemon_json_stat
+
+- name: Read the existing daemon.json
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  become: true
+  register: docker_daemon_json_current
+  when: docker_daemon_json_stat.stat.exists
+
+- name: Merge data-root into the existing settings
+  ansible.builtin.set_fact:
+    docker_daemon_settings: >-
+      {{ ((docker_daemon_json_current.content | b64decode | from_json)
+          if docker_daemon_json_stat.stat.exists else {})
+         | combine({'data-root': docker_data_root}) }}
+
+# Only the file: no handler, no restart, no reload.
+- name: Write daemon.json
+  ansible.builtin.copy:
+    content: "{{ docker_daemon_settings | to_nice_json(indent=2) }}\n"
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  # An unchanged setting must not rewrite a hand-formatted file.
+  when: >-
+    not docker_daemon_json_stat.stat.exists
+    or (docker_daemon_json_current.content | b64decode | from_json)
+       != docker_daemon_settings
+
+- name: Read the data-root the running daemon uses
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{' }}.DockerRootDir{{ '}}' }}"]
+  become: true
+  register: docker_running_root
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Report a Docker restart pending
+  ansible.builtin.debug:
+    msg: >-
+      Docker runs on {{ docker_running_root.stdout | default('?') }} and
+      daemon.json names {{ docker_data_root }}. The new root applies only when
+      the daemon next starts; restart it in the maintenance window, after the
+      old root has been copied across with Docker stopped.
+  when:
+    - docker_running_root.rc == 0
+    - docker_running_root.stdout | trim != docker_data_root
