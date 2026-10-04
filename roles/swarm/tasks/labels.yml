@@ -64,6 +64,13 @@
       changed_when: false
       check_mode: false
 
+    # A drained worker during a host maintenance (playbooks/host-drain.yml)
+    # must stay drained until host-return.yml undrains it.
+    - name: Refuse to reset the availability during maintenance
+      ansible.builtin.include_role:
+        name: maintenance_guard
+      when: swarm_availability_now.stdout | trim != swarm_availability | default('active')
+
     - name: Set the node's availability
       ansible.builtin.command:
         argv:

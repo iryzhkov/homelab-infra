@@ -1,6 +1,9 @@
 [Unit]
 Description=Detect stale Jocasta NAS recovery points
 After=network-online.target
+# The check reads /mnt/backup. At boot the timer can fire before the NFS
+# mount is up (2026-10-03, homelab's return in phase 7): wait for it.
+RequiresMountsFor=/mnt/backup
 
 [Service]
 Type=oneshot

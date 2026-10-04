@@ -20,8 +20,12 @@ swarm_stacks_s2:
     routes:
       - host: voice.ryzhkov.dev
         port: 8097
-        # No unauthenticated endpoint answers 200, as before.
-        health_check: false
+        # The static page at / answers 200 without a login (measured
+        # 2026-10-03 on both workers). Without a check, Traefik kept sending
+        # half the requests to a stopped worker during the phase 7 drain of
+        # proxmox-b (voice.ryzhkov.dev failed 26 of 54 rounds).
+        health_check:
+          path: /
 
   # No route: Home Assistant names 192.168.70.223:10300.
   - name: wyoming-openai
