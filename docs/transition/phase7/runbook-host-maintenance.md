@@ -95,9 +95,8 @@ Consequences that follow from those, not separate exceptions:
 - Literal homelab addresses: the *arr apps call flaresolverr at `192.168.70.223:8191` (the
   routing mesh keeps it answering only while homelab is up); Home Assistant names Wyoming and
   InfluxDB on homelab (HA is down with proxmox-a anyway).
-- cv-site's `IMMICH_URL` is the literal `http://192.168.70.234:2283`
-  (`inventory/group_vars/swarm/stacks-f4.yml`), so its photo feature fails while Immich runs on
-  homelab; `https://photos.ryzhkov.dev` would follow it.
+- cv-site's `IMMICH_URL` is `https://photos.ryzhkov.dev` since 2026-10-03, so its photo
+  feature follows Immich to either host.
 - Backups that name a host keep naming the home host: Emby's twice-weekly SQLite copy runs on
   homelab, Immich's nightly dump on normandy. While a stack is away (hours), the job on the
   home host is down with it; no new backup of that stack is taken until it returns.
@@ -305,24 +304,18 @@ The design, as it was proposed before it was built:
   through Traefik wherever it runs and survives the loss of either edge. Emby still sees OCI's
   mesh address for outside clients (Traefik does not trust OCI's `X-Forwarded-For`). Apply
   with `ansible-playbook playbooks/oci-caddy.yml` (a `caddy reload`, no dropped connections).
-- **UniFi, for Igor**: the port group `traefik-homelab-ports` (id `6a966cc55afbaf142ea88874`),
-  used by the policy `public-api -> homelab (Traefik backends)` towards both workers, lacks
-  2283 (Immich on homelab). (1933 is not in it either, but another policy already lets the
-  edges reach it: `ov.ryzhkov.dev/health` answers 200 through the VIP.) Measured from both edges:
-  `192.168.70.223:2283` times out (curl exit 28) while `:8096` answers 302. Without 2283,
-  `photos.ryzhkov.dev` fails while Immich runs on homelab.
-- **Home Assistant, for Igor**: `configuration.yaml` (`media_player: platform: emby, host:
-  192.168.70.223`) and `packages/requests.yaml` (four `rest_command`s on
-  `http://192.168.70.223:8096`) name homelab. While Emby runs on normandy (a proxmox-a drain)
-  Home Assistant is down too, so it matters only for a drain-only rehearsal; the lasting fix is
-  `https://emby.ryzhkov.dev`.
-- **OpenViking clients** that name `192.168.70.223:1933` (found 2026-10-03):
-  `~/.config/ov-mcp/config.toml` on the laptop, normandy and gaming-pc (`base_url`), homelab's
-  `~/.config/ov-mcp/config.toml` and `~/.codex/config.toml`, the laptop's
-  `~/.claude/settings.json`, and the `ov-memory` skill's text on every host. homelab's own
-  `~/.claude.json` uses `127.0.0.1:1933`, which stops answering when OpenViking moves to
-  normandy. They belong to the agent tooling (UpKeeper); the failover-capable address is
-  `https://ov.ryzhkov.dev`, live since 2026-10-03 11:15.
+- **UniFi**: done 2026-10-03 11:11. The port group `traefik-homelab-ports` (id
+  `6a966cc55afbaf142ea88874`) now includes 2283 and 1933, so the edges reach Immich and
+  OpenViking on either worker (`2026-10-03-outside-repo-changes.md`). photos.ryzhkov.dev
+  answered while Immich ran on homelab during the proxmox-b window.
+- **Home Assistant**: done 2026-10-03 11:12 (core restarted 11:33). The Emby integration and the
+  four `rest_command`s use `https://emby.ryzhkov.dev`, so they follow Emby to either host; the
+  integration reconnected after each rehearsal move.
+- **OpenViking clients**: done 2026-10-03. Every managed client uses `OV_BASE_URL` =
+  `https://ov.ryzhkov.dev` through UpKeeper v0.1.23 and release
+  `9ae93944f9b9beefb9cbd7a7a32aa57adf9d28a9d9a1298bd3760248c6f6c055`. The stale
+  `~/.config/ov-mcp/config.toml` files still name `192.168.70.223:1933` but are overridden;
+  agent sessions started before the release keep the old address until they restart.
 
 ## Measured
 
