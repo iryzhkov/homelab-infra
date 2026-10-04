@@ -1,0 +1,67 @@
+---
+# Refuse to run while a host is in maintenance (plan phase 7).
+#
+# playbooks/host-drain.yml sets the node label maintenance=<proxmox host> on
+# the surviving Swarm worker before it changes anything, and
+# playbooks/host-return.yml removes it as its last step. While it is set, a
+# converge must not undo the drain: the nodes play would reset the drained
+# worker to active, keepalived would be started again on the edge the drain
+# stopped, and site.yml would deploy stacks on the host that is down or
+# re-create projects the drain stopped. Included by roles/swarm (labels.yml),
+# roles/keepalived and playbooks/site.yml.
+#
+#   -e maintenance_override=true   run anyway (the maintenance playbooks pass
+#                                   it to the converges they run themselves)
+#
+# The label is read from the first Swarm worker that answers, once per play.
+# If no worker answers, the play is refused as well: maintenance cannot be
+# ruled out.
+#
+# Test hook: -e maintenance_guard_test_marker=<text> behaves as if the label
+# read <text> (for check-mode tests without setting a label).
+
+- name: Maintenance guard | read the maintenance label from a Swarm worker
+  ansible.builtin.shell:
+    cmd: >-
+      set -e;
+      for id in $(docker node ls -q --filter node.label=maintenance); do
+      docker node inspect --format '{{ '{{' }}index .Spec.Labels "maintenance"{{ '}}' }} on {{ '{{' }}.Description.Hostname{{ '}}' }}' "$id"; done
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_workers'] | default([]) }}"
+  register: maintenance_guard_read
+  changed_when: false
+  failed_when: false
+  ignore_unreachable: true
+  check_mode: false
+  run_once: true
+  when: not (maintenance_override | default(false) | bool)
+
+- name: Maintenance guard | refuse while a host is in maintenance
+  ansible.builtin.assert:
+    that:
+      - answered | length > 0
+      - marker | trim | length == 0
+    fail_msg: >-
+      {{ ('Maintenance in progress: ' ~ marker
+          ~ ' (node label set by playbooks/host-drain.yml). Finish it with'
+          ~ ' playbooks/host-return.yml, or pass -e maintenance_override=true.')
+         if answered | length > 0 else
+         ('No Swarm worker answered, so maintenance cannot be ruled out;'
+          ~ ' pass -e maintenance_override=true to run anyway.') }}
+    quiet: true
+  vars:
+    answered: >-
+      {{ maintenance_guard_read.results | default([])
+         | rejectattr('unreachable', 'defined')
+         | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0) | list }}
+    marker: >-
+      {{ maintenance_guard_test_marker
+         if maintenance_guard_test_marker is defined
+         else ((answered | first).stdout_lines | join(', ') if answered | length > 0 else '') }}
+  run_once: true
+  # A run_once failure must stop every host of the play, not only the one
+  # the assert ran on.
+  any_errors_fatal: true
+  when:
+    - not (maintenance_override | default(false) | bool)
+    - groups['swarm_workers'] | default([]) | length > 0

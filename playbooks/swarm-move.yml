@@ -218,7 +218,10 @@
         cmd: |
           set -eu
           cat {{ swarm_move_dir }}/.swarm-owner 2>/dev/null || echo missing
-          cat {{ swarm_move_dir }}/.swarm-replicas 2>/dev/null || echo '{}'
+          moved=$(ls -dt {{ swarm_state_root }}/.moved/{{ stack }}-* 2>/dev/null | head -1)
+          echo "${moved:-none}"
+          cat {{ swarm_move_dir }}/.swarm-replicas 2>/dev/null \
+            || { [ -n "$moved" ] && cat "$moved/.swarm-replicas" 2>/dev/null; } || echo '{}'
       delegate_to: "{{ swarm_move_from }}"
       become: true
       register: swarm_move_from_state
@@ -241,6 +244,36 @@
       changed_when: false
       check_mode: false
 
+    # A re-run after a failure between "set the old copy aside" and the pin
+    # flip finds no live copy on the old node, the copy set aside in
+    # .moved/<stack>-*, and the target already owning the restored data: it
+    # resumes from the pin flip instead of refusing. Check-mode test hook:
+    # -e swarm_move_test_resume=true pretends to be in that state.
+    - name: Read the ownership marks
+      ansible.builtin.set_fact:
+        swarm_move_from_owner: >-
+          {{ 'missing' if swarm_move_test_resume | default(false) | bool
+             else swarm_move_from_state.stdout_lines[0] }}
+        swarm_move_from_moved: >-
+          {{ (swarm_move_test_resume | default(false) | bool)
+             or swarm_move_from_state.stdout_lines[1] != 'none' }}
+        swarm_move_to_owner: >-
+          {{ to if swarm_move_test_resume | default(false) | bool
+             else swarm_move_to_state.stdout_lines[0] }}
+
+    - name: Refuse the test hook outside check mode
+      ansible.builtin.assert:
+        that: ansible_check_mode
+        fail_msg: swarm_move_test_resume is for check mode only.
+        quiet: true
+      when: swarm_move_test_resume | default(false) | bool
+
+    - name: Decide whether this run resumes an interrupted move
+      ansible.builtin.set_fact:
+        swarm_move_resume: >-
+          {{ swarm_move_from_owner == 'missing' and swarm_move_from_moved | bool
+             and swarm_move_to_owner == to }}
+
     - name: Work out the replica counts to restore
       ansible.builtin.set_fact:
         swarm_move_replicas: >-
@@ -248,7 +281,7 @@
           {%- for line in swarm_move_replicas_now.stdout_lines | default([]) -%}
           {%-   set _ = live.update({line.split()[0]: line.split()[1]}) -%}
           {%- endfor -%}
-          {%- set recorded = swarm_move_from_state.stdout_lines[1:] | join('\n') | from_json -%}
+          {%- set recorded = swarm_move_from_state.stdout_lines[2:] | join('\n') | from_json -%}
           {{ live if (live.values() | map('int') | sum) > 0 else recorded }}
 
     - name: Refuse a move the stack is not ready for
@@ -258,14 +291,15 @@
           - "'global' not in swarm_move_replicas.values() | list"
           - swarm_move_replicas | length > 0
           - (swarm_move_replicas.values() | map('int') | sum) > 0
-          - swarm_move_from_state.stdout_lines[0] == swarm_move_from
-          - swarm_move_to_state.stdout_lines[0] in ['absent', to]
-          - swarm_move_to_state.stdout_lines[1] | int < swarm_move_max_age | int
+          - swarm_move_from_owner == swarm_move_from or swarm_move_resume | bool
+          - swarm_move_to_owner in ['absent', to]
+          - swarm_move_resume | bool or swarm_move_to_state.stdout_lines[1] | int < swarm_move_max_age | int
         fail_msg: >-
           {{ stack }}: services {{ swarm_move_services.stdout_lines }}, replicas
           {{ swarm_move_replicas }}; {{ swarm_move_dir }} on {{ swarm_move_from }} is owned
-          by '{{ swarm_move_from_state.stdout_lines[0] }}' (must be {{ swarm_move_from }});
-          on {{ to }} it is '{{ swarm_move_to_state.stdout_lines[0] }}' (must be absent);
+          by '{{ swarm_move_from_owner }}' (must be {{ swarm_move_from }}, or missing with a
+          copy in .moved and {{ to }} the owner, to resume); on {{ to }} it is
+          '{{ swarm_move_to_owner }}' (must be absent or {{ to }});
           the peer copy on {{ to }} is {{ swarm_move_to_state.stdout_lines[1] }} s old
           (limit {{ swarm_move_max_age }}; -e allow_stale=true to skip).
         quiet: true
@@ -275,6 +309,7 @@
         msg: >-
           Moving {{ stack }} ({{ swarm_move_replicas }}) from {{ swarm_move_from }}
           to {{ to }}; the peer copy is {{ swarm_move_to_state.stdout_lines[1] }} s old.
+          {{ 'Resuming an interrupted move: the data is already on ' ~ to ~ '; only the pin flip and the start remain.' if swarm_move_resume | bool else '' }}
           {{ 'Check mode: nothing below runs.' if ansible_check_mode else '' }}
 
     # 2. Stop -----------------------------------------------------------------
@@ -288,6 +323,7 @@
         mode: "0644"
       delegate_to: "{{ swarm_move_from }}"
       become: true
+      when: not swarm_move_resume | bool
 
     - name: Scale every service of {{ stack }} to 0
       ansible.builtin.command:
@@ -328,6 +364,7 @@
       delegate_to: "{{ swarm_move_from }}"
       become: true
       changed_when: true
+      when: not swarm_move_resume | bool
 
     # 4. Restore --------------------------------------------------------------
 
@@ -342,6 +379,7 @@
           - "{{ swarm_move_dir }}/"
       become: true
       changed_when: true
+      when: not swarm_move_resume | bool
 
     - name: Make {{ to }} the owner
       ansible.builtin.copy:
@@ -352,7 +390,7 @@
         mode: "0644"
       become: true
       # The directory exists only once the restore above has run.
-      when: not ansible_check_mode
+      when: not ansible_check_mode and not swarm_move_resume | bool
 
     # 5. Retire the old copy --------------------------------------------------
 
@@ -366,6 +404,7 @@
       delegate_to: "{{ swarm_move_from }}"
       become: true
       changed_when: true
+      when: not swarm_move_resume | bool
 
     # 6. Flip the pin ---------------------------------------------------------
 

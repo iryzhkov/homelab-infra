@@ -29,6 +29,15 @@
   vars: &site_vars
     site_swarm_stack_names: "{{ hostvars | swarm_stack_names(groups) }}"
 
+  # During a host maintenance (playbooks/host-drain.yml to host-return.yml)
+  # a converge would deploy onto the host that is down or bring back what the
+  # drain stopped; the maintenance playbooks pass -e maintenance_override=true
+  # to the converges they run themselves.
+  pre_tasks: &site_pre_tasks
+    - name: Refuse to run during a host maintenance
+      ansible.builtin.include_role:
+        name: maintenance_guard
+
   tasks: &site_tasks
     - name: Deploy each stack
       ansible.builtin.include_role:
@@ -101,4 +110,5 @@
   serial: 1
   gather_facts: false
   vars: *site_vars
+  pre_tasks: *site_pre_tasks
   tasks: *site_tasks

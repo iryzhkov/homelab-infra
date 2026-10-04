@@ -64,6 +64,7 @@ host_maintenance_routes:
   - { host: garage.ryzhkov.dev, path: / }
   - { host: obsidian.ryzhkov.dev, path: / }
   - { host: photos.ryzhkov.dev, path: /api/server/ping }
+  - { host: ov.ryzhkov.dev, path: /health }
   - { host: emby.ryzhkov.dev, path: /System/Info/Public }
   - { host: cctv.ryzhkov.dev, path: /, down_with: proxmox-b }
   - { host: jocasta.ryzhkov.dev, path: /healthz, down_with: proxmox-a }

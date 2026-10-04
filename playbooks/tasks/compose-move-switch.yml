@@ -127,10 +127,12 @@
     stdin: ""
   delegate_to: localhost
   loop:
-    - [playbooks/site.yml, -l, "{{ to }}", -e, "only={{ stack }}"]
-    - [playbooks/site.yml, -l, "{{ cm_from }}", -e, "only={{ stack }}"]
+    # maintenance_override: these converges are part of the move, which a
+    # host drain or return runs while its maintenance marker is set.
+    - [playbooks/site.yml, -l, "{{ to }}", -e, "only={{ stack }}", -e, maintenance_override=true]
+    - [playbooks/site.yml, -l, "{{ cm_from }}", -e, "only={{ stack }}", -e, maintenance_override=true]
     - [playbooks/traefik.yml]
-    - [playbooks/site.yml, -l, "{{ groups['swarm_workers'] | join(',') }}", -e, only=gatus]
+    - [playbooks/site.yml, -l, "{{ groups['swarm_workers'] | join(',') }}", -e, only=gatus, -e, maintenance_override=true]
   loop_control:
     label: "{{ item | join(' ') }}"
   register: cm_converge

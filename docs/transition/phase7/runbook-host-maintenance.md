@@ -135,13 +135,23 @@ Consequences that follow from those, not separate exceptions:
    home. A `site.yml` run from another machine would not see it, would deploy the stack on its
    home host as well, and the prepare check would refuse there only if that host's copy were
    missing. Never edit the file by hand; move the stack instead.
-7. **No `swarm.yml --tags stacks` converge while a stateful stack sits away from its inventory
-   pin**, until the prepare-file fix is confirmed (2026-10-03: miniflux's and Authentik's
-   `swarm-prepare.yml` read the node from the inventory pin rather than the node label, so a
-   converge would recreate an empty state directory on the old node and abort; E26's fix
-   to read the node label was reported done by the lead the same day; re-check it before
-   relying on this rule's removal). The drain and return playbooks never run that converge while stacks are
-   away, except `-e shed=` restores after every stack is home.
+7. **A `swarm.yml --tags stacks` converge is safe while a stateful stack sits away from its
+   inventory pin.** Checked 2026-10-03: every one of the 20 `stacks/*/swarm-prepare.yml` that
+   names a pin finds the node by `docker node ls --filter node.label=pin.<stack>=true` and
+   falls back to the inventory `pin` only when no node carries the label (before the first
+   cutover); the six stateless ones name no pin. (Until E26's fix that day, miniflux's and
+   Authentik's read the inventory pin, and a converge after a move would have recreated an
+   empty state directory on the old node.)
+8. **The maintenance marker.** `host-drain.yml` sets the node label `maintenance=<proxmox
+   host>` on the surviving worker before it changes anything, and `host-return.yml` removes it
+   as its last step. While it is set, `site.yml`, the keepalived role and the nodes play's
+   availability reset (`roles/swarm/tasks/labels.yml`) refuse to run (`roles/maintenance_guard`),
+   so no converge restarts keepalived on the edge that is going down, undrains the worker, or
+   deploys onto the host that is off. `-e maintenance_override=true` runs them anyway; the
+   maintenance playbooks pass it to the converges they run themselves. A drain refuses while
+   another host's marker is set (one host at a time). To see it: `docker node ls -q --filter
+   node.label=maintenance` on a manager. To clear it by hand after an abandoned maintenance:
+   `docker node update --label-rm maintenance <node>`.
 
 ## Presence pre-check
 
@@ -170,14 +180,15 @@ is the drain-only rehearsal (plan phase 7 step 1); undo it with `host-return.yml
 
 | Step | What happens | Rollback if it fails or is stopped here |
 |---|---|---|
-| 1. Pre-checks | Host known; only listed guests run; managers and OCI; Proxmox quorum and QDevice; both Gatus instances green; last vzdump OK and under 26 h; presence and Emby; reservations of what moves fit on the surviving worker with 2 GiB to spare | Nothing changed. Fix the cause; never override the OCI or quorum checks. |
+| 1. Pre-checks | Host known; only listed guests run; managers and OCI; Proxmox quorum and QDevice; both Gatus instances green (on a re-run after a drain-only run, the survivor's only, expected failures allowed); last vzdump OK and under 26 h; presence and Emby; reservations of what moves fit on the surviving worker with 2 GiB to spare; every stack that will move has a peer copy on the survivor under two hours old (run `systemctl --user start homelab-backup-hourly.service` on the leaving worker first); no other host's maintenance marker. Then the marker is set. | Nothing changed but the marker; `host-return.yml` removes it, or `docker node update --label-rm maintenance <node>`. Never override the OCI or quorum checks. |
+| 2 to 8 as a unit | If any step from 2 on fails, a rescue starts keepalived again on the edge the run stopped, redeploys the shed tier, and fails the drain. Moves already made stay valid; the marker stays set. | `host-return.yml -e host=<h>` undoes the rest. |
 | 2. VIP | If the leaving host's edge holds 192.168.20.3, `keepalived` is stopped there and the playbook waits for the survivor to take it (phase 4 measured 1.34 s). `nopreempt` keeps it there afterwards. | `systemctl start keepalived` on the stopped edge (`host-return.yml` does it); the VIP stays where it is. |
 | 3. Shed | Only with `-e shed=<stack,...>`: those stacks scaled to 0. Not needed today: normandy has 11.6 GiB available against 4.7 GiB reserved by everything that moves there. Candidates, cheapest first: whisper (1.5 GiB limit), komga, flaresolverr, wyoming-piper, librespeed, kiwix. | `ansible-playbook playbooks/swarm.yml --tags stacks -e only=<stack>` per shed stack (the return does it with the same `-e shed=`). |
 | 4. Moves | `swarm-move.yml -e stack=<s> -e to=<survivor worker>` per stateful stack pinned to the leaving worker: leaf stacks in name order, then authentik, miniflux, vaultwarden, forgejo last (the image mirror). Each is a stop, a cold copy, a restore, a pin flip, a start, probes, and a tidy of obsolete copies. About 40 s each, of which about 20 s is the route failing; 19 stacks take about 13 minutes. | A move that fails before its pin flip leaves the stack stopped on the old node: `docker service scale <svc>=<n>` on it restores it (the counts are in `/srv/swarm/<stack>/.swarm-replicas`). After the flip: move it back with `swarm-move.yml -e to=<old node>`. Moves already done stay valid; continue or run `host-return.yml`. |
 | 4b. Compose moves | `compose-move.yml -e stack=<s> -e to=<survivor worker>` for the movable Compose stack placed on the leaving worker: Emby for proxmox-a, Immich for proxmox-b (section "Compose moves"). | Before the placement flip: `site.yml -l <worker> -e only=<s>`. After it: `compose-move.yml -e to=<worker>`. |
 | 5. Drain | `docker node update --availability drain <worker>`; wait until it runs no Swarm task and every service except `logging` and the shed has a running task. hugo runs one of two replicas (one per node). | `docker node update --availability active <worker>`. |
 | 6. Compose | `docker stop -t 60` on every container of the host's Compose projects (normandy's Omarchy `DefaultTimeoutStopSec=5s` would otherwise kill them at shutdown). | `docker start` on them (`host-return.yml` step 7). |
-| 7. Verify | Every household route through the VIP answers 2xx, 3xx or 401, except those that go down with this host by design; `vault.ryzhkov.dev` resolves to the VIP from the surviving worker (a VLAN 70 client); Gatus on the survivor fails only where `host_maintenance_gatus_expected` allows. | Investigate before powering off; `host-return.yml` undoes steps 2 to 6. |
+| 7. Verify | Every route Traefik serves (its router list on the surviving edge, 43 hosts on 2026-10-03) is probed through the VIP. The household routes in `host_maintenance_routes` must answer 2xx, 3xx or 401, except those that go down with this host by design; any other router (T3 hosts, the test car, Proxmox) is probed at `/` and reported, without refusing; `vault.ryzhkov.dev` resolves to the VIP from the surviving worker (a VLAN 70 client); Gatus on the survivor fails only where `host_maintenance_gatus_expected` allows. | Investigate before powering off; `host-return.yml` undoes steps 2 to 6. |
 | 8. Power off (`-e power_off=true`) | Guests shut down in the listed order (`qm shutdown --timeout 300`, `pct shutdown --timeout 120`); refuse if any still runs; `systemd-run --on-active=10 /sbin/shutdown -h now`; wait until the host leaves the network; check the survivor is still quorate. | Power the host on; `host-return.yml`. |
 
 DNS during a proxmox-a outage: DHCP advertises 192.168.20.154, .106 and .83 on every VLAN
@@ -222,7 +233,8 @@ power button. Then:
 | 7. Compose | `docker start` every stopped container of the projects the drain stopped; wait until none is exited, starting or unhealthy | `ansible-playbook playbooks/site.yml -l <host> -e only=<project>` |
 | 8. Stacks home | the survivor's hourly snapshot job runs once (the move needs a peer copy under two hours old), then `swarm-move.yml -e to=<worker>` for every stack whose inventory `pin` names the worker, same order as the drain; then `compose-move.yml -e to=<worker>` for the movable Compose stack whose home is the worker (the override file is removed once both are home); then `-e shed=` stacks are redeployed | a stack left on the survivor keeps working there; move it later |
 | 9. Verify | both Gatus instances without failures, every route through the VIP, keepalived active on both edges and the VIP on exactly one | - |
-| 10. Loki (proxmox-a only) | after homelab returns, Loki's task runs but `/ready` can stay at "Ingester not ready: waiting for 15s after being ready"; then `docker service update --force logging_loki` on a manager, and `curl http://127.0.0.1:3100/ready` on homelab answers `ready` within half a minute | logs are dropped meanwhile, nothing else waits on it |
+| 10. Loki (proxmox-a only, required) | after homelab returns, Loki's task runs but `/ready` stays at "Ingester not ready: waiting for 15s after being ready" (2026-10-03: still so 17 minutes after the return); run `docker service update --force logging_loki` on a manager, and `curl http://127.0.0.1:3100/ready` on homelab answers `ready` within half a minute. Root cause open: it looks like the single-node ring keeping the old instance's entry after an unclean stop (the same symptom as the 23:50 ring failure in phase 5, `docs/transition/phase5/2026-10-03-F5.md`). | logs are dropped meanwhile, nothing else waits on it |
+| 11. Clear the maintenance | an hourly snapshot on the returned worker (so the next drain's pre-pass finds fresh peer copies of the stacks that just came home), then the maintenance marker removed | `docker node update --label-rm maintenance <node>` |
 
 What the return proves on each host, checked on 2026-10-03: `tank` imported at boot
 (`journalctl -b -u zfs-import@tank`), the pool disk mounted before containerd and Docker
@@ -325,7 +337,46 @@ the slowest); Immich 16 s and 22 s; Emby 24 s and 28 s; Authentik and forward au
 37 s. While a host is down, only the accepted exceptions fail: Frigate for proxmox-b; Home
 Assistant, Zigbee, MQTT, Jocasta, dsh, the feed, logging and torrents for proxmox-a.
 
+## Copies left behind, by design
+
+- `/srv/swarm/.moved/<stack>-<stamp>` on the node a stack left: the rollback copy of that move,
+  as it was at the stop. It is overwritten (removed and replaced) the next time the stack leaves
+  that node, and removed by the tidy when the stack moves back onto it. On 2026-10-03, after
+  both drains, normandy holds 19 of them, 9.7 GB (from the moves home). If space is needed, prune them by
+  hand: `sudo rm -rf /srv/swarm/.moved/<stack>-*` on that node, never the live
+  `/srv/swarm/<stack>`.
+- `<pool>/compose/<stack>` on the worker that is not the stack's home (normandy
+  `/mnt/data/compose/emby`, homelab `/mnt/docker-data/compose/immich/postgres`): the cold copy
+  from the last time the stack ran there. It is overwritten by the next move (`rsync --delete`)
+  and makes that move's warm copy short. It is stale data, including Emby's config and Immich's
+  database; the root is root:root 0700. Prune by hand if space is needed: `sudo rm -rf
+  <pool>/compose/<stack>`.
+- The staging copies under `peer-snapshots/<peer>/compose/` are removed by every move and every
+  rollback; none should exist between maintenances.
+
+## Retest at the next drain
+
+- voice: its route now has a health check; confirm it does not fail while its other worker is
+  down (it failed every other request during the proxmox-b drain).
+- irc and rss: both failed in short bursts while other stacks moved (6 to 39 s of 503, from
+  15:28 to 15:31 and 16:02 to 16:06 on 2026-10-03), not only at their own moves. Recorded, not
+  fixed: their Traefik health checks (5 s interval, 3 s timeout) probably time out while the
+  worker is busy with move copies. A longer timeout on those two routes is the candidate fix.
+
 ## Lessons built into the playbooks (2026-10-03)
+
+Added after the review of the host-down runs:
+
+- The maintenance marker and its guard (rule 8).
+- The drain's read-only pre-pass on peer-copy age, before anything changes; `host-return.yml`
+  ends with an hourly snapshot on the returned worker.
+- The drain's rescue (keepalived and the shed tier restored on any failure after step 2).
+- `swarm-move.yml` resumes a move interrupted after the old copy was set aside and before the
+  pin flip (no owner on the old node, a copy in `.moved/<stack>-*`, the target already the
+  owner): it skips the copies and goes on with the pin flip and the start.
+- The verify step probes Traefik's own router list.
+
+From the host-down runs themselves:
 
 - Every Swarm route needs a Traefik health check, or Traefik keeps sending part of the traffic to
   a stopped worker (voice failed every other request while proxmox-b was down; its route now

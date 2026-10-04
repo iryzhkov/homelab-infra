@@ -50,10 +50,10 @@
     stdin: ""
   delegate_to: localhost
   loop:
-    - [playbooks/site.yml, -l, "{{ cm_from }}", -e, "only={{ stack }}"]
-    - [playbooks/site.yml, -l, "{{ to }}", -e, "only={{ stack }}"]
+    - [playbooks/site.yml, -l, "{{ cm_from }}", -e, "only={{ stack }}", -e, maintenance_override=true]
+    - [playbooks/site.yml, -l, "{{ to }}", -e, "only={{ stack }}", -e, maintenance_override=true]
     - [playbooks/traefik.yml]
-    - [playbooks/site.yml, -l, "{{ groups['swarm_workers'] | join(',') }}", -e, only=gatus]
+    - [playbooks/site.yml, -l, "{{ groups['swarm_workers'] | join(',') }}", -e, only=gatus, -e, maintenance_override=true]
   loop_control:
     label: "{{ item | join(' ') }}"
   when: not ansible_check_mode

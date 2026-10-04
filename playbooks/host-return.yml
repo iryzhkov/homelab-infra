@@ -158,7 +158,10 @@
 
     - name: Unlock {{ hm.worker }} through the nodes play
       ansible.builtin.command:
-        argv: "{{ ['ansible-playbook', playbook_dir ~ '/swarm.yml', '--tags', 'nodes', '-l', hm.worker] + hm_check_flag }}"
+        # maintenance_override: the marker is still set; the nodes play would
+        # otherwise refuse to reset the worker's availability (it is undrained
+        # below anyway).
+        argv: "{{ ['ansible-playbook', playbook_dir ~ '/swarm.yml', '--tags', 'nodes', '-l', hm.worker, '-e', 'maintenance_override=true'] + hm_check_flag }}"
         chdir: "{{ playbook_dir }}/.."
         stdin: ""
       delegate_to: localhost
@@ -310,7 +313,7 @@
 
     - name: Restore the shed tier from its stack files
       ansible.builtin.command:
-        argv: "{{ ['ansible-playbook', playbook_dir ~ '/swarm.yml', '--tags', 'stacks', '-e', 'only=' ~ item] + hm_check_flag }}"
+        argv: "{{ ['ansible-playbook', playbook_dir ~ '/swarm.yml', '--tags', 'stacks', '-e', 'only=' ~ item, '-e', 'maintenance_override=true'] + hm_check_flag }}"
         chdir: "{{ playbook_dir }}/.."
         stdin: ""
       loop: "{{ hm_shed }}"
@@ -384,6 +387,29 @@
         that: hr_edges.results | map(attribute='stdout') | map('split') | map('last') | map('int') | sum == 1
         fail_msg: "keepalived and VIP per edge: {{ hr_edges.results | map(attribute='stdout') | list }}"
         quiet: true
+
+    # 10. Clear the maintenance -------------------------------------------------
+
+    # So the next drain finds fresh peer copies of the stacks that just came
+    # home (its pre-pass refuses copies older than two hours).
+    - name: Take an hourly snapshot on {{ hm.worker }}
+      ansible.builtin.command:
+        argv: [systemctl, --user, start, homelab-backup-hourly.service]
+      delegate_to: "{{ hm.worker }}"
+
+    - name: Find the maintenance marker
+      ansible.builtin.command:
+        argv: [docker, node, ls, -q, --filter, "node.label=maintenance={{ host }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      register: hr_marker
+      changed_when: false
+      check_mode: false
+
+    - name: Remove the maintenance marker
+      ansible.builtin.command:
+        argv: [docker, node, update, --label-rm, maintenance, "{{ item }}"]
+      delegate_to: "{{ hm.survivor_worker }}"
+      loop: "{{ hr_marker.stdout_lines }}"
 
     - name: Done
       ansible.builtin.debug:

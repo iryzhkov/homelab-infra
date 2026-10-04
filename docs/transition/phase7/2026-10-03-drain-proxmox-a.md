@@ -118,6 +118,47 @@ Agents: agent-a down 15:35 to about 15:50; the feed and Jocasta as above.
 - Wake-on-LAN works for both nodes from the other node (Python magic packet to 192.168.1.255); the
   runbook's "power on by hand" is not necessary.
 
+## Review fixes (16:20 to 17:10)
+
+Tooling review, FIX REQUIRED (should-fix only). Repository and check mode only, except item 5.
+
+1. Maintenance marker: `host-drain.yml` sets the node label `maintenance=<host>` on the survivor
+   after its read-only checks; `host-return.yml` removes it last. New `roles/maintenance_guard`,
+   included by `playbooks/site.yml` (pre_tasks of both plays), `roles/keepalived` and
+   `roles/swarm/tasks/labels.yml` (only when the availability would be reset), refuses while it
+   is set unless `-e maintenance_override=true`; `compose-move.yml` and `host-return.yml` pass the
+   override to the converges they run. Tested with the hook `-e maintenance_guard_test_marker=...`
+   in check mode: `site.yml` and `keepalived.yml` both refuse ("Maintenance in progress: ..."),
+   every host of the play stops (`any_errors_fatal`), and the override lets them run.
+2. Read-only pre-pass in the drain: the peer copy of every stack in `hm_moves` must be under two
+   hours old on the survivor, else it refuses before the marker or anything else. `host-return.yml`
+   ends with an hourly snapshot on the returned worker.
+3. Recovery: steps 2 to 8 of the drain run as a block whose rescue starts keepalived again on the
+   edge the run stopped and redeploys the shed tier, then fails. `--check -e host=proxmox-b -e
+   hm_test_fail_after_vip=true`: `rescued=1`, the rescue's keepalived start and the final message
+   ran. `swarm-move.yml` resumes a move interrupted after the old copy was set aside (no owner on
+   the old node, `.moved/<stack>-*` present, the target the owner): `--check -e stack=lubelogger
+   -e to=normandy -e swarm_move_test_resume=true`: "Resuming an interrupted move", the replica
+   counts read from the `.moved` copy, the four copy steps skipped.
+4. Runbook: rule 7 rewritten after checking every prepare file (20 read the pin label, 6 name no
+   pin), rule 8 (the marker), the `.moved` and compose cold copies (normandy holds 19 `.moved`
+   copies, 9.7 GB), voice, irc and rss to retest, Loki's forced restart required with the cause
+   open, the probe list taken from Traefik's routers (43 hosts; `ov.ryzhkov.dev` added to the
+   household list with `/health`, the only router the first run reported).
+5. `jocasta-backup-watch.service` failed at homelab's boot (15:50:39, `/mnt/backup` not mounted
+   yet): `RequiresMountsFor=/mnt/backup` in `stacks/jocasta/templates/jocasta-backup-watch.service.j2`;
+   `site.yml -l homelab -e only=jocasta` at 16:29:07, `changed=2` (the unit, and the prepare
+   step's daemon reload and restart of the oneshot `jocasta-firewall.service`, which re-applies the
+   same chain; `iptables -S JOCASTA` unchanged, `jocasta.ryzhkov.dev/healthz` 200). Started by
+   hand: `Result=success`; `RequiresMountsFor=/mnt/backup` and `mnt-backup.mount` in its
+   dependencies. Last `jocasta-backup.service` run 16:00:06, `Result=success`.
+
+Checks after the 17:00 hourly runs (homelab 17:02:10, normandy 17:01:50, both success):
+`host-drain.yml --check` proxmox-a `ok=46 changed=0 failed=0`, the pre-pass passing, no
+unlisted router failing after the `ov` fix; proxmox-b `ok=42 changed=1 failed=0` (the simulated
+keepalived stop). `host-return.yml --check` both `ok=21 changed=0 failed=0`. `site`, `swarm`,
+`traefik`, `backup`, `keepalived` in check mode: changed=0 on every host.
+
 ## Final checks (16:09 to 16:15)
 
 Both Gatus instances (75 and 80 endpoints) and the public one (16): none failing. Check mode:
