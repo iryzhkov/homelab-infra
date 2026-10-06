@@ -63,6 +63,25 @@ http:
       tls:
         certResolver: "letencrypt"
 
+    # Agent VMs on VLAN 130 (2026-10-06). UniFi allows only the edges to
+    # reach them on TCP 7391; recorded in the security-pass exceptions
+    # register until the publication catalog owns these routes.
+    t3-agent-a-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`t3-agent-a.ryzhkov.dev`)"
+      service: t3-agent-a-service
+      tls:
+        certResolver: "letencrypt"
+
+    t3-agent-b-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`t3-agent-b.ryzhkov.dev`)"
+      service: t3-agent-b-service
+      tls:
+        certResolver: "letencrypt"
+
   services:
     # LAN first, Nebula once the laptop is off the LAN.
     t3-laptop-service:
@@ -103,3 +122,13 @@ http:
       loadBalancer:
         servers:
           - url: "http://192.168.70.234:7391"
+
+    t3-agent-a-service:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.130.2:7391"
+
+    t3-agent-b-service:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.130.3:7391"
