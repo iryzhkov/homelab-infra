@@ -1,0 +1,236 @@
+---
+- name: Validate mount configuration
+  ansible.builtin.assert:
+    that:
+      - smb_mount_id is match('^[a-z][a-z0-9-]+$')
+      - smb_mount_server is match('^[a-zA-Z0-9.-]+$')
+      - smb_mount_share is match('^[a-zA-Z0-9_-]+$')
+      - smb_mount_path is match('^/mnt/[a-zA-Z0-9_]+$')
+
+- name: Read the SMB account from the controller Secret Service
+  ansible.builtin.command:
+    argv:
+      - secret-tool
+      - lookup
+      - service
+      - "{{ smb_mount_keyring_service }}"
+      - server
+      - "{{ smb_mount_server }}"
+      - share
+      - "{{ smb_mount_keyring_share | default(smb_mount_share) }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+  check_mode: false
+  no_log: true
+  register: smb_mount_keyring
+  failed_when: false
+
+- name: Require an enrolled account
+  ansible.builtin.assert:
+    that:
+      - smb_mount_keyring.rc == 0
+      - smb_mount_keyring.stdout | length > 0
+    fail_msg: >-
+      Enroll the SMB account using scripts/enroll-smb-secret.py on the
+      controller, then run this playbook again.
+
+- name: Parse the enrolled account
+  ansible.builtin.set_fact:
+    smb_mount_account: "{{ smb_mount_keyring.stdout | from_json }}"
+  no_log: true
+
+- name: Validate credentials for the CIFS credential format
+  ansible.builtin.assert:
+    that:
+      - smb_mount_account.username is string
+      - smb_mount_account.password is string
+      - smb_mount_account.username is match('^[^\r\n]+$')
+      - smb_mount_account.password is match('^[^\r\n]+$')
+      - smb_mount_account.domain | default('') is string
+      - "'\n' not in (smb_mount_account.domain | default(''))"
+      - "'\r' not in (smb_mount_account.domain | default(''))"
+  no_log: true
+
+- name: Format the in-memory CIFS credential
+  ansible.builtin.set_fact:
+    smb_mount_credential: |
+      username={{ smb_mount_account.username }}
+      password={{ smb_mount_account.password }}
+      {% if smb_mount_account.domain | default('') %}
+      domain={{ smb_mount_account.domain }}
+      {% endif %}
+  no_log: true
+
+- name: Install the SMB mount helper
+  ansible.builtin.package:
+    name: cifs-utils
+    state: present
+
+- name: Create the encrypted credential store
+  ansible.builtin.file:
+    path: /etc/credstore.encrypted
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Locate the existing encrypted account
+  ansible.builtin.stat:
+    path: "/etc/credstore.encrypted/{{ smb_mount_id }}"
+  register: smb_mount_credential_stat
+
+- name: Compare the existing account without displaying it
+  ansible.builtin.command:
+    argv:
+      - systemd-creds
+      - decrypt
+      - "--name={{ smb_mount_id }}"
+      - "/etc/credstore.encrypted/{{ smb_mount_id }}"
+      - "-"
+  register: smb_mount_existing
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  when: smb_mount_credential_stat.stat.exists
+
+- name: Determine whether the encrypted account needs updating
+  ansible.builtin.set_fact:
+    smb_mount_credential_changed: >-
+      {{ not smb_mount_credential_stat.stat.exists
+         or (smb_mount_existing.rc | default(1)) != 0
+         or (smb_mount_existing.stdout | default('')).splitlines()
+            != smb_mount_credential.splitlines() }}
+  no_log: true
+
+- name: Report a planned account update
+  ansible.builtin.debug:
+    msg: The host-encrypted SMB account will be updated.
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - smb_mount_credential_changed
+
+- name: Encrypt the account on this host
+  when:
+    - not ansible_check_mode
+    - smb_mount_credential_changed
+  block:
+    - name: Allocate a temporary ciphertext file
+      ansible.builtin.tempfile:
+        state: file
+        path: /etc/credstore.encrypted
+        prefix: .smb-
+      register: smb_mount_ciphertext
+
+    - name: Encrypt stdin with the host credential key
+      ansible.builtin.command:
+        argv:
+          - systemd-creds
+          - encrypt
+          - --with-key=host
+          - "--name={{ smb_mount_id }}"
+          - "-"
+          - "{{ smb_mount_ciphertext.path }}"
+        stdin: "{{ smb_mount_credential }}"
+        stdin_add_newline: false
+      no_log: true
+
+    - name: Install the encrypted account
+      ansible.builtin.copy:
+        src: "{{ smb_mount_ciphertext.path }}"
+        dest: "/etc/credstore.encrypted/{{ smb_mount_id }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+  always:
+    - name: Remove temporary ciphertext
+      ansible.builtin.file:
+        path: "{{ smb_mount_ciphertext.path }}"
+        state: absent
+      when: smb_mount_ciphertext.path is defined
+
+- name: Create an inaccessible underlying mount directory
+  ansible.builtin.file:
+    path: "{{ smb_mount_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0000"
+  # Never chmod/chown the remote share on a subsequent run.
+  when: smb_mount_path not in (ansible_mounts | map(attribute='mount') | list)
+
+- name: Resolve the systemd mount unit name
+  ansible.builtin.command:
+    argv: [systemd-escape, --path, --suffix=mount, "{{ smb_mount_path }}"]
+  register: smb_mount_unit
+  check_mode: false
+  changed_when: false
+
+- name: Install the credential preparation service
+  ansible.builtin.template:
+    src: credentials.service.j2
+    dest: "/etc/systemd/system/{{ smb_mount_id }}-credentials.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: smb_mount_service_config
+  notify: Reload SMB units
+
+- name: Install the SMB mount unit
+  ansible.builtin.template:
+    src: share.mount.j2
+    dest: "/etc/systemd/system/{{ smb_mount_unit.stdout }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: smb_mount_mount_config
+  notify: Reload SMB units
+
+- name: Install the SMB automount unit
+  ansible.builtin.template:
+    src: share.automount.j2
+    dest: "/etc/systemd/system/{{ smb_mount_unit.stdout | regex_replace('\\.mount$', '.automount') }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: smb_mount_automount_config
+  notify: Reload SMB units
+
+- name: Apply unit and credential changes before activation
+  ansible.builtin.meta: flush_handlers
+
+# Rotation is inline so each include_role loop uses its own share variables.
+- name: Stop automount before changing active unit settings
+  ansible.builtin.systemd_service:
+    name: "{{ smb_mount_unit.stdout | regex_replace('\\.mount$', '.automount') }}"
+    state: stopped
+  when:
+    - not ansible_check_mode
+    - smb_mount_mount_config.changed or smb_mount_automount_config.changed or smb_mount_service_config.changed
+
+- name: Unmount before applying account or unit changes
+  ansible.builtin.systemd_service:
+    name: "{{ smb_mount_unit.stdout }}"
+    state: stopped
+  when:
+    - not ansible_check_mode
+    - smb_mount_credential_changed or smb_mount_mount_config.changed or smb_mount_service_config.changed
+
+- name: Stop the previous credential service before rotation
+  ansible.builtin.systemd_service:
+    name: "{{ smb_mount_id }}-credentials.service"
+    state: stopped
+  when:
+    - not ansible_check_mode
+    - smb_mount_credential_changed or smb_mount_service_config.changed
+
+- name: Enable access-triggered mounting at boot
+  ansible.builtin.systemd_service:
+    name: "{{ smb_mount_unit.stdout | regex_replace('\\.mount$', '.automount') }}"
+    enabled: true
+    state: started
+  when: not ansible_check_mode

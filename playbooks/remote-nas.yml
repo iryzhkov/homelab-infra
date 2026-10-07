@@ -1,0 +1,22 @@
+---
+# Only the two clients of the remote business shares.
+- name: Configure remote NAS mounts
+  hosts: homelab:normandy
+  become: true
+  gather_facts: true
+  vars:
+    smb_mount_server: "{{ hostvars['anz-nas'].ansible_host }}"
+    smb_mount_keyring_share: anz_business
+  tasks:
+    - name: Configure each remote share
+      ansible.builtin.include_role:
+        name: smb_mount
+      vars:
+        smb_mount_share: "{{ smb_share }}"
+        smb_mount_path: "/mnt/{{ smb_share }}"
+        smb_mount_id: "{{ smb_share | replace('_', '-') }}"
+      loop:
+        - anz_business
+        - anz
+      loop_control:
+        loop_var: smb_share

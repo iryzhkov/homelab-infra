@@ -1,0 +1,5 @@
+---
+smb_mount_uid: 1000
+smb_mount_gid: 1000
+smb_mount_idle_timeout: 600
+smb_mount_keyring_service: smb-mount

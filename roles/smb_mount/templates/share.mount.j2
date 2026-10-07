@@ -1,0 +1,12 @@
+[Unit]
+Description=Remote SMB share {{ smb_mount_share }}
+Wants=network-online.target
+After=network-online.target {{ smb_mount_id }}-credentials.service
+Requires={{ smb_mount_id }}-credentials.service
+
+[Mount]
+What=//{{ smb_mount_server }}/{{ smb_mount_share }}
+Where={{ smb_mount_path }}
+Type=cifs
+Options=credentials=/run/{{ smb_mount_id }}/credentials,uid={{ smb_mount_uid }},gid={{ smb_mount_gid }},file_mode=0600,dir_mode=0700,nosuid,nodev
+TimeoutSec=30

@@ -1,0 +1,9 @@
+[Unit]
+Description=Automount remote SMB share {{ smb_mount_share }}
+
+[Automount]
+Where={{ smb_mount_path }}
+TimeoutIdleSec={{ smb_mount_idle_timeout }}
+
+[Install]
+WantedBy=multi-user.target
