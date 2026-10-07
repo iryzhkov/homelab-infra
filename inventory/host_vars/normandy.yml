@@ -1,10 +1,8 @@
 ---
 # Adopted 2026-09-06.
 
-# homelab's key was authorised here by hand before this repository existed;
-# declaring it means the list is somewhere other than the host itself.
-fleet_ssh_authorized:
-  - homelab
+# The unused ml-orchestrator credential was retired on 2026-10-05.
+fleet_ssh_authorized: []
 
 # The drift check runs here too: three stacks, and the feed client was
 # already installed.

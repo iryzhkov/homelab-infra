@@ -4,10 +4,8 @@
 # Every host runs its own diun with a different Compose file, so each keeps its
 # own directory under stacks/ and names it with `source`.
 
-# Added 2026-09-06 so homelab can reach the edge proxy. Restricted to
-# homelab's address by the from= option the role applies.
-fleet_ssh_authorized:
-  - homelab
+# The unused ml-orchestrator credential was retired on 2026-10-05.
+fleet_ssh_authorized: []
 
 # The drift check runs here as well. This host needed lingering enabled and
 # homelab-cli installed first, on 2026-09-06.

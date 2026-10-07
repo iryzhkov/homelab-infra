@@ -127,10 +127,6 @@ edge_vip: 192.168.20.3
 # the hosts whose host_vars name it in fleet_ssh_authorized, restricted to the
 # address it is expected to come from.
 fleet_ssh_keys:
-  homelab:
-    comment: "homelab (ml-orchestrator)"
-    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDhU+leIj5YUWMbgyAD15iu4uvl7wfZaPWswPcp7Taiy"
-    from: "192.168.70.223"
   # The t3-steward coordinator on normandy, which opens a persistent SSH
   # connection to each worker. It is normandy's general key, not one dedicated
   # to the steward; the agent VMs accept no other fleet key.
