@@ -1,4 +1,8 @@
 ---
 # The blueprint this role owns in Authentik, found by name. Renaming it here
 # would leave the old one behind, its objects still in place.
+
+# The host whose nightly drift check (roles/drift_check) compares Authentik
+# with what this role last applied, using a read-only token. Empty: none.
+authentik_drift_host: homelab
 authentik_blueprint_name: homelab-infra access

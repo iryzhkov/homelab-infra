@@ -97,8 +97,10 @@ the host:
 
 - `~/app/zigbee_watchdog.sh` on homelab hardcodes a Home Assistant long-lived
   access token and a Proxmox API token (`root@pam!watchdog`).
-- `~/app/miniflux/docker-compose.yml` hardcodes `OAUTH2_CLIENT_ID` and
-  `OAUTH2_CLIENT_SECRET` for the Authentik OIDC client.
+- `~/app/miniflux/docker-compose.yml` hardcoded `OAUTH2_CLIENT_ID` and
+  `OAUTH2_CLIENT_SECRET` for the Authentik OIDC client. Resolved: the copy
+  left in a `.bak` beside it was deleted and every credential in it rotated
+  on 2026-10-12 (`docs/authentik-audit-2026-10-12.md`).
 
 Every other Compose file references secrets through `${VAR}` and reads them from
 a `.env` beside it. There are 8 such files: `dsh`, `authentik`, `obsidian`,

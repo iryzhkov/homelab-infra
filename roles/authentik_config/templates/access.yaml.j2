@@ -20,6 +20,49 @@ entries:
 {% endfor %}
 {% endfor %}
 
+  # One proxy provider (forward auth, single application) and one application
+  # per route with `sso: forward`, found by external host and slug, so the
+  # provider created by hand for ai.ryzhkov.dev on 2026-08-27 was adopted
+  # rather than duplicated. The flows and scope mappings are the ones the
+  # admin interface preselects for a new proxy provider. These come before
+  # the bindings: a blueprint resolves !Find entry by entry, so a binding on
+  # an application created further down would find nothing.
+{% for host, slug in authentik_forward_routes.items() | sort %}
+  - model: authentik_providers_proxy.proxyprovider
+    id: forward-{{ slug }}
+    identifiers:
+      external_host: https://{{ host }}
+    attrs:
+      name: {{ authentik_app_access[slug].title | default(slug | capitalize) }}
+      mode: forward_single
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      property_mappings:
+{% for scope in ['oauth2/scope-openid', 'oauth2/scope-email', 'oauth2/scope-profile', 'oauth2/scope-entitlements', 'proxy/scope-proxy'] %}
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/{{ scope }}]]
+{% endfor %}
+  - model: authentik_core.application
+    identifiers:
+      slug: {{ slug }}
+    attrs:
+      name: {{ authentik_app_access[slug].title | default(slug | capitalize) }}
+      provider: !KeyOf forward-{{ slug }}
+      meta_launch_url: https://{{ host }}
+{% endfor %}
+
+  # The embedded outpost serves exactly the providers above: the list is
+  # replaced, not appended to.
+  - model: authentik_outposts.outpost
+    identifiers:
+      managed: goauthentik.io/outposts/embedded
+    attrs:
+      providers:
+{% for host, slug in authentik_forward_routes.items() | sort %}
+        - !KeyOf forward-{{ slug }}
+{% else %}
+        []
+{% endfor %}
+
 {% for slug, access in authentik_app_access.items() %}
 {% for group in access.groups | default([]) %}
   - model: authentik_policies.policybinding
@@ -60,47 +103,6 @@ entries:
     state: absent
     identifiers:
       name: {{ app.provider_name }}
-{% endfor %}
-
-  # One proxy provider (forward auth, single application) and one application
-  # per route with `sso: forward`, found by external host and slug, so the
-  # provider created by hand for ai.ryzhkov.dev on 2026-08-27 was adopted
-  # rather than duplicated. The flows and scope mappings are the ones the
-  # admin interface preselects for a new proxy provider.
-{% for host, slug in authentik_forward_routes.items() | sort %}
-  - model: authentik_providers_proxy.proxyprovider
-    id: forward-{{ slug }}
-    identifiers:
-      external_host: https://{{ host }}
-    attrs:
-      name: {{ authentik_app_access[slug].title | default(slug | capitalize) }}
-      mode: forward_single
-      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
-      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
-      property_mappings:
-{% for scope in ['oauth2/scope-openid', 'oauth2/scope-email', 'oauth2/scope-profile', 'oauth2/scope-entitlements', 'proxy/scope-proxy'] %}
-        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/{{ scope }}]]
-{% endfor %}
-  - model: authentik_core.application
-    identifiers:
-      slug: {{ slug }}
-    attrs:
-      name: {{ authentik_app_access[slug].title | default(slug | capitalize) }}
-      provider: !KeyOf forward-{{ slug }}
-      meta_launch_url: https://{{ host }}
-{% endfor %}
-
-  # The embedded outpost serves exactly the providers above: the list is
-  # replaced, not appended to.
-  - model: authentik_outposts.outpost
-    identifiers:
-      managed: goauthentik.io/outposts/embedded
-    attrs:
-      providers:
-{% for host, slug in authentik_forward_routes.items() | sort %}
-        - !KeyOf forward-{{ slug }}
-{% else %}
-        []
 {% endfor %}
 
   # MFA for {{ authentik_mfa_required_group }}. The default MFA stage (order 30)

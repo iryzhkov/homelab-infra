@@ -14,6 +14,12 @@ It also compares the manifest against what the repository last deployed, not
 against the repository as it is now. A change committed but never applied is
 the laptop's job to catch, with `ansible-playbook playbooks/site.yml --check`.
 
+Where playbooks/authentik.yml has left its own manifest (homelab), Authentik
+is checked too, through its API with a read-only token: the access blueprint
+unchanged, every managed application bound and every managed group made up
+as the repository declared, and no application the repository does not
+manage.
+
 Exit status: 0 clean, 1 drift found, 2 the check itself could not run.
 """
 
@@ -24,8 +30,13 @@ import os
 import subprocess
 import shutil
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 MANIFEST = os.path.expanduser("~/.local/share/homelab-infra/drift-manifest.json")
+AUTHENTIK_MANIFEST = os.path.expanduser("~/.local/share/homelab-infra/authentik-manifest.json")
+AUTHENTIK_TOKEN = os.path.expanduser("~/.config/homelab-infra/authentik-token")
 
 
 def sha256(path):
@@ -149,6 +160,106 @@ def upkeeper_findings():
     return findings, broken
 
 
+def authentik_api(url, token):
+    """A GET against Authentik's API, returning the decoded JSON."""
+    def get(path):
+        request = urllib.request.Request(url + path, headers={"Authorization": "Bearer " + token})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    return get
+
+
+def authentik_findings(manifest=None, get=None):
+    """Where Authentik no longer matches what playbooks/authentik.yml applied.
+
+    The tests pass manifest and get; the timer passes neither, and a host with
+    no Authentik manifest has nothing to check.
+    """
+    if manifest is None:
+        if not os.path.isfile(AUTHENTIK_MANIFEST):
+            return [], False
+        try:
+            with open(AUTHENTIK_MANIFEST) as handle:
+                manifest = json.load(handle)
+            with open(AUTHENTIK_TOKEN) as handle:
+                get = authentik_api(manifest["url"], handle.read().strip())
+        except (OSError, ValueError, KeyError) as error:
+            return [f"Authentik: cannot read the manifest or token ({error})"], True
+
+    findings = []
+    try:
+        stored = get("/managed/blueprints/?name=" + urllib.parse.quote(manifest["blueprint"]))["results"]
+        if not stored:
+            findings.append(f"Authentik: blueprint '{manifest['blueprint']}' is gone")
+        else:
+            content = stored[0].get("content", "")
+            if hashlib.sha256(content.encode()).hexdigest() != manifest["blueprint_sha256"]:
+                findings.append(f"Authentik: blueprint '{manifest['blueprint']}' changed outside the repository")
+            if stored[0].get("status") != "successful":
+                findings.append(f"Authentik: blueprint '{manifest['blueprint']}' is {stored[0].get('status')}")
+
+        # The declared configuration, not evaluated access: check_access only
+        # honours for_user for a superuser and otherwise silently answers for
+        # the caller (authentik/core/api/applications.py, 2025.8.6). With the
+        # policy engine mode "any" and only group and user bindings, who may
+        # open an application follows from its bindings and the groups'
+        # members, which a read-only account can read.
+        for slug, expected in sorted(manifest["apps"].items()):
+            try:
+                app = get(f"/core/applications/{slug}/")
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                findings.append(f"Authentik {slug}: application is gone")
+                continue
+            if app.get("policy_engine_mode") != "any":
+                findings.append(f"Authentik {slug}: policy engine mode is {app.get('policy_engine_mode')}, "
+                                "the repository expects any")
+            found = set()
+            for binding in get(f"/policies/bindings/?target={app['pk']}&page_size=500")["results"]:
+                if binding.get("group_obj"):
+                    key = f"group {binding['group_obj']['name']}"
+                elif binding.get("user_obj"):
+                    key = f"user {binding['user_obj']['username']}"
+                else:
+                    key = f"policy {(binding.get('policy_obj') or {}).get('name')}"
+                if not binding.get("enabled", True) or binding.get("negate"):
+                    state = "negated" if binding.get("negate") else "disabled"
+                    findings.append(f"Authentik {slug}: binding to {key} is {state}")
+                    continue
+                found.add(key)
+            want = {f"group {g}" for g in expected["groups"]} | {f"user {u}" for u in expected["users"]}
+            for key in sorted(found - want):
+                findings.append(f"Authentik {slug}: bound to {key} outside the repository")
+            for key in sorted(want - found):
+                findings.append(f"Authentik {slug}: binding to {key} is missing")
+
+        for name, members in sorted(manifest["groups"].items()):
+            found = get(f"/core/groups/?name={urllib.parse.quote(name)}&include_users=true")["results"]
+            if not found:
+                findings.append(f"Authentik group {name}: is gone")
+                continue
+            actual = {u["username"] for u in found[0].get("users_obj") or []}
+            for user in sorted(actual - set(members)):
+                findings.append(f"Authentik group {name}: {user} added outside the repository")
+            for user in sorted(set(members) - actual):
+                findings.append(f"Authentik group {name}: {user} removed outside the repository")
+
+        # A read-only account cannot list applications (the full list is for
+        # superusers), but it can list providers, and every application here
+        # has one: the OAuth2 list includes the proxy providers.
+        assigned = set()
+        for kind in ("oauth2", "saml", "ldap"):
+            for provider in get(f"/providers/{kind}/?page_size=500")["results"]:
+                if provider.get("assigned_application_slug"):
+                    assigned.add(provider["assigned_application_slug"])
+        for slug in sorted(assigned - set(manifest["apps"])):
+            findings.append(f"Authentik {slug}: application not managed by the repository")
+    except (OSError, ValueError, KeyError) as error:
+        return findings + [f"Authentik: drift observation failed ({error})"], True
+    return findings, False
+
+
 def main():
     try:
         with open(MANIFEST) as handle:
@@ -168,6 +279,8 @@ def main():
     ).strftime("%Y-%m-%d %H:%M")
 
     findings, upkeeper_broken = upkeeper_findings()
+    authentik, authentik_broken = authentik_findings()
+    findings.extend(authentik)
     for stack in manifest["stacks"]:
         findings.extend(check_stack(stack, running))
 
@@ -186,7 +299,7 @@ def main():
           f"deployed {deployed}:")
     for finding in findings:
         print(f"  - {finding}")
-    return 2 if upkeeper_broken else 1
+    return 2 if upkeeper_broken or authentik_broken else 1
 
 
 if __name__ == "__main__":

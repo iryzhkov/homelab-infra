@@ -17,9 +17,9 @@
     name: authentik_api
   no_log: true
 
-# The routes with `sso: forward`, from every host's stacks and from the Swarm
-# stacks, as hostname to application slug (the route's name). The same
-# routes get the forward-auth middleware in roles/traefik.
+# The routes with `sso: forward`, from every host's stacks, the Swarm stacks
+# and traefik_static_routes, as hostname to application slug (the route's
+# name): every route roles/traefik gives the forward-auth middleware.
 - name: Collect the routes behind forward auth
   ansible.builtin.set_fact:
     authentik_forward_routes: >-
@@ -29,6 +29,7 @@
       {%-   set _ = stacks.extend(hostvars[h].stacks | default([])) -%}
       {%- endfor -%}
       {%- set _ = stacks.extend(hostvars | swarm_stacks(groups)) -%}
+      {%- set _ = stacks.append({'routes': traefik_static_routes | default([])}) -%}
       {%- for stack in stacks -%}
       {%-   for route in stack.routes | default([]) if route.sso | default('') == 'forward' -%}
       {%-     set _ = found.update({route.host: route.name | default(route.host.split('.')[0])}) -%}
@@ -171,3 +172,60 @@
           {{ authentik_groups | selectattr('name', 'in', access.groups | default([]))
              | map(attribute='members') | flatten }}
         expected: "{{ user in access.users | default([]) or user in members }}"
+
+# What the drift check on authentik_drift_host compares Authentik against:
+# the blueprint as stored by this run, each application's bindings and each
+# group's members. Bindings and members rather than access, because the
+# check's read-only account cannot ask check_access about anyone but itself.
+# Written only after the checks above passed, so it describes a state that
+# was verified. The token is drift-check's (group authentik Read-only), which
+# can read everything and change nothing.
+- name: Hand the applied state to the drift check
+  when: not ansible_check_mode and authentik_drift_host | length > 0
+  delegate_to: "{{ authentik_drift_host }}"
+  # The play's `connection: local` would otherwise apply to the delegated
+  # tasks too, and run them on the controller.
+  connection: ssh
+  vars:
+    # playbooks/authentik.yml sets ssh_user to the local user, and a play
+    # variable outranks host_vars even for a delegated host; a block variable
+    # outranks the play's.
+    ansible_user: "{{ hostvars[authentik_drift_host].ssh_user }}"
+    drift_home: "/home/{{ hostvars[authentik_drift_host].ssh_user }}"
+  block:
+    - name: Ensure the drift check's directories exist
+      ansible.builtin.file:
+        path: "{{ drift_home }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - .config/homelab-infra
+        - .local/share/homelab-infra
+
+    - name: Install the read-only token
+      ansible.builtin.copy:
+        content: "{{ authentik_api.authentik_drift_token }}\n"
+        dest: "{{ drift_home }}/.config/homelab-infra/authentik-token"
+        mode: "0600"
+      no_log: true
+
+    - name: Write the expected state
+      ansible.builtin.copy:
+        content: >-
+          {%- set apps = {} -%}
+          {%- for slug, access in authentik_app_access.items() -%}
+          {%-   set _ = apps.update({slug: {'groups': access.groups | default([]) | sort,
+                                        'users': access.users | default([]) | sort}}) -%}
+          {%- endfor -%}
+          {%- set groups = {} -%}
+          {%- for group in authentik_groups -%}
+          {%-   set _ = groups.update({group.name: group.members | sort}) -%}
+          {%- endfor -%}
+          {{ {'note': 'Written by playbooks/authentik.yml after a verified run. Read by homelab-drift-check.',
+              'url': authentik_url,
+              'blueprint': authentik_blueprint_name,
+              'blueprint_sha256': authentik_content | hash('sha256'),
+              'apps': apps,
+              'groups': groups} | to_nice_json }}
+        dest: "{{ drift_home }}/.local/share/homelab-infra/authentik-manifest.json"
+        mode: "0644"

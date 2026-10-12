@@ -12,6 +12,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python3 scripts/test-upkeeper-drift.py
+      - run: python3 scripts/test-authentik-drift.py
       - run: python3 scripts/test-helper-backups.py
       - run: python3 scripts/test-jocasta-backup.py
       - run: python3 scripts/test-swarm-snapshot.py

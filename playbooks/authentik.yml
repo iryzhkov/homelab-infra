@@ -11,6 +11,8 @@
   connection: local
   gather_facts: false
   # The inventory's ansible_user is "{{ ssh_user }}", which localhost lacks.
+  # This outranks host_vars for every host the play touches, so the tasks
+  # delegated to homelab name homelab's user themselves.
   vars:
     ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
   vars_files:

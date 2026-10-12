@@ -24,6 +24,14 @@ To renew it, delete the token `agent-iac-api` and create a new one for
 `agent-iac` (Directory > Tokens and App passwords, intent API), then
 `sops secrets/authentik-api.sops.yaml`.
 
+A second service account, `drift-check`, is a member of the default
+`authentik Read-only` group only: it can read every object and change none.
+Its token, `drift-check-api`, expires on **2027-10-12** and sits in the same
+SOPS file as `authentik_drift_token`; `playbooks/authentik.yml` installs it
+on homelab for the nightly drift check. Renew it the same way. It must be an
+API token: `POST /core/users/service_account/` issues an app password, which
+the API refuses as "Token invalid/expired".
+
 ## Findings
 
 1. **Six applications were open to every account.** budget, forgejo, photos,
@@ -39,9 +47,13 @@ To renew it, delete the token `agent-iac-api` and create a new one for
 4. **An expired Emby app password**: `emby-service-account` held an app
    password that expired on 2026-09-07, with no LDAP provider to use it with,
    apparently from an abandoned attempt at Emby login through Authentik.
-   Left in place.
+   The token was deleted; the account is kept for a later LDAP attempt.
 5. **Two unused groups**: `admins` (igor only, not a superuser group) and an
-   empty `authentik Read-only`, neither bound to anything. Left in place.
+   empty `authentik Read-only`, neither bound to anything. `admins` was
+   deleted after checking that no application reads a groups claim (Forgejo's
+   OAuth source maps none). `authentik Read-only` was kept: the default
+   blueprint `rbac-role-read-only.yaml` creates it, and the drift check's
+   account now uses it.
 6. Otherwise clean: all OIDC clients confidential, with exact redirect URIs;
    only the default flows, stages and policies; one embedded outpost; no
    sources beyond the built-in one; no failed logins but typos.
@@ -90,6 +102,22 @@ providers and applications of `sso: forward` routes (`docs/traefik-routing.md`,
 their client secrets, the `authentik Admins` group (so that a mistake in the
 file cannot lock anyone out), users themselves, and the default flows.
 
+Between runs, homelab's nightly drift check (`roles/drift_check`) compares
+Authentik with what the last run applied, which `playbooks/authentik.yml`
+leaves on homelab as `~/.local/share/homelab-infra/authentik-manifest.json`:
+the blueprint's content and status, every managed application's policy mode
+and bindings, every managed group's members, and any application the file
+does not manage. It compares the configuration rather than asking who may
+open what, because `check_access` honours `for_user` only for a superuser and
+otherwise silently answers for the caller. Tested 2026-10-12 by adding a
+binding by hand: reported, and clean again once removed.
+
+The create path of `sso: forward` was tested the same day with a throwaway
+route: a person in `family` went through authorization and the callback to
+the backend, a person in no group stopped at Authentik's access-denied page.
+The test found that the blueprint must create forward-auth applications
+before it binds anything to them, since `!Find` resolves entry by entry.
+
 Two blueprint behaviours to keep in mind:
 
 - Removing an entry from the file does not remove the object from Authentik.
@@ -98,6 +126,18 @@ Two blueprint behaviours to keep in mind:
 - The embedded outpost's provider list is replaced on every run, so a
   forward-auth provider created by hand would be dropped from it. Declare them
   as routes instead.
+
+## Found on the way: Miniflux credentials in plaintext
+
+`docs/current-state.md` had noted Miniflux's OIDC client secret hardcoded in
+its Compose file. The live Compose file no longer had it, but
+`~/app/miniflux/docker-compose.yml.bak` on homelab (2026-08-29, mode 0644)
+still held the live OIDC client secret, admin password and Postgres password,
+and a copy had gone to the bucket. All three were rotated on 2026-10-12 (the
+admin password through Miniflux's API, the database password with ALTER
+USER, the client secret in Authentik), the old values were checked to be
+refused, and the `.bak` was deleted. No other Compose file under `~/app` on
+homelab holds a literal secret.
 
 ## Not done
 
