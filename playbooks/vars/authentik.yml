@@ -1,0 +1,63 @@
+---
+# Who may use what in Authentik, for playbooks/authentik.yml. roles/
+# authentik_config renders this into one blueprint, stored in Authentik through
+# its API (no file on any host), and applies it. Audit and decisions:
+# docs/authentik-audit-2026-10-12.md.
+#
+# Only what is listed here is managed. Providers, their client secrets and the
+# default flows stay as they are in Authentik; an application not named in
+# authentik_app_access keeps whatever bindings it has.
+
+# Group membership is authoritative: a member added in the admin interface is
+# removed at the next run. The superuser group, "authentik Admins", is
+# deliberately not managed here, so a mistake in this file cannot lock anyone
+# out of the admin interface.
+authentik_groups:
+  # The household. Renamed from jellyfin_users on 2026-10-12, tanya added.
+  - name: family
+    members: [igor, kostya, lisa, oleg, tanya, tetiana]
+  - name: home_assistant_users
+    members: [igor, lisa]
+
+# Application slug to the groups and users allowed to open it. Every
+# application's policy engine mode is "any", so one matching binding is
+# enough; an application with no binding at all is open to every account.
+#
+# A route with `sso: forward` (inventory/host_vars/) must have an entry here,
+# named after the route; roles/authentik_config creates its provider and
+# application, titled `title` (default: the slug, capitalised).
+authentik_app_access:
+  ai:
+    title: AI
+    users: [igor]
+  budget:
+    groups: [family]
+  forgejo:
+    groups: [family]
+  home-assistant:
+    groups: [home_assistant_users]
+  komga:
+    groups: [family]
+  photos:
+    groups: [family]
+  rss:
+    groups: [family]
+  vaultwarden:
+    groups: [family]
+
+# Bindings the entries above replace, removed by the blueprint.
+authentik_removed_bindings:
+  # Vaultwarden was igor-only until family was given access.
+  - { app: vaultwarden, user: igor }
+
+# Applications removed together with their provider.
+authentik_removed_apps:
+  # Jellyfin was replaced by Emby and is gone from every host.
+  - slug: jellyfin
+    provider_model: authentik_providers_oauth2.oauth2provider
+    provider_name: Provider for Jellyfin
+
+# Members of this group who have no MFA device are made to enroll one (TOTP or
+# WebAuthn) at their next login. Everyone else logs in as before: the default
+# MFA stage still asks for a device whenever one exists.
+authentik_mfa_required_group: authentik Admins

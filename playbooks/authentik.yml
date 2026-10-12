@@ -1,0 +1,19 @@
+---
+# Converge Authentik's access configuration: groups, who may open which
+# application, the admin MFA requirement. The data is playbooks/vars/
+# authentik.yml; roles/authentik_config says how it reaches Authentik.
+#
+#   ansible-playbook playbooks/authentik.yml --check --diff
+#   ansible-playbook playbooks/authentik.yml
+
+- name: Configure Authentik
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  # The inventory's ansible_user is "{{ ssh_user }}", which localhost lacks.
+  vars:
+    ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
+  vars_files:
+    - vars/authentik.yml
+  roles:
+    - authentik_config

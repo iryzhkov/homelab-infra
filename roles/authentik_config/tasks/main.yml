@@ -1,0 +1,173 @@
+---
+# Store the access blueprint in Authentik and apply it, then prove the result:
+# every person's access to every managed application is checked against
+# playbooks/vars/authentik.yml through Authentik's own policy engine.
+#
+# The blueprint is kept in Authentik's database (its `content`), not in a file
+# under /blueprints, so it needs no mount and survives a stack move. Unlike a
+# file blueprint, the worker never re-applies it on its own (the hourly
+# blueprints_discovery only walks files, 2025.8.6): a change made in the admin
+# interface to a managed object stays until the next run of this playbook.
+# Runs on the controller; the API token is secrets/authentik-api.sops.yaml
+# (service account agent-iac, expires 2027-04-10).
+
+- name: Load the Authentik API token
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/authentik-api.sops.yaml"
+    name: authentik_api
+  no_log: true
+
+# The routes with `sso: forward`, from every host's stacks and from the Swarm
+# stacks, as hostname to application slug (the route's name). The same
+# routes get the forward-auth middleware in roles/traefik.
+- name: Collect the routes behind forward auth
+  ansible.builtin.set_fact:
+    authentik_forward_routes: >-
+      {%- set found = {} -%}
+      {%- set stacks = [] -%}
+      {%- for h in groups['docker_hosts'] -%}
+      {%-   set _ = stacks.extend(hostvars[h].stacks | default([])) -%}
+      {%- endfor -%}
+      {%- set _ = stacks.extend(hostvars | swarm_stacks(groups)) -%}
+      {%- for stack in stacks -%}
+      {%-   for route in stack.routes | default([]) if route.sso | default('') == 'forward' -%}
+      {%-     set _ = found.update({route.host: route.name | default(route.host.split('.')[0])}) -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ found }}
+
+# A forward-auth application with no binding would be open to every account.
+- name: Require declared access for every forward-auth route
+  ansible.builtin.assert:
+    that: item.value in authentik_app_access
+    fail_msg: >-
+      {{ item.key }} has `sso: forward` but no entry "{{ item.value }}" in
+      authentik_app_access (playbooks/vars/authentik.yml).
+    quiet: true
+  loop: "{{ authentik_forward_routes | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Describe the API
+  ansible.builtin.set_fact:
+    authentik_url: "{{ authentik_api.authentik_api_url }}"
+    authentik_headers:
+      Authorization: "Bearer {{ authentik_api.authentik_api_token }}"
+    # Trimmed, because the API stores content with surrounding whitespace
+    # stripped, and the comparison below would otherwise never match.
+    authentik_content: "{{ lookup('ansible.builtin.template', 'access.yaml.j2') | trim }}"
+  no_log: true
+
+- name: Find the stored blueprint
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/managed/blueprints/?name={{ authentik_blueprint_name | urlencode }}"
+    headers: "{{ authentik_headers }}"
+  register: authentik_found
+  check_mode: false
+  no_log: true
+
+- name: Compare it with the rendered one
+  ansible.builtin.set_fact:
+    authentik_instance: "{{ authentik_found.json.results | first | default({}) }}"
+    authentik_changed: >-
+      {{ (authentik_found.json.results | first | default({})).get('content', '') != authentik_content }}
+
+- name: Show the blueprint that would be stored
+  ansible.builtin.debug:
+    msg: "{{ authentik_content.splitlines() }}"
+  when: authentik_changed and (ansible_check_mode or ansible_diff_mode)
+
+# The API validates the content on create and update (BlueprintInstance
+# serializer, validate_content) and refuses a blueprint that does not import.
+- name: Store the blueprint
+  ansible.builtin.uri:
+    url: >-
+      {{ authentik_url }}/managed/blueprints/{{
+         (authentik_instance.pk ~ '/') if authentik_instance else '' }}
+    method: "{{ 'PATCH' if authentik_instance else 'POST' }}"
+    headers: "{{ authentik_headers }}"
+    body_format: json
+    body:
+      name: "{{ authentik_blueprint_name }}"
+      path: ""
+      content: "{{ authentik_content }}"
+      enabled: true
+    status_code: [200, 201]
+  register: authentik_stored
+  when: authentik_changed
+  changed_when: true
+  no_log: true
+
+- name: Apply the blueprint
+  when: not ansible_check_mode
+  block:
+    - name: Remember the blueprint's instance
+      ansible.builtin.set_fact:
+        authentik_pk: "{{ authentik_stored.json.pk if authentik_stored is changed else authentik_instance.pk }}"
+
+    - name: Apply it
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/managed/blueprints/{{ authentik_pk }}/apply/"
+        method: POST
+        headers: "{{ authentik_headers }}"
+      register: authentik_applied
+      changed_when: authentik_changed
+      no_log: true
+
+    - name: Wait for the result
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/managed/blueprints/{{ authentik_pk }}/"
+        headers: "{{ authentik_headers }}"
+      register: authentik_status
+      until: authentik_status.json.status != 'unknown'
+      retries: 10
+      delay: 3
+      no_log: true
+
+    - name: Require a clean import
+      ansible.builtin.assert:
+        that: authentik_status.json.status == 'successful'
+        fail_msg: >-
+          Blueprint "{{ authentik_blueprint_name }}" is {{ authentik_status.json.status }};
+          its logs are under System > Blueprints in the admin interface.
+        success_msg: Blueprint "{{ authentik_blueprint_name }}" applied, last {{ authentik_status.json.last_applied }}
+
+# Check mode stops here when the blueprint is not stored yet: the access it
+# would grant cannot be asked about before it exists.
+- name: Verify access
+  when: not ansible_check_mode or not authentik_changed
+  block:
+    - name: List the people
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/core/users/?type=internal&page_size=500"
+        headers: "{{ authentik_headers }}"
+      register: authentik_users
+      check_mode: false
+      no_log: true
+
+    - name: Ask Authentik who may open each application
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/core/applications/{{ item.0.key }}/check_access/?for_user={{ item.1.pk }}"
+        headers: "{{ authentik_headers }}"
+      loop: "{{ authentik_app_access | dict2items | product(authentik_users.json.results | selectattr('is_active')) | list }}"
+      loop_control:
+        label: "{{ item.0.key }} / {{ item.1.username }}"
+      register: authentik_access
+      check_mode: false
+
+    - name: Compare it with playbooks/vars/authentik.yml
+      ansible.builtin.assert:
+        that: item.json.passing == expected
+        fail_msg: "{{ app }} / {{ user }}: Authentik says {{ item.json.passing }}, the inventory says {{ expected }}"
+        quiet: true
+      loop: "{{ authentik_access.results }}"
+      loop_control:
+        label: "{{ app }} / {{ user }}"
+      vars:
+        app: "{{ item.item.0.key }}"
+        user: "{{ item.item.1.username }}"
+        access: "{{ item.item.0.value }}"
+        members: >-
+          {{ authentik_groups | selectattr('name', 'in', access.groups | default([]))
+             | map(attribute='members') | flatten }}
+        expected: "{{ user in access.users | default([]) or user in members }}"

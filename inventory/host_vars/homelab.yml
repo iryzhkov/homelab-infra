@@ -153,13 +153,7 @@ host_stacks:
     routes:
       - host: ai.ryzhkov.dev
         port: 7100
-        middlewares:
-          - authentik-forwardauth
-      - host: ai.ryzhkov.dev
-        name: ai-outpost
-        path_prefix: /outpost.goauthentik.io/
-        priority: 100
-        service: auth
+        sso: forward
     secrets: homelab-dsh
   - name: excalidraw
     routes:

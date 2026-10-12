@@ -18,6 +18,13 @@
     path_prefix   added to the rule as PathPrefix
     priority      router priority, needed when two rules can both match
     middlewares   list of middleware names
+    sso           `forward` puts the route behind Authentik's forward auth: it
+                  gets the authentik-forwardauth middleware, and a second
+                  router, <name>-outpost, sends the outpost's own paths on the
+                  same host (/outpost.goauthentik.io/, the login callback) to
+                  Authentik. playbooks/authentik.yml creates the matching
+                  proxy provider and application, and refuses a route whose
+                  access is not declared in playbooks/vars/authentik.yml.
     health_check  a mapping with path, and optionally interval and timeout, or
                   false for no health check at all. Defaults to
                   traefik_health_check. This is not cosmetic: Traefik counts a
@@ -89,7 +96,18 @@
 {% for route in traefik_static_routes | default([]) %}
 {%   set _ = ns.routes.append(dict(route, name=route.name | default(route.host.split('.')[0]))) %}
 {% endfor %}
-{% set routes = ns.routes | sort(attribute='name') %}
+{% set sso = namespace(routes=[]) %}
+{% for route in ns.routes %}
+{%   if route.sso | default('') == 'forward' %}
+{%     set _ = sso.routes.append(dict(route, middlewares=(route.middlewares | default([])) + ['authentik-forwardauth'])) %}
+{%     set _ = sso.routes.append({'host': route.host, 'name': route.name ~ '-outpost', 'url': '',
+                                  'path_prefix': '/outpost.goauthentik.io/', 'priority': 100,
+                                  'service': ns.authentik_service}) %}
+{%   else %}
+{%     set _ = sso.routes.append(route) %}
+{%   endif %}
+{% endfor %}
+{% set routes = sso.routes | sort(attribute='name') %}
 # {{ ansible_managed }}
 #
 # Generated from the `routes` entries in inventory/host_vars/ by

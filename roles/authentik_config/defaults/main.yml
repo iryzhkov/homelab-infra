@@ -1,0 +1,4 @@
+---
+# The blueprint this role owns in Authentik, found by name. Renaming it here
+# would leave the old one behind, its objects still in place.
+authentik_blueprint_name: homelab-infra access

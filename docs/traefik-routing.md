@@ -34,12 +34,54 @@ Fields a route may carry beyond `host` and `port`:
 | `path_prefix` | added to the rule as `PathPrefix` |
 | `priority` | when two rules can both match the same request |
 | `middlewares` | list of middleware names |
+| `sso` | `forward` to put the route behind Authentik; see below |
 | `health_check` | `{path, interval, timeout}`, or `false` for none |
 | `url` | full backend URL, for a route that cannot reach its stack the ordinary way |
 
 `traefik_static_routes` in `inventory/group_vars/all.yml` covers backends that
 are not stacks this repository deploys: Home Assistant in its own VM,
 Zigbee2MQTT in an LXC.
+
+## Putting a service behind Authentik
+
+For a service with no login of its own, add `sso: forward` to its route and
+say who may open it in `playbooks/vars/authentik.yml`, under
+`authentik_app_access`, keyed by the route's name:
+
+```yaml
+# inventory/host_vars/homelab.yml
+      - host: ai.ryzhkov.dev
+        port: 7100
+        sso: forward
+
+# playbooks/vars/authentik.yml
+authentik_app_access:
+  ai:
+    title: AI
+    users: [igor]
+```
+
+Then:
+
+```sh
+ansible-playbook playbooks/authentik.yml   # provider, application, outpost, access
+ansible-playbook playbooks/traefik.yml     # middleware and the outpost router
+```
+
+Authentik first, so the outpost knows the host before Traefik sends anyone to
+it. The Traefik side adds the `authentik-forwardauth` middleware and a second
+router, `<name>-outpost`, that sends `/outpost.goauthentik.io/` on the same
+host to Authentik for the login callback. The Authentik side creates a proxy
+provider in forward-auth (single application) mode, the application, the
+embedded outpost's provider list and the bindings, and checks every person's
+access against the file afterwards. `playbooks/authentik.yml` refuses a
+forward-auth route with no `authentik_app_access` entry, because an application
+with no binding is open to every account.
+
+Services that speak OIDC themselves (Immich, Forgejo, Miniflux and the others)
+are not covered: their providers and client secrets are still set up in the
+admin interface, and only their access is declared in the file. See
+`docs/authentik-audit-2026-10-12.md`.
 
 ## Moving a service between hosts
 
@@ -183,6 +225,7 @@ That dashboard has no authentication in front of it, and by decision on
 It is not reachable from the internet, because no Cloudflare Tunnel hostname
 exists for it and adding one is a deliberate act in the dashboard.
 
-If that ever needs to change, it is one line — `middlewares:
-[authentik-forwardauth]` on the route in `inventory/host_vars/public-api.yml`,
-the same treatment `ai.ryzhkov.dev` already has.
+If that ever needs to change, it is `sso: forward` on the route in
+`inventory/host_vars/public-api.yml` and an access entry in
+`playbooks/vars/authentik.yml`, the same treatment `ai.ryzhkov.dev` already
+has ("Putting a service behind Authentik", above).

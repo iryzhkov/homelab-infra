@@ -119,6 +119,7 @@ Then, from the repository root:
 ansible-playbook playbooks/ping.yml          # connectivity and interpreter check
 ansible-playbook playbooks/forgejo-client.yml # git over SSH to Forgejo, T3 agent hosts
 ansible-playbook playbooks/forgejo-webhooks.yml # Forgejo webhook receiver and handlers, homelab
+ansible-playbook playbooks/authentik.yml     # Authentik groups, app access, admin MFA
 ./scripts/snapshot.sh                        # refresh snapshot/
 ```
 
