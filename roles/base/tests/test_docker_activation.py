@@ -37,6 +37,12 @@ class ActivationTests(unittest.TestCase):
         self.assertFalse(evaluate(task('Require household health before this restart')['when']))
         self.assertIn('restart_compose_ids',task('Restore only containers that were running before this window')['ansible.builtin.command']['argv'])
 
+    def test_health_only_recovery_does_not_stop_healthy_manager_apps(self):
+        expression=task('Stop captured Compose containers before a manager restart')['when'][1]
+        for state,started,expected in [('active',False,False),('locked',False,True),('active',True,True)]:
+            template=Templar(loader=loader,variables={'restart_default':{'stdout':'local'},'restart_initial_swarm_state':{'stdout':state},'restart_recovery_daemon':{'changed':started}})
+            self.assertEqual(template.evaluate_conditional(TrustedAsTemplate().tag(expression)),expected)
+
     def test_clean_local_activation_is_unchanged(self):
         template=Templar(loader=loader,variables={'restart_default':{'stdout':'local'},'restart_state':{'stat':{'exists':False}}})
         self.assertFalse(template.evaluate_conditional(TrustedAsTemplate().tag(play['tasks'][0]['when'][0])))

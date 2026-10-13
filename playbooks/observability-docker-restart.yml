@@ -51,6 +51,7 @@
         name: docker
         state: started
       become: true
+      register: restart_recovery_daemon
       when:
         - restart_state.stat.exists
         - not ansible_check_mode
@@ -70,6 +71,15 @@
       register: restart_default
       changed_when: false
       check_mode: false
+    - name: Read initial manager state for safe recovery ordering
+      ansible.builtin.command:
+        argv: [docker, info, --format, "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"]
+      register: restart_initial_swarm_state
+      changed_when: false
+      check_mode: false
+      when:
+        - inventory_hostname in groups['swarm']
+        - restart_default.stdout | trim != 'local' or restart_state.stat.exists
     - name: Load interrupted activation state
       ansible.builtin.slurp:
         src: "{{ restart_state_path }}"
@@ -205,7 +215,7 @@
             argv: "{{ ['docker', 'stop', '--time', '30'] + restart_compose_ids }}"
           when:
             - inventory_hostname in groups['swarm']
-            - restart_default.stdout | trim != 'local' or restart_state.stat.exists
+            - restart_default.stdout | trim != 'local' or restart_initial_swarm_state.stdout | default('') | trim == 'locked' or restart_recovery_daemon.changed | default(false)
             - restart_compose_ids | length > 0
           changed_when: true
         - name: Restart the Docker daemon
