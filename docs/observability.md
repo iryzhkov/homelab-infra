@@ -80,8 +80,11 @@ Redaction fixtures cover bearer/basic headers, named token/key/password/secret
 fields, connection strings, provider key formats and JWTs. The live file,
 journal and Docker acceptance script is `scripts/verify-observability-redaction.py`.
 The socket proxy denies write, exec, archive and export operations. The laptop
-uses mesh addresses while travelling, and both laptop/OCI resolve the ingest
-names to both mesh edges. The LAN collectors use the failover VIP. Native backup
+uses mesh addresses while travelling. Laptop/OCI route one TLS stream through a
+bounded loopback HAProxy relay with explicit primary/backup edge health checks;
+TLS verification and ingestion credentials stay with Alloy. DNS address lists
+alone failed the blackhole acceptance. See [relay evidence](observability-mesh-relay.md).
+The LAN collectors use the failover VIP. Native backup
 authentication uses a private stdin pipe rather than a secret in process arguments.
 Metric queries, dashboard provisioning and household route health are checked.
 
