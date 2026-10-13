@@ -4,6 +4,8 @@
 # ZFS ARC cap, 2 GiB (32 GB of RAM, most of it given to guests).
 zfs_arc_max_bytes: 2147483648
 
+observability_syslog_guest: {name: ct201, address: 192.168.20.83}
+
 # Physical drives, as smartctl names them. See host_vars/proxmox-a.yml.
 smart_drives:
   - model: WD PC SN810 SDCPNRY-256G-1006   # WD SN810 256 GB NVMe, boot

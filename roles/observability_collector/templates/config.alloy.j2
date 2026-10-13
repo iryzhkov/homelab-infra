@@ -137,18 +137,28 @@ loki.process "redact" {
     expression = `(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)`
     replace = "[REDACTED]"
   }
-  stage.static_labels {
-    values = { host = "{{ inventory_hostname }}" }
-  }
 }
 
 // Test-only local file exists solely to prove redaction before log rollout.
 loki.source.file "redaction_validation" {
-  targets = [{ __path__ = "/var/lib/alloy/redaction-test.log", job = "redaction-validation" }]
+  targets = [{ __path__ = "/var/lib/alloy/redaction-test.log", job = "redaction-validation", host = "{{ inventory_hostname }}" }]
   forward_to = [loki.process.redact.receiver]
 }
 
 {% if observability_logs_enabled | bool %}
+{% if observability_syslog_guest is defined %}
+// Source IP is restricted by the owning hypervisor firewall. Guest labels
+// are assigned here, never accepted from arbitrary log message contents.
+loki.source.syslog "alpine" {
+  listener {
+    address = "{{ ansible_host }}:1514"
+    protocol = "udp"
+    syslog_format = "rfc3164"
+    labels = { job = "syslog", host = "{{ observability_syslog_guest.name }}" }
+  }
+  forward_to = [loki.process.redact.receiver]
+}
+{% endif %}
 loki.relabel "journal" {
   forward_to = []
   rule {
@@ -158,7 +168,7 @@ loki.relabel "journal" {
 }
 loki.source.journal "host" {
   max_age = "24h"
-  labels = { job = "journal" }
+  labels = { job = "journal", host = "{{ inventory_hostname }}" }
   relabel_rules = loki.relabel.journal.rules
   forward_to = [loki.process.redact.receiver]
 }
@@ -201,7 +211,7 @@ discovery.relabel "containers" {
 loki.source.docker "containers" {
   host = "tcp://127.0.0.1:2375"
   targets = discovery.relabel.containers.output
-  labels = { job = "docker" }
+  labels = { job = "docker", host = "{{ inventory_hostname }}" }
   forward_to = [loki.process.redact.receiver]
 }
 {% endif %}

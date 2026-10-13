@@ -102,6 +102,26 @@
   changed_when: false
   when: not ansible_check_mode
 
+- name: Restrict any declared Alpine log source before opening its receiver
+  ansible.builtin.include_role:
+    name: observability_syslog_parent
+  when: observability_syslog_guest is defined
+
+- name: Check whether the native Alloy validator is available
+  ansible.builtin.stat:
+    path: /usr/bin/alloy
+  register: observability_native_alloy
+
+- name: Validate a prepared native configuration before changing collection
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy.prepared
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/bin/alloy validate %s
+  when: ansible_facts.os_family == 'Debian' and observability_native_alloy.stat.exists
+
 - name: Install a restricted Docker API proxy for container collection
   ansible.builtin.include_tasks: docker-proxy.yml
   when: observability_docker_enabled | bool
@@ -117,6 +137,11 @@
       CUSTOM_ARGS: --server.http.listen-addr=127.0.0.1:12345 --disable-reporting
       GOMEMLIMIT: "{{ observability_alloy_go_memory_limit }}"
     alloy_systemd_override: |
+      {% if observability_syslog_guest is defined %}
+      [Unit]
+      Requires=observability-syslog-firewall.service
+      After=observability-syslog-firewall.service
+      {% endif %}
       [Service]
       MemoryHigh={{ observability_alloy_memory_high }}
       MemoryMax={{ observability_alloy_memory_max }}

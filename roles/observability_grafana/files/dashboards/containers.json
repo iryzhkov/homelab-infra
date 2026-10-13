@@ -130,7 +130,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host, name) (rate(container_cpu_usage_seconds_total{host=~\"$host\",name!=\"\"}[$__rate_interval]))",
+          "expr": "sum by(host, name) (rate(container_cpu_usage_seconds_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -194,7 +194,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "container_memory_working_set_bytes{host=~\"$host\",name!=\"\"}",
+          "expr": "max by(host,name) (container_memory_working_set_bytes{host=~\"$host\",job=\"cadvisor\",name!=\"\"})",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -258,7 +258,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host,name) (rate(container_network_receive_bytes_total{host=~\"$host\",name!=\"\"}[$__rate_interval]))",
+          "expr": "sum by(host,name) (rate(container_network_receive_bytes_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -322,7 +322,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host,name) (rate(container_network_transmit_bytes_total{host=~\"$host\",name!=\"\"}[$__rate_interval]))",
+          "expr": "sum by(host,name) (rate(container_network_transmit_bytes_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -386,8 +386,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "container_fs_usage_bytes{host=~\"$host\",name!=\"\"}",
-          "legendFormat": "{{host}} {{name}}",
+          "expr": "container_fs_usage_bytes{host=~\"$host\",job=\"cadvisor\",name!=\"\"}",
+          "legendFormat": "{{host}} · {{name}} · {{device}}",
           "range": true,
           "instant": false
         }
@@ -450,7 +450,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host,name) (rate(container_cpu_cfs_throttled_periods_total{host=~\"$host\",name!=\"\"}[$__rate_interval]))",
+          "expr": "sum by(host,name) (rate(container_cpu_cfs_throttled_periods_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false

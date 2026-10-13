@@ -131,8 +131,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (1 - avg by (host) (rate(node_cpu_seconds_total{host=~\"$host\",mode=\"idle\"}[$__rate_interval])))",
-          "legendFormat": "{{host}} {{name}}",
+          "expr": "100 * (1 - avg by (host) (avg by (host,cpu) (rate(node_cpu_seconds_total{host=~\"$host\",job=\"node\",mode=\"idle\"}[$__rate_interval]))))",
+          "legendFormat": "{{host}}",
           "range": true,
           "instant": false
         }
@@ -195,8 +195,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "node_memory_MemAvailable_bytes{host=~\"$host\"}",
-          "legendFormat": "{{host}} {{name}}",
+          "expr": "max by(host) (node_memory_MemAvailable_bytes{host=~\"$host\",job=\"node\"})",
+          "legendFormat": "{{host}}",
           "range": true,
           "instant": false
         }
@@ -259,8 +259,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "node_filesystem_avail_bytes{host=~\"$host\",fstype!~\"tmpfs|overlay|squashfs\"}",
-          "legendFormat": "{{host}} {{name}}",
+          "expr": "max by(host,mountpoint) (node_filesystem_avail_bytes{host=~\"$host\",job=\"node\",fstype=~\"ext[234]|xfs|btrfs|zfs|vfat|f2fs|ntfs|exfat\",mountpoint!~\"/(dev|proc|sys|run|var/lib/docker|var/lib/containers|var/lib/kubelet)(/.*)?\"})",
+          "legendFormat": "{{host}} · {{mountpoint}}",
           "range": true,
           "instant": false
         }
@@ -323,8 +323,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "node_load1{host=~\"$host\"}",
-          "legendFormat": "{{host}} {{name}}",
+          "expr": "max by(host) (node_load1{host=~\"$host\",job=\"node\"})",
+          "legendFormat": "{{host}}",
           "range": true,
           "instant": false
         }
