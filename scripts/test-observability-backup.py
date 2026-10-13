@@ -163,7 +163,7 @@ class NativeBackupTest(unittest.TestCase):
         self.assertNotIn("authKey", " ".join(cmd.call_args.args[0]))
         self.assertIn("/run/secrets/vm_snapshot_key", cmd.call_args.kwargs["stdin"])
         self.assertNotIn("wget", cmd.call_args.kwargs["stdin"])
-        self.assertIn('"$key" | nc', cmd.call_args.kwargs["stdin"])
+        self.assertIn('"$key"; sleep 30; } | nc', cmd.call_args.kwargs["stdin"])
 
     def test_authenticated_api_rejects_error_without_echoing_body(self):
         with patch.object(backup, "command", return_value='HTTP/1.0 401 Unauthorized\r\n\r\nDUMMY_SECRET'):
