@@ -2292,7 +2292,7 @@
     },
     {
       "type": "text",
-      "title": "Unreported GPU temperature / discrete GPU",
+      "title": "GPU coverage · unsupported readings",
       "gridPos": {
         "x": 0,
         "y": 113,

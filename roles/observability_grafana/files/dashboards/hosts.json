@@ -153,7 +153,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Every resource panel follows the selected host. CPU/RAM prefer its mapped Proxmox guest accounting; thread IDs are reported OS logical CPUs, not physical cores or allocated LXC capacity. Physical sensors require declared capability; attached GPU ownership is explicit. Unavailable means unsupported/unreported."
+        "content": "Every resource panel follows the selected host. CPU uses mapped Proxmox guest accounting; RAM prefers OS available-memory counters, falling back to explicitly labelled PVE residency only without OS metrics. Thread IDs are reported logical CPUs; LXC parent counters are excluded. Hardware requires declared physical capability or explicit passthrough ownership."
       },
       "id": 1
     },
