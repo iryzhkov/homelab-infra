@@ -7,6 +7,7 @@
 - name: Require verified HTTPS for Home Assistant collection
   ansible.builtin.assert:
     that:
+      - groups['observability_homeassistant_scrapers'] | length == 1
       - observability_homeassistant_url is match('^https://[^/]+/api/prometheus$')
       - observability_homeassistant_token_path == '/etc/alloy/homeassistant-token'
     quiet: true
