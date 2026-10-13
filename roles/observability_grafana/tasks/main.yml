@@ -32,6 +32,7 @@
     folder_uid: "{{ observability_grafana_folder_uid }}"
     folder_title: "{{ observability_grafana_folder_title }}"
     dashboards: "{{ observability_grafana_dashboards }}"
+    legacy_dashboard_uids: "{{ observability_grafana_legacy_dashboard_uids }}"
     external_shares: "{{ observability_grafana_share_secrets.GF_PUBLIC_SHARES if observability_grafana_sharing_enabled | bool else [] }}"
   register: observability_grafana_result
   no_log: true

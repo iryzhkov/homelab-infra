@@ -76,10 +76,17 @@ def main():
             folder_title=dict(type="str", required=True),
             dashboards=dict(type="list", elements="dict", required=True),
             external_shares=dict(type="list", elements="dict", default=[], no_log=True),
+            legacy_dashboard_uids=dict(type="list", elements="str", default=[]),
         ),
         supports_check_mode=True,
     )
     p = module.params
+    allowed_legacy = {
+        "home-assistant-overview", "27360081-9791-40a0-9c22-5b01178551cc",
+        "33b22e09-fa0c-468a-b507-f87d71700a25",
+    }
+    if set(p["legacy_dashboard_uids"]) - allowed_legacy:
+        module.fail_json(msg="Legacy dashboard ownership is restricted to the three explicitly adopted resources")
     auth = base64.b64encode((p["username"] + ":" + p["password"]).encode()).decode()
     changes = []
 
@@ -158,11 +165,13 @@ def main():
     for document in p["dashboards"]:
         desired = replace_loki(copy.deepcopy(document), loki_uid)
         uid = desired.get("uid", "")
-        if not uid.startswith("homelab-observe-"):
+        legacy = uid in p["legacy_dashboard_uids"]
+        if not uid.startswith("homelab-observe-") and not legacy:
             module.fail_json(msg="Refusing a dashboard outside the owned UID namespace")
         existing = api("GET", "/api/dashboards/uid/" + quote(uid, safe=""), missing_ok=True)
         actual = existing["dashboard"] if existing else None
-        folder_matches = existing and existing.get("meta", {}).get("folderUid") == p["folder_uid"]
+        desired_folder = existing.get("meta", {}).get("folderUid", "") if legacy and existing else p["folder_uid"]
+        folder_matches = existing and (legacy or existing.get("meta", {}).get("folderUid") == desired_folder)
         if not desired_matches(actual, desired) or not folder_matches:
             changes.append("dashboard " + uid)
             if not module.check_mode:
@@ -170,7 +179,7 @@ def main():
                 payload["id"] = actual.get("id") if actual else None
                 payload["version"] = actual.get("version", 0) if actual else 0
                 api("POST", "/api/dashboards/db", {
-                    "dashboard": payload, "folderUid": p["folder_uid"],
+                    "dashboard": payload, "folderUid": desired_folder,
                     "overwrite": True, "message": "Reconcile Ansible observability source",
                 })
 
