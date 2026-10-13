@@ -417,8 +417,8 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Agent tokens · exporter unavailable",
-      "description": "Reserved for a real agent usage exporter. No estimate or synthetic fallback.",
+      "title": "Token aggregation · unsupported native contract",
+      "description": "The reviewed native producer explicitly does not aggregate tokens or costs. Evidence rows may overlap and must never be presented as token totals. Producer remains pending deployment.",
       "gridPos": {
         "x": 0,
         "y": 20,
@@ -432,8 +432,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "agent_tokens_total{host=~\"$host\"}",
-          "legendFormat": "{{host}} {{name}}",
+          "expr": "steward_token_aggregation_supported{job=\"steward\"} and on(job,instance) (up{job=\"steward\"} == 1)",
+          "legendFormat": "Capability",
           "range": true,
           "instant": false
         }
@@ -459,7 +459,19 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Producer unavailable",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unsupported",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -481,8 +493,8 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Provider quota remaining · exporter unavailable",
-      "description": "Reserved for real provider quota telemetry. No estimate or synthetic fallback.",
+      "title": "Worst observed quota used / window · producer pending",
+      "description": "Global worst fresh native observation per window (0–100%), not provider/pool capacity or remaining quota. Windows overlap and are not additive. Native producer has not yet been deployed.",
       "gridPos": {
         "x": 12,
         "y": 20,
@@ -496,15 +508,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "agent_provider_quota_remaining{host=~\"$host\"}",
-          "legendFormat": "{{host}} {{name}}",
+          "expr": "100 * (steward_quota_worst_used_ratio{job=\"steward\"} and on(job,instance) (up{job=\"steward\"} == 1))",
+          "legendFormat": "{{window}}",
           "range": true,
           "instant": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "percent",
           "color": {
             "mode": "palette-classic"
           },
@@ -523,7 +535,10 @@
                 "value": null
               }
             ]
-          }
+          },
+          "min": 0,
+          "max": 100,
+          "noValue": "Producer unavailable"
         },
         "overrides": []
       },
@@ -541,6 +556,213 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "type": "stat",
+      "title": "Declared tasks · queue / ready",
+      "description": "Latest retained declared attempts; excludes retries and supervision activations. Producer pending deployment.",
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 8,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(steward_tasks{job=\"steward\",state=~\"queued|ready\"} and on(job,instance) (up{job=\"steward\"} == 1))",
+          "legendFormat": "Queue + ready",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 8
+    },
+    {
+      "type": "stat",
+      "title": "Fresh native workers",
+      "description": "Reported/connected/fresh worker states overlap; only fresh is shown, never summed.",
+      "gridPos": {
+        "x": 8,
+        "y": 28,
+        "w": 8,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "steward_workers{job=\"steward\",state=\"fresh\"} and on(job,instance) (up{job=\"steward\"} == 1)",
+          "legendFormat": "Fresh workers",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 9
+    },
+    {
+      "type": "stat",
+      "title": "Native snapshot age",
+      "description": "Native snapshots refresh every 30s. Last-known gauges are hidden when up is zero. Producer pending deployment.",
+      "gridPos": {
+        "x": 16,
+        "y": 28,
+        "w": 8,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(time() - steward_metrics_snapshot_timestamp_seconds{job=\"steward\"}) and on(job,instance) (up{job=\"steward\"} == 1)",
+          "legendFormat": "Snapshot age",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 10
     }
   ]
 }
