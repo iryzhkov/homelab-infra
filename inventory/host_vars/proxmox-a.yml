@@ -28,6 +28,8 @@ observability_file_inputs:
 observability_syslog_guest: {name: ct110, address: 192.168.70.250}
 observability_alpine_forwarding_verified: true
 observability_alpine_promtail_retire: true
+# Parent-emitted identity only; no OS exporter or hardware capability claim.
+observability_host_metadata_only_guests: [home-assistant]
 observability_lxc_scrapes:
   - {name: ct100, address: '192.168.20.154:9911', host: ct100, job: node}
   - {name: ct104, address: '192.168.70.241:9911', host: ct104, job: node}

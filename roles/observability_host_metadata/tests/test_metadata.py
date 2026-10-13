@@ -71,6 +71,19 @@ class MetadataAcceptanceTest(unittest.TestCase):
         self.assertNotIn('node_monitoring_smart_expected_devices{', text)
         self.assertNotIn('capability="smart"', text)
 
+    def test_metadata_only_ha_is_parent_published_without_exporter_claim(self):
+        parent = self.variables.get_vars(host=self.inventory.get_host("proxmox-a"))
+        names = parent["observability_host_metadata_only_guests"]
+        self.assertEqual(names, ["home-assistant"])
+        guest = self.variables.get_vars(host=self.inventory.get_host(names[0]))
+        self.assertFalse(guest["observability_alloy_enabled"])
+        text = self.metadata(["proxmox-a"] + names)
+        self.assertIn('node_monitoring_host_info{host="home-assistant",kind="vm",guest_id="qemu/103"} 1', text)
+        self.assertNotIn('node_monitoring_capability_info{host="home-assistant"', text)
+        self.assertNotIn('node_monitoring_gpu_owner_info{host="home-assistant"', text)
+        self.assertNotIn('node_monitoring_smart_expected_devices{host="home-assistant"', text)
+        self.assertEqual(len([line for line in text.splitlines() if line.startswith('node_monitoring_host_info{')]), 2)
+
     def test_parent_exported_guest_metadata_preserves_explicit_guest_identity(self):
         text = self.metadata(["proxmox-a", "ct100", "ct104", "ct107"])
         for number in [100, 104, 107]:

@@ -40,13 +40,20 @@ another physical device. This currently identifies monitored Intel iGPUs;
 unavailable discrete/Apple GPU performance is not synthesized.
 
 Optional `guest_id` matches PVE metric IDs such as qemu/101 and lxc/100.
-Known mapped VMs are101,102,106,108,111,202,211; CT IDs come from the existing
+Known mapped VMs are101,102,103,106,108,111,202,211; CT IDs come from the existing
 `proxmox_vmid` declaration. Physical CPU capacity must join kind=physical and
 count reported logical CPUs/SMT threads from node_cpu_seconds_total. VM/LXC
 CPU/RAM views remain separate. PVE guest CPU/memory is preferable for LXC
 capacity because a guest may expose inherited host counters/sensors. CT105
 currently exposes physical hwmon metrics but is explicitly LXC with no
 physical temperature capability.
+
+The owning parent can also declare `observability_host_metadata_only_guests`
+for inventory identities without an OS exporter. Home Assistant is reference-only
+VM `home-assistant`, guest_id=qemu/103, emitted by proxmox-a. It has no physical
+hardware capability or node-exporter claim; CPU/RAM fallback uses PVE guest
+accounting deduplicated by id. To relocate its metadata publisher, move the
+single parent list entry while retaining the stable guest_id.
 
 Small native Debian exporters currently disable textfile collection. Their
 owning PVE renders metadata for declared job=node guest scrapes with explicit

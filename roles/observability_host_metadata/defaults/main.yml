@@ -6,4 +6,5 @@ observability_gpu_owners: []
 observability_host_metadata_directory: /var/lib/observability-textfile
 # Native small guests currently disable textfile collection. Their owning
 # PVE's existing node collector exports explicit child host labels instead.
-observability_host_metadata_guests: "{{ observability_lxc_scrapes | default([]) | selectattr('job', 'equalto', 'node') | map(attribute='host') | unique | list }}"
+observability_host_metadata_only_guests: []
+observability_host_metadata_guests: "{{ ((observability_lxc_scrapes | default([]) | selectattr('job', 'equalto', 'node') | map(attribute='host') | list) + observability_host_metadata_only_guests) | unique | list }}"
