@@ -73,6 +73,18 @@ restore locally and from the peer. Each restore returned the exact 33-series
 historical proof. Restore containers had no network, published ports, secrets
 or live state mounts and were removed after acceptance.
 
+After final collector and backup-transport changes, homelab created native
+backup `20261013T113629Z-773cfa5c`. Both the owner's isolated restore and
+normandy's restore from
+`/mnt/data/peer-snapshots/homelab/observability/snapshots/victoriametrics/20261013T113629Z-773cfa5c`
+returned the exact 41-series historical proof. The genuine ordinary hourly
+mirror completed again afterwards. Snapshot authentication travels through a
+private stdin pipe; neither host nor container process arguments contain its
+key. BusyBox nc needs its input pipe held open through the response window;
+the bounded 30-second hold adds roughly one minute to a complete backup.
+A snapshot request timeout still requires inspecting residual native snapshots
+before another attempt; do not delete snapshots of unknown ownership.
+
 At acceptance the sole observability pin and owner marker named homelab;
 logging's pin still named homelab. Homelab's pool retained approximately
 252.8 GB free. The final genuine homelab hourly mirror completed successfully
