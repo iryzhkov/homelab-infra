@@ -144,15 +144,18 @@
 - name: Decide whether this stack gets the override
   ansible.builtin.set_fact:
     compose_log_override_wanted: >-
-      {{ compose_logging_override | bool
-         and compose_log_daemon['log-driver'] | default('') == 'loki'
-         and (compose_log_daemon['log-opts'] | default({}))['mode'] | default('') == 'non-blocking'
-         and compose_log_services | length > 0 }}
+      {{ compose_log_services | length > 0
+         and ((docker_logs_via_alloy | default(false) | bool)
+           or (compose_logging_override | bool
+             and compose_log_daemon['log-driver'] | default('') == 'loki'
+             and (compose_log_daemon['log-opts'] | default({}))['mode'] | default('') == 'non-blocking')) }}
     compose_log_doc: >-
       {%- set services = {} -%}
+      {%- set logging = {'driver': 'local', 'options': docker_alloy_log_options}
+            if docker_logs_via_alloy | default(false) | bool else
+            {'driver': 'loki', 'options': (compose_log_daemon['log-opts'] | default({}))} -%}
       {%- for name in compose_log_services -%}
-      {%-   set _ = services.update({name: {'logging': {'driver': 'loki',
-              'options': (compose_log_daemon['log-opts'] | default({}))}}}) -%}
+      {%-   set _ = services.update({name: {'logging': logging}}) -%}
       {%- endfor -%}
       {{ {'services': services} }}
 
@@ -160,8 +163,8 @@
   ansible.builtin.copy:
     content: |
       # Written by homelab-infra roles/compose_stack (compose_logging_override):
-      # this host's daemon.json Loki settings, made explicit so they apply
-      # without a daemon restart. Do not edit; it is rewritten on every run.
+      # bounded local logging for Alloy, or the unmigrated daemon's Loki settings.
+      # Applied through container recreation. Rewritten on every run.
       {{ compose_log_doc | to_nice_yaml(indent=2) }}
     dest: "{{ stack_dir }}/docker-compose.override.yml"
     mode: "0644"

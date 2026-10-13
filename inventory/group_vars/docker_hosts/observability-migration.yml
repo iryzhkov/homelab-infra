@@ -1,0 +1,9 @@
+---
+# Container logs are read through Docker's API and redacted by Alloy.
+# Local storage stays bounded and independent of Loki availability.
+docker_logs_via_alloy: true
+docker_alloy_log_options:
+  max-size: "50m"
+  max-file: "3"
+  mode: non-blocking
+  max-buffer-size: 4m
