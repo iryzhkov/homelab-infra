@@ -17,6 +17,7 @@
       - https://git.ryzhkov.dev/api/healthz
       - https://uptime.ryzhkov.dev/health
       - https://rss.ryzhkov.dev/healthcheck
+    restart_state_path: /var/lib/observability/docker-activation.json
   pre_tasks:
     - name: Require the controlled interruption window
       ansible.builtin.assert:
@@ -55,13 +56,59 @@
       register: restart_default
       changed_when: false
       check_mode: false
-  tasks:
-    - name: Restart only when the active default differs
+    - name: Inspect durable activation recovery state
+      ansible.builtin.stat:
+        path: "{{ restart_state_path }}"
+      become: true
+      register: restart_state
+      check_mode: false
+    - name: Load interrupted activation state
+      ansible.builtin.slurp:
+        src: "{{ restart_state_path }}"
+      become: true
+      register: restart_saved
+      when: restart_state.stat.exists
+    - name: Recover the original Compose container set
+      ansible.builtin.set_fact:
+        restart_recovery: "{{ restart_saved.content | b64decode | from_json }}"
+      when: restart_state.stat.exists
+    - name: Validate interrupted activation belongs to this host
+      ansible.builtin.assert:
+        that:
+          - restart_recovery.host == inventory_hostname
+          - restart_recovery.compose_ids is sequence
+          - restart_recovery.compose_ids is not string
+          - restart_recovery.compose_ids | reject('match', '^[a-f0-9]{12,64}$') | list | length == 0
+        quiet: true
+      when: restart_state.stat.exists
+    - name: Restore the original IDs for recovery
+      ansible.builtin.set_fact:
+        restart_compose_ids: "{{ restart_recovery.compose_ids }}"
+      when: restart_state.stat.exists
+    - name: Preflight private manager unlock data before any interruption
       when:
-        - restart_default.stdout | trim != 'local'
+        - inventory_hostname in groups['swarm']
+        - restart_default.stdout | trim != 'local' or restart_state.stat.exists
+      block:
+        - name: Load private Swarm unlock data
+          community.sops.load_vars:
+            file: "{{ swarm_secret_file | default(playbook_dir ~ '/../secrets/swarm.sops.yaml') }}"
+            name: swarm_secrets
+          delegate_to: localhost
+          no_log: true
+        - name: Require a present manager unlock key before stopping services
+          ansible.builtin.assert:
+            that: swarm_secrets.swarm_unlock_key | default('') | length > 0
+            quiet: true
+          no_log: true
+  tasks:
+    - name: Activate or recover an interrupted activation
+      when:
+        - restart_default.stdout | trim != 'local' or restart_state.stat.exists
         - not ansible_check_mode
       block:
         - name: Require household health before this restart
+          when: not restart_state.stat.exists
           ansible.builtin.uri:
             url: "{{ item }}"
             status_code: 200
@@ -76,12 +123,12 @@
           delegate_to: "{{ groups['swarm_workers'][0] }}"
           register: restart_manager_states
           changed_when: false
-          when: inventory_hostname in groups['swarm']
+          when: inventory_hostname in groups['swarm'] and restart_default.stdout | trim != 'local'
         - name: Preserve manager quorum
           ansible.builtin.assert:
             that: restart_manager_states.stdout_lines | select('match', '^Ready (Leader|Reachable)$') | list | length >= 3
             quiet: true
-          when: inventory_hostname in groups['swarm']
+          when: inventory_hostname in groups['swarm'] and restart_default.stdout | trim != 'local'
         - name: Keep the peer edge on the VIP during an edge restart
           when: inventory_hostname in groups['edge_proxy']
           block:
@@ -100,6 +147,7 @@
               retries: 10
               delay: 1
         - name: Require backend health after any edge VIP handoff
+          when: not restart_state.stat.exists
           ansible.builtin.uri:
             url: "{{ item }}"
             status_code: 200
@@ -109,6 +157,7 @@
           become: false
           no_log: true
         - name: Capture originally running Compose containers only
+          when: not restart_state.stat.exists
           ansible.builtin.command:
             argv:
               - docker
@@ -120,8 +169,27 @@
           register: restart_compose_raw
           changed_when: false
         - name: Exclude Swarm tasks that also carry Compose labels
+          when: not restart_state.stat.exists
           ansible.builtin.set_fact:
             restart_compose_ids: "{{ restart_compose_raw.stdout_lines | map('trim') | reject('search', ' ') | reject('equalto', '') | list }}"
+        - name: Create private activation journal directory
+          ansible.builtin.file:
+            path: "{{ restart_state_path | dirname }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          become: true
+          when: not restart_state.stat.exists
+        - name: Persist original IDs before interrupting services
+          ansible.builtin.copy:
+            dest: "{{ restart_state_path }}"
+            content: "{{ {'host': inventory_hostname, 'compose_ids': restart_compose_ids} | to_json }}"
+            owner: root
+            group: root
+            mode: "0600"
+          become: true
+          when: not restart_state.stat.exists
         # A locked manager can start Compose before its network agent is restored.
         # Starting after unlock keeps the embedded service DNS registrations.
         - name: Stop captured Compose containers before a manager restart
@@ -129,9 +197,11 @@
             argv: "{{ ['docker', 'stop', '--time', '30'] + restart_compose_ids }}"
           when:
             - inventory_hostname in groups['swarm']
+            - restart_default.stdout | trim != 'local'
             - restart_compose_ids | length > 0
           changed_when: true
         - name: Restart the Docker daemon
+          when: restart_default.stdout | trim != 'local'
           ansible.builtin.systemd_service:
             name: docker
             state: restarted
@@ -147,12 +217,6 @@
         - name: Unlock a restarted Swarm manager through the existing secret path
           when: inventory_hostname in groups['swarm']
           block:
-            - name: Load private Swarm unlock data
-              community.sops.load_vars:
-                file: "{{ swarm_secret_file | default(playbook_dir ~ '/../secrets/swarm.sops.yaml') }}"
-                name: swarm_secrets
-              delegate_to: localhost
-              no_log: true
             - name: Read Swarm state
               ansible.builtin.command:
                 argv: [docker, info, --format, "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"]
@@ -196,6 +260,11 @@
           retries: 30
           delay: 3
           no_log: true
+        - name: Clear activation journal only after recovery and backend acceptance
+          ansible.builtin.file:
+            path: "{{ restart_state_path }}"
+            state: absent
+          become: true
       always:
         - name: Restore edge VIP failover membership
           ansible.builtin.systemd_service:
