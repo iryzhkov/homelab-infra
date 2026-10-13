@@ -175,8 +175,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_smart_status{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_smart_status{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -263,8 +263,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -334,8 +334,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"op_limit_max\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"}) - max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"op_limit_max\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"}) - max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -405,8 +405,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_percentage_used{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_percentage_used{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -476,8 +476,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_attribute{job=\"smartctl\",device=~\"$drive\",attribute_name=\"Percent_Lifetime_Remain\",attribute_value_type=\"value\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_attribute{job=\"smartctl\",device=~\"$drive\",attribute_name=\"Percent_Lifetime_Remain\",attribute_value_type=\"value\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -531,7 +531,7 @@
       "id": 6
     },
     {
-      "type": "stat",
+      "type": "bargauge",
       "title": "NVMe media errors",
       "description": "",
       "gridPos": {
@@ -547,8 +547,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_media_errors{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_media_errors{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -576,7 +576,8 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -588,23 +589,14 @@
           "fields": "",
           "values": false
         },
-        "orientation": "auto",
+        "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true,
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none",
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "text": {
-          "titleSize": 14,
-          "valueSize": 44
-        }
+        "showUnfilled": true
       },
       "id": 7
     },
     {
-      "type": "stat",
+      "type": "bargauge",
       "title": "NVMe critical warning bits",
       "description": "Bitmask; unavailable is not zero.",
       "gridPos": {
@@ -620,8 +612,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_critical_warning{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_critical_warning{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -649,7 +641,8 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -661,24 +654,15 @@
           "fields": "",
           "values": false
         },
-        "orientation": "auto",
+        "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true,
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none",
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "text": {
-          "titleSize": 14,
-          "valueSize": 44
-        }
+        "showUnfilled": true
       },
       "id": 8
     },
     {
-      "type": "stat",
-      "title": "Power-on time",
+      "type": "bargauge",
+      "title": "Power-on hours",
       "description": "",
       "gridPos": {
         "x": 16,
@@ -693,15 +677,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_power_on_seconds{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "((max by(host,device)(smartctl_device_power_on_seconds{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})) / 3600",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "suffix: h",
           "noValue": "Unavailable",
           "color": {
             "mode": "fixed",
@@ -722,7 +706,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "decimals": 0
         },
         "overrides": []
       },
@@ -734,18 +720,9 @@
           "fields": "",
           "values": false
         },
-        "orientation": "auto",
+        "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true,
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none",
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "text": {
-          "titleSize": 14,
-          "valueSize": 44
-        }
+        "showUnfilled": true
       },
       "id": 9
     },
@@ -766,8 +743,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",device=~\"$drive\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": true,
           "instant": false
         }
@@ -817,7 +794,7 @@
       "id": 10
     },
     {
-      "type": "stat",
+      "type": "bargauge",
       "title": "Power cycles",
       "description": "",
       "gridPos": {
@@ -833,8 +810,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_power_cycle_count{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "(max by(host,device)(smartctl_device_power_cycle_count{job=\"smartctl\",device=~\"$drive\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{host}} · {{model_name}}",
           "range": false,
           "instant": true
         }
@@ -862,7 +839,8 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -874,18 +852,9 @@
           "fields": "",
           "values": false
         },
-        "orientation": "auto",
+        "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true,
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none",
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "text": {
-          "titleSize": 14,
-          "valueSize": 44
-        }
+        "showUnfilled": true
       },
       "id": 11
     },
@@ -906,8 +875,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device,attribute_name)(smartctl_device_attribute{job=\"smartctl\",device=~\"$drive\",attribute_value_type=\"raw\",attribute_name=~\"Reported_Uncorrect|Offline_Uncorrectable|Current_Pending_ECC_Cnt|UDMA_CRC_Error_Count|Reallocate_NAND_Blk_Cnt\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
-          "legendFormat": "{{device}} · {{attribute_name}}",
+          "expr": "(max by(host,device,attribute_name)(smartctl_device_attribute{job=\"smartctl\",device=~\"$drive\",attribute_value_type=\"raw\",attribute_name=~\"Reported_Uncorrect|Offline_Uncorrectable|Current_Pending_ECC_Cnt|UDMA_CRC_Error_Count|Reallocate_NAND_Blk_Cnt\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name) max by(host,device,model_name)(smartctl_device{job=\"smartctl\"})",
+          "legendFormat": "{{model_name}} · {{attribute_name}}",
           "range": false,
           "instant": true
         }
