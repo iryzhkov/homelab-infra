@@ -19,6 +19,13 @@
     mode: "0644"
   loop: "{{ traefik_rendered_files }}"
 
+- name: Render the push-only observability routes
+  ansible.builtin.template:
+    src: observability-ingest.yml.j2
+    dest: "{{ traefik_dynamic_dir }}/observability-ingest.yml"
+    mode: "0644"
+  when: observability_enabled | default(false) | bool
+
 - name: Render the generated dynamic configuration
   ansible.builtin.template:
     src: generated.yml.j2

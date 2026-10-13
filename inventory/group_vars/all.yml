@@ -123,6 +123,11 @@ edge_proxy_ip: "{{ edge_vip }}"
 # (roles/keepalived), reserved on VLAN 20 outside the DHCP pool.
 edge_vip: 192.168.20.3
 
+# Dedicated TLS push-only ingest port; never a Cloudflare Tunnel route.
+observability_enabled: true
+observability_ingest_port: 8443
+observability_ingest_backend_port: 8429
+
 # Machine-to-machine SSH inside the fleet. A key listed here is authorised on
 # the hosts whose host_vars name it in fleet_ssh_authorized, restricted to the
 # address it is expected to come from.
