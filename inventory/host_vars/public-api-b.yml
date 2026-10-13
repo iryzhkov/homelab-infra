@@ -22,9 +22,8 @@ description: Second edge reverse proxy, VM 108 on proxmox-b
 qemu_guest_agent: true
 docker_install: true
 
-# The same machine-to-machine access as public-api.
-fleet_ssh_authorized:
-  - homelab
+# The unused ml-orchestrator credential was retired on 2026-10-05.
+fleet_ssh_authorized: []
 
 stacks:
   # No routes: the routes are declared once, on public-api, and every edge_proxy
