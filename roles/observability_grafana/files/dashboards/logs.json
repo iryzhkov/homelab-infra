@@ -364,11 +364,21 @@
           },
           "targets": [
             {
-              "expr": "{job=~\"journal|systemd-journal|syslog\",host=~\"$host\"} |~ \"(?i)sshd.*(accepted|failed|invalid|authentication failure)\""
+              "expr": "{job=~\"journal|systemd-journal\",host=~\"$host\",unit=~\"ssh(d)?[.]service\"} |~ \"(?i)accepted.*(publickey|password)|failed.*password|invalid user|authentication failure|disconnect.*(authenticating|invalid)\"",
+              "refId": "A"
+            },
+            {
+              "expr": "{job=~\"journal|systemd-journal|syslog\",host=~\"$host\",unit!~\"ssh(d)?[.]service\",syslog_identifier=~\"ssh|sshd|app_core_ssh\"} |~ \"(?i)accepted.*(publickey|password)|failed.*password|invalid user|authentication failure|disconnect.*(authenticating|invalid)\"",
+              "refId": "B"
+            },
+            {
+              "expr": "{job=~\"journal|systemd-journal|syslog\",host=~\"$host\",unit!~\"ssh(d)?[.]service\",syslog_identifier!~\"ssh|sshd|app_core_ssh\"} |~ \"(?i)sshd[^ ]*.*(accepted|failed|invalid|authentication failure)\"",
+              "refId": "C"
             }
           ],
           "title": "SSH authentication · host journal",
-          "type": "logs"
+          "type": "logs",
+          "description": "Current journald identifies SSH via unit labels; historical identifier and syslog-prefix fallbacks are separate and non-overlapping. Cron PAM sessions are excluded."
         },
         {
           "datasource": {
