@@ -1656,6 +1656,75 @@
         "showThresholdMarkers": true
       },
       "id": 22
+    },
+    {
+      "type": "bargauge",
+      "title": "Physical sensor hotspot / host",
+      "description": "Hottest reported physical hwmon sensor per host; may be CPU, board or storage. Select a host above for individual sensor labels. Not a GPU temperature estimate.",
+      "gridPos": {
+        "x": 0,
+        "y": 81,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host)(node_hwmon_temp_celsius{job=\"node\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\"})",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 23
     }
   ]
 }
