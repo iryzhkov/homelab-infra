@@ -525,14 +525,6 @@
       "targetBlank": false
     },
     {
-      "title": "Agent hosts",
-      "type": "link",
-      "url": "/d/homelab-observe-agents",
-      "keepTime": true,
-      "includeVars": false,
-      "targetBlank": false
-    },
-    {
       "title": "UniFi Network",
       "type": "link",
       "url": "/d/homelab-observe-unifi",

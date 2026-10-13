@@ -15,16 +15,11 @@ observability_grafana_dashboard_files:
   - capacity.json
   - containers.json
   - logs.json
-  - agents.json
   - unifi.json
   - homeassistant.json
   - legacy-ha.json
-  - legacy-overview.json
-  - legacy-security.json
 observability_grafana_legacy_dashboard_uids:
   - home-assistant-overview
-  - 27360081-9791-40a0-9c22-5b01178551cc
-  - 33b22e09-fa0c-468a-b507-f87d71700a25
 
 # Optional private aggregate views; sharing is a separate explicitly reviewed action.
 observability_grafana_embedding_dashboard_files:
@@ -33,3 +28,9 @@ observability_grafana_embedding_dashboard_files:
   - embed-homeassistant.json
 observability_grafana_sharing_enabled: false
 # Available: embed-overview.json, embed-agents.json, embed-homeassistant.json.
+
+# Explicitly approved superseded private UIDs; existing public capabilities are never retired.
+observability_grafana_retired_dashboard_uids:
+  - homelab-observe-agents
+  - 27360081-9791-40a0-9c22-5b01178551cc
+  - 33b22e09-fa0c-468a-b507-f87d71700a25

@@ -448,27 +448,12 @@
       "gridPos": {
         "x": 0,
         "y": 18,
-        "w": 8,
+        "w": 12,
         "h": 5
       },
       "options": {
         "mode": "markdown",
-        "content": "### [Open Logs](/d/homelab-observe-logs)\n\nSearch host and container logs within a chosen time window.\n\n[Service log summary](/d/27360081-9791-40a0-9c22-5b01178551cc) · [Security history](/d/33b22e09-fa0c-468a-b507-f87d71700a25)"
-      }
-    },
-    {
-      "id": 17,
-      "title": "Agent Hosts",
-      "type": "text",
-      "gridPos": {
-        "x": 8,
-        "y": 18,
-        "w": 8,
-        "h": 5
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "### [Open Agent Hosts](/d/homelab-observe-agents)\n\nResources for agent hosts. Coordinator metrics become available after its producer is deployed."
+        "content": "### [Open Logs](/d/homelab-observe-logs)\n\nService log volume, error signals and selected host/container records. Troubleshooting includes SSH and tunnel activity."
       }
     },
     {
@@ -476,9 +461,9 @@
       "title": "Fleet Overview",
       "type": "text",
       "gridPos": {
-        "x": 16,
+        "x": 12,
         "y": 18,
-        "w": 8,
+        "w": 12,
         "h": 5
       },
       "options": {

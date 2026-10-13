@@ -7,6 +7,8 @@ import sys
 import types
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
+from email.message import Message
 
 MODULE_PATH = pathlib.Path(__file__).parents[1] / "library/grafana_observability.py"
 class Done(Exception):
@@ -17,7 +19,7 @@ class ProvisioningTest(unittest.TestCase):
         doc = {"uid": "homelab-observe-home", "title": "Home"}
         params = dict(api_url="http://test", username="admin", password="private",
                       metrics_url="http://metrics", folder_uid="folder", folder_title="Folder",
-                      dashboards=[doc], external_shares=[], legacy_dashboard_uids=[],
+                      dashboards=[doc], external_shares=[], legacy_dashboard_uids=[], retired_dashboard_uids=["homelab-observe-agents"] if "retired" in state else [],
                       home_dashboard_uid=doc["uid"], starred_dashboard_uids=[doc["uid"]])
         class Module:
             check_mode = check
@@ -35,6 +37,10 @@ class ProvisioningTest(unittest.TestCase):
                 elif path == "/api/folders/folder": body = {"title":"Folder"}
                 elif path == "/api/search?starred=true": body = [{"uid":doc["uid"]}] if state["starred"] else []
                 elif path == "/api/org/preferences": body = state["preferences"]
+                elif path.startswith("/api/dashboards/uid/homelab-observe-agents"):
+                    if path.endswith("/public-dashboards/") or not state["retired"]:
+                        raise HTTPError(req.full_url, 404, "Missing", Message(), None)
+                    body = {"dashboard":{"uid":"homelab-observe-agents","id":8},"meta":{"provisioned":False}}
                 elif path.startswith("/api/dashboards/uid/"): body = {"dashboard":dict(doc,id=7), "meta":{"folderUid":"folder","isStarred":state["starred"]}}
                 elif path.endswith("/health"): body = {"status":"OK"}
                 elif "/api/v1/query?" in path: body = {"status":"success","data":{"result":[]}}
@@ -43,6 +49,8 @@ class ProvisioningTest(unittest.TestCase):
                 state["preferences"] = json.loads(req.data); body = {}
             elif method == "POST" and path == "/api/user/stars/dashboard/uid/homelab-observe-home":
                 state["starred"] = True; body = {}
+            elif method == "DELETE" and path == "/api/dashboards/uid/homelab-observe-agents":
+                state["retired"] = False; body = {}
             else: raise AssertionError((method,path))
             return io.BytesIO(json.dumps(body).encode())
         fake = types.ModuleType("ansible.module_utils.basic"); setattr(fake, "AnsibleModule", Module)
@@ -67,4 +75,16 @@ class ProvisioningTest(unittest.TestCase):
         self.assertEqual(state["preferences"]["homeDashboardUID"],"homelab-observe-home")
         result,calls=self.run_module(False,state)
         self.assertFalse(result["changed"]); self.assertTrue(all(m=="GET" for m,p in calls))
+    def test_retirement_check_is_get_only(self):
+        state={"preferences":{"homeDashboardUID":"homelab-observe-home"},"starred":True,"retired":True}
+        result,calls=self.run_module(True,state)
+        self.assertTrue(result["changed"]); self.assertTrue(state["retired"])
+        self.assertTrue(all(method=="GET" for method,path in calls))
+    def test_retirement_apply_is_idempotent(self):
+        state={"preferences":{"homeDashboardUID":"homelab-observe-home"},"starred":True,"retired":True}
+        result,calls=self.run_module(False,state)
+        self.assertFalse(state["retired"])
+        self.assertEqual(sum(method=="DELETE" for method,path in calls),1)
+        result,calls=self.run_module(False,state)
+        self.assertFalse(result["changed"]); self.assertTrue(all(method=="GET" for method,path in calls))
 if __name__ == "__main__": unittest.main()

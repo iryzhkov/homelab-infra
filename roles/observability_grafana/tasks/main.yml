@@ -32,6 +32,7 @@
     folder_uid: "{{ observability_grafana_folder_uid }}"
     folder_title: "{{ observability_grafana_folder_title }}"
     dashboards: "{{ observability_grafana_dashboards }}"
+    retired_dashboard_uids: "{{ observability_grafana_retired_dashboard_uids }}"
     home_dashboard_uid: "{{ observability_grafana_home_dashboard_uid }}"
     starred_dashboard_uids: "{{ observability_grafana_starred_dashboard_uids }}"
     legacy_dashboard_uids: "{{ observability_grafana_legacy_dashboard_uids }}"
