@@ -1,0 +1,15 @@
+---
+legacy_influx_transition_confirm: false
+legacy_influx_transition_owner: homelab
+legacy_influx_transition_peer: normandy
+# Root-owned proof produced by actual isolated native restore; see README.
+legacy_influx_transition_proof: /var/lib/legacy-influx-transition/proof.json
+legacy_influx_transition_health_urls:
+  - https://vault.ryzhkov.dev/alive
+  - https://auth.ryzhkov.dev/-/health/ready/
+  - https://home.ryzhkov.dev/
+  - https://photos.ryzhkov.dev/api/server/ping
+  - https://emby.ryzhkov.dev/System/Info/Public
+  - https://logs.ryzhkov.dev/api/health
+  - https://git.ryzhkov.dev/
+  - https://uptime.ryzhkov.dev/

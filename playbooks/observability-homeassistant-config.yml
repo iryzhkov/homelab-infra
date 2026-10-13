@@ -1,0 +1,9 @@
+---
+- name: Guarded native Home Assistant metrics configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_user: "{{ lookup('env', 'USER') }}"
+  roles:
+    - observability_homeassistant_config

@@ -1,0 +1,5 @@
+---
+observability_guest_log_parent: proxmox-a
+observability_guest_log_files:
+  - {path: /var/log/AdGuardHome.out, tag: adguard-out}
+  - {path: /var/log/AdGuardHome.err, tag: adguard-err}

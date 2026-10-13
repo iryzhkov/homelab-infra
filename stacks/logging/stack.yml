@@ -1,27 +1,18 @@
-# Loki, Grafana and InfluxDB as a Swarm stack (phase 5, batch F5). Deployed
-# by playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
-# stacks-f5.yml; the Compose file beside this one stays until the phase 5
-# cleanup. All three services follow pin.logging, so they always run on the
-# same node and reach each other by service name on the stack's network.
+# Loki and Grafana, independently movable from retained legacy-influx.
+# Deployed by playbooks/swarm.yml via stacks-f5.yml; logging's prepare guard
+# requires the accepted legacy-influx cold transition before any prune.
+# Both stacks use the existing external logging_default overlay, so Grafana
+# keeps the Flux endpoint http://influxdb:8086 unchanged.
 #
-# State in ${SWARM_STATE_ROOT}/logging: loki/ and config/loki-config.yml
-# (from the Compose directory), grafana/ (moved off NFS, where the plan
-# forbids a database), influxdb/data and influxdb/config (the two named
-# volumes, now binds).
-#
-# Every Docker daemon and promtail in the house pushes to port 3100 on
-# homelab's address, and Home Assistant and Proxmox write to 8087 there;
-# through the routing mesh both keep answering wherever the stack runs, as
-# long as homelab is up. Loki keeps the `local` log driver: it must not log
-# to itself.
-#
-# Images are the versions the :latest and :2 tags resolved to at conversion;
-# InfluxDB 2.9.1 is pinned by digest because the 2.9.1 tag has been rebuilt
-# since the running image was pulled.
+# State in ${SWARM_STATE_ROOT}/logging: loki/, grafana/ and config/.
+# The old inactive influxdb directory is retained as a cold rollback copy.
+# Loki's host-published 3100 and remaining direct clients still require the
+# existing logging move guards until those clients have been retired.
+# GF_SECURITY_ALLOW_EMBEDDING permits the explicitly approved iframe shares;
+# ordinary Grafana authentication remains enabled.
 
 services:
   loki:
-    # Docker Hub grafana/loki:3.7.8 (sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193),
     # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
     image: git.ryzhkov.dev/igor/mirror/docker.io/grafana/loki@sha256:e664166bca56031661b40a0a0b1c77dfeffa4b03053cc887836dd4f51cb212ab
     logging:
@@ -88,6 +79,7 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
       GF_SERVER_ROOT_URL: https://logs.ryzhkov.dev
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
       # Keep the Go heap below the cgroup limit. Grafana repeatedly hit its
       # 1 GiB limit and was OOM-killed during the 2026-10-13 baseline audit.
       GOMEMLIMIT: 768MiB
@@ -111,57 +103,14 @@ services:
         condition: any
         delay: 5s
 
-  influxdb:
-    # Docker Hub influxdb:2.9.1@sha256:05d6fb735bc22449c401094d42846123a24e3325d3a6e092242a45bfd68fff21,
-    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
-    image: git.ryzhkov.dev/igor/mirror/docker.io/library/influxdb@sha256:cdf0f56ff18bc55c73c297d6a3092d461cb58009187e764def2ad89d6f3e0ac5
-    ports:
-      - "8087:8086"
-    volumes:
-      - type: bind
-        source: ${SWARM_STATE_ROOT}/logging/influxdb/data
-        target: /var/lib/influxdb2
-      - type: bind
-        source: ${SWARM_STATE_ROOT}/logging/influxdb/config
-        target: /etc/influxdb2
-    # Setup runs only on an empty data directory; with the copied one these
-    # are inert, kept so a rebuild from nothing gets the same organisation.
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: admin
-      DOCKER_INFLUXDB_INIT_PASSWORD_FILE: /run/secrets/influx_pass
-      DOCKER_INFLUXDB_INIT_ORG: ryzhkov
-      DOCKER_INFLUXDB_INIT_BUCKET: homeassistant
-      DOCKER_INFLUXDB_INIT_RETENTION: 52w
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: /run/secrets/influx_token
-    secrets:
-      - influx_pass
-      - influx_token
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.labels.pin.logging == true
-      resources:
-        limits:
-          memory: 1G
-        reservations:
-          memory: 320M
-      update_config:
-        order: stop-first
-      rollback_config:
-        order: stop-first
-      restart_policy:
-        condition: any
-        delay: 5s
+# influxdb is supplied by the independently pinned legacy-influx stack.
+# Keep the overlay name and alias stable for existing Grafana Flux sources.
+networks:
+  default:
+    external: true
+    name: logging_default
 
 secrets:
   grafana_password:
     name: logging_grafana_password_${SECRET_HASH_GRAFANA_PASSWORD}
     file: ./secrets/GRAFANA_PASSWORD
-  influx_pass:
-    name: logging_influx_pass_${SECRET_HASH_INFLUX_PASS}
-    file: ./secrets/INFLUX_PASS
-  influx_token:
-    name: logging_influx_token_${SECRET_HASH_INFLUX_TOKEN}
-    file: ./secrets/INFLUX_TOKEN

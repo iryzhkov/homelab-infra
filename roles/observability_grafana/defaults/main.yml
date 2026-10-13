@@ -4,10 +4,33 @@ observability_grafana_admin_user: admin
 observability_grafana_metrics_url: http://observability_victoriametrics:8428
 observability_grafana_folder_uid: homelab-observability
 observability_grafana_folder_title: Homelab Observability
+observability_grafana_home_dashboard_uid: homelab-observe-home
+# Stars apply to the authenticated provisioning administrator; home/navigation are organization-wide.
+observability_grafana_starred_dashboard_uids: [homelab-observe-home, homelab-observe-hosts, homelab-observe-disks, homelab-observe-capacity]
 observability_grafana_dashboard_files:
+  - home.json
   - overview.json
   - hosts.json
+  - disks.json
+  - capacity.json
   - containers.json
   - logs.json
-  - agents.json
   - unifi.json
+  - homeassistant.json
+  - legacy-ha.json
+observability_grafana_legacy_dashboard_uids:
+  - home-assistant-overview
+
+# Optional private aggregate views; sharing is a separate explicitly reviewed action.
+observability_grafana_embedding_dashboard_files:
+  - embed-overview.json
+  - embed-agents.json
+  - embed-homeassistant.json
+observability_grafana_sharing_enabled: false
+# Available: embed-overview.json, embed-agents.json, embed-homeassistant.json.
+
+# Explicitly approved superseded private UIDs; existing public capabilities are never retired.
+observability_grafana_retired_dashboard_uids:
+  - homelab-observe-agents
+  - 27360081-9791-40a0-9c22-5b01178551cc
+  - 33b22e09-fa0c-468a-b507-f87d71700a25

@@ -63,5 +63,20 @@ loopback-only metrics. Rollback stops/disables observability-unifi and deletes
 only this new local user and its now-unused dedicated role. Existing identities
 and roles were verified unchanged. Certificate rotation requires pin review.
 
+Debian guest I1 (owner: homelab-infra maintainer; review2026-11-13): ct100
+192.168.20.154 and ct107192.168.20.106 reach only proxmox-a192.168.1.5 TCP1515
+via new policy6ace680b1825b50cb13977c3 and generated return rule
+68bf4d0401ce4321b7a02460693c8833269937381b6a857530008. The existing300 policies
+were semantically unchanged except the separately approved8429 port addition;
+current307 includes other operator additions and generated return rules.
+Rollback deletes only this new forward policy and its generated return rule,
+never restores a historical controller snapshot. ct104192.168.70.241 uses the
+existing Internal-to-Internal route to the same parent; no gateway exception was
+added. All three flows passed real forwarding canaries. A persistent parent
+INPUT chain permits only these exact source IPs to its own TCP1515; unknown peers
+are rejected. Remove only its owned chain/unit if retiring this receiver.
+TCP carries unencrypted LAN syslog; connection-IP labels prevent peers from
+claiming another inventory host. Local journals/files remain available.
+
 OCI mesh -> edge:8443 was qualified read-only: 10.42.0.1 reaches edge
 10.42.0.3:8443 and gets 404 for an unmatched path. No new mesh rule needed.

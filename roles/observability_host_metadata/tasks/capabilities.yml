@@ -1,0 +1,41 @@
+---
+- name: Require supported truthful capability labels for {{ observability_metadata_host }}
+  ansible.builtin.assert:
+    that:
+      - item.capability in ['smart', 'temperature', 'igpu', 'gpu']
+      - item.mode in ['physical', 'passthrough']
+      - item.mode != 'physical' or hostvars[observability_metadata_host].observability_host_kind == 'physical'
+      - item.mode != 'passthrough' or (item.capability == 'igpu' and hostvars[observability_metadata_host].observability_host_kind == 'vm')
+      - item.capability not in ['smart', 'temperature'] or item.mode == 'physical'
+      - item.capability != 'smart' or hostvars[observability_metadata_host].smart_drives | default([]) | length > 0
+    quiet: true
+  loop: "{{ hostvars[observability_metadata_host].observability_host_capabilities | default([]) }}"
+
+- name: Require bounded physical drive inventory on {{ observability_metadata_host }}
+  ansible.builtin.assert:
+    that:
+      - hostvars[observability_metadata_host].observability_host_kind == 'physical'
+      - item.serial is match('^[a-zA-Z0-9_.:-]{1,127}$')
+      - item.model is match('^[a-zA-Z0-9 _().:/-]{1,127}$')
+      - item.transport | default('unknown') in ['nvme', 'sata', 'scsi', 'unknown']
+      - item.telemetry | default('smart') in ['smart', 'unsupported', 'unproven']
+      - item.error_history | default('unknown') in ['supported', 'unsupported', 'unknown']
+    quiet: true
+  loop: "{{ hostvars[observability_metadata_host].smart_drives | default([]) }}"
+
+- name: Require explicit physical ownership for inventoried GPUs on {{ observability_metadata_host }}
+  ansible.builtin.assert:
+    that:
+      - item.physical_host in hostvars
+      - item.physical_host is match('^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$')
+      - hostvars[item.physical_host].observability_host_kind | default('') == 'physical'
+      - item.physical_device is match('^[a-zA-Z0-9_.:-]{1,63}$')
+      - item.gpu_kind in ['igpu', 'discrete']
+      - item.mode in ['physical', 'passthrough']
+      - item.vendor | default('intel') in ['intel', 'nvidia', 'amd', 'apple']
+      - item.telemetry | default('native') in ['native', 'inventory_only']
+      - item.model_name | default('Intel integrated GPU') is match('^[a-zA-Z0-9 _().:/-]{1,127}$')
+      - item.mode != 'physical' or (item.physical_host == observability_metadata_host and hostvars[observability_metadata_host].observability_host_kind == 'physical')
+      - item.mode != 'passthrough' or hostvars[observability_metadata_host].observability_host_kind == 'vm'
+    quiet: true
+  loop: "{{ hostvars[observability_metadata_host].observability_gpu_owners | default([]) }}"

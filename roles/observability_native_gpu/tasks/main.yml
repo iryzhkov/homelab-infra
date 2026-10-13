@@ -1,0 +1,92 @@
+---
+- name: Select only explicitly supported physical native GPU adapters
+  ansible.builtin.set_fact:
+    observability_native_gpu_devices: "{{ observability_gpu_owners | selectattr('telemetry', 'equalto', 'native') | list }}"
+
+- name: Require scoped physical GPU ownership and the existing root-owned textfile directory
+  ansible.builtin.assert:
+    that:
+      - observability_host_kind == 'physical'
+      - observability_native_gpu_devices | length > 0
+      - observability_native_gpu_devices | length <= 8
+      - observability_native_gpu_directory == '/var/lib/observability-textfile'
+      - item.physical_host == inventory_hostname
+      - item.mode == 'physical'
+      - item.vendor in ['nvidia', 'amd']
+      - item.physical_device is match('^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]$')
+    quiet: true
+  loop: "{{ observability_native_gpu_devices }}"
+
+- name: Create private config and readable root-owned textfile directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/observability-native-gpu, group: root, mode: '0700'}
+    - {path: /var/lib/observability-textfile, group: alloy, mode: '0755'}
+
+- name: Install bounded standard-library native GPU reader
+  ansible.builtin.copy:
+    src: observability-native-gpu-report
+    dest: /usr/local/bin/observability-native-gpu-report
+    owner: root
+    group: root
+    mode: '0755'
+  register: observability_native_gpu_script
+
+- name: Declare exact physical adapters without credentials
+  ansible.builtin.copy:
+    content: "{{ {'host': inventory_hostname, 'devices': observability_native_gpu_devices} | to_nice_json }}"
+    dest: /etc/observability-native-gpu/devices.json
+    owner: root
+    group: root
+    mode: '0600'
+  register: observability_native_gpu_config
+
+- name: Install only owned native GPU unit and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: [observability-native-gpu.service, observability-native-gpu.timer]
+  register: observability_native_gpu_units
+
+- name: Enable bounded native GPU timer
+  ansible.builtin.systemd_service:
+    name: observability-native-gpu.timer
+    state: started
+    enabled: true
+    daemon_reload: "{{ observability_native_gpu_units is changed }}"
+
+- name: Refresh only the owned GPU reader after source or config changes
+  ansible.builtin.systemd_service:
+    name: observability-native-gpu.service
+    state: restarted
+  when: not ansible_check_mode and (observability_native_gpu_script is changed or observability_native_gpu_config is changed or observability_native_gpu_units is changed)
+
+- name: Wait for first atomic output after the owned oneshot completes
+  ansible.builtin.wait_for:
+    path: "{{ observability_native_gpu_directory }}/native-gpu.prom"
+    state: present
+    timeout: 35
+  when: not ansible_check_mode
+
+- name: Inspect fresh native adapter output
+  ansible.builtin.slurp:
+    src: "{{ observability_native_gpu_directory }}/native-gpu.prom"
+  register: observability_native_gpu_output
+  when: not ansible_check_mode
+
+- name: Require every declared adapter produced supported readings
+  ansible.builtin.assert:
+    that:
+      - ('gpu_scrape_success{host="' ~ inventory_hostname ~ '",device="' ~ item.physical_device ~ '"} 1') in (observability_native_gpu_output.content | b64decode)
+      - ('gpu_last_success_timestamp_seconds{host="' ~ inventory_hostname ~ '",device="' ~ item.physical_device ~ '"}') in (observability_native_gpu_output.content | b64decode)
+    quiet: true
+  loop: "{{ observability_native_gpu_devices }}"
+  when: not ansible_check_mode

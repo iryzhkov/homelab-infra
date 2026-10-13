@@ -1,0 +1,2309 @@
+{
+  "uid": "homelab-observe-capacity",
+  "title": "Homelab · Fleet CPU / GPU",
+  "description": "Managed in Ansible. Host names are inventory identities, independent of IP or Swarm placement. Empty panels mean the exporter has not reported that metric; they do not imply a healthy zero.",
+  "tags": [
+    "homelab",
+    "observability",
+    "ansible-managed"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "links": [
+    {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/homelab-observe-overview",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Hosts & hardware",
+      "type": "link",
+      "url": "/d/homelab-observe-hosts",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Disk health",
+      "type": "link",
+      "url": "/d/homelab-observe-disks",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "CPU / GPU",
+      "type": "link",
+      "url": "/d/homelab-observe-capacity",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Containers",
+      "type": "link",
+      "url": "/d/homelab-observe-containers",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Log explorer",
+      "type": "link",
+      "url": "/d/homelab-observe-logs",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "UniFi Network",
+      "type": "link",
+      "url": "/d/homelab-observe-unifi",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Home Assistant",
+      "type": "link",
+      "url": "/d/homelab-observe-homeassistant",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": false,
+        "hide": false,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Deployments and notes",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "Physical capacity, guest demand, individual engines",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Physical overall CPU is weighted by reported logical CPUs; VM/LXC demand is separate to avoid double counting hardware. GPU values are engine busy time, not FLOPs. LXC reported CPU IDs can reflect the parent topology and are not independent allocated capacity."
+      },
+      "id": 1
+    },
+    {
+      "type": "gauge",
+      "title": "Physical CPU utilization",
+      "description": "Weighted by physical-host logical CPUs; SMT threads are not physical cores.",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum((1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[$__rate_interval]))) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"})) / count(max by(host,cpu)(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"}))",
+          "legendFormat": "Physical CPU utilization",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Busy logical CPU equivalents",
+      "description": "",
+      "gridPos": {
+        "x": 6,
+        "y": 3,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum((1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[$__rate_interval]))) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"}))",
+          "legendFormat": "Busy logical CPU equivalents",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Physical logical CPUs",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(max by(host,cpu)(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"}))",
+          "legendFormat": "Physical logical CPUs",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
+      },
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Physical GPU inventory",
+      "description": "Unique physical devices, including unsupported inventory-only Apple GPU. Inventory count is not a count of measured utilization streams.",
+      "gridPos": {
+        "x": 18,
+        "y": 3,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by(physical_host,physical_device)(node_monitoring_gpu_inventory_info{job=\"node\"}))",
+          "legendFormat": "Physical GPU identities",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
+      },
+      "id": 5
+    },
+    {
+      "type": "bargauge",
+      "title": "Physical hosts · CPU",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg by(host)(max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[$__rate_interval])))) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"})",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 10
+    },
+    {
+      "type": "bargauge",
+      "title": "Proxmox VM / LXC CPU demand",
+      "description": "Authoritative PVE guest CPU ratio, separated from physical host utilization.",
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * max by(id)(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"}) * on(id) group_left(name,node,type) topk by(id)(1,max by(id,name,node,type)(pve_guest_info{job=\"pve\",template=\"0\"}))",
+          "legendFormat": "{{name}} / {{id}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 40,
+        "maxVizHeight": 48,
+        "namePlacement": "left",
+        "text": {
+          "titleSize": 12,
+          "valueSize": 16
+        }
+      },
+      "id": 11
+    },
+    {
+      "type": "bargauge",
+      "title": "Physical sensor hotspot / chip",
+      "description": "Explicit physical temperature capability; inherited LXC sensors excluded. Invalid sensor sentinels outside -20..150°C are excluded; missing readings stay unavailable.",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,chip)(((node_hwmon_temp_celsius{job=\"node\"} > -20) < 150)) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\"})",
+          "legendFormat": "{{host}} / {{chip}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 28,
+        "maxVizHeight": 32,
+        "namePlacement": "left",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 16
+        }
+      },
+      "id": 12
+    },
+    {
+      "type": "table",
+      "title": "All physical GPU inventory · actual telemetry support",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Readings"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "native": {
+                        "text": "Native readings",
+                        "color": "blue"
+                      },
+                      "inventory_only": {
+                        "text": "Inventory only · unsupported",
+                        "color": "orange"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Physical host"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Model"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 270
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Vendor"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Metrics owner"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Physical device"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 145
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "Value #A": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "intermittent": true
+            },
+            "renameByName": {
+              "host": "Metrics owner",
+              "physical_host": "Physical host",
+              "physical_device": "Physical device",
+              "vendor": "Vendor",
+              "model_name": "Model",
+              "telemetry": "Readings"
+            },
+            "indexByName": {
+              "physical_host": 0,
+              "model_name": 1,
+              "telemetry": 2,
+              "vendor": 3,
+              "host": 4,
+              "physical_device": 5
+            }
+          }
+        }
+      ],
+      "id": 24
+    },
+    {
+      "type": "bargauge",
+      "title": "Native desktop GPU busy",
+      "description": "Driver-reported busy ratio; no invented Apple or Intel whole-device busy percentage.",
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(100 * max by(host,device)(gpu_utilization_ratio{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 25
+    },
+    {
+      "type": "bargauge",
+      "title": "Native desktop GPU temperature",
+      "description": "Only actual vendor temperature readings; absence stays unavailable.",
+      "gridPos": {
+        "x": 12,
+        "y": 51,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(gpu_temperature_celsius{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 26
+    },
+    {
+      "type": "bargauge",
+      "title": "Native desktop GPU memory used",
+      "description": "Driver-reported visible GPU memory allocation, not total host RAM or a universal shared-memory limit.",
+      "gridPos": {
+        "x": 0,
+        "y": 59,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(100 * max by(host,device)(gpu_memory_used_bytes{job=\"node\"}) / (max by(host,device)(gpu_memory_total_bytes{job=\"node\"}) > 0) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 27
+    },
+    {
+      "type": "bargauge",
+      "title": "Native desktop GPU power",
+      "description": "Actual GPU power only; missing counters are unsupported, not idle zero.",
+      "gridPos": {
+        "x": 12,
+        "y": 59,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(gpu_power_watts{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 28
+    },
+    {
+      "type": "gauge",
+      "title": "Mean native desktop GPU busy",
+      "description": "Arithmetic mean of vendor-reported busy-time ratios, not physical capacity or mixed CPU/GPU/FLOP throughput. Intel engine-class mean is shown separately. Only successful fresh adapters (<180s) are included.",
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * avg((max by(host,device)(gpu_utilization_ratio{job=\"node\"}) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\"))",
+          "legendFormat": "Observed desktop GPU busy",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 29
+    },
+    {
+      "type": "stat",
+      "title": "Native desktop GPU telemetry age",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 67,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")",
+          "legendFormat": "{{host}} · {{model_name}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 30
+    },
+    {
+      "type": "stat",
+      "title": "Desktop GPU adapter result",
+      "description": "Explicit native adapter status; unsupported Apple has no adapter and no invented status.",
+      "gridPos": {
+        "x": 0,
+        "y": 74,
+        "w": 12,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,device)(gpu_scrape_success{job=\"node\"})",
+          "legendFormat": "{{host}} · {{device}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Reading failed",
+                  "color": "orange"
+                },
+                "1": {
+                  "text": "Reading OK",
+                  "color": "blue"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 31
+    },
+    {
+      "type": "stat",
+      "title": "Reported desktop GPU memory capacity",
+      "description": "Vendor-reported visible GPU memory only; does not aggregate unlike dedicated and shared memory pools.",
+      "gridPos": {
+        "x": 12,
+        "y": 74,
+        "w": 12,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,device)(gpu_memory_total_bytes{job=\"node\"}) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} · {{device}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 32
+    },
+    {
+      "type": "bargauge",
+      "title": "iGPU · Render / 3D",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} → {{physical_host}} · {{physical_device}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 13
+    },
+    {
+      "type": "bargauge",
+      "title": "iGPU · Video 0",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host)(igpu_vcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} → {{physical_host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 14
+    },
+    {
+      "type": "bargauge",
+      "title": "iGPU · Video 1",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 88,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host)(igpu_vcs1_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 18
+    },
+    {
+      "type": "bargauge",
+      "title": "iGPU · Blitter",
+      "description": "",
+      "gridPos": {
+        "x": 8,
+        "y": 88,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host)(igpu_bcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 19
+    },
+    {
+      "type": "bargauge",
+      "title": "iGPU · Video enhancement",
+      "description": "",
+      "gridPos": {
+        "x": 16,
+        "y": 88,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host)(igpu_vecs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 20
+    },
+    {
+      "type": "timeseries",
+      "title": "iGPU actual clock",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 96,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(1e6 * (max by(host)(igpu_actual_freq_mhz{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "hertz",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 15
+    },
+    {
+      "type": "stat",
+      "title": "GPU telemetry age",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 96,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
+      },
+      "id": 16
+    },
+    {
+      "type": "gauge",
+      "title": "Mean observed Render / 3D duty cycle",
+      "description": "Arithmetic mean of the same monitored render engine class. A busy-time indicator, not total GPU throughput or FLOP utilization. Only fresh (<180s) Intel producer readings are included.",
+      "gridPos": {
+        "x": 0,
+        "y": 104,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg((max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))",
+          "legendFormat": "Mean observed Render / 3D duty cycle",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 21
+    },
+    {
+      "type": "bargauge",
+      "title": "iGPU RC6 residency",
+      "description": "Reported low-power residency, not engine busy utilization.",
+      "gridPos": {
+        "x": 12,
+        "y": 104,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host)(igpu_rc6_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 22
+    },
+    {
+      "type": "bargauge",
+      "title": "Physical sensor hotspot / host",
+      "description": "Hottest reported physical hwmon sensor per host; may be CPU, board or storage. Select a host above for individual sensor labels. Not a GPU temperature estimate. Invalid sensor sentinels outside -20..150°C are excluded; missing readings stay unavailable.",
+      "gridPos": {
+        "x": 0,
+        "y": 111,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host)(((node_hwmon_temp_celsius{job=\"node\"} > -20) < 150)) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\"})",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 23
+    },
+    {
+      "type": "text",
+      "title": "GPU coverage · unsupported readings",
+      "gridPos": {
+        "x": 0,
+        "y": 119,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Native desktop GPU utilization/temperature/memory/power appear only when vendor tooling reports them. Intel passthrough exposes engine duty cycles and clocks; GPU temperature is unreported. Apple inventory-only GPU remains visible in inventory with no fabricated busy, temperature or memory. Means are observed duty cycles, not throughput/FLOPs."
+      },
+      "id": 17
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+# Draft only: copy into the owning Home Assistant config repository after UI review.
+# Standalone YAML dashboard; existing generated dashboards/home.yaml stays intact.
+# Authenticated private Grafana URLs; no external share capability exists here.
+title: Observability
+views:
+  - title: Overview
+    path: overview
+    icon: mdi:chart-box-outline
+    type: panel
+    cards:
+      - type: iframe
+        url: https://logs.ryzhkov.dev/d/homelab-observe-embed-overview?orgId=1&kiosk&theme=dark
+        aspect_ratio: 100%
+  - title: Agent capacity
+    path: agents
+    icon: mdi:server
+    type: panel
+    cards:
+      - type: iframe
+        url: https://logs.ryzhkov.dev/d/homelab-observe-embed-agents?orgId=1&kiosk&theme=dark
+        aspect_ratio: 100%
+  - title: Home Assistant
+    path: homeassistant
+    icon: mdi:home-analytics
+    type: panel
+    cards:
+      - type: iframe
+        url: https://logs.ryzhkov.dev/d/homelab-observe-embed-homeassistant?orgId=1&kiosk&theme=dark
+        aspect_ratio: 100%

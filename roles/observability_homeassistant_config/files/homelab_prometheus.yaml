@@ -1,0 +1,23 @@
+# Native authenticated metrics; InfluxDB remains the archive for detailed HA history.
+prometheus:
+  namespace: homeassistant
+  requires_auth: true
+  filter:
+    include_domains:
+      - sensor
+      - binary_sensor
+      - climate
+      - light
+      - switch
+      - fan
+      - cover
+      - counter
+    exclude_entity_globs:
+      - sensor.*_radar_report_*
+      - sensor.*_mmwave_target_*
+      - sensor.robot_position_*
+      - sensor.*_ssid
+      - sensor.*_bssid
+      - sensor.*_geocoded_location
+      - sensor.*_last_update_trigger
+      - sensor.*_sim_*

@@ -1,0 +1,65 @@
+---
+- name: Require existing unprivileged Alloy collector
+  ansible.builtin.getent:
+    database: group
+    key: alloy
+
+- name: Require verified HTTPS for Home Assistant collection
+  ansible.builtin.assert:
+    that:
+      - groups['observability_homeassistant_scrapers'] | length == 1
+      - observability_homeassistant_url is match('^https://[^/]+/api/prometheus$')
+      - observability_homeassistant_token_path == '/etc/alloy/homeassistant-token'
+    quiet: true
+
+- name: Resolve Home Assistant through the resilient local TLS ingress
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: '# {mark} ANSIBLE HOME ASSISTANT OBSERVABILITY'
+    block: "{{ edge_vip }} home.ryzhkov.dev"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Load only the encrypted dedicated read-only identity
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/observability-homeassistant.sops.yaml"
+    name: observability_homeassistant_credentials
+  delegate_to: localhost
+  no_log: true
+
+- name: Install private bearer credential readable by Alloy
+  ansible.builtin.copy:
+    content: "{{ observability_homeassistant_credentials.HOMEASSISTANT_TOKEN }}"
+    dest: "{{ observability_homeassistant_token_path }}"
+    owner: alloy
+    group: alloy
+    mode: "0600"
+  no_log: true
+  diff: false
+
+- name: Verify native authenticated metrics over trusted HTTPS
+  ansible.builtin.uri:
+    url: "{{ observability_homeassistant_url }}"
+    headers:
+      Authorization: "Bearer {{ observability_homeassistant_credentials.HOMEASSISTANT_TOKEN }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+    timeout: 15
+  register: observability_homeassistant_metrics
+  changed_when: false
+  retries: 6
+  delay: 10
+  until: observability_homeassistant_metrics.status | default(0) == 200
+  check_mode: false
+  no_log: true
+  when: observability_homeassistant_require_ready | bool
+
+- name: Require native Home Assistant metric families
+  ansible.builtin.assert:
+    that:
+      - observability_homeassistant_metrics.content is search('(?m)^homeassistant_')
+    quiet: true
+  no_log: true
+  when: observability_homeassistant_require_ready | bool

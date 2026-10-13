@@ -1,0 +1,32 @@
+---
+# Stage validated daemon defaults only. Restart after the service-by-service
+# handoff, in the authorized window; this play never restarts an application.
+- name: Prepare local Docker logging after verifying its Alloy reader
+  hosts: docker_hosts
+  serial: 1
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Respect active host maintenance
+      ansible.builtin.include_role:
+        name: maintenance_guard
+    - name: Require an active Alloy collector
+      ansible.builtin.command:
+        argv: [systemctl, is-active, alloy]
+      changed_when: false
+      check_mode: false
+    - name: Inspect the private Docker reader socket
+      ansible.builtin.stat:
+        path: /var/lib/observability-docker-proxy/proxy.sock
+      register: docker_logging_proxy
+    - name: Require the declared native collection policy and reader
+      ansible.builtin.assert:
+        that:
+          - docker_logs_via_alloy | default(false) | bool
+          - docker_logging_proxy.stat.issock | default(false)
+        quiet: true
+  tasks:
+    - name: Stage bounded local logging without a daemon restart
+      ansible.builtin.include_role:
+        name: base
+        tasks_from: docker_logging_alloy.yml

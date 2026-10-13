@@ -11,7 +11,7 @@ User=root
 Group=root
 ExecStart={{ observability_smartctl_exporter_install_dir }}/{{ observability_smartctl_exporter_archive }}/smartctl_exporter \
   --web.listen-address={{ observability_smartctl_exporter_listen_address }} \
-  --smartctl.path={{ observability_smartctl_exporter_smartctl_path }} \
+  --smartctl.path={{ observability_smartctl_exporter_command_path }} \
   --smartctl.interval={{ observability_smartctl_exporter_poll_interval }} \
   --smartctl.powermode-check=standby \
   --no-smartctl.scan \

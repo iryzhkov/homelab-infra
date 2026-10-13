@@ -1,4 +1,7 @@
 ---
+observability_host_capabilities:
+  - {capability: smart, mode: physical}
+  - {capability: temperature, mode: physical}
 # hp-elite-mini-01.
 
 # ZFS ARC cap, 4 GiB (64 GB of RAM, most of it given to guests).
@@ -10,13 +13,23 @@ zfs_arc_max_bytes: 4294967296
 smart_drives:
   - model: CT500P3SSD8        # Crucial P3 500 GB NVMe, boot
     serial: "24244958383E"
+    transport: nvme
   - model: CT2000P3SSD8       # Crucial P3 2 TB NVMe
     serial: "2420E8AFBCE0"
+    transport: nvme
 
 # Small guests retain Promtail; only the owning node can scrape these ports.
+observability_tcp_syslog_guests:
+  - {name: ct100, address: 192.168.20.154}
+  - {name: ct104, address: 192.168.70.241}
+  - {name: ct107, address: 192.168.20.106}
+observability_file_inputs:
+  - {path: /var/log/pve/tasks/active, job: pve-tasks}
 observability_syslog_guest: {name: ct110, address: 192.168.70.250}
 observability_alpine_forwarding_verified: true
 observability_alpine_promtail_retire: true
+# Parent-emitted identity only; no OS exporter or hardware capability claim.
+observability_host_metadata_only_guests: [home-assistant]
 observability_lxc_scrapes:
   - {name: ct100, address: '192.168.20.154:9911', host: ct100, job: node}
   - {name: ct104, address: '192.168.70.241:9911', host: ct104, job: node}

@@ -1,0 +1,34 @@
+[Unit]
+Description=Bounded guest journal and declared-file forwarding to its owning parent
+After=systemd-journald.service network-online.target
+Wants=network-online.target
+[Service]
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30
+User=root
+ExecStart=/usr/sbin/rsyslogd -n -i /run/observability-guest-logs/rsyslog.pid -f /etc/observability-guest-logs/rsyslog.conf
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=observability-guest-logs
+RuntimeDirectoryMode=0700
+UMask=0077
+MemoryHigh=48M
+MemoryMax=64M
+CPUQuota=10%
+TasksMax=16
+NoNewPrivileges=true
+# The MQTT file is0600 owned by Mosquitto. Read-only DAC capability; no write bypass.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/observability-guest-logs /run/observability-guest-logs
+InaccessiblePaths=-/etc/shadow -/etc/ssh -/etc/ssl/private -/etc/mosquitto -/opt/AdGuardHome
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+[Install]
+WantedBy=multi-user.target

@@ -38,6 +38,7 @@ set -a
 [ -r "$config_dir/env" ] && . "$config_dir/env"
 set +a
 
+rclone_filters=()
 output=$(mktemp)
 trap 'rm -f "$output"' EXIT
 
@@ -66,6 +67,8 @@ case "$tier" in
         subject="influxdb"
         local_dir="$root/influxdb"
         remote_dir="$remote/influxdb"
+        # Export lock/partials are local coordination, never recovery objects.
+        rclone_filters=(--include 'influxdb_*.tar.gz')
         ;;
     verify)
         "$HOME/.local/bin/homelab-restore-verify" >>"$output" 2>&1
@@ -93,7 +96,7 @@ case "$tier" in
 esac
 
 if [ "$status" -eq 0 ] && [ -n "$local_dir" ]; then
-    rclone sync "$local_dir" "$remote_dir" >>"$output" 2>&1
+    rclone sync "$local_dir" "$remote_dir" "${rclone_filters[@]}" >>"$output" 2>&1
     status=$?
     [ "$status" -ne 0 ] && echo "rclone sync to $remote_dir failed" >>"$output"
 fi

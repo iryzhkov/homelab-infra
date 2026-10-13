@@ -1,0 +1,29 @@
+---
+# Writes only. Docker restart belongs to the controlled migration window.
+- name: Read Docker's current configuration
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  become: true
+  register: docker_alloy_current
+  failed_when: false
+  no_log: true
+
+- name: Preserve unrelated Docker settings and replace legacy log options
+  ansible.builtin.set_fact:
+    docker_alloy_settings: >-
+      {{ ((docker_alloy_current.content | b64decode | from_json)
+           if docker_alloy_current.content is defined else {})
+         | combine({'log-driver': 'local', 'log-opts': docker_alloy_log_options}) }}
+  no_log: true
+
+- name: Write and validate bounded local logging without restarting Docker
+  ansible.builtin.copy:
+    content: "{{ docker_alloy_settings | to_nice_json }}\n"
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    validate: /usr/bin/dockerd --validate --config-file=%s
+  become: true
+  no_log: true

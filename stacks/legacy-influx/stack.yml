@@ -1,0 +1,64 @@
+# Existing InfluxDB 2.9.1: migration refuses empty state; keep writers/history.
+services:
+  influxdb:
+    # Docker Hub influxdb:2.9.1@sha256:05d6fb735bc22449c401094d42846123a24e3325d3a6e092242a45bfd68fff21,
+    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/influxdb@sha256:cdf0f56ff18bc55c73c297d6a3092d461cb58009187e764def2ad89d6f3e0ac5
+    networks:
+      logging:
+        aliases: [influxdb]
+    logging:
+      driver: local
+      options: {max-size: "50m", max-file: "3"}
+    stop_grace_period: 60s
+    ports:
+      - "8087:8086"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/legacy-influx/influxdb/data
+        target: /var/lib/influxdb2
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/legacy-influx/influxdb/config
+        target: /etc/influxdb2
+    # Setup runs only on an empty data directory; with the copied one these
+    # are inert, kept so a rebuild from nothing gets the same organisation.
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD_FILE: /run/secrets/influx_pass
+      DOCKER_INFLUXDB_INIT_ORG: ryzhkov
+      DOCKER_INFLUXDB_INIT_BUCKET: homeassistant
+      DOCKER_INFLUXDB_INIT_RETENTION: 52w
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: /run/secrets/influx_token
+    secrets:
+      - influx_pass
+      - influx_token
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.legacy-influx == true
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 320M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+networks:
+  logging:
+    external: true
+    name: logging_default
+secrets:
+  influx_pass:
+    name: legacy-influx_influx_pass_${SECRET_HASH_INFLUX_PASS}
+    file: ./secrets/INFLUX_PASS
+  influx_token:
+    name: legacy-influx_influx_token_${SECRET_HASH_INFLUX_TOKEN}
+    file: ./secrets/INFLUX_TOKEN

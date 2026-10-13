@@ -1,0 +1,3 @@
+---
+# Explicit operator gate after exact-path coverage and live redaction acceptance.
+observability_promtail_retirement_verified: false

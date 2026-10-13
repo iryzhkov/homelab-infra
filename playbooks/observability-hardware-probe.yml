@@ -1,0 +1,34 @@
+---
+- name: Probe laptop native SMART support without drive tests
+  hosts: laptop
+  become: true
+  gather_facts: true
+  vars:
+    observability_smartctl_exporter_smartctl_path: /usr/bin/smartctl
+    observability_smartctl_bootstrap: true
+  tasks:
+    - name: Bootstrap only the native SMART read utility
+      ansible.builtin.include_role:
+        name: observability_hardware
+        tasks_from: bootstrap.yml
+    - name: Read namespace-one physical drive health without changing power policy
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/smartctl
+          - --json
+          - --info
+          - --health
+          - --attributes
+          - --nocheck=standby
+          - /dev/disk/by-id/nvme-APPLE_SSD_AP0512Z_0ba0203423a4c830
+      register: observability_laptop_smart_probe
+      changed_when: false
+      failed_when: false
+      no_log: true
+    - name: Report only supported numeric health metadata
+      ansible.builtin.debug:
+        msg:
+          exit_status: "{{ observability_laptop_smart_probe.rc }}"
+          model: "{{ (observability_laptop_smart_probe.stdout | from_json).model_name | default('unknown') }}"
+          health: "{{ (observability_laptop_smart_probe.stdout | from_json).smart_status | default({}) }}"
+          nvme_health: "{{ (observability_laptop_smart_probe.stdout | from_json).nvme_smart_health_information_log | default({}) }}"

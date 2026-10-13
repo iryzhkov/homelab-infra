@@ -1,0 +1,7 @@
+---
+- name: Add bounded log forwarding to small Debian guests
+  hosts: ct100:ct104:ct107
+  serial: 1
+  gather_facts: true
+  roles:
+    - observability_guest_logs

@@ -92,7 +92,13 @@
 # After the data-root task, which writes the same file.
 - name: Keep the Loki log driver's address and mode
   ansible.builtin.include_tasks: docker_logging.yml
-  when: docker_loki_push_url | length > 0
+  when:
+    - not (docker_logs_via_alloy | default(false) | bool)
+    - docker_loki_push_url | length > 0
+
+- name: Keep bounded local Docker logs for Alloy
+  ansible.builtin.include_tasks: docker_logging_alloy.yml
+  when: docker_logs_via_alloy | default(false) | bool
 
 - name: Keep the QEMU guest agent
   ansible.builtin.include_tasks: qemu_guest_agent.yml

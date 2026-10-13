@@ -3,6 +3,7 @@
 import base64
 import copy
 import json
+import re
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -33,6 +34,37 @@ def replace_loki(value: Any, uid: str) -> Any:
     return uid if value == "__LOKI_UID__" else value
 
 
+def embedding_queries(document: dict) -> list[str]:
+    """Fail closed before changing any dashboard eligible for external access."""
+    allowed = {
+        "homelab-observe-embed-overview",
+        "homelab-observe-embed-agents",
+        "homelab-observe-embed-homeassistant",
+    }
+    if document.get("uid") not in allowed:
+        raise ValueError("External access is confined to reviewed aggregate dashboard UIDs")
+    if document.get("links") or document.get("templating", {}).get("list") or document.get("annotations", {}).get("list"):
+        raise ValueError("Embedding dashboards cannot contain links, variables or annotations")
+    expressions = []
+    for panel in document.get("panels", []):
+        if panel.get("type") not in ("stat", "timeseries", "text"):
+            raise ValueError("Embedding dashboards contain only reviewed metric or text panels")
+        if panel.get("links"):
+            raise ValueError("Embedding panel links are not permitted")
+        for target in panel.get("targets", []):
+            if panel.get("datasource", {}).get("uid") != "homelab-metrics":
+                raise ValueError("Embedding queries must use only homelab-metrics")
+            if target.get("datasource", {}).get("uid", "homelab-metrics") != "homelab-metrics":
+                raise ValueError("Embedding targets cannot override the metrics datasource")
+            expression = target.get("expr", "")
+            if not expression or "$" in expression or re.search(r"(?i)loki|token|quota|secret|password|friendly_name|entity=|ip_address", expression):
+                raise ValueError("Embedding query contains an unsupported or sensitive selection")
+            expressions.append(expression)
+    if not expressions:
+        raise ValueError("Embedding dashboard contains no metric queries")
+    return expressions
+
+
 def main():
     module = AnsibleModule(
         argument_spec=dict(
@@ -43,10 +75,21 @@ def main():
             folder_uid=dict(type="str", required=True),
             folder_title=dict(type="str", required=True),
             dashboards=dict(type="list", elements="dict", required=True),
+            external_shares=dict(type="list", elements="dict", default=[], no_log=True),
+            legacy_dashboard_uids=dict(type="list", elements="str", default=[]),
+            home_dashboard_uid=dict(type="str", default=""),
+            retired_dashboard_uids=dict(type="list", elements="str", default=[]),
+            starred_dashboard_uids=dict(type="list", elements="str", default=[]),
         ),
         supports_check_mode=True,
     )
     p = module.params
+    allowed_legacy = {
+        "home-assistant-overview", "27360081-9791-40a0-9c22-5b01178551cc",
+        "33b22e09-fa0c-468a-b507-f87d71700a25",
+    }
+    if set(p["legacy_dashboard_uids"]) - allowed_legacy:
+        module.fail_json(msg="Legacy dashboard ownership is restricted to the three explicitly adopted resources")
     auth = base64.b64encode((p["username"] + ":" + p["password"]).encode()).decode()
     changes = []
 
@@ -64,6 +107,7 @@ def main():
                 return json.load(response)
         except HTTPError as exc:
             if missing_ok and exc.code == 404:
+                exc.close()
                 return None
             module.fail_json(msg="Grafana API %s %s failed (HTTP %s)" % (method, path, exc.code))
         except (URLError, ValueError, TimeoutError):
@@ -103,14 +147,35 @@ def main():
         if not module.check_mode:
             api("PUT", folder_path, {"title": p["folder_title"], "version": folder.get("version", 0)})
 
+    documents = {d.get("uid"): d for d in p["dashboards"]}
+    for share in p["external_shares"]:
+        if share.get("dashboard_uid") not in documents:
+            module.fail_json(msg="Shared dashboard must be included in reviewed source documents")
+    for document in p["dashboards"]:
+        if document.get("uid", "").startswith("homelab-observe-embed-"):
+            expressions: list[str] = []
+            try:
+                expressions = embedding_queries(document)
+            except ValueError as exc:
+                module.fail_json(msg=str(exc))
+            if existing_source or not module.check_mode:
+                for expression in expressions:
+                    result = api("GET", "/api/datasources/proxy/uid/homelab-metrics/api/v1/query?" + urlencode({"query": expression}))
+                    if result.get("status") != "success" or any(
+                        series.get("metric") for series in result.get("data", {}).get("result", [])
+                    ):
+                        module.fail_json(msg="Embedding query must return only aggregate series with no labels")
+
     for document in p["dashboards"]:
         desired = replace_loki(copy.deepcopy(document), loki_uid)
         uid = desired.get("uid", "")
-        if not uid.startswith("homelab-observe-"):
+        legacy = uid in p["legacy_dashboard_uids"]
+        if not uid.startswith("homelab-observe-") and not legacy:
             module.fail_json(msg="Refusing a dashboard outside the owned UID namespace")
         existing = api("GET", "/api/dashboards/uid/" + quote(uid, safe=""), missing_ok=True)
         actual = existing["dashboard"] if existing else None
-        folder_matches = existing and existing.get("meta", {}).get("folderUid") == p["folder_uid"]
+        desired_folder = (existing.get("meta", {}).get("folderUid") or "") if legacy and existing else p["folder_uid"]
+        folder_matches = existing and (legacy or existing.get("meta", {}).get("folderUid") == desired_folder)
         if not desired_matches(actual, desired) or not folder_matches:
             changes.append("dashboard " + uid)
             if not module.check_mode:
@@ -118,11 +183,80 @@ def main():
                 payload["id"] = actual.get("id") if actual else None
                 payload["version"] = actual.get("version", 0) if actual else 0
                 api("POST", "/api/dashboards/db", {
-                    "dashboard": payload, "folderUid": p["folder_uid"],
+                    "dashboard": payload, "folderUid": desired_folder,
                     "overwrite": True, "message": "Reconcile Ansible observability source",
                 })
 
+    for share in p["external_shares"]:
+        uid = share["dashboard_uid"]
+        try:
+            embedding_queries(documents[uid])
+        except ValueError as exc:
+            module.fail_json(msg=str(exc))
+        path = "/api/dashboards/uid/" + quote(uid, safe="") + "/public-dashboards/"
+        desired_share = {
+            "uid": share["public_uid"], "accessToken": share["access_token"],
+            "isEnabled": True, "annotationsEnabled": False,
+            "timeSelectionEnabled": False, "share": "public",
+        }
+        actual_share = api("GET", path, missing_ok=True)
+        if actual_share and (
+            actual_share.get("uid") != desired_share["uid"]
+            or actual_share.get("accessToken") != desired_share["accessToken"]
+        ):
+            module.fail_json(msg="Existing external share identity differs; refusing to replace its access capability")
+        if not desired_matches(actual_share, desired_share):
+            changes.append("external share " + uid)
+            if not module.check_mode:
+                if actual_share:
+                    api("PATCH", path.rstrip("/") + "/" + quote(actual_share["uid"], safe=""), {
+                        key: desired_share[key] for key in (
+                            "isEnabled", "annotationsEnabled", "timeSelectionEnabled", "share"
+                        )
+                    })
+                else:
+                    api("POST", path, desired_share)
+
+    allowed_retired = {"homelab-observe-agents", "27360081-9791-40a0-9c22-5b01178551cc", "33b22e09-fa0c-468a-b507-f87d71700a25"}
+    if set(p["retired_dashboard_uids"]) - allowed_retired:
+        module.fail_json(msg="Retirement is restricted to the three explicitly approved redundant private UIDs")
+    for uid in p["retired_dashboard_uids"]:
+        if uid in documents or uid in {share["dashboard_uid"] for share in p["external_shares"]}:
+            module.fail_json(msg="Cannot retire a desired or shared dashboard")
+        path = "/api/dashboards/uid/" + quote(uid, safe="")
+        old = api("GET", path, missing_ok=True)
+        if old:
+            if old.get("meta", {}).get("provisioned"):
+                module.fail_json(msg="Refusing to delete an externally file-provisioned dashboard")
+            if api("GET", path + "/public-dashboards/", missing_ok=True):
+                module.fail_json(msg="Refusing to retire a dashboard with an external capability")
+            changes.append("retired dashboard " + uid)
+            if not module.check_mode:
+                api("DELETE", path)
+
+    home_uid = p["home_dashboard_uid"]
+    if home_uid:
+        if home_uid not in documents or home_uid.startswith("homelab-observe-embed-"):
+            module.fail_json(msg="Home dashboard must be a managed private document")
+        preferences = api("GET", "/api/org/preferences")
+        if preferences.get("homeDashboardUID") != home_uid:
+            changes.append("organization home dashboard")
+            if not module.check_mode:
+                payload = dict(preferences, homeDashboardUID=home_uid)
+                payload.pop("homeDashboardId", None)
+                api("PUT", "/api/org/preferences", payload)
+    starred_uids = {item["uid"] for item in api("GET", "/api/search?starred=true")} if p["starred_dashboard_uids"] else set()
+    for uid in p["starred_dashboard_uids"]:
+        if uid not in documents or uid.startswith("homelab-observe-embed-"):
+            module.fail_json(msg="Bookmarks must be managed private dashboards")
+        dashboard = api("GET", "/api/dashboards/uid/" + quote(uid, safe=""), missing_ok=True)
+        if uid not in starred_uids:
+            changes.append("administrator bookmark " + uid)
+            if not module.check_mode:
+                api("POST", "/api/user/stars/dashboard/uid/" + quote(uid, safe=""))
+
     readiness = "pending datasource creation (check mode)"
+
     if existing_source or not module.check_mode:
         health = api("GET", "/api/datasources/uid/homelab-metrics/health")
         if str(health.get("status", "")).lower() not in ("ok", "success"):

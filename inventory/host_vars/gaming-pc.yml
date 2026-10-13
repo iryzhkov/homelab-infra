@@ -1,0 +1,16 @@
+---
+# omarchy-pc is this physical desktop's OS hostname; metrics use gaming-pc.
+observability_host_kind: physical
+observability_host_capabilities:
+  - {capability: temperature, mode: physical}
+  - {capability: smart, mode: physical}
+  - {capability: gpu, mode: physical}
+observability_smartctl_exporter_smartctl_path: /usr/bin/smartctl
+observability_extra_scrapes:
+  - {name: smartctl, address: "127.0.0.1:9633", interval: 60s, timeout: 60s}
+smart_drives:
+  - {model: Samsung SSD 990 EVO Plus 1TB, serial: S7U5NU0YB48480P, transport: nvme, telemetry: smart}
+  - {model: Samsung SSD 990 EVO Plus 2TB, serial: S7U6NJ0XB35693Z, transport: nvme, telemetry: smart}
+observability_gpu_owners:
+  - {physical_host: gaming-pc, physical_device: "0000:01:00.0", gpu_kind: discrete, mode: physical, vendor: nvidia, model_name: NVIDIA GeForce RTX 4090, telemetry: native}
+  - {physical_host: gaming-pc, physical_device: "0000:0c:00.0", gpu_kind: igpu, mode: physical, vendor: amd, model_name: AMD Raphael integrated GPU, telemetry: native}

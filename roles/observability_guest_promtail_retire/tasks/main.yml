@@ -1,0 +1,106 @@
+---
+- name: Require accepted guest journal and actual-file forwarding
+  ansible.builtin.assert:
+    that:
+      - observability_guest_promtail_retirement_verified | bool
+      - inventory_hostname in ['ct100', 'ct104', 'ct107']
+      - observability_guest_log_files | length > 0
+    quiet: true
+
+- name: Inspect the obsolete legacy file before disabling its watcher
+  ansible.builtin.stat:
+    path: /var/log/messages
+  register: observability_guest_legacy_messages
+
+- name: Preserve any unexpected newly active legacy file source
+  ansible.builtin.assert:
+    that:
+      - not observability_guest_legacy_messages.stat.exists
+    quiet: true
+    fail_msg: The old file now exists; compare coverage before retiring its watcher.
+
+- name: Read the original private source configuration for exact guard checks
+  ansible.builtin.slurp:
+    src: /etc/promtail/config.yml
+  register: observability_guest_promtail_original
+  no_log: true
+
+- name: Parse the private configuration without exposing clients
+  ansible.builtin.set_fact:
+    observability_guest_promtail_config: "{{ observability_guest_promtail_original.content | b64decode | from_yaml }}"
+  no_log: true
+
+- name: Refuse any legacy source beyond the known absent messages file
+  ansible.builtin.assert:
+    that:
+      - observability_guest_promtail_config.scrape_configs | length == 1
+      - observability_guest_promtail_config.scrape_configs[0].static_configs | length == 1
+      - observability_guest_promtail_config.scrape_configs[0].static_configs[0].labels.__path__ == '/var/log/messages'
+      - "'journal' not in observability_guest_promtail_config.scrape_configs[0]"
+      - "'syslog' not in observability_guest_promtail_config.scrape_configs[0]"
+      - not observability_guest_promtail_config.scrape_configs[0].get('pipeline_stages', [])
+      - not observability_guest_promtail_config.scrape_configs[0].get('relabel_configs', [])
+    quiet: true
+  no_log: true
+
+- name: Require the dedicated native collector to remain active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, observability-guest-logs.service]
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require ordinary fixture-free forwarder configuration
+  ansible.builtin.slurp:
+    src: /etc/observability-guest-logs/rsyslog.conf
+  register: observability_guest_forwarder_config
+  no_log: true
+
+- name: Guard against retiring while a temporary canary target remains
+  ansible.builtin.assert:
+    that:
+      - "'canary-file' not in (observability_guest_forwarder_config.content | b64decode)"
+      - >-
+        'module(load="imjournal"' in (observability_guest_forwarder_config.content | b64decode)
+    quiet: true
+  no_log: true
+
+- name: Preserve private rollback evidence while retaining the installed binary and unit
+  ansible.builtin.file:
+    path: /var/lib/observability-promtail-retirement
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Preserve the original config and positions once
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/var/lib/observability-promtail-retirement/{{ item | basename }}"
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - /etc/promtail/config.yml
+    - /var/lib/promtail/positions.yaml
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Retire only the accepted idle legacy Promtail daemon
+  ansible.builtin.systemd_service:
+    name: promtail
+    state: stopped
+    enabled: false
+  when: not ansible_check_mode
+
+- name: Confirm old Promtail stopped and native forwarding remains active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  loop: [promtail, observability-guest-logs]
+  register: observability_guest_retired_state
+  changed_when: false
+  failed_when: >-
+    (item == 'promtail' and observability_guest_retired_state.rc != 3)
+    or (item == 'observability-guest-logs' and observability_guest_retired_state.rc != 0)
+  when: not ansible_check_mode

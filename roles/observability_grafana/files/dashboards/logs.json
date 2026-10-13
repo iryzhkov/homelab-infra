@@ -25,11 +25,19 @@
   },
   "links": [
     {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/homelab-observe-overview",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -37,7 +45,23 @@
       "type": "link",
       "url": "/d/homelab-observe-hosts",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Disk health",
+      "type": "link",
+      "url": "/d/homelab-observe-disks",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "CPU / GPU",
+      "type": "link",
+      "url": "/d/homelab-observe-capacity",
+      "keepTime": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -45,7 +69,7 @@
       "type": "link",
       "url": "/d/homelab-observe-containers",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -53,15 +77,7 @@
       "type": "link",
       "url": "/d/homelab-observe-logs",
       "keepTime": true,
-      "includeVars": true,
-      "targetBlank": false
-    },
-    {
-      "title": "Agent hosts",
-      "type": "link",
-      "url": "/d/homelab-observe-agents",
-      "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -69,7 +85,15 @@
       "type": "link",
       "url": "/d/homelab-observe-unifi",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Home Assistant",
+      "type": "link",
+      "url": "/d/homelab-observe-homeassistant",
+      "keepTime": true,
+      "includeVars": false,
       "targetBlank": false
     }
   ],
@@ -121,7 +145,7 @@
           "type": "grafana",
           "uid": "-- Grafana --"
         },
-        "enable": true,
+        "enable": false,
         "hide": false,
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Deployments and notes",
@@ -141,8 +165,108 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Fleet logs\nFilter by host and a plain text search. Use Grafana Explore for additional labels or a custom LogQL expression. Logs retain the existing Loki datasource and retention policy."
+        "content": "### Central logs and service troubleshooting\nChoose hosts and text to investigate recent records. Service summaries normalize Swarm task names. Authentication/password-manager collection stays excluded; SSH host-journal messages remain available. Open the troubleshooting row for errors, actual SSH authentication and tunnel failures."
       }
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "__LOKI_UID__"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 12,
+        "h": 10
+      },
+      "id": 3,
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "expr": "topk(12,sum by(service)(count_over_time({host=~\"$host\",job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" | label_format service=`{{ regexReplaceAll \"\\\\.[0-9]+\\\\.[a-z0-9]+$\" .container_name \"\" }}`[1h])))",
+          "instant": true,
+          "legendFormat": "{{container_name}}",
+          "queryType": "instant"
+        }
+      ],
+      "title": "Top 12 services · log lines / hour",
+      "type": "table",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "service": "Service",
+              "Value": "Lines",
+              "Value #A": "Lines"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Lines",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "__LOKI_UID__"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 20
+          }
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 12,
+        "h": 10
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sum by(service)(count_over_time({host=~\"$host\",job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" | label_format service=`{{ regexReplaceAll \"\\\\.[0-9]+\\\\.[a-z0-9]+$\" .container_name \"\" }}` !~ \"(?i)(level|severity)[[:punct:]]?[=:] *[[:punct:]]?(info|debug|warn)\" |~ \"(?i)(^|[^a-zA-Z0-9_])(error|exception|fatal|panic)([^a-zA-Z0-9_]|$)\"[5m]))",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "title": "Error messages / service",
+      "type": "timeseries",
+      "description": "Explicit INFO/DEBUG/WARN severity lines are excluded before error-word matching; empty ErrorCode/ErrorMessage keys do not match."
     },
     {
       "id": 2,
@@ -150,9 +274,9 @@
       "title": "Recent log lines",
       "gridPos": {
         "x": 0,
-        "y": 3,
+        "y": 13,
         "w": 24,
-        "h": 18
+        "h": 14
       },
       "datasource": {
         "type": "loki",
@@ -179,6 +303,110 @@
         "sortOrder": "Descending",
         "dedupStrategy": "none"
       }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Error / SSH / tunnel troubleshooting",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "__LOKI_UID__"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 28,
+            "w": 24,
+            "h": 10
+          },
+          "id": 5,
+          "options": {
+            "enableLogDetails": true,
+            "showCommonLabels": false,
+            "showLabels": true,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{host=~\"$host\",job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" !~ \"(?i)(level|severity)[[:punct:]]?[=:] *[[:punct:]]?(info|debug|warn)\" |~ \"(?i)(^|[^a-zA-Z0-9_])(error|exception|fatal|panic)([^a-zA-Z0-9_]|$)\""
+            }
+          ],
+          "title": "Actual error messages",
+          "type": "logs"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "__LOKI_UID__"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 38,
+            "w": 24,
+            "h": 10
+          },
+          "id": 6,
+          "options": {
+            "showLabels": true,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{job=~\"journal|systemd-journal\",host=~\"$host\",unit=~\"ssh(d)?[.]service\"} |~ \"(?i)accepted.*(publickey|password)|failed.*password|invalid user|authentication failure|disconnect.*(authenticating|invalid)\"",
+              "refId": "A"
+            },
+            {
+              "expr": "{job=~\"journal|systemd-journal|syslog\",host=~\"$host\",unit!~\"ssh(d)?[.]service\",syslog_identifier=~\"ssh|sshd|app_core_ssh\"} |~ \"(?i)accepted.*(publickey|password)|failed.*password|invalid user|authentication failure|disconnect.*(authenticating|invalid)\"",
+              "refId": "B"
+            },
+            {
+              "expr": "{job=~\"journal|systemd-journal|syslog\",host=~\"$host\",unit!~\"ssh(d)?[.]service\",syslog_identifier!~\"ssh|sshd|app_core_ssh\"} |~ \"(?i)sshd[^ ]*.*(accepted|failed|invalid|authentication failure)\"",
+              "refId": "C"
+            }
+          ],
+          "title": "SSH authentication · host journal",
+          "type": "logs",
+          "description": "Current journald identifies SSH via unit labels; historical identifier and syslog-prefix fallbacks are separate and non-overlapping. Cron PAM sessions are excluded."
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "__LOKI_UID__"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 48,
+            "w": 24,
+            "h": 10
+          },
+          "id": 7,
+          "options": {
+            "showLabels": true,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{host=~\"$host\",job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" | container_name=~\".*cloudflared.*\" !~ \"(?i)(level|severity)[[:punct:]]?[=:] *[[:punct:]]?(info|debug)\" |~ \"(?i)error|warning|reconnect|connection.*(closed|failed)\""
+            }
+          ],
+          "title": "Tunnel errors / reconnects",
+          "type": "logs"
+        }
+      ]
     }
   ]
 }

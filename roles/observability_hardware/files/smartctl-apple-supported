@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Strict read-only Apple namespace adapter for the pinned stock exporter.
+
+Only the unsupported optional Error Information Log read is omitted. Native
+SMART JSON, health failures, stdout/stderr and exit status remain unchanged.
+"""
+import json
+import os
+from pathlib import Path
+import sys
+
+
+def adapt_args(args, device):
+    expected = [
+        "--json", "--info", "--health", "--attributes", "--capabilities",
+        "--tolerance=verypermissive", "--nocheck=standby", "--format=brief",
+        "--log=error", "--device=auto", device,
+    ]
+    if args != expected:
+        raise ValueError("unapproved read-only SMART invocation")
+    return [value for value in args if value != "--log=error"]
+
+
+def validate_namespace(config, sysroot=Path("/sys"), realpath=os.path.realpath):
+    real = Path(realpath(config["device"])).name
+    namespace = (sysroot / "class/block" / real).resolve()
+    if int((namespace / "nsid").read_text().strip()) != 1:
+        raise ValueError("only the declared physical namespace is approved")
+    controller = namespace.parent
+    if (controller / "serial").read_text().strip() != config["serial"]:
+        raise ValueError("physical drive identity changed")
+    if (controller / "device/driver").resolve().name != "nvme-apple":
+        raise ValueError("optional log exception is Apple-driver-only")
+
+
+def main():
+    try:
+        config = json.loads(Path("/etc/observability-smartctl-exporter/apple-readonly.json").read_text())
+        args = adapt_args(sys.argv[1:], config["device"])
+        validate_namespace(config)
+    except (OSError, ValueError, KeyError):
+        print("Unapproved read-only physical SMART invocation", file=sys.stderr)
+        sys.exit(2)
+    # Replacing this process preserves native JSON and every exit-status bit.
+    os.execv("/usr/bin/smartctl", ["/usr/bin/smartctl"] + args)
+
+
+if __name__ == "__main__":
+    main()

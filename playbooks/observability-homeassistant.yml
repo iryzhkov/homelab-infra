@@ -1,0 +1,7 @@
+---
+- name: Provision the dedicated Home Assistant scrape credential
+  hosts: observability_homeassistant_scrapers
+  become: true
+  gather_facts: false
+  roles:
+    - observability_homeassistant

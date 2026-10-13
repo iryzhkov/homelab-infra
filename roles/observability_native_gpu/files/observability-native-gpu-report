@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Publish native sampled NVIDIA/AMD readings, without changing GPU state."""
+import argparse
+import csv
+import json
+import math
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import time
+
+
+def number(value, multiplier=1):
+    try:
+        result = float(value) * multiplier
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def nvidia_values(text):
+    rows = list(csv.reader(text.strip().splitlines()))
+    if len(rows) != 1 or len(rows[0]) != 6:
+        raise ValueError("invalid native NVIDIA response")
+    busy, temperature, total, used, power, bus = [v.strip() for v in rows[0]]
+    values = {}
+    for key, value, scale in [
+        ("utilization_ratio", busy, .01),
+        ("temperature_celsius", temperature, 1),
+        ("memory_total_bytes", total, 1024 * 1024),
+        ("memory_used_bytes", used, 1024 * 1024),
+        ("power_watts", power, 1),
+    ]:
+        parsed = number(value, scale)
+        if parsed is not None:
+            values[key] = parsed
+    validate_values(values)
+    return bus.lower()[-12:], values
+
+
+def validate_values(values):
+    if not values:
+        raise ValueError("no supported native readings")
+    if "utilization_ratio" in values and not 0 <= values["utilization_ratio"] <= 1:
+        raise ValueError("invalid native utilization")
+    if "temperature_celsius" in values and not -100 <= values["temperature_celsius"] <= 200:
+        raise ValueError("invalid native temperature")
+    for key in ("memory_total_bytes", "memory_used_bytes", "power_watts"):
+        if key in values and values[key] < 0:
+            raise ValueError("negative native reading")
+
+
+def read_number(path, scale=1):
+    try:
+        return number(path.read_text().strip(), scale)
+    except (OSError, ValueError):
+        return None
+
+
+def amd_values(device):
+    values = {}
+    for key, path, scale in [
+        ("utilization_ratio", "gpu_busy_percent", .01),
+        ("memory_total_bytes", "mem_info_vram_total", 1),
+        ("memory_used_bytes", "mem_info_vram_used", 1),
+    ]:
+        value = read_number(device / path, scale)
+        if value is not None:
+            values[key] = value
+    for hwmon in sorted((device / "hwmon").glob("hwmon*")):
+        for sensor in sorted(hwmon.glob("temp*_input")):
+            value = read_number(sensor, .001)
+            if value is not None:
+                values["temperature_celsius"] = value
+                break
+        # APU/package power is not exclusive GPU power. Only publish a sensor
+        # whose native label explicitly identifies GPU power.
+        for sensor in sorted(hwmon.glob("power*_average")):
+            label = sensor.with_name(sensor.name.replace("_average", "_label"))
+            try:
+                gpu_power = label.read_text().strip().lower() in ("gpu", "gpu power")
+            except OSError:
+                gpu_power = False
+            value = read_number(sensor, .000001)
+            if gpu_power and value is not None:
+                values["power_watts"] = value
+    validate_values(values)
+    return values
+
+
+def collect_gpu(item, sysroot=Path("/sys"), run=subprocess.run):
+    device = item["physical_device"].lower()
+    path = sysroot / "bus/pci/devices" / device
+    driver = (path / "driver").resolve().name
+    if item["vendor"] == "nvidia":
+        if driver != "nvidia":
+            raise ValueError("declared GPU driver mismatch")
+        response = run([
+            "/usr/bin/nvidia-smi", "--id=" + device,
+            "--query-gpu=utilization.gpu,temperature.gpu,memory.total,memory.used,power.draw,pci.bus_id",
+            "--format=csv,noheader,nounits",
+        ], capture_output=True, text=True, timeout=10, check=False)
+        if response.returncode:
+            raise ValueError("native NVIDIA read failed")
+        observed, values = nvidia_values(response.stdout)
+        if observed != device:
+            raise ValueError("native NVIDIA PCI identity mismatch")
+        return values
+    if item["vendor"] == "amd":
+        if driver != "amdgpu":
+            raise ValueError("declared GPU driver mismatch")
+        return amd_values(path)
+    raise ValueError("unsupported native GPU adapter")
+
+
+def validate_config(config):
+    host = config["host"]
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}", host):
+        raise ValueError("invalid inventory host")
+    devices = config["devices"]
+    if not 1 <= len(devices) <= 8:
+        raise ValueError("invalid GPU inventory bound")
+    seen = set()
+    for item in devices:
+        device = item["physical_device"].lower()
+        if not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", device):
+            raise ValueError("invalid PCI identity")
+        if device in seen or item["vendor"] not in ("nvidia", "amd"):
+            raise ValueError("ambiguous or unsupported GPU adapter")
+        seen.add(device)
+
+
+def samples(config, read=collect_gpu, now=time.time):
+    validate_config(config)
+    descriptions = {
+        'utilization_ratio': 'Native sampled GPU duty cycle, not FLOPs or throughput.',
+        'temperature_celsius': 'Native GPU temperature; unsupported sensors are omitted.',
+        'memory_total_bytes': 'Native vendor-reported VRAM capacity.',
+        'memory_used_bytes': 'Native vendor-reported VRAM use.',
+        'power_watts': 'Native GPU power only, excluding ambiguous package power.',
+        'last_success_timestamp_seconds': 'Time of the last successful native device read.',
+        'scrape_success': 'Whether this explicitly supported adapter returned native readings.',
+    }
+    lines = []
+    for name, help_text in descriptions.items():
+        lines.extend(['# HELP gpu_' + name + ' ' + help_text, '# TYPE gpu_' + name + ' gauge'])
+    timestamp = int(now())
+    for item in config["devices"]:
+        device = item["physical_device"].lower()
+        labels = '{host=' + json.dumps(config["host"]) + ',device=' + json.dumps(device) + '}'
+        try:
+            values = read(item)
+            validate_values(values)
+            for key, value in sorted(values.items()):
+                lines.append("gpu_" + key + labels + " " + str(value))
+            lines.append("gpu_last_success_timestamp_seconds" + labels + " " + str(timestamp))
+            lines.append("gpu_scrape_success" + labels + " 1")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            # No raw native stderr, process inventory or credentials in logs.
+            # A failed device publishes no measurement values or success time.
+            lines.append("gpu_scrape_success" + labels + " 0")
+    return "\n".join(lines) + "\n"
+
+
+def atomic_write(path, content):
+    fd, temporary = tempfile.mkstemp(prefix=".native-gpu-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+    config = json.loads(Path(args.config).read_text())
+    atomic_write(Path(args.output), samples(config))
+
+
+if __name__ == "__main__":
+    main()

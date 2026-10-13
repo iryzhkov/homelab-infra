@@ -1,0 +1,7 @@
+---
+- name: Restart the dedicated guest log forwarder
+  ansible.builtin.systemd_service:
+    name: observability-guest-logs
+    daemon_reload: true
+    state: restarted
+  when: observability_guest_logs_start | bool and not ansible_check_mode

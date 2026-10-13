@@ -1,0 +1,48 @@
+---
+- name: Require exact declared guest sources and TCP1515
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in groups['hypervisors']
+      - observability_tcp_syslog_guests | length > 0
+      - ansible_host is match('^[0-9.]+$')
+    quiet: true
+
+- name: Validate each fixed peer identity
+  ansible.builtin.assert:
+    that:
+      - item.name in ['ct100', 'ct104', 'ct107']
+      - item.address is match('^[0-9.]+$')
+    quiet: true
+  loop: "{{ observability_tcp_syslog_guests }}"
+
+- name: Install the isolated TCP log receiver firewall controller
+  ansible.builtin.template:
+    src: observability-guest-log-firewall.j2
+    dest: /usr/local/sbin/observability-guest-log-firewall
+    owner: root
+    group: root
+    mode: "0755"
+  register: observability_guest_log_firewall_script
+
+- name: Install persistent receiver firewall unit
+  ansible.builtin.copy:
+    src: observability-guest-log-firewall.service
+    dest: /etc/systemd/system/observability-guest-log-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: observability_guest_log_firewall_unit
+
+- name: Apply only the dedicated receiver firewall chain
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/observability-guest-log-firewall]
+  changed_when: observability_guest_log_firewall_script is changed
+  when: not ansible_check_mode
+
+- name: Persist the isolated source restriction before Alloy starts
+  ansible.builtin.systemd_service:
+    name: observability-guest-log-firewall
+    enabled: true
+    state: started
+    daemon_reload: "{{ observability_guest_log_firewall_unit is changed }}"
+  when: not ansible_check_mode

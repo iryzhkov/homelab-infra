@@ -1,0 +1,19 @@
+---
+- name: Inspect requested native SMART utility
+  ansible.builtin.stat:
+    path: "{{ observability_smartctl_exporter_smartctl_path }}"
+  register: observability_smartctl_bootstrap_binary
+
+- name: Require explicitly authorized narrow Arch utility bootstrap
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Archlinux'
+      - inventory_hostname == 'laptop'
+      - observability_smartctl_bootstrap | default(false) | bool
+  when: not observability_smartctl_bootstrap_binary.stat.exists
+
+- name: Install only native smartmontools from existing signed package indexes
+  ansible.builtin.command:
+    argv: [/usr/bin/pacman, --sync, --needed, --noconfirm, smartmontools]
+  when: not observability_smartctl_bootstrap_binary.stat.exists
+  changed_when: true

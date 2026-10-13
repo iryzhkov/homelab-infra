@@ -27,6 +27,9 @@
 #     are home); restore a shed tier with -e shed=<stack,...>.
 #  9. Verify: both Gatus instances without failures, every route through the
 #     VIP, keepalived active on both edges with the VIP on exactly one.
+# 10. Repeat Loki readiness on homelab until its probe-driven 15s gate passes.
+#     Do not force another restart because the first readiness probe is early.
+# 11. Refresh snapshots and clear the maintenance marker only after readiness.
 
 - name: Return a Proxmox host to service
   hosts: "{{ host | default('no-host-given') }}"
@@ -388,7 +391,26 @@
         fail_msg: "keepalived and VIP per edge: {{ hr_edges.results | map(attribute='stdout') | list }}"
         quiet: true
 
-    # 10. Clear the maintenance -------------------------------------------------
+    # 10. Loki readiness --------------------------------------------------------
+    # The ingester's 15s gate starts at its first healthy /ready probe, not
+    # process startup. Repeat the probe; never force a second restart merely
+    # because the first response says "waiting for 15s after being ready".
+    - name: Wait for Loki readiness after the logging worker returns
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3100/ready
+        status_code: 200
+        timeout: 5
+        return_content: true
+      delegate_to: "{{ hm.worker }}"
+      register: hr_loki_ready
+      until: hr_loki_ready.status | default(0) == 200
+      retries: 24
+      delay: 5
+      when:
+        - hm.worker == 'homelab'
+        - not ansible_check_mode
+
+    # 11. Clear the maintenance -------------------------------------------------
 
     # So the next drain finds fresh peer copies of the stacks that just came
     # home (its pre-pass refuses copies older than two hours).

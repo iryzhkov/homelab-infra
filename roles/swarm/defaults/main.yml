@@ -41,22 +41,18 @@ swarm_registry_tokens:
 # converted it (stack forgejo, service server).
 swarm_registry_mirror_host: homelab
 
-# The log settings tasks/stack.yml gives every service that names none: the
-# Loki driver at Loki's address on the Swarm (stacks/logging publishes 3100
-# in host mode on homelab), never blocking a container's writes or its stop
-# when Loki is unreachable. The same values roles/base writes into
-# daemon.json; spelled out per service so they apply without a daemon
-# restart (phase 5, F5 follow-up).
-swarm_stack_logging:
-  driver: loki
-  options:
-    loki-url: "http://{{ hostvars[swarm_bootstrap_manager].ansible_host }}:3100/loki/api/v1/push"
-    loki-retries: "3"
-    loki-batch-size: "400"
-    mode: non-blocking
-    max-buffer-size: 4m
-    max-size: 50m
-    max-file: "3"
+# Services without an explicit driver use bounded local storage once Alloy
+# owns Docker log delivery. Unmigrated inventory keeps the legacy Loki settings.
+# A service log setting reaches new tasks without a daemon restart; the daemon
+# default is migrated separately after application collection is verified.
+swarm_stack_logging: >-
+  {{ {'driver': 'local', 'options': docker_alloy_log_options}
+     if docker_logs_via_alloy | default(false) | bool else
+     {'driver': 'loki', 'options': {
+       'loki-url': 'http://' ~ hostvars[swarm_bootstrap_manager].ansible_host ~ ':3100/loki/api/v1/push',
+       'loki-retries': '3', 'loki-batch-size': '400',
+       'mode': 'non-blocking', 'max-buffer-size': '4m',
+       'max-size': '50m', 'max-file': '3'}} }}
 swarm_forgejo_service: forgejo_server
 
 # The other managers, whose mesh addresses may reach the control ports here,

@@ -32,13 +32,10 @@ swarm_stacks_f5:
       class: sqlite
       sqlite:
         - { name: grafana, path: /srv/swarm/logging/grafana/grafana.db, keep: 48 }
-      # Loki's chunks and index, InfluxDB's TSM files and bolt database, and
-      # the configuration. Mirrored live, so InfluxDB's copy is
-      # crash-consistent at best; the daily `influx backup` archive is the
-      # consistent one, and a move copies everything cold.
+      # Loki chunks/index and Grafana state/config. Retained InfluxDB has
+      # its own owner, pin and snapshot definition in stacks-legacy-influx.yml.
       files:
         - /srv/swarm/logging/grafana
         - /srv/swarm/logging/loki
         - /srv/swarm/logging/config
-        - /srv/swarm/logging/influxdb
       exclude: [grafana.db, grafana.db-*]

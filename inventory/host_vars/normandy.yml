@@ -1,4 +1,8 @@
 ---
+observability_host_capabilities:
+  - {capability: igpu, mode: passthrough}
+observability_gpu_owners:
+  - {physical_host: proxmox-b, physical_device: '0000:00:02.0', gpu_kind: igpu, mode: passthrough, vendor: intel, model_name: Intel UHD 630, telemetry: native}
 # Adopted 2026-09-06.
 
 # The unused ml-orchestrator credential was retired on 2026-10-05.

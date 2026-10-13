@@ -1,0 +1,1366 @@
+{
+  "uid": "homelab-observe-disks",
+  "title": "Homelab · Disk Health",
+  "description": "Manufacturer SMART from explicitly declared physical drives. No predicted failure date; unsupported readings remain unavailable.",
+  "tags": [
+    "homelab",
+    "observability",
+    "ansible-managed"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "links": [
+    {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/homelab-observe-overview",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Hosts & hardware",
+      "type": "link",
+      "url": "/d/homelab-observe-hosts",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Disk health",
+      "type": "link",
+      "url": "/d/homelab-observe-disks",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "CPU / GPU",
+      "type": "link",
+      "url": "/d/homelab-observe-capacity",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Containers",
+      "type": "link",
+      "url": "/d/homelab-observe-containers",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Log explorer",
+      "type": "link",
+      "url": "/d/homelab-observe-logs",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "UniFi Network",
+      "type": "link",
+      "url": "/d/homelab-observe-unifi",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Home Assistant",
+      "type": "link",
+      "url": "/d/homelab-observe-homeassistant",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "drive",
+        "label": "Physical drive identity",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "homelab-metrics"
+        },
+        "query": {
+          "query": "label_values(node_monitoring_physical_drive_info{job=\"node\"},serial_number)",
+          "refId": "drive"
+        },
+        "definition": "label_values(node_monitoring_physical_drive_info{job=\"node\"},serial_number)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": false,
+        "hide": false,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Deployments and notes",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "Read the drive, not a predicted failure date",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "SMART PASS is the drive's current self-report, not a guarantee. Endurance is a manufacturer estimate, not remaining lifetime. Missing wear/limits/error families mean unsupported, not zero."
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Selected drives · reported SMART health",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_smart_status{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "FAILED",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "PASS",
+                  "color": "green"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "valueSize": 24,
+          "titleSize": 12
+        },
+        "wideLayout": true
+      },
+      "id": 2
+    },
+    {
+      "type": "bargauge",
+      "title": "Drive temperature",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 3
+    },
+    {
+      "type": "bargauge",
+      "title": "NVMe operating-temperature headroom",
+      "description": "Vendor operating limit minus current temperature; unavailable without reported limit.",
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"op_limit_max\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"}) - max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 4
+    },
+    {
+      "type": "bargauge",
+      "title": "NVMe endurance used",
+      "description": "100% means manufacturer estimated endurance consumed, not a predicted failure time.",
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_percentage_used{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 5
+    },
+    {
+      "type": "bargauge",
+      "title": "SATA vendor lifetime remaining",
+      "description": "Vendor-specific normalized attribute, separate from NVMe wear.",
+      "gridPos": {
+        "x": 12,
+        "y": 36,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_attribute{job=\"smartctl\",attribute_name=\"Percent_Lifetime_Remain\",attribute_value_type=\"value\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 6
+    },
+    {
+      "type": "bargauge",
+      "title": "NVMe media errors",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 8,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_media_errors{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 7
+    },
+    {
+      "type": "bargauge",
+      "title": "NVMe critical warning bits",
+      "description": "Bitmask; unavailable is not zero.",
+      "gridPos": {
+        "x": 8,
+        "y": 46,
+        "w": 8,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_critical_warning{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 8
+    },
+    {
+      "type": "bargauge",
+      "title": "Power-on hours",
+      "description": "",
+      "gridPos": {
+        "x": 16,
+        "y": 46,
+        "w": 8,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((max by(host,device)(smartctl_device_power_on_seconds{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))) / 3600",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: h",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "decimals": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Drive temperature history",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 10
+    },
+    {
+      "type": "bargauge",
+      "title": "Power cycles",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device)(smartctl_device_power_cycle_count{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{host}} · {{drive_label}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 11
+    },
+    {
+      "type": "bargauge",
+      "title": "SATA raw error attributes",
+      "description": "Manufacturer attribute names preserved; counters are not universal failure probability.",
+      "gridPos": {
+        "x": 0,
+        "y": 66,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max by(host,device,attribute_name)(smartctl_device_attribute{job=\"smartctl\",attribute_value_type=\"raw\",attribute_name=~\"Reported_Uncorrect|Offline_Uncorrectable|Current_Pending_ECC_Cnt|UDMA_CRC_Error_Count|Reallocate_NAND_Blk_Cnt\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
+          "legendFormat": "{{drive_label}} · {{attribute_name}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label} · ${__field.labels.attribute_name}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
+      },
+      "id": 12
+    },
+    {
+      "type": "stat",
+      "title": "Declared SMART-capable drives / host",
+      "description": "Inventory smart_drives count for explicitly SMART-capable hosts; unsupported inventory is listed separately, not fabricated as healthy.",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host)(node_monitoring_smart_expected_devices{job=\"node\"})",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 36
+        }
+      },
+      "id": 13
+    },
+    {
+      "type": "stat",
+      "title": "Declared drives not reporting",
+      "description": "Known inventory count minus drives reported by healthy SMART exporters. Exporter downtime reports missing coverage, never healthy SMART. Independent of selected drive filter.",
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 12,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clamp_min(max by(host)(node_monitoring_smart_expected_devices{job=\"node\"}) - (count by(host)(max by(host,device)(smartctl_device{job=\"smartctl\"}) and on(host)(max by(host)(up{job=\"smartctl\"}) == 1)) or on(host)(0 * max by(host)(node_monitoring_smart_expected_devices{job=\"node\"}))), 0)",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 36
+        }
+      },
+      "id": 14
+    },
+    {
+      "type": "table",
+      "title": "Physical drive inventory · unsupported stays visible",
+      "description": "Each physical SSD inventory identity is counted once. SMART means supported telemetry; unsupported/unproven is not PASS or zero wear. Values below come only from actual SMART readings. Optional detailed error-history logs are a separate capability; unsupported history does not turn supported health-log media/error counters into zero or unknown.",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,serial_number,model_name,transport,telemetry,error_history)(node_monitoring_physical_drive_info{job=\"node\",serial_number=~\"$drive\"})",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Readings"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "smart": {
+                        "text": "SMART available",
+                        "color": "blue"
+                      },
+                      "unsupported": {
+                        "text": "Unsupported",
+                        "color": "orange"
+                      },
+                      "unproven": {
+                        "text": "Unproven",
+                        "color": "orange"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Model"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 280
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Interface"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Drive identity"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 145
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error history"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "unsupported": {
+                        "text": "Unsupported",
+                        "color": "orange"
+                      },
+                      "unknown": {
+                        "text": "Not declared",
+                        "color": "gray"
+                      },
+                      "supported": {
+                        "text": "Supported",
+                        "color": "blue"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "Value #A": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "intermittent": true
+            },
+            "renameByName": {
+              "host": "Host",
+              "serial_number": "Drive identity",
+              "model_name": "Model",
+              "transport": "Interface",
+              "telemetry": "Readings",
+              "error_history": "Error history"
+            },
+            "indexByName": {
+              "host": 0,
+              "model_name": 1,
+              "telemetry": 2,
+              "error_history": 3,
+              "transport": 4,
+              "serial_number": 5
+            }
+          }
+        }
+      ],
+      "id": 15
+    }
+  ]
+}

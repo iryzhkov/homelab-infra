@@ -1,0 +1,17 @@
+---
+- name: Reconcile the owned metrics-only Home Assistant UI
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_user: "{{ lookup('env', 'USER') }}"
+  tasks:
+    - name: Reconcile the owned UI using private SOPS capability links
+      ansible.builtin.command:
+        argv: >-
+          {{ ['node', playbook_dir + '/../roles/observability_grafana/files/homeassistant-embedding.js',
+              '--shares-file', playbook_dir + '/../secrets/observability-grafana-shares.sops.yaml']
+             + (['--check'] if ansible_check_mode else []) }}
+      register: observability_homeassistant_embedding_result
+      changed_when: (observability_homeassistant_embedding_result.stdout | from_json).changed
+      check_mode: false

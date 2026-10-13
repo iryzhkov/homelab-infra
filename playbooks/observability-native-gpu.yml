@@ -1,0 +1,7 @@
+---
+- name: Publish native physical GPU readings without application changes
+  hosts: observability_native_gpu_hosts
+  become: true
+  gather_facts: false
+  roles:
+    - observability_native_gpu

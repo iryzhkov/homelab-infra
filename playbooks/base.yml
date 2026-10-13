@@ -21,12 +21,12 @@
 #   ansible-playbook playbooks/site.yml -l normandy -e only=gatus
 
 - name: Keep the hardware metric buckets and their write tokens in InfluxDB
-  # The host running the `logging` stack, which holds InfluxDB.
+  # Bootstrap ingress endpoint of the independently pinned legacy-influx stack.
   hosts: homelab
   gather_facts: false
   vars:
     influx_api: http://127.0.0.1:8087/api/v2
-    # InfluxDB answers here while the `logging` stack is up. Override it (for
+    # InfluxDB answers here while legacy-influx is up. Override it (for
     # example with a closed port) to exercise the skip below.
     influx_health_url: "{{ influx_api | regex_replace('/api/v2$', '') }}/health"
     metrics_secret_file: "{{ playbook_dir }}/../secrets/hardware-metrics.sops.yaml"

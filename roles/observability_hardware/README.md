@@ -1,6 +1,13 @@
 # Physical SMART telemetry
 
-Apply `playbooks/observability-hardware.yml` to the hypervisors. This adds only
+Apply `playbooks/observability-hardware.yml` to the explicitly declared physical
+hardware owners: both hypervisors, gaming-pc and laptop. The laptop's native
+smartmontools utility was installed by the scoped probe play, and read-only
+SMART health/temperature/wear/spare/error commands succeeded before claiming
+supported telemetry. Its three namespaces share one Apple SSD controller;
+namespace1 is explicitly selected and the physical drive is counted once.
+Both amd64 and arm64 official0.15.0 assets have separate checksum pins.
+The desktop uses its existing /usr/bin/smartctl; no app or driver changes. This adds only
 `observability-smartctl-exporter.service` and its versioned binary/cache directories.
 Existing SMART/Influx/Gatus collectors and timers are retained.
 
@@ -32,6 +39,18 @@ Useful metrics include `smartctl_device_smart_status` (1 passed, 0 failed),
 `smartctl_device_available_spare` and `smartctl_device_media_errors`.
 CPU/board temperatures still come from the host hwmon collector in Alloy.
 The role checks HTTP readiness and confirms every declared serial appears.
+
+Apple nvme-apple provides native health, wear, temperature, spare and aggregate
+media/error counts, but rejects the optional Error Information Log read. The
+pinned exporter otherwise rejects this whole valid observation. An explicit
+laptop-only adapter therefore removes only --log=error from the exact pinned
+read-only argument vector; it never parses or rewrites JSON and uses exec to
+preserve stdout/stderr and every native exit-status bit, including real health
+failures. It fences the exact by-id path, namespace1, controller serial and
+nvme-apple driver, refusing every other flag/device/power mode. Physical drive
+inventory marks error_history=unsupported; this must not become a fabricated
+zero history. Native aggregate num_err_log_entries is a different supported
+SMART health-log field. All other hosts call the original smartctl directly.
 
 Check mode resolves and identifies drives read-only and previews directory/unit
 changes. It skips downloads, extraction, service changes and metrics readiness.
