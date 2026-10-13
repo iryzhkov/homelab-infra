@@ -102,6 +102,25 @@
   no_log: true
   when: not ansible_check_mode
 
+- name: Create the root-owned exporter launcher directory
+  ansible.builtin.file:
+    path: /usr/local/libexec/observability-pve
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install exporter-scoped legacy CA compatibility
+  ansible.builtin.copy:
+    src: pve-exporter-launcher.py
+    dest: /usr/local/libexec/observability-pve/pve-exporter-launcher.py
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart observability PVE exporter
+
 - name: Install the local-only constrained exporter service
   ansible.builtin.template:
     src: observability-pve.service.j2

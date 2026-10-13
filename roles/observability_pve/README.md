@@ -19,6 +19,13 @@ passes the verify_ssl path to requests. This is a CA path, not a false boolean
 or client certificate. The inspected certificates on both current hypervisors
 include localhost and 127.0.0.1 in their subject alternative names.
 
+The existing cluster CA omits the keyUsage extension. Python 3.13 and current
+urllib3 enable VERIFY_X509_STRICT and reject that legacy CA. A role-owned
+launcher clears only VERIFY_X509_STRICT in this exporter process. It leaves
+CA-chain/signature, hostname and certificate validity verification enabled;
+it never sets verify_ssl=false and does not alter the host's global TLS policy.
+An invalid trust root and a hostname mismatch must still be rejected.
+
 Alloy on each hypervisor should scrape:
 
     targets: [{"__address__": "127.0.0.1:9221", "host": INVENTORY_HOSTNAME}]
