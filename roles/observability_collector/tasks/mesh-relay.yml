@@ -7,10 +7,18 @@
       - observability_ingest_address != observability_ingest_fallback_address
     quiet: true
 
-- name: Install native TCP relay without activating the distribution default service
+- name: Install the Debian relay without starting an unrelated default service
+  ansible.builtin.apt:
+    name: haproxy
+    state: present
+    policy_rc_d: 101
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Install the Arch relay package
   ansible.builtin.package:
     name: haproxy
     state: present
+  when: ansible_facts.os_family == 'Archlinux'
 
 - name: Create a dedicated unprivileged mesh relay identity
   ansible.builtin.user:
