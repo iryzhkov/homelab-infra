@@ -108,6 +108,29 @@
           delegate_to: localhost
           become: false
           no_log: true
+        - name: Capture originally running Compose containers only
+          ansible.builtin.command:
+            argv:
+              - docker
+              - ps
+              - --filter
+              - label=com.docker.compose.project
+              - --format
+              - "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Label \"com.docker.swarm.service.id\"{{ '}}' }}"
+          register: restart_compose_raw
+          changed_when: false
+        - name: Exclude Swarm tasks that also carry Compose labels
+          ansible.builtin.set_fact:
+            restart_compose_ids: "{{ restart_compose_raw.stdout_lines | map('trim') | reject('search', ' ') | reject('equalto', '') | list }}"
+        # A locked manager can start Compose before its network agent is restored.
+        # Starting after unlock keeps the embedded service DNS registrations.
+        - name: Stop captured Compose containers before a manager restart
+          ansible.builtin.command:
+            argv: "{{ ['docker', 'stop', '--time', '30'] + restart_compose_ids }}"
+          when:
+            - inventory_hostname in groups['swarm']
+            - restart_compose_ids | length > 0
+          changed_when: true
         - name: Restart the Docker daemon
           ansible.builtin.systemd_service:
             name: docker
@@ -140,6 +163,26 @@
                 name: swarm
                 tasks_from: unlock.yml
               when: restarted_swarm_state.stdout | trim == 'locked'
+        - name: Restore only containers that were running before this window
+          ansible.builtin.command:
+            argv: "{{ ['docker', 'start'] + restart_compose_ids }}"
+          when: restart_compose_ids | length > 0
+          register: restart_compose_started
+          until: restart_compose_started.rc == 0
+          retries: 20
+          delay: 3
+          changed_when: true
+        - name: Require captured containers running and native checks healthy
+          ansible.builtin.command:
+            argv: "{{ ['docker', 'inspect', '--format', '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}'] + restart_compose_ids }}"
+          register: restarted_containers
+          changed_when: false
+          when: restart_compose_ids | length > 0
+          until: >-
+            restarted_containers.rc == 0
+            and restarted_containers.stdout_lines | reject('match', '^true (healthy|no-healthcheck)$') | list | length == 0
+          retries: 60
+          delay: 3
         - name: Require household health before proceeding to another host
           ansible.builtin.uri:
             url: "{{ item }}"

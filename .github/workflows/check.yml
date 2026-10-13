@@ -23,6 +23,13 @@ jobs:
       - run: python3 scripts/test-swarm-snapshot.py
       - run: python3 scripts/test-observability-backup.py
       - run: python3 scripts/test-observability-textfile.py
+      - name: Install the deployment templating version for guarded role tests
+        run: pip install --disable-pip-version-check ansible-core==2.19.13
+      - name: Test cold-transition, inventory and activation guards
+        run: |
+          python3 -m unittest discover -s roles/base/tests -v
+          python3 -m unittest discover -s roles/legacy_influx_transition/tests -v
+          python3 -m unittest discover -s roles/observability_host_metadata/tests -v
       - run: python3 -m py_compile roles/base/files/homelab-gpu-report roles/observability_pve/files/pve-exporter-launcher.py roles/observability_grafana/library/grafana_observability.py
       - run: python3 -m py_compile roles/backup/files/homelab-swarm-snapshot roles/backup/files/homelab-sqlite-backup
       - run: python3 -m py_compile stacks/jocasta/files/jocasta-backup scripts/jocasta-credentials.py
