@@ -4,6 +4,13 @@
 {% set guest_id = hostvars[name].observability_guest_id | default('lxc/' ~ hostvars[name].proxmox_vmid if hostvars[name].proxmox_vmid is defined else '') %}
 node_monitoring_host_info{host="{{ name }}",kind="{{ hostvars[name].observability_host_kind }}"{% if guest_id %},guest_id="{{ guest_id }}"{% endif %}} 1
 {% endfor %}
+# HELP node_monitoring_smart_expected_devices Inventory drive count for coverage comparison, not drive health.
+# TYPE node_monitoring_smart_expected_devices gauge
+{% for name in observability_metadata_hosts | sort %}
+{% if 'smart' in (hostvars[name].observability_host_capabilities | default([]) | map(attribute='capability') | list) %}
+node_monitoring_smart_expected_devices{host="{{ name }}"} {{ hostvars[name].smart_drives | length }}
+{% endif %}
+{% endfor %}
 # HELP node_monitoring_gpu_owner_info Physical GPU identity and its sole telemetry owner; not a health signal.
 # TYPE node_monitoring_gpu_owner_info gauge
 {% for name in observability_metadata_hosts | sort %}

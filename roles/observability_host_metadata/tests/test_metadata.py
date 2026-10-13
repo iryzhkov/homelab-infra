@@ -11,7 +11,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 ROOT = Path(__file__).resolve().parents[3]
 ROLE = ROOT / "roles/observability_host_metadata"
 KEYS = {"observability_host_kind", "observability_host_capabilities",
-        "observability_guest_id", "observability_gpu_owners", "proxmox_vmid"}
+        "observability_guest_id", "observability_gpu_owners", "proxmox_vmid", "smart_drives"}
 env = Environment(loader=FileSystemLoader(str(ROLE / "templates")), undefined=StrictUndefined)
 
 class MetadataAcceptanceTest(unittest.TestCase):
@@ -46,6 +46,10 @@ class MetadataAcceptanceTest(unittest.TestCase):
         self.assertNotIn('node_monitoring_capability_info{host="ct105"', text)
         self.assertNotIn('host="gaming-pc",capability="smart"', text)
         self.assertNotIn('host="laptop",capability="smart"', text)
+        self.assertIn('node_monitoring_smart_expected_devices{host="proxmox-a"} 2', text)
+        self.assertIn('node_monitoring_smart_expected_devices{host="proxmox-b"} 2', text)
+        self.assertNotIn('node_monitoring_smart_expected_devices{host="gaming-pc"}', text)
+        self.assertNotIn('node_monitoring_smart_expected_devices{host="ct105"}', text)
         self.assertIn('host="homelab",physical_host="proxmox-a",physical_device="0000:00:02.0",gpu_kind="igpu",mode="passthrough"', text)
         self.assertIn('host="normandy",physical_host="proxmox-b",physical_device="0000:00:02.0",gpu_kind="igpu",mode="passthrough"', text)
 

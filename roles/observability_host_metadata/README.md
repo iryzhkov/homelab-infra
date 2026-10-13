@@ -17,6 +17,7 @@ The metrics are descriptive gauges with value1, never health substitutes:
 
 - `node_monitoring_host_info{host,kind,guest_id?}`
 - `node_monitoring_capability_info{host,capability,mode}`
+- `node_monitoring_smart_expected_devices{host}` (inventory coverage count)
 - `node_monitoring_gpu_owner_info{host,physical_host,physical_device,gpu_kind,mode}`
 
 Capabilities exist only for explicitly supported telemetry: SMART on the two
