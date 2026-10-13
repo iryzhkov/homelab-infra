@@ -79,7 +79,7 @@ prometheus.scrape "{{ scrape.name }}" {
 
 {% if observability_cadvisor_embedded | default(false) | bool %}
 prometheus.exporter.cadvisor "containers" {
-  docker_host = "tcp://127.0.0.1:2375"
+  docker_host = "unix:///var/lib/observability-docker-proxy/proxy.sock"
   docker_only = true
   store_container_labels = false
   allowlisted_container_labels = ["com.docker.swarm.service.name", "com.docker.stack.namespace", "com.docker.compose.project", "com.docker.compose.service"]
@@ -174,7 +174,7 @@ loki.source.journal "host" {
 }
 {% if observability_docker_enabled | bool %}
 discovery.docker "containers" {
-  host = "tcp://127.0.0.1:2375"
+  host = "unix:///var/lib/observability-docker-proxy/proxy.sock"
   refresh_interval = "10s"
 }
 discovery.relabel "containers" {
@@ -209,7 +209,7 @@ discovery.relabel "containers" {
   }
 }
 loki.source.docker "containers" {
-  host = "tcp://127.0.0.1:2375"
+  host = "unix:///var/lib/observability-docker-proxy/proxy.sock"
   targets = discovery.relabel.containers.output
   labels = { job = "docker", host = "{{ inventory_hostname }}" }
   forward_to = [loki.process.redact.receiver]

@@ -9,6 +9,22 @@
     that: observability_docker_socket.stat.exists
     quiet: true
 
+- name: Create a distinct non-login proxy identity
+  ansible.builtin.user:
+    name: observability-proxy
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+  register: observability_proxy_identity
+
+- name: Create the persistent private socket directory with inherited collector group
+  ansible.builtin.file:
+    path: /var/lib/observability-docker-proxy
+    state: directory
+    owner: observability-proxy
+    group: alloy
+    mode: "2750"
+
 - name: Create the managed proxy directory
   ansible.builtin.file:
     path: /opt/observability/docker-socket-proxy
@@ -36,7 +52,8 @@
 
 - name: Verify allowed runtime discovery and denied filesystem access
   ansible.builtin.uri:
-    url: "http://127.0.0.1:2375/{{ item.path }}"
+    url: "http://localhost/{{ item.path }}"
+    unix_socket: /var/lib/observability-docker-proxy/proxy.sock
     status_code: "{{ item.status }}"
     return_content: false
     timeout: 5

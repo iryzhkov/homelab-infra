@@ -7,6 +7,14 @@
       - observability_backup_keep | int > 0
     quiet: true
 
+- name: Create root-owned backup telemetry output independently of collector deployment
+  ansible.builtin.file:
+    path: /var/lib/observability-textfile
+    state: directory
+    owner: root
+    mode: "0755"
+  become: true
+
 - name: Create private observability backup configuration directory
   ansible.builtin.file:
     path: /etc/observability-backup

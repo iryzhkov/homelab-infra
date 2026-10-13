@@ -28,7 +28,11 @@ missing scrape credentials.
   briefly; remote-write buffering resumes after the endpoint returns.
 
 Collectors use an unprivileged Alloy identity and private credential files.
-Docker collection passes through a read-only, endpoint-restricted socket proxy.
+Docker collection passes through a read-only, endpoint-restricted Unix socket
+proxy, with no TCP listener and no network interface. Its persistent socket
+is accessible only to the Alloy group, the dedicated proxy identity and root.
+Container inspection can include environment values, so access to this socket
+is restricted; cAdvisor exports only allowlisted labels.
 cAdvisor runs in a separately constrained root helper. Small 2 GB Debian LXCs
 use the distribution node exporter, accessible only to their owning hypervisor;
 Proxmox metrics cover every VM/LXC, including stopped guests. Alpine logs use
