@@ -31,7 +31,7 @@
       - (observability_promtail_config.scrape_configs | selectattr('static_configs', 'defined') | first).static_configs[0].labels.__path__ == '/var/log/pve/tasks/active'
       - (observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | first).journal.get('path', '') == ''
       - (observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | first).journal.max_age == '12h'
-      - (observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | first).relabel_configs == [{'source_labels': ['__journal__systemd_unit'], 'target_label': 'unit'}]
+      - "(observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | first).relabel_configs == [{'source_labels': ['__journal__systemd_unit'], 'target_label': 'unit'}]"
       - (observability_promtail_config.scrape_configs | selectattr('pipeline_stages', 'defined') | list) | length == 0
     quiet: true
   no_log: true
