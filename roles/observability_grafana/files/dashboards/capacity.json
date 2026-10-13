@@ -612,7 +612,7 @@
     {
       "type": "bargauge",
       "title": "Physical sensor hotspot / chip",
-      "description": "Explicit physical temperature capability; inherited LXC sensors excluded.",
+      "description": "Explicit physical temperature capability; inherited LXC sensors excluded. Invalid sensor sentinels outside -20..150°C are excluded; missing readings stay unavailable.",
       "gridPos": {
         "x": 0,
         "y": 26,
@@ -626,7 +626,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,chip)(node_hwmon_temp_celsius{job=\"node\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\"})",
+          "expr": "max by(host,chip)(((node_hwmon_temp_celsius{job=\"node\"} > -20) < 150)) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\"})",
           "legendFormat": "{{host}} / {{chip}}",
           "range": false,
           "instant": true
@@ -760,7 +760,7 @@
               },
               {
                 "id": "custom.width",
-                "value": 120
+                "value": 180
               }
             ]
           },
@@ -772,7 +772,7 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 75
+                "value": 120
               }
             ]
           },
@@ -784,7 +784,7 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 145
+                "value": 270
               }
             ]
           },
@@ -808,7 +808,7 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 95
+                "value": 120
               }
             ]
           },
@@ -2222,7 +2222,7 @@
     {
       "type": "bargauge",
       "title": "Physical sensor hotspot / host",
-      "description": "Hottest reported physical hwmon sensor per host; may be CPU, board or storage. Select a host above for individual sensor labels. Not a GPU temperature estimate.",
+      "description": "Hottest reported physical hwmon sensor per host; may be CPU, board or storage. Select a host above for individual sensor labels. Not a GPU temperature estimate. Invalid sensor sentinels outside -20..150°C are excluded; missing readings stay unavailable.",
       "gridPos": {
         "x": 0,
         "y": 105,
@@ -2236,7 +2236,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(node_hwmon_temp_celsius{job=\"node\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\"})",
+          "expr": "max by(host)(((node_hwmon_temp_celsius{job=\"node\"} > -20) < 150)) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\"})",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true

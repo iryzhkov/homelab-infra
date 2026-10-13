@@ -174,7 +174,7 @@
         "x": 0,
         "y": 12,
         "w": 24,
-        "h": 6
+        "h": 10
       },
       "datasource": {
         "type": "prometheus",
@@ -239,7 +239,7 @@
           "fields": "",
           "values": false
         },
-        "orientation": "auto",
+        "orientation": "vertical",
         "displayMode": "gradient",
         "showUnfilled": true,
         "textMode": "value_and_name",
@@ -248,9 +248,10 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "text": {
-          "titleSize": 14,
-          "valueSize": 52
-        }
+          "valueSize": 24,
+          "titleSize": 12
+        },
+        "wideLayout": true
       },
       "id": 2
     },
@@ -260,7 +261,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 22,
+        "y": 26,
         "w": 12,
         "h": 10
       },
@@ -340,7 +341,7 @@
       "description": "Vendor operating limit minus current temperature; unavailable without reported limit.",
       "gridPos": {
         "x": 12,
-        "y": 22,
+        "y": 26,
         "w": 12,
         "h": 10
       },
@@ -420,7 +421,7 @@
       "description": "100% means manufacturer estimated endurance consumed, not a predicted failure time.",
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 36,
         "w": 12,
         "h": 10
       },
@@ -500,7 +501,7 @@
       "description": "Vendor-specific normalized attribute, separate from NVMe wear.",
       "gridPos": {
         "x": 12,
-        "y": 32,
+        "y": 36,
         "w": 12,
         "h": 10
       },
@@ -580,7 +581,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 46,
         "w": 8,
         "h": 10
       },
@@ -654,7 +655,7 @@
       "description": "Bitmask; unavailable is not zero.",
       "gridPos": {
         "x": 8,
-        "y": 42,
+        "y": 46,
         "w": 8,
         "h": 10
       },
@@ -728,7 +729,7 @@
       "description": "",
       "gridPos": {
         "x": 16,
-        "y": 42,
+        "y": 46,
         "w": 8,
         "h": 10
       },
@@ -803,7 +804,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 52,
+        "y": 56,
         "w": 12,
         "h": 10
       },
@@ -869,7 +870,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 52,
+        "y": 56,
         "w": 12,
         "h": 10
       },
@@ -943,7 +944,7 @@
       "description": "Manufacturer attribute names preserved; counters are not universal failure probability.",
       "gridPos": {
         "x": 0,
-        "y": 62,
+        "y": 66,
         "w": 24,
         "h": 9
       },
@@ -1021,7 +1022,7 @@
       "description": "Inventory smart_drives count for explicitly SMART-capable hosts; unsupported inventory is listed separately, not fabricated as healthy.",
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 22,
         "w": 12,
         "h": 4
       },
@@ -1094,7 +1095,7 @@
       "description": "Known inventory count minus drives reported by healthy SMART exporters. Exporter downtime reports missing coverage, never healthy SMART. Independent of selected drive filter.",
       "gridPos": {
         "x": 12,
-        "y": 18,
+        "y": 22,
         "w": 12,
         "h": 4
       },

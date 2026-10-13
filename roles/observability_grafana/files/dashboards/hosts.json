@@ -970,7 +970,7 @@
     {
       "type": "timeseries",
       "title": "Physical temperature sensors",
-      "description": "Maximum actual sensor reading within each explicitly physical chip; individual sensor identities are shown on CPU/GPU Capacity. Inherited LXC readings excluded.",
+      "description": "Maximum actual sensor reading within each explicitly physical chip; individual sensor identities are shown on CPU/GPU Capacity. Inherited LXC readings excluded. Invalid sensor sentinels outside -20..150°C are excluded; missing readings stay unavailable.",
       "gridPos": {
         "x": 0,
         "y": 47,
@@ -984,7 +984,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,chip,sensor)(node_hwmon_temp_celsius{job=\"node\",host=\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\",host=\"$host\"})",
+          "expr": "max by(host,chip,sensor)(((node_hwmon_temp_celsius{job=\"node\",host=\"$host\"} > -20) < 150)) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\",host=\"$host\"})",
           "legendFormat": "{{chip}} / {{sensor}}",
           "range": true,
           "instant": false
