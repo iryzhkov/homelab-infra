@@ -56,6 +56,12 @@ class RollbackTest(unittest.TestCase):
         self.assertFalse(render("{{ " + condition + " }}", {"influx_existing_legacy_service": {"stdout": "service-reserving-8087\n"}}))
         self.assertTrue(render("{{ " + condition + " }}", {"influx_existing_legacy_service": {"stdout": ""}}))
 
+    def test_archive_symlink_ownership_cannot_chown_the_live_backup_tier(self):
+        args = task("Expose the existing daily native archive tier to the peer mirror")["ansible.builtin.file"]
+        self.assertEqual(args["state"], "link")
+        self.assertFalse(args["follow"])
+        self.assertEqual(args["owner"], "root")
+
     def test_ordinary_convergence_requires_true_acceptance_and_never_bypasses_failed_state(self):
         prepare = loader.load_from_file(str(ROLE.parents[1] / "stacks/legacy-influx/swarm-prepare.yml"))
         gate = next(t for t in prepare if t["name"] == "Refuse ordinary convergence before acceptance or after failed cutover")

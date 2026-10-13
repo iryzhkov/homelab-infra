@@ -228,6 +228,7 @@
     src: "{{ stack_root }}/backups/influxdb"
     dest: "{{ swarm_state_root }}/legacy-influx/native-backups"
     state: link
+    follow: false
     owner: root
     group: root
   delegate_to: "{{ legacy_influx_transition_owner }}"
