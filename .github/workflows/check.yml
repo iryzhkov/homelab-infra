@@ -33,6 +33,7 @@ jobs:
           python3 -m unittest discover -s roles/observability_homeassistant_config/tests -v
           python3 -m unittest discover -s roles/observability_hardware/tests -v
           python3 -m unittest discover -s roles/observability_native_gpu/tests -v
+          python3 -m unittest discover -s roles/observability_grafana/tests -v
       - run: python3 -m py_compile roles/base/files/homelab-gpu-report roles/observability_pve/files/pve-exporter-launcher.py roles/observability_grafana/library/grafana_observability.py
       - run: python3 -m py_compile roles/backup/files/homelab-swarm-snapshot roles/backup/files/homelab-sqlite-backup
       - run: python3 -m py_compile stacks/jocasta/files/jocasta-backup scripts/jocasta-credentials.py
