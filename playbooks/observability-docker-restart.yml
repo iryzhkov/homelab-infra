@@ -72,7 +72,7 @@
         - name: Confirm all three Swarm managers are healthy before losing one
           ansible.builtin.command:
             argv: [docker, node, ls, --format, "{{ '{{' }}.Status{{ '}}' }} {{ '{{' }}.ManagerStatus{{ '}}' }}"]
-          delegate_to: "{{ swarm_bootstrap_manager }}"
+          delegate_to: "{{ groups['swarm_workers'][0] }}"
           register: restart_manager_states
           changed_when: false
           when: inventory_hostname in groups['swarm']
@@ -116,7 +116,7 @@
           block:
             - name: Load private Swarm unlock data
               community.sops.load_vars:
-                file: "{{ swarm_secret_file }}"
+                file: "{{ swarm_secret_file | default(playbook_dir ~ '/../secrets/swarm.sops.yaml') }}"
                 name: swarm_secrets
               delegate_to: localhost
               no_log: true
