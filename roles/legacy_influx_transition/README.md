@@ -184,3 +184,38 @@ backup closure. The live Influx task remained `2cab5b961612`; no application
 restart or bucket deletion was performed. This fresh archive passed structural
 and transport validation. The earlier isolated restore evidence above proves
 historical sample recovery; no new full identity/token restore is claimed.
+
+## Native archive publication safety
+
+The native daily helper now holds a nonblocking export lock in the archive
+volume, so direct/manual and scheduled invocations cannot delete one another's
+scratch data. Each export creates a unique container directory while keeping
+its tar's native `influxdb-backup/` layout. It writes a private `.partial`,
+checks size, gzip integrity and tar readability, then atomically renames that
+file into the retained archive set. Retention runs only after publication;
+failed exports clean their own partial and preserve existing archives.
+
+The existing daily cloud transport selects only `influxdb_*.tar.gz`. The
+legacy peer mirror excludes `*.partial` and `.native-backup.lock`. The lock
+inode remains present locally; unlinking it could defeat serialization.
+Source commit `2dc65fc` passed exact CI, nine helper regressions, nineteen
+mirror regressions and local ShellCheck. Focused convergence changed only
+backup scripts and exclusion definitions, then returned zero changes on both
+workers. A live overlapping export was refused with exit1 before touching the
+active export. While one actual partial existed, read-only rsync and rclone
+filter checks excluded it. No application restart was performed.
+
+The first live export through this safer helper completed as
+`influxdb_2026-10-13_121455_VSBJD86L.tar.gz`: 943,962,788 bytes, mode0600,
+SHA256`340b1e217fe592d6c7c544004e6899cc15d01a3cc8cdcf619b1d3df0da924075`.
+No partial or unique container scratch remained. The genuine peer mirror
+stored the same regular archive beneath
+`/mnt/data/peer-snapshots/homelab/legacy-influx/files/native-backups/`,
+with matching size/SHA256, no partial/lock files and real sync stamp
+`1791919111 homelab`. The daily filtered cloud sync exited zero, and B2
+readback at `apps/homelab/backups/influxdb/<filename>` matched its size and
+SHA1`5ec5788f7c5f6b5f6fd6bb3218e7eae8f4049508`. All nine current backend
+acceptance routes and Influx health returned200; Influx task
+`2cab5b961612` remained unchanged. Historical native restore evidence remains
+the separately recorded isolated restore, not an exhaustive restore of this
+new archive.
