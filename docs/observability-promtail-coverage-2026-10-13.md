@@ -19,6 +19,20 @@ active file is declared, without broadening to all archived PVE task logs.
 Alloy retains its own persistent file cursor under /var/lib/alloy. A first read
 may replay the small existing task file with the normalized inventory host label.
 
+## PVE acceptance
+
+Deployed the declared-file source on both PVE nodes without changing application
+services or file permissions. Each exact active-file stream delivered 25 entries
+under job=pve-tasks with the normalized inventory host label. Only counts were
+returned during inspection, not raw production logs.
+
+An additional owned temporary file target exercised the same declared_files
+component. All nine dummy-secret patterns were redacted before ingest on both
+nodes. The canary target was then removed by restoring the ordinary Ansible
+configuration, and the owned fixture files and temporary variable file deleted.
+Alloy and Promtail were both active afterward; Promtail retirement remains a
+separate gated action now that replacement coverage has passed acceptance.
+
 ## Tiny Debian guest proposal
 
 No rsyslog or syslog-ng is installed in ct100/104/107. Native Debian rsyslog
