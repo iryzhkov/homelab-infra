@@ -116,7 +116,7 @@
           "type": "grafana",
           "uid": "-- Grafana --"
         },
-        "enable": true,
+        "enable": false,
         "hide": false,
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Deployments and notes",

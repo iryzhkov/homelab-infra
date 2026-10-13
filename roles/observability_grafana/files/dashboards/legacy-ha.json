@@ -94,7 +94,7 @@
       "id": 2,
       "targets": [
         {
-          "query": "from(bucket: \"homeassistant\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"entity_id\"] =~ /humidity/)\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> filter(fn: (r) => r[\"_value\"] >= 0 and r[\"_value\"] <= 100)\n  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)",
+          "query": "import \"strings\"\n\nfrom(bucket: \"homeassistant\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"entity_id\"] =~ /humidity/)\n  |> filter(fn: (r) => r[\"entity_id\"] !~ /baseline/)\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> filter(fn: (r) => r[\"_value\"] >= 0 and r[\"_value\"] <= 100)\n  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({r with entity_id: strings.replaceAll(v: strings.replaceAll(v: strings.replaceAll(v: r.entity_id, t: \"_humidity\", u: \"\"), t: \"_air_sensor\", u: \"\"), t: \"_\", u: \" \")}))",
           "refId": "A"
         }
       ],

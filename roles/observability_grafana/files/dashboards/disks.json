@@ -142,7 +142,7 @@
           "type": "grafana",
           "uid": "-- Grafana --"
         },
-        "enable": true,
+        "enable": false,
         "hide": false,
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Deployments and notes",
@@ -184,7 +184,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_smart_status{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -273,7 +273,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -353,7 +353,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"op_limit_max\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"}) - max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -433,7 +433,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_percentage_used{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -513,7 +513,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_attribute{job=\"smartctl\",attribute_name=\"Percent_Lifetime_Remain\",attribute_value_type=\"value\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -593,7 +593,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_media_errors{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -667,7 +667,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_critical_warning{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -741,7 +741,7 @@
         {
           "refId": "A",
           "expr": "((max by(host,device)(smartctl_device_power_on_seconds{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))) / 3600",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -816,7 +816,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_temperature{job=\"smartctl\",temperature_type=\"current\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": true,
           "instant": false
         }
@@ -882,7 +882,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device)(smartctl_device_power_cycle_count{job=\"smartctl\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{host}} · {{device}}",
+          "legendFormat": "{{host}} · {{drive_label}}",
           "range": false,
           "instant": true
         }
@@ -956,7 +956,7 @@
         {
           "refId": "A",
           "expr": "(max by(host,device,attribute_name)(smartctl_device_attribute{job=\"smartctl\",attribute_value_type=\"raw\",attribute_name=~\"Reported_Uncorrect|Offline_Uncorrectable|Current_Pending_ECC_Cnt|UDMA_CRC_Error_Count|Reallocate_NAND_Blk_Cnt\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})) * on(host,device) group_left(model_name,drive_label) (label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"model_name\",\"(.*)\") unless on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1) or label_replace(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"}),\"drive_label\",\"$1\",\"device\",\"(.*)\") and on(host,model_name) (count by(host,model_name)(max by(host,device,model_name)(smartctl_device{job=\"smartctl\",serial_number=~\"$drive\"})) > 1))",
-          "legendFormat": "{{device}} · {{attribute_name}}",
+          "legendFormat": "{{drive_label}} · {{attribute_name}}",
           "range": false,
           "instant": true
         }
