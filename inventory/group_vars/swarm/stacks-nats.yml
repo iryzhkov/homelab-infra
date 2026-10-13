@@ -1,0 +1,6 @@
+---
+swarm_stacks_nats:
+  - name: nats
+    pin: homelab
+    secrets: nats
+    prepare_tasks: swarm-prepare.yml

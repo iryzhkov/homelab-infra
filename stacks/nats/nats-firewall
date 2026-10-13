@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+# Own only NATS-EDGE/NATS-EDGE6 and jumps scoped to original TCP9222.
+if [ "${1:-}" = "--remove" ]; then
+  iptables -D INPUT -p tcp --dport 9222 -j NATS-EDGE 2>/dev/null || true
+  iptables -D DOCKER-USER -p tcp -m conntrack --ctorigdstport 9222 --ctdir ORIGINAL -j NATS-EDGE 2>/dev/null || true
+  ip6tables -D INPUT -p tcp --dport 9222 -j NATS-EDGE6 2>/dev/null || true
+  ip6tables -D DOCKER-USER -p tcp -m conntrack --ctorigdstport 9222 --ctdir ORIGINAL -j NATS-EDGE6 2>/dev/null || true
+  iptables -F NATS-EDGE; iptables -X NATS-EDGE
+  ip6tables -F NATS-EDGE6; ip6tables -X NATS-EDGE6
+  exit 0
+fi
+iptables -N NATS-EDGE 2>/dev/null || true
+iptables-restore --noflush <<'RULES'
+*filter
+-F NATS-EDGE
+-A NATS-EDGE -s 192.168.20.33 -j ACCEPT
+-A NATS-EDGE -s 192.168.20.4 -j ACCEPT
+-A NATS-EDGE -j DROP
+COMMIT
+RULES
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -C INPUT -p tcp --dport 9222 -j NATS-EDGE 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 9222 -j NATS-EDGE
+iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport 9222 --ctdir ORIGINAL -j NATS-EDGE 2>/dev/null || iptables -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdstport 9222 --ctdir ORIGINAL -j NATS-EDGE
+ip6tables -N NATS-EDGE6 2>/dev/null || true
+ip6tables-restore --noflush <<'RULES'
+*filter
+-F NATS-EDGE6
+-A NATS-EDGE6 -j DROP
+COMMIT
+RULES
+ip6tables -N DOCKER-USER 2>/dev/null || true
+ip6tables -C INPUT -p tcp --dport 9222 -j NATS-EDGE6 2>/dev/null || ip6tables -I INPUT 1 -p tcp --dport 9222 -j NATS-EDGE6
+ip6tables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport 9222 --ctdir ORIGINAL -j NATS-EDGE6 2>/dev/null || ip6tables -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdstport 9222 --ctdir ORIGINAL -j NATS-EDGE6

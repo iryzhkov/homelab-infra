@@ -1,0 +1,28 @@
+---
+- name: Preserve maintenance guard before NATS deployment
+  ansible.builtin.include_role:
+    name: maintenance_guard
+
+- name: Verify the actual pinned storage mount
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, "TARGET,FSTYPE", --target, "{{ swarm_state_root }}"]
+  register: nats_store_fs
+  changed_when: false
+  check_mode: false
+  failed_when: nats_store_fs.stdout.split() != ['/mnt/docker-data', 'ext4']
+
+- name: Refuse any other initial storage host
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'homelab'
+      - swarm_stack.pin == 'homelab'
+    quiet: true
+
+- name: Create only the new NATS persistent data directory
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/nats/data"
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: "0700"
+  become: true

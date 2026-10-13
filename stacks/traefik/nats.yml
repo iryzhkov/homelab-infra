@@ -1,0 +1,14 @@
+# Additive file-provider route only; no static entrypoint or Traefik restart.
+http:
+  routers:
+    nats-jetstream:
+      rule: "Host(`nats.ryzhkov.dev`)"
+      entryPoints: [websecure]
+      service: nats-jetstream
+      tls: {certResolver: letencrypt}
+  services:
+    nats-jetstream:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - {url: "http://192.168.70.223:9222"}

@@ -1,0 +1,12 @@
+[Unit]
+Description=NATS9222 edge-only IPv4 and IPv6 Docker forwarding guard
+After=network-pre.target netfilter-persistent.service
+Before=docker.service
+Wants=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/nats-firewall
+ExecReload=/usr/local/sbin/nats-firewall
+[Install]
+WantedBy=multi-user.target

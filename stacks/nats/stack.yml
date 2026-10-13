@@ -1,0 +1,46 @@
+services:
+  nats:
+    image: nats:2.15.1-alpine@sha256:9e47060a6c099ce118566e425245adc5c78139d02e1cc6fc48747b776445c4f8
+    user: "1000:1000"
+    command: ["-c", "/run/secrets/nats.conf"]
+    read_only: true
+    ports:
+      - target: 9222
+        published: 9222
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/nats/data
+        target: /data
+    secrets:
+      - source: nats_config
+        target: nats.conf
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == homelab
+          - node.labels.pin.nats == true
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+        reservations: {cpus: "0.1", memory: 128M}
+      update_config: {order: stop-first}
+      rollback_config: {order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+secrets:
+  nats_config:
+    name: nats_config_${SECRET_HASH_NATS_CONFIG}
+    file: ./secrets/NATS_CONFIG

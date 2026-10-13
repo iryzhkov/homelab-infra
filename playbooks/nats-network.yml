@@ -1,0 +1,43 @@
+---
+- name: Install only the persistent NATS backend firewall
+  hosts: homelab
+  gather_facts: false
+  become: true
+  tags: [firewall]
+  tasks:
+    - name: Preserve maintenance guard before NATS firewall changes
+      ansible.builtin.include_role:
+        name: maintenance_guard
+    - name: Install scoped firewall script
+      ansible.builtin.copy:
+        src: ../stacks/nats/nats-firewall
+        dest: /usr/local/sbin/nats-firewall
+        mode: "0755"
+      register: nats_firewall_script
+    - name: Install scoped firewall service
+      ansible.builtin.copy:
+        src: ../stacks/nats/nats-firewall.service
+        dest: /etc/systemd/system/nats-firewall.service
+        mode: "0644"
+      register: nats_firewall_unit
+    - name: Enable and apply only the new firewall service
+      ansible.builtin.systemd:
+        name: nats-firewall.service
+        daemon_reload: "{{ nats_firewall_unit.changed }}"
+        enabled: true
+        state: "{{ 'restarted' if nats_firewall_script.changed or nats_firewall_unit.changed else 'started' }}"
+      when: not ansible_check_mode
+
+- name: Install only the additive authenticated NATS WSS route
+  hosts: public-api:public-api-b
+  gather_facts: false
+  tags: [routes]
+  tasks:
+    - name: Preserve edge maintenance guard
+      ansible.builtin.include_role:
+        name: maintenance_guard
+    - name: Install only NATS dynamic route without restarting Traefik
+      ansible.builtin.copy:
+        src: ../stacks/traefik/nats.yml
+        dest: "{{ traefik_dynamic_dir }}/nats.yml"
+        mode: "0644"

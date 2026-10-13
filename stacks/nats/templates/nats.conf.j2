@@ -1,0 +1,24 @@
+server_name: homelab-nats-1
+listen: "0.0.0.0:4222"
+http: "0.0.0.0:8222"
+max_connections: 64
+max_payload: 1MB
+max_pending: 4MB
+write_deadline: 5s
+jetstream {
+  store_dir: /data/jetstream
+  max_mem_store: 128MB
+  max_file_store: 4GB
+}
+authorization {
+  users: [
+    {user: bootstrap-admin, password: "{{ stack_secrets.NATS_ADMIN_PASSWORD_HASH }}"}
+  ]
+}
+websocket {
+  listen: "0.0.0.0:9222"
+  no_tls: true
+  allowed_origins: ["https://nats.ryzhkov.dev"]
+  handshake_timeout: 5s
+  compress: false
+}
