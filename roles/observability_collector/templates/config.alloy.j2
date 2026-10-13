@@ -20,7 +20,7 @@ prometheus.remote_write "homelab" {
 prometheus.exporter.unix "host" {
   enable_collectors = ["systemd"]
   textfile {
-    directories = ["/var/lib/alloy/textfile"]
+    directory = "/var/lib/alloy/textfile"
   }
 }
 prometheus.scrape "host" {

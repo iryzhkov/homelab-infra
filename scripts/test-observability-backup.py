@@ -104,6 +104,59 @@ class NativeBackupTest(unittest.TestCase):
         self.assertFalse(any(str(Path(self.config["state_root"])) in a for a in run))
         self.assertEqual(list(Path(self.config["restore_root"]).iterdir()), [])
 
+    def test_explicit_peer_source_works_without_local_backups(self):
+        source = self.root / "peer" / "generation"
+        (source / "data").mkdir(parents=True)
+        (source / "proof.json").write_text(json.dumps({
+            "created": int(backup.time.time()), "query": "up", "time": 100,
+            "expected": [ROW], "vm_image": IMAGE,
+        }))
+        self.assertFalse(Path(self.config["backup_root"]).exists())
+        with patch.object(backup, "command", side_effect=self.cmd), \
+             patch.object(backup, "native_helper") as helper, \
+             patch.object(backup, "size", return_value=1), \
+             patch.object(backup, "api", return_value=PAYLOAD):
+            backup.restore_check(self.config, str(source))
+        self.assertIn(f"type=bind,src={source / 'data'},dst=/backup,readonly", helper.call_args.args[0])
+        self.assertFalse(Path(self.config["backup_root"]).exists())
+
+    def test_timed_out_native_helper_is_removed_before_error_returns(self):
+        with patch.object(backup, "command", side_effect=backup.subprocess.TimeoutExpired("docker", 1800)), \
+             patch.object(backup.subprocess, "run", return_value=backup.subprocess.CompletedProcess([], 0)) as rm:
+            with self.assertRaises(backup.subprocess.TimeoutExpired):
+                backup.native_helper(["--rm", "image"])
+        self.assertEqual(rm.call_args.args[0][:4], ["docker", "rm", "-f", "-v"])
+
+    def test_failed_cleanup_and_unreachable_daemon_is_unsafe(self):
+        result = backup.subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"unreachable")
+        with patch.object(backup, "command", side_effect=backup.subprocess.TimeoutExpired("docker", 1800)), \
+             patch.object(backup.subprocess, "run", return_value=result):
+            with self.assertRaises(backup.HelperStillRunning):
+                backup.native_helper(["--rm", "image"])
+
+    def test_uncertain_backup_helper_stop_preserves_native_snapshot_and_partial(self):
+        with patch.object(backup, "command", side_effect=self.cmd), \
+             patch.object(backup, "api", side_effect=self.api) as api, \
+             patch.object(backup, "size", return_value=1), \
+             patch.object(backup, "native_helper", side_effect=backup.HelperStillRunning("uncertain")):
+            with self.assertRaises(backup.HelperStillRunning):
+                backup.backup(self.config)
+        self.assertFalse(any(c.args[1] == "/snapshot/delete" for c in api.call_args_list))
+        self.assertEqual(len(list(Path(self.config["backup_root"]).iterdir())), 1)
+
+    def test_uncertain_restore_helper_stop_preserves_scratch(self):
+        source = self.root / "peer" / "generation"
+        (source / "data").mkdir(parents=True)
+        (source / "proof.json").write_text(json.dumps({
+            "created": int(backup.time.time()), "query": "up", "time": 100,
+            "expected": [ROW], "vm_image": IMAGE,
+        }))
+        with patch.object(backup, "size", return_value=1), \
+             patch.object(backup, "native_helper", side_effect=backup.HelperStillRunning("uncertain")):
+            with self.assertRaises(backup.HelperStillRunning):
+                backup.restore_check(self.config, str(source))
+        self.assertEqual(len(list(Path(self.config["restore_root"]).iterdir())), 1)
+
     def test_authentication_key_is_not_in_host_arguments(self):
         with patch.object(backup, "command", return_value='{"status":"ok"}') as cmd:
             backup.api("container", "/snapshot/create", authenticated=True)

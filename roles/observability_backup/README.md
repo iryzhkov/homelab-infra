@@ -33,7 +33,10 @@ and exact series labels, timestamps and values. Native vmrestore restores into a
 fresh scratch directory. A temporary VM container, without networks, published
 ports, secrets or live storage mounts, must return the exact saved vector.
 It uses the backed-up immutable VM image and is removed together with scratch
-storage afterwards. The running service is never stopped or modified.
+storage afterwards. Helpers are forcibly removed on timeouts before cleaning up
+snapshot references or scratch. If removal cannot be confirmed, the job fails and
+preserves those files for operator recovery. The running service is never stopped
+or modified.
 
 A peer recovery copy can be checked without switching service ownership:
 

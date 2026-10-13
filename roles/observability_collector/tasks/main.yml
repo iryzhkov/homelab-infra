@@ -40,6 +40,16 @@
     - {path: /var/lib/alloy, owner: alloy, mode: "0750"}
     - {path: /var/lib/alloy/textfile, owner: alloy, mode: "0750"}
 
+- name: Create the empty redaction acceptance input
+  ansible.builtin.file:
+    path: /var/lib/alloy/redaction-test.log
+    state: touch
+    owner: alloy
+    group: alloy
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+
 - name: Install this host's private ingest password
   ansible.builtin.copy:
     content: "{{ observability_credentials['INGEST_PASSWORD_' ~ (inventory_hostname | upper | replace('-', '_'))] }}"

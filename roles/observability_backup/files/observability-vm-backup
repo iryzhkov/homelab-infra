@@ -16,6 +16,10 @@ import urllib.parse
 import uuid
 
 
+class HelperStillRunning(RuntimeError):
+    """Cleanup could not prove the native container stopped; retain its files."""
+
+
 def command(argv, *, stdin=None, timeout=1800):
     result = subprocess.run(argv, input=stdin, text=True, capture_output=True, timeout=timeout)
     if result.returncode:
@@ -31,7 +35,17 @@ def native_helper(argv):
     finally:
         # A timed-out Docker client may leave its helper running. Stop it before
         # releasing snapshot references or deleting any scratch directory.
-        subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=60)
+        try:
+            removed = subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=60)
+            if removed.returncode:
+                inspected = subprocess.run(["docker", "ps", "-aq", "--filter", "name=^" + name + "$"],
+                                           capture_output=True, timeout=30)
+                # --rm already removes successfully completed helpers. A failed
+                # daemon query cannot establish that cleanup was safe.
+                if inspected.returncode or inspected.stdout.strip():
+                    raise HelperStillRunning("native helper cleanup failed; preserve snapshot and scratch")
+        except subprocess.TimeoutExpired:
+            raise HelperStillRunning("native helper cleanup timed out; preserve snapshot and scratch") from None
 
 
 def api(container, path, params=None, authenticated=False):
@@ -103,6 +117,8 @@ def backup(config):
             return
         raise RuntimeError("owner must have exactly one running VM task")
     container = containers[0]
+    command(["docker", "exec", container, "wget", "-q", "-T", "30", "-O", "/dev/null",
+             "http://127.0.0.1:8428/health"], timeout=45)
     root = Path(config["backup_root"])
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     room(root, size(state / "victoriametrics"), config)
@@ -115,6 +131,7 @@ def backup(config):
     partial.mkdir(mode=0o700)
     (partial / "data").mkdir(mode=0o700)
     snapshot = None
+    safe_cleanup = True
     try:
         created = api(container, "/snapshot/create", authenticated=True)
         snapshot = created.get("snapshot")
@@ -132,11 +149,14 @@ def backup(config):
                     "vm_image": command(["docker", "inspect", "--format", "{{.Config.Image}}", container])}
         (partial / "proof.json").write_text(json.dumps(metadata, sort_keys=True) + "\n")
         partial.rename(root / stamp)
+    except HelperStillRunning:
+        safe_cleanup = False
+        raise
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)
         raise
     finally:
-        if snapshot:
+        if snapshot and safe_cleanup:
             deleted = api(container, "/snapshot/delete", {"snapshot": snapshot}, authenticated=True)
             if deleted.get("status") != "ok":
                 raise RuntimeError("native snapshot cleanup failed")
@@ -149,9 +169,12 @@ def backup(config):
 
 
 def restore_check(config, source=None):
-    root = Path(config["backup_root"])
-    choices = sorted(p for p in root.iterdir() if p.is_dir() and (p / "proof.json").exists())
-    backup_path = Path(source).resolve() if source else (choices[-1] if choices else None)
+    if source:
+        backup_path = Path(source).resolve()
+    else:
+        root = Path(config["backup_root"])
+        choices = sorted(p for p in root.iterdir() if p.is_dir() and (p / "proof.json").exists()) if root.exists() else []
+        backup_path = choices[-1] if choices else None
     if backup_path is None:
         raise RuntimeError("no complete native backup")
     metadata = json.loads((backup_path / "proof.json").read_text())
@@ -162,7 +185,9 @@ def restore_check(config, source=None):
     scratch_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     room(scratch_root, size(backup_path), config)
     name = "observability-restore-" + uuid.uuid4().hex[:12]
-    with tempfile.TemporaryDirectory(prefix="vm-", dir=scratch_root) as scratch:
+    scratch = tempfile.mkdtemp(prefix="vm-", dir=scratch_root)
+    safe_cleanup = True
+    try:
         native_helper(["--rm", "--network", "none", "--memory", "256m", "--cpus", "0.5",
                  "--mount", f"type=bind,src={backup_path / 'data'},dst=/backup,readonly",
                  "--mount", f"type=bind,src={scratch},dst=/storage", image(config, "vmrestore_image"),
@@ -190,7 +215,16 @@ def restore_check(config, source=None):
                 raise RuntimeError("restored historical series differ from saved proof")
             print(f"observability: isolated restore passed; historical series={len(restored)}")
         finally:
-            command(["docker", "rm", "-f", "-v", name], timeout=60)
+            try:
+                command(["docker", "rm", "-f", "-v", name], timeout=60)
+            except Exception:
+                raise HelperStillRunning("restore container cleanup failed; preserve scratch") from None
+    except HelperStillRunning:
+        safe_cleanup = False
+        raise
+    finally:
+        if safe_cleanup:
+            shutil.rmtree(scratch)
 
 
 def main():
