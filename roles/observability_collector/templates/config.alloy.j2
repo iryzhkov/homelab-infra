@@ -9,7 +9,7 @@ prometheus.remote_write "homelab" {
     intermittent = "{{ observability_intermittent | bool | ternary('true', 'false') }}",
   }
   endpoint {
-    url = "https://metrics-push.ryzhkov.dev:{{ observability_ingest_port }}/api/v1/write"
+    url = "https://metrics-push.ryzhkov.dev:{{ observability_ingest_client_port }}/api/v1/write"
     basic_auth {
       username = "{{ inventory_hostname }}"
       password_file = "/etc/alloy/ingest-password"
@@ -107,7 +107,7 @@ prometheus.scrape "containers" {
 
 loki.write "homelab" {
   endpoint {
-    url = "https://loki-push.ryzhkov.dev:{{ observability_ingest_port }}/loki/api/v1/push"
+    url = "https://loki-push.ryzhkov.dev:{{ observability_ingest_client_port }}/loki/api/v1/push"
     basic_auth {
       username = "{{ inventory_hostname }}"
       password_file = "/etc/alloy/ingest-password"

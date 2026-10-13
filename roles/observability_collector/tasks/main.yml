@@ -81,11 +81,15 @@
   no_log: true
   notify: Restart the observability collector
 
+- name: Prepare checked primary and backup routing for offsite collectors
+  ansible.builtin.include_tasks: mesh-relay.yml
+  when: observability_ingest_fallback_address | length > 0
+
 - name: Resolve the private ingest names through the explicit reachable edge
   ansible.builtin.lineinfile:
     path: /etc/hosts
     regexp: '^(?!.*# observability-ingest-fallback$).*\smetrics-push\.ryzhkov\.dev\s+loki-push\.ryzhkov\.dev(?:\s|$)'
-    line: "{{ observability_ingest_address }} metrics-push.ryzhkov.dev loki-push.ryzhkov.dev"
+    line: "{{ '127.0.0.1' if observability_ingest_fallback_address | length > 0 else observability_ingest_address }} metrics-push.ryzhkov.dev loki-push.ryzhkov.dev"
     state: present
 
 - name: Add a scoped second mesh edge for offsite clients
@@ -93,7 +97,7 @@
     path: /etc/hosts
     regexp: '# observability-ingest-fallback$'
     line: "{{ observability_ingest_fallback_address }} metrics-push.ryzhkov.dev loki-push.ryzhkov.dev # observability-ingest-fallback"
-    state: "{{ (observability_ingest_fallback_address | length > 0) | ternary('present', 'absent') }}"
+    state: absent
 
 - name: Preserve local journals across reboots within a disk budget
   ansible.builtin.file:

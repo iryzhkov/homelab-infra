@@ -1,0 +1,20 @@
+# {{ ansible_managed }}. TLS is never terminated; credentials remain encrypted.
+global
+    maxconn 128
+defaults
+    mode tcp
+    timeout connect 3s
+    timeout client 60s
+    timeout server 60s
+    timeout check 3s
+frontend ingest
+    bind 127.0.0.1:{{ observability_mesh_relay_port }}
+    default_backend mesh_edges
+backend mesh_edges
+    option httpchk
+    http-check connect ssl sni metrics-push.ryzhkov.dev
+    http-check send meth POST uri /api/v1/write ver HTTP/1.1 hdr Host metrics-push.ryzhkov.dev hdr Content-Length 0
+    http-check expect status 401
+    default-server inter 5s fastinter 1s downinter 5s fall 2 rise 2 on-marked-down shutdown-sessions verify required verifyhost metrics-push.ryzhkov.dev ca-file {{ '/etc/ssl/cert.pem' if ansible_facts.os_family == 'Archlinux' else '/etc/ssl/certs/ca-certificates.crt' }}
+    server primary {{ observability_ingest_address }}:{{ observability_ingest_port }} check
+    server secondary {{ observability_ingest_fallback_address }}:{{ observability_ingest_port }} check backup

@@ -9,6 +9,8 @@ observability_alloy_memory_high: 256M
 observability_alloy_go_memory_limit: 128MiB
 observability_ingest_address: "{{ edge_vip }}"
 observability_ingest_fallback_address: ""
+observability_mesh_relay_port: 18443
+observability_ingest_client_port: "{{ observability_mesh_relay_port if observability_ingest_fallback_address | length > 0 else observability_ingest_port }}"
 observability_extra_scrapes: []
 observability_journal_max_use: 256M
 observability_alloy_zip_sha256:

@@ -1,0 +1,25 @@
+[Unit]
+Description=Loopback TLS passthrough to either observability mesh edge
+After=network-online.target
+Wants=network-online.target
+Before=alloy.service
+[Service]
+User=observability-relay
+ExecStart=/usr/sbin/haproxy -W -db -f /etc/observability-mesh-relay/haproxy.cfg
+Restart=on-failure
+RestartSec=3
+MemoryMax=64M
+CPUQuota=10%
+TasksMax=16
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+[Install]
+WantedBy=multi-user.target
