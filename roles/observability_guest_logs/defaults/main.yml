@@ -2,4 +2,6 @@
 observability_guest_log_parent: proxmox-a
 observability_guest_log_port: 1515
 observability_guest_log_files: []
+# Explicit owned fixtures during acceptance only; empty in ordinary deployment.
+observability_guest_log_extra_files: []
 observability_guest_logs_start: true

@@ -6,7 +6,7 @@ template(name="JournalToParent" type="string"
          string="<%pri%>1 %timereported:::date-rfc3339% {{ inventory_hostname }} journal - - - %msg%\n")
 template(name="FileToParent" type="string"
          string="<%pri%>1 %timereported:::date-rfc3339% {{ inventory_hostname }} %programname% - - - %msg%\n")
-{% for file in observability_guest_log_files %}
+{% for file in observability_guest_log_files + observability_guest_log_extra_files %}
 input(type="imfile" File={{ file.path | to_json }} Tag={{ (file.tag ~ ':') | to_json }} Severity="info" Facility="local0" PersistStateInterval="1")
 {% endfor %}
 if $inputname == "imjournal" then {
