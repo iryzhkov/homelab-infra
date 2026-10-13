@@ -9,6 +9,9 @@ services:
       - -retentionPeriod=400d
       - -storage.minFreeDiskSpaceBytes=5GB
       - -memory.allowedBytes=256MiB
+      - -selfScrapeInterval=30s
+      - -selfScrapeJob=victoriametrics
+      - -selfScrapeInstance=observability
       - -deleteAuthKey=file:///run/secrets/vm_delete_key
       - -snapshotAuthKey=file:///run/secrets/vm_snapshot_key
     volumes:
