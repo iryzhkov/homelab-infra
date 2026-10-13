@@ -10,6 +10,8 @@ observability_smartctl_exporter_install_dir: /opt/observability-smartctl-exporte
 observability_smartctl_exporter_cache_dir: /var/cache/observability-smartctl-exporter
 observability_smartctl_exporter_listen_address: "127.0.0.1:9633"
 observability_smartctl_exporter_smartctl_path: /usr/sbin/smartctl
+observability_smartctl_apple_error_log_unsupported: false
+observability_smartctl_exporter_command_path: "{{ '/usr/local/libexec/smartctl-apple-supported' if observability_smartctl_apple_error_log_unsupported else observability_smartctl_exporter_smartctl_path }}"
 observability_smartctl_exporter_poll_interval: 5m
 observability_smartctl_exporter_memory_max: 128M
 observability_smartctl_exporter_cpu_quota: "10%"

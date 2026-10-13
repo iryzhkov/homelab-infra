@@ -67,7 +67,7 @@ class MetadataAcceptanceTest(unittest.TestCase):
         host.vars["smart_drives"] = [{"model": "Unsupported drive", "serial": "UNKNOWN1", "telemetry": "unsupported"}]
         text = self.metadata([name])
         self.assertIn('node_monitoring_physical_drive_info{host="metadata-fixture-storage"', text)
-        self.assertIn('telemetry="unsupported"} 1', text)
+        self.assertIn('telemetry="unsupported",error_history="unknown"} 1', text)
         self.assertNotIn('node_monitoring_smart_expected_devices{', text)
         self.assertNotIn('capability="smart"', text)
 

@@ -15,7 +15,7 @@ node_monitoring_smart_expected_devices{host="{{ name }}"} {{ hostvars[name].smar
 # TYPE node_monitoring_physical_drive_info gauge
 {% for name in observability_metadata_hosts | sort %}
 {% for drive in hostvars[name].smart_drives | default([]) | sort(attribute='serial') %}
-node_monitoring_physical_drive_info{host="{{ name }}",serial_number="{{ drive.serial }}",model_name="{{ drive.model }}",transport="{{ drive.transport | default('unknown') }}",telemetry="{{ drive.telemetry | default('smart') }}"} 1
+node_monitoring_physical_drive_info{host="{{ name }}",serial_number="{{ drive.serial }}",model_name="{{ drive.model }}",transport="{{ drive.transport | default('unknown') }}",telemetry="{{ drive.telemetry | default('smart') }}",error_history="{{ drive.error_history | default('unknown') }}"} 1
 {% endfor %}
 {% endfor %}
 # HELP node_monitoring_gpu_inventory_info Physical GPU inventory and native measurement support, including inventory-only hardware.

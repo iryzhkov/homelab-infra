@@ -4,10 +4,12 @@ observability_host_capabilities:
   - {capability: temperature, mode: physical}
   - {capability: smart, mode: physical}
 observability_smartctl_exporter_smartctl_path: /usr/bin/smartctl
+# Native health/wear/temp works; Apple rejects the optional Error Information Log.
+observability_smartctl_apple_error_log_unsupported: true
 observability_extra_scrapes:
   - {name: smartctl, address: "127.0.0.1:9633", interval: 60s, timeout: 60s}
 smart_drives:
-  - {model: APPLE SSD AP0512Z, serial: 0ba0203423a4c830, namespace: 1, transport: nvme, telemetry: smart}
+  - {model: APPLE SSD AP0512Z, serial: 0ba0203423a4c830, namespace: 1, transport: nvme, telemetry: smart, error_history: unsupported}
 observability_gpu_owners:
   - {physical_host: laptop, physical_device: "206400000.gpu", gpu_kind: igpu, mode: physical, vendor: apple, model_name: Apple M2 AGX, telemetry: inventory_only}
 # The mesh works at home and while travelling; both edges serve the TLS names.

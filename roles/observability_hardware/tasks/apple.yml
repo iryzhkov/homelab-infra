@@ -1,0 +1,41 @@
+---
+- name: Require the exact approved Apple namespace exception
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'laptop'
+      - ansible_architecture == 'aarch64'
+      - observability_smartctl_exporter_devices | length == 1
+      - smart_drives | length == 1
+      - smart_drives[0].namespace == 1
+      - smart_drives[0].error_history == 'unsupported'
+      - observability_smartctl_exporter_smartctl_path == '/usr/bin/smartctl'
+    quiet: true
+
+- name: Create only private adapter config and standard executable directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/observability-smartctl-exporter, mode: '0700'}
+    - {path: /usr/local/libexec, mode: '0755'}
+
+- name: Install strict read-only Apple argument adapter without JSON transformation
+  ansible.builtin.copy:
+    src: smartctl-apple-supported
+    dest: /usr/local/libexec/smartctl-apple-supported
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Restart observability SMART exporter
+
+- name: Pin the single physical Apple namespace and serial
+  ansible.builtin.copy:
+    content: "{{ {'device': observability_smartctl_exporter_devices[0].device, 'serial': observability_smartctl_exporter_devices[0].serial} | to_nice_json }}"
+    dest: /etc/observability-smartctl-exporter/apple-readonly.json
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart observability SMART exporter

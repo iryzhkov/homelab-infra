@@ -40,6 +40,18 @@ Useful metrics include `smartctl_device_smart_status` (1 passed, 0 failed),
 CPU/board temperatures still come from the host hwmon collector in Alloy.
 The role checks HTTP readiness and confirms every declared serial appears.
 
+Apple nvme-apple provides native health, wear, temperature, spare and aggregate
+media/error counts, but rejects the optional Error Information Log read. The
+pinned exporter otherwise rejects this whole valid observation. An explicit
+laptop-only adapter therefore removes only --log=error from the exact pinned
+read-only argument vector; it never parses or rewrites JSON and uses exec to
+preserve stdout/stderr and every native exit-status bit, including real health
+failures. It fences the exact by-id path, namespace1, controller serial and
+nvme-apple driver, refusing every other flag/device/power mode. Physical drive
+inventory marks error_history=unsupported; this must not become a fabricated
+zero history. Native aggregate num_err_log_entries is a different supported
+SMART health-log field. All other hosts call the original smartctl directly.
+
 Check mode resolves and identifies drives read-only and previews directory/unit
 changes. It skips downloads, extraction, service changes and metrics readiness.
 
