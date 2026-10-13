@@ -63,6 +63,14 @@
       "keepTime": true,
       "includeVars": true,
       "targetBlank": false
+    },
+    {
+      "title": "UniFi Network",
+      "type": "link",
+      "url": "/d/homelab-observe-unifi",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
     }
   ],
   "templating": {

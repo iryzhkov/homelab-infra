@@ -12,8 +12,19 @@ membership, and no WiFi/VPN assignments. Its dedicated role is
     {"manifest_unique_key": "network.management", "formulas": ["readonly"]}
 
 The console's manifest expands this to `view:controller:network` and read-only
-Network site scopes. No user/console/Protect management permission is included.
-Existing identities and roles were preserved. The role does not create or change
+Network site scopes. No user/console/Protect management permission is included
+in the assigned role. UniFi OS also supplies baseline identity/console VIEW
+scopes to local users: authenticated self reports 13 scopes, all view/read
+(including identity-prefixed VIEW scopes), with no write/manage/operate scope.
+Read-only GET probes returned 403 for Protect bootstrap, while the baseline
+Users/admin list, Users search and custom-role list returned 200. Thus the role
+is exactly Network-only; the console's inherent directory VIEW access remains.
+Authenticated self reports exactly `network.management: [readonly]`, one role,
+local-only true, no email, zero groups and zero assignments. No mutation probes
+or extra privilege changes were performed.
+Existing identities and roles were preserved. Account ID:
+`b505b518-7167-4e9e-a055-67c954d8bdb0`; role ID:
+`c3843d3e-d716-4c0f-9712-b9080e944e35`. The role does not create or change
 controller accounts; it reads only the new encrypted
 `secrets/observability-unifi.sops.yaml` credential. Existing administrator
 credentials are never installed on the polling host.

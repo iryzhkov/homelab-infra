@@ -54,7 +54,10 @@ UDM Pro 192.168.1.1 TCP 443 through existing routing; no new firewall policy
 was needed. Owner/review as above. Local-only user unpoller
 b505b518-7167-4e9e-a055-67c954d8bdb0 has dedicated role
 c3843d3e-d716-4c0f-9712-b9080e944e35, only network.management readonly
-(view/read scopes, no Users/Protect/VPN/WiFi grants). SOPS holds its password;
+(view/read scopes; no write/manage/operate permissions). UniFi OS additionally
+grants its baseline read-only Identity/User-directory views, including user
+listing; Protect bootstrap was denied 403. There are no WiFi/VPN assignments.
+This vendor baseline is recorded in the role README. SOPS holds its password;
 the native service uses a verified exact controller-certificate pin and
 loopback-only metrics. Rollback stops/disables observability-unifi and deletes
 only this new local user and its now-unused dedicated role. Existing identities

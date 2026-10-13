@@ -10,3 +10,4 @@ observability_grafana_dashboard_files:
   - containers.json
   - logs.json
   - agents.json
+  - unifi.json
