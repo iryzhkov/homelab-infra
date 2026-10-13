@@ -1,0 +1,7 @@
+---
+# Receivers/firewalls and live redaction acceptance must pass first.
+- name: Preserve Alpine local logs while forwarding to its scoped parent
+  hosts: hypervisors
+  gather_facts: false
+  roles:
+    - observability_alpine_syslog

@@ -6,6 +6,7 @@ zfs_arc_max_bytes: 2147483648
 
 observability_syslog_guest: {name: ct201, address: 192.168.20.83}
 observability_alpine_forwarding_verified: true
+observability_alpine_promtail_retire: true
 
 # Physical drives, as smartctl names them. See host_vars/proxmox-a.yml.
 smart_drives:

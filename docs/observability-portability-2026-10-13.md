@@ -79,6 +79,49 @@ logging's pin still named homelab. Homelab's pool retained approximately
 and wrote `1791886362 homelab` on normandy, restoring the complete peer
 freshness material for the next planned move.
 
+## Alpine syslog acceptance
+
+The additive Alpine forwarding path was also verified on both guests. Parent
+receivers accept only ct110 192.168.70.250 → PVE-a 192.168.1.5 UDP1514 and
+ct201 192.168.20.83 → PVE-b 192.168.1.29 UDP1514, plus local receiver probes.
+They bind the specific parent IPv4 address and route RFC3164 records through
+the same Alloy redaction component with fixed guest host labels. Harmless
+UDP probes from homelab (a non-guest source) incremented each parent chain's
+DROP counter by one, proving the source restrictions on both receivers.
+
+ct110 initially passed an actual UDP socket delivery probe. ct201 initially
+failed that socket test; observing a packet on its bridge did not prove delivery.
+The parent added the exact ct201 source/destination UDP1514 policy and verified
+the existing policies stayed unchanged; the parent owns its network evidence.
+
+After that change, both direct test datagrams and actual BusyBox
+logger → syslogd → Alloy → Loki messages passed all nine dummy-secret patterns:
+Bearer, Basic, API key, password, URL credential, GitHub token, Slack token, AWS
+key and JWT. The received streams had host=ct110/ct201 and job=syslog, nine
+[REDACTED] replacements, and none of the raw fixture secrets.
+
+The sender role retained existing -t semantics and appended -R PARENT:1514 -L.
+Harmless acceptance markers continued to appear in each guest's original
+/var/log/messages. Original options are saved for rollback. First deployment's
+OpenRC syslog restart also restarted dependent crond; Healthcheck PID344 and
+AdGuard PID339 stayed unchanged. The role now uses --nodeps for future syslog
+restarts so those dependencies are not restarted.
+
+Fresh source inspection found both Promtail configs read only /var/log/messages.
+After the complete source and redaction handoff passed, explicitly gated
+retirement stopped only Promtail and removed its default boot membership on
+both guests. Init scripts, configs and binaries remain available for rollback.
+ct201's first default five-second stop failed; the scoped OpenRC retry schedule
+TERM/10/KILL/5 completed its own daemon shutdown. Subsequent role convergence
+confirmed both daemons stopped and no Promtail runlevel membership.
+
+After retirement, new actual BusyBox logger fixtures still appeared in each
+local /var/log/messages and in Loki with all nine patterns redacted. Healthcheck
+PID344, AdGuard PID339, crond PIDs1810/2063 and syslogd PIDs1784/2037 stayed
+unchanged during retirement. All eight household HTTP checks remained 200.
+The role defaults both forwarding and retirement opt-ins off and rejects
+retirement if its current old source paths differ from the verified coverage.
+
 ## Repeating a planned move
 
 Run from the stable controller checkout and avoid concurrent stack convergence
