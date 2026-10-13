@@ -9,7 +9,8 @@ network external; neither creates a replacement overlay.
 
 Ordinary logging convergence refuses until the accepted isolation proof and
 a running `legacy-influx_influxdb 1/1` exist. Ordinary legacy convergence
-refuses an empty or unowned database. The transition is never called by normal
+refuses empty, unowned, unaccepted or failed state, and refuses the original
+service even at zero replicas because it still reserves port 8087. The transition is never called by normal
 convergence, and defaults to refusing without
 `legacy_influx_transition_confirm=true`.
 
@@ -54,12 +55,16 @@ ansible-playbook playbooks/legacy-influx-transition.yml -e legacy_influx_transit
 
 The play checks spare disk, source owner/task, an unused new owner, the original
 deployed logging rendering and all fixed history samples. It retains that
-exact rendering for rollback and the native archive in the existing daily
+exact rendering for recovery evidence, derives an Influx-only rollback with
+the local log driver, and retains the native archive in the existing daily
 native archive tier. A root-owned `native-backups` symlink exposes that tier
 beneath the independently owned state to the standard hourly peer/offsite
 mirror; the existing native daily job and Backblaze destination stay intact.
 The backup selector refuses two running database tasks and supports both old
-and new service names without putting its token in Docker argv.
+and new service names without putting its token in Docker argv. The retained
+tier copy belongs to the backup login user with mode 0600 and a date-sortable
+filename, so the existing user rclone job can read it and seven-archive
+retention still expires it normally.
 
 The play precopies while the original Influx task runs, checks the household
 routes, sets only that service to zero with60s shutdown grace, waits for no
@@ -72,12 +77,20 @@ HA writes after cutover, Grafana overlay alias health and healthy household
 routes. Only then does it write the acceptance marker; subsequent logging
 convergence can prune the old source entry safely.
 
-On failure, rollback removes the new service and confirms its tasks are gone
-before deploying the saved original logging rendering without pruning. The
+On failure, rollback invalidates both acceptance markers, writes a persistent
+failed-attempt barrier, removes the new service and confirms its tasks are
+gone before deploying only the original InfluxDB definition without pruning.
+The derived rollback uses local logs, retains the original Influx data mounts
+and secret identities, and excludes Grafana/Loki, so their newer settings and
+running tasks cannot be reverted by database recovery. The
 original cold state, new state, native archive and peer archive are retained.
 If the new database already accepted writes, those records remain in its
 retained new directory even when the old directory is restored to service:
 review and reconcile that bounded failed-window history before any retry.
+The attempt marker is written before the first live stop; completed, failed
+or interrupted markers make retries fail before any copy. Neither a cleared
+owner marker nor a zero-replica service permits an automatic retry. An
+operator must reconcile retained writes before clearing the barriers.
 There is never permission for two active8087 writers. A rollback that cannot
 establish exclusivity stops rather than starting the old writer blindly.
 
@@ -109,3 +122,12 @@ Scratch container and data were removed; the original InfluxDB container
 `93f02b541b8e0569421fd345f3efab26aa7bff20743c54bffd56df14734ce866`
 (one organization, six buckets, three authorizations). The cold transition
 has not been executed at this evidence point.
+
+The rollback/retry audit added four production-template regression tests:
+only Influx is rendered for rollback with local logging; accepted/failed/
+interrupted markers refuse overwriting state; a preexisting zero-replica
+service refuses a new transition; ordinary convergence requires true
+acceptance and cannot bypass a failed-state barrier. Run these with the deployment venv:
+`/home/igor/.local/share/venvs/ansible/bin/python roles/legacy_influx_transition/tests/test_transition.py`.
+The SMART/GPU/PVE writer selector now names legacy-influx while preserving
+the existing bootstrap ingress address and port.

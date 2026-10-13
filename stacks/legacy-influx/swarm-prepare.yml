@@ -1,5 +1,36 @@
 ---
-# Ordinary deploy must never initialize a second, empty InfluxDB.
+# Ordinary deploy must never initialize a second, empty or failed InfluxDB.
+- name: Inspect the independent acceptance and failed-state barriers
+  ansible.builtin.stat:
+    path: "{{ swarm_state_root }}/legacy-influx/{{ item }}"
+  loop: [.transition-accepted.json, .transition-failed.json]
+  delegate_to: "{{ swarm_stack.pin }}"
+  become: true
+  register: legacy_influx_barriers
+- name: Read accepted independent history proof when present
+  ansible.builtin.slurp:
+    src: "{{ swarm_state_root }}/legacy-influx/.transition-accepted.json"
+  delegate_to: "{{ swarm_stack.pin }}"
+  become: true
+  register: legacy_influx_acceptance
+  when: legacy_influx_barriers.results[0].stat.exists
+  no_log: true
+- name: Refuse ordinary convergence before acceptance or after failed cutover
+  ansible.builtin.assert:
+    that:
+      - not legacy_influx_barriers.results[1].stat.exists
+      - legacy_influx_transition_active | default(false) | bool or ((legacy_influx_acceptance.content | default('e30=') | b64decode | from_json).accepted | default(false) | bool)
+    quiet: true
+- name: Require the old service has released its ingress reservation
+  ansible.builtin.command:
+    argv: [docker, service, ls, -q, --filter, name=logging_influxdb]
+  register: legacy_influx_old_service
+  changed_when: false
+  check_mode: false
+- name: Refuse a second service even when the original has zero replicas
+  ansible.builtin.assert:
+    that: legacy_influx_old_service.stdout | trim == ''
+    quiet: true
 - name: Require a cold-seeded legacy InfluxDB
   ansible.builtin.stat:
     path: "{{ swarm_state_root }}/legacy-influx/influxdb/data/influxd.bolt"

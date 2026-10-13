@@ -214,11 +214,11 @@ offsite_local_work: "{{ lookup('env', 'HOME') }}/.cache/homelab-offsite"
 offsite_recipient: age1us6n6ky6yf6fz084hhw35rzd3xnsra5fazt9dgmc7lqsfhvwqupqpu74ju
 
 # SMART health of the hypervisors' physical drives (roles/base). Points go to
-# the `smart` bucket of the InfluxDB in the logging stack, over the LAN with a
+# the `smart` bucket of the independently pinned legacy-influx stack, with a
 # write-only token; health results go to the Gatus instance that owns alerts,
 # as one external endpoint per drive listed in the hypervisor's smart_drives.
 # Playbook: playbooks/base.yml.
-smart_influx_url: "http://{{ hostvars | stack_host_ip(groups, 'logging') }}:8087"
+smart_influx_url: "http://{{ hostvars | stack_host_ip(groups, 'legacy-influx') }}:8087"
 smart_influx_org: ryzhkov
 smart_influx_bucket: smart
 # 400 days, so a year-on-year wear comparison is always possible.

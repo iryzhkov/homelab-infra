@@ -9,6 +9,26 @@
     fail_msg: Review native/peer proof and coordinate with the rollout lead before setting legacy_influx_transition_confirm=true.
     quiet: true
 
+- name: Inspect completed or interrupted transition markers
+  ansible.builtin.stat:
+    path: "{{ swarm_state_root }}/{{ item }}"
+  loop:
+    - logging/.influx-isolated.json
+    - legacy-influx/.transition-failed.json
+    - legacy-influx/.transition-accepted.json
+    - legacy-influx/.transition-attempt.json
+  delegate_to: "{{ legacy_influx_transition_owner }}"
+  become: true
+  register: influx_attempt_markers
+- name: Refuse completed or interrupted transition retries
+  ansible.builtin.assert:
+    that: not item.stat.exists
+    fail_msg: A completed or interrupted transition marker exists. Preserve and reconcile the new cold state before an operator clears it; this play must never overwrite accepted writes on retry.
+    quiet: true
+  loop: "{{ influx_attempt_markers.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
 - name: Verify the recovery proof is private and root owned
   ansible.builtin.stat:
     path: "{{ legacy_influx_transition_proof }}"
@@ -79,6 +99,15 @@
   loop_control:
     label: "{{ item.item.host }}"
 
+- name: Refuse any existing independently deployed legacy database service
+  ansible.builtin.command:
+    argv: [docker, service, ls, -q, --filter, name=legacy-influx_influxdb]
+  register: influx_existing_legacy_service
+  changed_when: false
+- name: Require no preexisting legacy service before copying
+  ansible.builtin.assert:
+    that: influx_existing_legacy_service.stdout | trim == ''
+    quiet: true
 - name: Identify exactly one original task
   ansible.builtin.command:
     argv: [docker, ps, -q, --filter, label=com.docker.swarm.service.name=logging_influxdb]
@@ -158,9 +187,28 @@
   loop_control:
     label: "{{ item.item.bucket }}"
 
-- name: Preserve the exact logging rendering for rollback
+- name: Decode the original deployment for an Influx-only rollback
+  ansible.builtin.set_fact:
+    influx_original_doc: "{{ influx_old_rendering.content | b64decode | from_yaml }}"
+  no_log: true
+- name: Prepare a rollback that cannot revert Loki or Grafana
+  ansible.builtin.set_fact:
+    influx_rollback_rendering: >-
+      {%- set service = influx_original_doc.services.influxdb | combine({'logging': {'driver': 'local', 'options': {'max-size': '50m', 'max-file': '3'}}}) -%}
+      {%- set secrets = influx_original_doc.secrets | dict2items | selectattr('key', 'in', ['influx_pass', 'influx_token']) | items2dict -%}
+      {{ {'version': '3.8', 'services': {'influxdb': service},
+          'networks': {'default': {'external': true, 'name': 'logging_default'}},
+          'secrets': secrets} | to_nice_yaml(indent=2, width=4096) }}
+  no_log: true
+- name: Retain the exact original rendering for operator recovery evidence
   ansible.builtin.copy:
     content: "{{ influx_old_rendering.content | b64decode }}"
+    dest: "{{ swarm_deploy_root }}/logging/influx-transition-original.yml"
+    mode: '0600'
+  no_log: true
+- name: Preserve the Influx-only local-driver rollback rendering
+  ansible.builtin.copy:
+    content: "{{ influx_rollback_rendering }}"
     dest: "{{ swarm_deploy_root }}/logging/influx-transition-rollback.yml"
     mode: '0600'
     force: true
@@ -187,10 +235,9 @@
 - name: Retain the consistent native archive under the separately owned stack
   ansible.builtin.copy:
     src: "{{ influx_proof.archive }}"
-    dest: "{{ swarm_state_root }}/legacy-influx/native-backups/"
+    dest: "{{ swarm_state_root }}/legacy-influx/native-backups/influxdb_{{ '%Y-%m-%d_%H%M' | strftime(influx_proof.created_at | int, utc=true) }}_proof.tar.gz"
     remote_src: true
-    owner: root
-    group: root
+    owner: "{{ ansible_user }}"
     mode: '0600'
   delegate_to: "{{ legacy_influx_transition_owner }}"
   become: true
@@ -213,6 +260,15 @@
 
 - name: Cold transition with exclusive writer and rollback
   block:
+    - name: Persist the attempt before any live database change
+      ansible.builtin.copy:
+        content: "{{ {'archive_sha256': influx_proof.archive_sha256, 'status': 'cold-window-started', 'preserve_new_state_on_retry': true} | to_nice_json }}\n"
+        dest: "{{ swarm_state_root }}/legacy-influx/.transition-attempt.json"
+        owner: root
+        group: root
+        mode: '0600'
+      delegate_to: "{{ legacy_influx_transition_owner }}"
+      become: true
     - name: Stop only the old InfluxDB service
       ansible.builtin.command:
         argv: [docker, service, update, --stop-grace-period, 60s, --replicas, '0', logging_influxdb]
@@ -256,6 +312,7 @@
         tasks_from: stack.yml
       vars:
         swarm_stack: "{{ swarm_stacks_legacy_influx[0] }}"
+        legacy_influx_transition_active: true
     - name: Require the preserved external endpoint
       ansible.builtin.uri:
         url: "http://127.0.0.1:8087/health"
@@ -341,6 +398,21 @@
       delegate_to: localhost
       become: false
       no_log: true
+    - name: Clear the attempt only after all acceptance checks passed
+      ansible.builtin.file:
+        path: "{{ swarm_state_root }}/legacy-influx/.transition-attempt.json"
+        state: absent
+      delegate_to: "{{ legacy_influx_transition_owner }}"
+      become: true
+    - name: Accept independently owned legacy history for ordinary convergence
+      ansible.builtin.copy:
+        content: "{{ influx_proof | combine({'accepted': true, 'write_cutoff': influx_write_cutoff.stdout}) | to_nice_json }}\n"
+        dest: "{{ swarm_state_root }}/legacy-influx/.transition-accepted.json"
+        owner: root
+        group: root
+        mode: '0600'
+      delegate_to: "{{ legacy_influx_transition_owner }}"
+      become: true
     - name: Allow later logging convergence only after history and writes pass
       ansible.builtin.copy:
         content: "{{ influx_proof | combine({'accepted': true, 'write_cutoff': influx_write_cutoff.stdout}) | to_nice_json }}\n"
@@ -351,6 +423,22 @@
       delegate_to: "{{ legacy_influx_transition_owner }}"
       become: true
   rescue:
+    - name: Invalidate acceptance before any rollback operation
+      ansible.builtin.file:
+        path: "{{ swarm_state_root }}/{{ item }}"
+        state: absent
+      loop: [logging/.influx-isolated.json, legacy-influx/.transition-accepted.json]
+      delegate_to: "{{ legacy_influx_transition_owner }}"
+      become: true
+    - name: Preserve a failed-attempt barrier against overwriting new history
+      ansible.builtin.copy:
+        content: "{{ {'archive_sha256': influx_proof.archive_sha256, 'status': 'failed-reconciliation-required', 'preserve_new_state_on_retry': true} | to_nice_json }}\n"
+        dest: "{{ swarm_state_root }}/legacy-influx/.transition-failed.json"
+        owner: root
+        group: root
+        mode: '0600'
+      delegate_to: "{{ legacy_influx_transition_owner }}"
+      become: true
     - name: Remove the new service before any old writer can start
       ansible.builtin.command:
         argv: [docker, stack, rm, legacy-influx]
@@ -374,7 +462,7 @@
       until: influx_rollback_task.stdout | trim == ''
       retries: 30
       delay: 2
-    - name: Restore the original unchanged stack rendering without pruning
+    - name: Restore only the original InfluxDB service using the local log driver
       ansible.builtin.command:
         argv: [docker, stack, deploy, --with-registry-auth, --detach=false, --compose-file, "{{ swarm_deploy_root }}/logging/influx-transition-rollback.yml", logging]
       changed_when: true
@@ -396,4 +484,4 @@
       become: true
     - name: Report a recovered failed transition
       ansible.builtin.fail:
-        msg: Influx isolation failed; the original service is healthy again. Both cold directories and the native/peer archive were retained. Review before retrying.
+        msg: Influx isolation failed; the original Influx service is healthy again with local logs. Loki/Grafana were not redeployed. Both cold directories and native/peer archive remain; failed-attempt markers block retry until new history is reconciled.
