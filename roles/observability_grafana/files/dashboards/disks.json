@@ -238,7 +238,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 52
+        }
       },
       "id": 2
     },
@@ -288,7 +292,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -357,7 +363,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -426,7 +434,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -495,7 +505,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -583,7 +595,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 7
     },
@@ -652,7 +668,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 8
     },
@@ -721,7 +741,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 9
     },
@@ -771,7 +795,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -855,7 +881,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 11
     },

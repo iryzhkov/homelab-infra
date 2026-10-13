@@ -176,7 +176,7 @@
         {
           "refId": "A",
           "expr": "100 * sum((1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[$__rate_interval]))) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"})) / count(max by(host,cpu)(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"}))",
-          "legendFormat": "",
+          "legendFormat": "Physical CPU utilization",
           "range": false,
           "instant": true
         }
@@ -254,7 +254,7 @@
         {
           "refId": "A",
           "expr": "sum((1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[$__rate_interval]))) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"}))",
-          "legendFormat": "",
+          "legendFormat": "Busy logical CPU equivalents",
           "range": false,
           "instant": true
         }
@@ -301,7 +301,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 3
     },
@@ -323,7 +327,7 @@
         {
           "refId": "A",
           "expr": "count(max by(host,cpu)(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"}))",
-          "legendFormat": "",
+          "legendFormat": "Physical logical CPUs",
           "range": false,
           "instant": true
         }
@@ -370,7 +374,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 4
     },
@@ -392,7 +400,7 @@
         {
           "refId": "A",
           "expr": "count(count by(physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))",
-          "legendFormat": "",
+          "legendFormat": "Observed passthrough GPUs",
           "range": false,
           "instant": true
         }
@@ -439,7 +447,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 5
     },
@@ -664,7 +676,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 8
     },
@@ -948,7 +964,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1144,7 +1162,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(igpu_actual_freq_mhz{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "expr": "1e6 * (max by(host)(igpu_actual_freq_mhz{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
@@ -1152,7 +1170,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "Mhz",
+          "unit": "hertz",
           "noValue": "Unavailable",
           "color": {
             "mode": "fixed",
@@ -1257,7 +1275,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 16
     },
@@ -1528,7 +1550,7 @@
         {
           "refId": "A",
           "expr": "avg(max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))",
-          "legendFormat": "",
+          "legendFormat": "Mean observed Render / 3D duty cycle",
           "range": false,
           "instant": true
         }
@@ -1634,7 +1656,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1703,7 +1727,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },

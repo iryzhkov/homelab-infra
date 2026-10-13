@@ -3,6 +3,8 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars:
+    ansible_user: "{{ lookup('env', 'USER') }}"
   tasks:
     - name: Reconcile the owned UI using private SOPS capability links
       ansible.builtin.command:

@@ -404,7 +404,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 4
     },
@@ -473,7 +477,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       },
       "id": 5
     },
@@ -601,7 +609,9 @@
               }
             ]
           },
-          "noValue": "Unavailable"
+          "noValue": "Unavailable",
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -991,7 +1001,9 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1090,7 +1102,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 52
+        }
       },
       "id": 14
     },
@@ -1249,7 +1265,11 @@
         "orientation": "auto",
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area"
+        "graphMode": "area",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       }
     },
     {
@@ -1299,7 +1319,9 @@
             ]
           },
           "mappings": [],
-          "noValue": "Unavailable"
+          "noValue": "Unavailable",
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1365,7 +1387,9 @@
             ]
           },
           "mappings": [],
-          "noValue": "Unavailable"
+          "noValue": "Unavailable",
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1431,7 +1455,9 @@
             ]
           },
           "mappings": [],
-          "noValue": "Unavailable"
+          "noValue": "Unavailable",
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1510,7 +1536,9 @@
             ]
           },
           "mappings": [],
-          "noValue": "Unavailable"
+          "noValue": "Unavailable",
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1525,7 +1553,11 @@
         "orientation": "auto",
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area"
+        "graphMode": "area",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       }
     },
     {
@@ -1590,7 +1622,11 @@
         "orientation": "auto",
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area"
+        "graphMode": "area",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       }
     },
     {
@@ -1640,7 +1676,9 @@
             ]
           },
           "mappings": [],
-          "noValue": "Unavailable"
+          "noValue": "Unavailable",
+          "min": 0,
+          "max": 100
         },
         "overrides": []
       },
@@ -1655,7 +1693,11 @@
         "orientation": "auto",
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area"
+        "graphMode": "area",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       }
     },
     {
@@ -1738,7 +1780,11 @@
         "orientation": "auto",
         "textMode": "auto",
         "colorMode": "value",
-        "graphMode": "area"
+        "graphMode": "area",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 44
+        }
       }
     }
   ]
