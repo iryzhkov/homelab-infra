@@ -559,7 +559,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "CPU busy",
-      "description": "",
+      "description": "Same authoritative guest/native fallback as the CPU gauge; excludes misleading parent-visible LXC counters when PVE guest accounting exists.",
       "gridPos": {
         "x": 0,
         "y": 18,
@@ -573,7 +573,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (1 - avg by (host) (avg by (host,cpu) (rate(node_cpu_seconds_total{host=~\"$host\",job=\"node\",mode=\"idle\"}[$__rate_interval]))))",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - avg by(host) (max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval])))))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
@@ -624,7 +624,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Memory used",
-      "description": "Kernel memory usage including ZFS ARC. Inspect the separate ARC panel before interpreting high hypervisor memory as pressure.",
+      "description": "Mapped guests use PVE reported memory; physical/unmapped hosts use OS total minus available (including ZFS ARC).",
       "gridPos": {
         "x": 12,
         "y": 18,
@@ -638,7 +638,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host) (node_memory_MemTotal_bytes{host=~\"$host\",job=\"node\"}) - max by(host) (node_memory_MemAvailable_bytes{host=~\"$host\",job=\"node\"})",
+          "expr": "(max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (max by(host) (node_memory_MemTotal_bytes{host=~\"$host\",job=\"node\"}) - max by(host) (node_memory_MemAvailable_bytes{host=~\"$host\",job=\"node\"}))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
