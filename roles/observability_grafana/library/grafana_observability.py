@@ -170,7 +170,7 @@ def main():
             module.fail_json(msg="Refusing a dashboard outside the owned UID namespace")
         existing = api("GET", "/api/dashboards/uid/" + quote(uid, safe=""), missing_ok=True)
         actual = existing["dashboard"] if existing else None
-        desired_folder = existing.get("meta", {}).get("folderUid", "") if legacy and existing else p["folder_uid"]
+        desired_folder = (existing.get("meta", {}).get("folderUid") or "") if legacy and existing else p["folder_uid"]
         folder_matches = existing and (legacy or existing.get("meta", {}).get("folderUid") == desired_folder)
         if not desired_matches(actual, desired) or not folder_matches:
             changes.append("dashboard " + uid)

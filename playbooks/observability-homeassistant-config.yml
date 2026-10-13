@@ -1,0 +1,7 @@
+---
+- name: Guarded native Home Assistant metrics configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - observability_homeassistant_config

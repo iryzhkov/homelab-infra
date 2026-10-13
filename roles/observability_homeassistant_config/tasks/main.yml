@@ -1,0 +1,13 @@
+---
+- name: Reconcile only the Home Assistant Prometheus package and explicit include
+  ansible.builtin.command:
+    argv: >-
+      {{ [ansible_playbook_python, role_path + '/files/reconcile.py',
+           '--ssh-target', observability_homeassistant_config_ssh_target,
+           '--package', role_path + '/files/homelab_prometheus.yaml']
+         + (['--check'] if ansible_check_mode else [])
+         + (['--maintenance'] if observability_homeassistant_config_maintenance | bool else [])
+         + (['--restart'] if observability_homeassistant_config_restart | bool else []) }}
+  register: observability_homeassistant_config_result
+  changed_when: (observability_homeassistant_config_result.stdout | from_json).changed
+  check_mode: false

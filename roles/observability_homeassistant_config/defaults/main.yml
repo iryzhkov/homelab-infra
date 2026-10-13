@@ -1,0 +1,4 @@
+---
+observability_homeassistant_config_ssh_target: home-assistant
+observability_homeassistant_config_maintenance: false
+observability_homeassistant_config_restart: false

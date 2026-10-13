@@ -310,7 +310,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Mean host CPU busy",
+      "title": "Physical CPU utilization",
       "description": "",
       "gridPos": {
         "x": 0,
@@ -325,7 +325,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (1 - avg(avg by(host,cpu) (rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[5m]))))",
+          "expr": "100 * sum((1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[5m]))) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"})) / count(max by(host,cpu)(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"}))",
           "legendFormat": "CPU busy",
           "range": true,
           "instant": false
@@ -376,7 +376,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Aggregate memory used",
+      "title": "Physical memory used",
       "description": "",
       "gridPos": {
         "x": 12,
@@ -391,7 +391,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (1 - sum(max by(host) (node_memory_MemAvailable_bytes{job=\"node\"})) / sum(max by(host) (node_memory_MemTotal_bytes{job=\"node\"})))",
+          "expr": "100 * (1 - sum(max by(host)(node_memory_MemAvailable_bytes{job=\"node\"}) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"})) / sum(max by(host)(node_memory_MemTotal_bytes{job=\"node\"}) * on(host) group_left() max by(host)(node_monitoring_host_info{job=\"node\",kind=\"physical\"})))",
           "legendFormat": "Memory used",
           "range": true,
           "instant": false

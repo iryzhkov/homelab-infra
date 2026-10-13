@@ -171,6 +171,22 @@
       "targetBlank": false
     },
     {
+      "title": "Disk health",
+      "type": "link",
+      "url": "/d/homelab-observe-disks",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "CPU / GPU",
+      "type": "link",
+      "url": "/d/homelab-observe-capacity",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
       "title": "Containers",
       "type": "link",
       "url": "/d/homelab-observe-containers",

@@ -1,6 +1,6 @@
 {
   "uid": "homelab-observe-hosts",
-  "title": "Homelab · Hosts & Hardware",
+  "title": "Homelab · Host Focus",
   "description": "Managed in Ansible. Host names are inventory identities, independent of IP or Swarm placement. Empty panels mean the exporter has not reported that metric; they do not imply a healthy zero.",
   "tags": [
     "homelab",
@@ -36,6 +36,22 @@
       "title": "Hosts & hardware",
       "type": "link",
       "url": "/d/homelab-observe-hosts",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Disk health",
+      "type": "link",
+      "url": "/d/homelab-observe-disks",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "CPU / GPU",
+      "type": "link",
+      "url": "/d/homelab-observe-capacity",
       "keepTime": true,
       "includeVars": true,
       "targetBlank": false
@@ -92,19 +108,19 @@
           "uid": "homelab-metrics"
         },
         "query": {
-          "query": "label_values(up, host)",
+          "query": "label_values(node_monitoring_host_info{job=\"node\"},host)",
           "refId": "host"
         },
-        "definition": "label_values(up, host)",
+        "definition": "label_values(node_monitoring_host_info{job=\"node\"},host)",
         "refresh": 1,
         "sort": 1,
-        "multi": true,
-        "includeAll": true,
+        "multi": false,
+        "includeAll": false,
         "allValue": ".*",
         "current": {
           "selected": true,
-          "text": "All",
-          "value": "$__all"
+          "text": "proxmox-a",
+          "value": "proxmox-a"
         },
         "options": []
       },
@@ -153,27 +169,400 @@
   },
   "panels": [
     {
-      "id": 1,
       "type": "text",
-      "title": "Host health",
+      "title": "One host at a time",
       "gridPos": {
         "x": 0,
+        "y": 0,
         "w": 24,
         "h": 3
       },
       "options": {
         "mode": "markdown",
-        "content": "### Hosts, guests and physical hardware\nLocal host metrics appear first; ZFS ARC and SMART follow. Guest panels use the **Guest ID** selector and deduplicate both Proxmox cluster views. Proxmox is authoritative for guest limits. Hypervisor memory includes ZFS ARC; optional sensors remain empty when unreported."
-      }
+        "content": "CPU/RAM apply to all hosts. Hardware readings require declared physical capabilities; virtual disk usage is not SMART. Logical CPU IDs are reported OS threads/vCPUs, not physical core or allocated-container capacity. Unavailable means unsupported or unreported."
+      },
+      "id": 1
     },
     {
-      "id": 2,
+      "type": "gauge",
+      "title": "CPU utilization",
+      "description": "Mapped Proxmox guests use authoritative PVE guest CPU usage; physical/unmapped hosts use native OS counters.",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - avg by(host) (max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval])))))",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 2
+    },
+    {
+      "type": "gauge",
+      "title": "RAM used",
+      "description": "Mapped Proxmox guests use configured guest memory accounting; physical/unmapped hosts use native OS available memory. Hypervisor ARC remains included.",
+      "gridPos": {
+        "x": 6,
+        "y": 3,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) / max by(guest_id)(label_replace(pve_memory_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - max by(host)(node_memory_MemAvailable_bytes{job=\"node\",host=~\"$host\"}) / max by(host)(node_memory_MemTotal_bytes{job=\"node\",host=~\"$host\"})))",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Load / reported logical CPU",
+      "description": "Load 1 divided by reported logical CPU count: a ratio, not utilization.",
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host) (node_load1{host=~\"$host\",job=\"node\"}) / count by(host) (max by(host,cpu) (node_cpu_seconds_total{host=~\"$host\",job=\"node\",mode=\"idle\"}))",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Host type",
+      "description": "",
+      "gridPos": {
+        "x": 18,
+        "y": 3,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\"})",
+          "legendFormat": "{{kind}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 5
+    },
+    {
+      "type": "bargauge",
+      "title": "Each reported logical CPU / SMT thread",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval])))",
+          "legendFormat": "Logical CPU {{cpu}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 6
+    },
+    {
+      "id": 7,
       "type": "timeseries",
       "title": "CPU busy",
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 3,
+        "y": 18,
         "w": 12,
         "h": 8
       },
@@ -211,7 +600,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -231,77 +621,13 @@
       }
     },
     {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Load per logical CPU",
-      "description": "",
-      "gridPos": {
-        "x": 12,
-        "y": 3,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "homelab-metrics"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max by(host) (node_load1{host=~\"$host\",job=\"node\"}) / count by(host) (max by(host,cpu) (node_cpu_seconds_total{host=~\"$host\",job=\"node\",mode=\"idle\"}))",
-          "legendFormat": "{{host}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 4,
+      "id": 8,
       "type": "timeseries",
       "title": "Memory used",
       "description": "Kernel memory usage including ZFS ARC. Inspect the separate ARC panel before interpreting high hypervisor memory as pressure.",
       "gridPos": {
-        "x": 0,
-        "y": 11,
+        "x": 12,
+        "y": 18,
         "w": 12,
         "h": 8
       },
@@ -339,7 +665,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -359,77 +686,13 @@
       }
     },
     {
-      "id": 5,
-      "type": "timeseries",
-      "title": "Swap used",
-      "description": "",
-      "gridPos": {
-        "x": 12,
-        "y": 11,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "homelab-metrics"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max by(host) (node_memory_SwapTotal_bytes{host=~\"$host\",job=\"node\"}) - max by(host) (node_memory_SwapFree_bytes{host=~\"$host\",job=\"node\"})",
-          "legendFormat": "{{host}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 6,
+      "id": 9,
       "type": "timeseries",
       "title": "Filesystem available",
       "description": "Local disks only; network shares and temporary mounts are excluded.",
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 26,
         "w": 12,
         "h": 8
       },
@@ -467,7 +730,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -487,13 +751,13 @@
       }
     },
     {
-      "id": 7,
+      "id": 10,
       "type": "timeseries",
       "title": "Disk read / write throughput",
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 19,
+        "y": 26,
         "w": 12,
         "h": 8
       },
@@ -531,7 +795,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -551,13 +816,13 @@
       }
     },
     {
-      "id": 8,
+      "id": 11,
       "type": "timeseries",
       "title": "Network received",
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 34,
         "w": 12,
         "h": 8
       },
@@ -595,7 +860,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -615,13 +881,13 @@
       }
     },
     {
-      "id": 9,
+      "id": 12,
       "type": "timeseries",
       "title": "Network transmitted",
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 27,
+        "y": 34,
         "w": 12,
         "h": 8
       },
@@ -659,7 +925,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -679,13 +946,12 @@
       }
     },
     {
-      "id": 10,
       "type": "timeseries",
-      "title": "Hardware temperature",
-      "description": "Physical host hwmon sensors. Containers are excluded because their sysfs may expose host hardware.",
+      "title": "Physical temperature sensors",
+      "description": "Explicit physical temperature capability; inherited LXC sensors excluded.",
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 42,
         "w": 12,
         "h": 8
       },
@@ -696,8 +962,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,chip,sensor) (node_hwmon_temp_celsius{host=~\"$host\",job=\"node\",host!~\"ct[0-9]+\"})",
-          "legendFormat": "{{host}} · {{chip}} {{sensor}}",
+          "expr": "max by(host,chip,sensor)(node_hwmon_temp_celsius{job=\"node\",host=~\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\",host=~\"$host\"})",
+          "legendFormat": "{{chip}} · {{sensor}}",
           "range": true,
           "instant": false
         }
@@ -705,24 +971,26 @@
       "fieldConfig": {
         "defaults": {
           "unit": "celsius",
+          "noValue": "Unavailable",
           "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
+            "mode": "fixed",
+            "fixedColor": "blue"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
           }
         },
         "overrides": []
@@ -732,24 +1000,23 @@
           "displayMode": "table",
           "placement": "bottom",
           "calcs": [
-            "lastNotNull",
-            "max"
+            "lastNotNull"
           ]
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "id": 13
     },
     {
-      "id": 11,
       "type": "stat",
-      "title": "SMART device health",
-      "description": "1 = SMART passed, 0 = failed; no data means unreported.",
+      "title": "SMART quick health",
+      "description": "Physical drives only; see Disk health for detail.",
       "gridPos": {
         "x": 12,
-        "y": 35,
+        "y": 42,
         "w": 12,
         "h": 8
       },
@@ -760,8 +1027,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device) (smartctl_device_smart_status{host=~\"$host\",job=\"smartctl\"})",
-          "legendFormat": "{{host}} · {{device}}",
+          "expr": "max by(host,device)(smartctl_device_smart_status{job=\"smartctl\",host=~\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
+          "legendFormat": "{{device}}",
           "range": false,
           "instant": true
         }
@@ -769,28 +1036,26 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "noValue": "Unavailable",
           "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
+            "mode": "fixed",
+            "fixedColor": "blue"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "blue",
                 "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
               }
             ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
           },
           "mappings": [
             {
@@ -801,7 +1066,7 @@
                   "color": "red"
                 },
                 "1": {
-                  "text": "Passed",
+                  "text": "PASS",
                   "color": "green"
                 }
               }
@@ -819,205 +1084,15 @@
           "values": false
         },
         "orientation": "auto",
-        "textMode": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
         "colorMode": "value",
-        "graphMode": "area"
-      }
-    },
-    {
-      "id": 12,
-      "type": "timeseries",
-      "title": "Drive temperature",
-      "description": "",
-      "gridPos": {
-        "x": 0,
-        "y": 43,
-        "w": 12,
-        "h": 8
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
       },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "homelab-metrics"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max by(host,device) (smartctl_device_temperature{host=~\"$host\",job=\"smartctl\",temperature_type=\"current\"})",
-          "legendFormat": "{{host}} · {{device}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "celsius",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 13,
-      "type": "timeseries",
-      "title": "NVMe endurance consumed",
-      "description": "Reported lifetime endurance used, not a forecast. SATA devices may not expose this series.",
-      "gridPos": {
-        "x": 12,
-        "y": 43,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "homelab-metrics"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max by(host,device) (smartctl_device_percentage_used{host=~\"$host\",job=\"smartctl\"})",
-          "legendFormat": "{{host}} · {{device}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 14,
-      "type": "timeseries",
-      "title": "NVMe media errors",
-      "description": "",
-      "gridPos": {
-        "x": 0,
-        "y": 51,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "homelab-metrics"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max by(host,device) (smartctl_device_media_errors{host=~\"$host\",job=\"smartctl\"})",
-          "legendFormat": "{{host}} · {{device}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "id": 14
     },
     {
       "id": 15,
@@ -1025,9 +1100,9 @@
       "title": "ZFS ARC size",
       "description": "Cache is included in kernel used-memory reporting. Display its actual size separately; do not infer application memory by subtracting an estimate.",
       "gridPos": {
-        "x": 12,
-        "y": 51,
-        "w": 12,
+        "x": 0,
+        "y": 50,
+        "w": 24,
         "h": 8
       },
       "datasource": {
@@ -1065,7 +1140,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1092,7 +1168,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 58,
         "w": 24,
         "h": 1
       }
@@ -1104,7 +1180,7 @@
       "description": "Guest ID filter is independent of the Host filter; templates are excluded. Cluster views are deduplicated by guest ID.",
       "gridPos": {
         "x": 0,
-        "y": 60,
+        "y": 59,
         "w": 24,
         "h": 6
       },
@@ -1157,7 +1233,8 @@
                 }
               }
             }
-          ]
+          ],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1182,7 +1259,7 @@
       "description": "Proxmox guest CPU ratio. Both exporter cluster views deduplicate by ID.",
       "gridPos": {
         "x": 0,
-        "y": 66,
+        "y": 65,
         "w": 12,
         "h": 8
       },
@@ -1221,7 +1298,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1247,7 +1325,7 @@
       "description": "Proxmox-reported memory usage relative to configured memory. QEMU reporting may include guest cache or balloon accounting.",
       "gridPos": {
         "x": 12,
-        "y": 66,
+        "y": 65,
         "w": 12,
         "h": 8
       },
@@ -1286,7 +1364,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1312,7 +1391,7 @@
       "description": "LXC root filesystem reporting from Proxmox. VM disk usage is omitted because QEMU does not supply guest filesystem usage here.",
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 73,
         "w": 24,
         "h": 8
       },
@@ -1351,7 +1430,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1378,7 +1458,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 81,
         "w": 24,
         "h": 1
       }
@@ -1390,7 +1470,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 83,
+        "y": 82,
         "w": 8,
         "h": 6
       },
@@ -1429,7 +1509,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1454,7 +1535,7 @@
       "description": "",
       "gridPos": {
         "x": 8,
-        "y": 83,
+        "y": 82,
         "w": 8,
         "h": 6
       },
@@ -1493,7 +1574,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1518,7 +1600,7 @@
       "description": "",
       "gridPos": {
         "x": 16,
-        "y": 83,
+        "y": 82,
         "w": 8,
         "h": 6
       },
@@ -1557,7 +1639,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
@@ -1582,7 +1665,7 @@
       "description": "Online flag only. No data means the exporter did not report status; zero does not by itself identify the cause.",
       "gridPos": {
         "x": 0,
-        "y": 89,
+        "y": 88,
         "w": 24,
         "h": 5
       },
@@ -1639,7 +1722,8 @@
                 }
               }
             }
-          ]
+          ],
+          "noValue": "Unavailable"
         },
         "overrides": []
       },

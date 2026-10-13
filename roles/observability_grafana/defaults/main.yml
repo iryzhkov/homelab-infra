@@ -7,6 +7,8 @@ observability_grafana_folder_title: Homelab Observability
 observability_grafana_dashboard_files:
   - overview.json
   - hosts.json
+  - disks.json
+  - capacity.json
   - containers.json
   - logs.json
   - agents.json
