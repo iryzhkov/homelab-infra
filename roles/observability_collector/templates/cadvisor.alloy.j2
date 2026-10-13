@@ -3,7 +3,7 @@ logging { level = "warn" }
 prometheus.remote_write "homelab" {
   external_labels = { host = "{{ inventory_hostname }}" }
   endpoint {
-    url = "https://metrics-push.ryzhkov.dev:{{ observability_ingest_port }}/api/v1/write"
+    url = "https://metrics-push.ryzhkov.dev:{{ observability_ingest_client_port }}/api/v1/write"
     basic_auth {
       username = "{{ inventory_hostname }}"
       password_file = "/etc/alloy/cadvisor-ingest-password"

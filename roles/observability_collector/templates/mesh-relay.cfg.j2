@@ -1,5 +1,6 @@
 # {{ ansible_managed }}. TLS is never terminated; credentials remain encrypted.
 global
+    nbthread 1
     maxconn 128
 defaults
     mode tcp

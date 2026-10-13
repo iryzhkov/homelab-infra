@@ -7,7 +7,8 @@ encrypted per-host Basic credentials. The relay cannot read request contents.
 
 The primary mesh address is 10.42.0.3; the backup is 10.42.0.10. Certificate-
 verified HTTPS health checks require the unauthenticated metrics ingest path
-to answer 401. Two failures mark an edge down and close its existing sessions,
+to answer 401. This proves edge/authentication reachability, not storage backend
+writability. Two failures mark an edge down and close its existing sessions,
 allowing Alloy to reconnect to the backup rather than hanging on a blackhole.
 Checks run every five seconds, with three-second timeouts and faster checks
 during transitions. Both unavailable means failed writes remain subject to
