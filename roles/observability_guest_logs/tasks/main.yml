@@ -22,13 +22,10 @@
       - (observability_guest_logs_free.stdout_lines[-1] | trim | regex_replace('M$', '') | int) >= 256
     quiet: true
 
-- name: Install the small native forwarder without starting the default daemon
-  ansible.builtin.apt:
-    name: rsyslog
-    state: present
-    update_cache: true
-    cache_valid_time: 3600
-    policy_rc_d: 101
+- name: Check the native package before refreshing installation metadata
+  ansible.builtin.stat:
+    path: /usr/sbin/rsyslogd
+  register: observability_guest_logs_binary
 
 - name: Create private forwarder configuration and persistent cursor directories
   ansible.builtin.file:
@@ -40,6 +37,34 @@
   loop:
     - /etc/observability-guest-logs
     - /var/lib/observability-guest-logs
+
+- name: Prepare signed official Debian metadata without altering existing app feeds
+  ansible.builtin.copy:
+    content: |
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian {{ ansible_facts.distribution_release }} main
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian {{ ansible_facts.distribution_release }}-updates main
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://security.debian.org/debian-security {{ ansible_facts.distribution_release }}-security main
+    dest: /etc/observability-guest-logs/debian.sources.list
+    owner: root
+    group: root
+    mode: "0600"
+  when: not observability_guest_logs_binary.stat.exists
+
+- name: Refresh only official signed metadata before a first package installation
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - update
+      - -oDir::Etc::sourcelist=/etc/observability-guest-logs/debian.sources.list
+      - -oDir::Etc::sourceparts=-
+      - -oAPT::Get::List-Cleanup=0
+  when: not observability_guest_logs_binary.stat.exists and not ansible_check_mode
+
+- name: Install the small native forwarder without starting the default daemon
+  ansible.builtin.apt:
+    name: rsyslog
+    state: present
+    policy_rc_d: 101
 
 - name: Validate and install only the dedicated forwarder configuration
   ansible.builtin.template:
