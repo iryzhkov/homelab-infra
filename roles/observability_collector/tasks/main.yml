@@ -147,6 +147,13 @@
         remote_src: true
         creates: "/usr/local/bin/alloy-linux-{{ observability_alloy_arch[ansible_facts.architecture] }}"
 
+    - name: Set executable permissions on the official binary
+      ansible.builtin.file:
+        path: "/usr/local/bin/alloy-linux-{{ observability_alloy_arch[ansible_facts.architecture] }}"
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Name the managed binary
       ansible.builtin.file:
         src: "/usr/local/bin/alloy-linux-{{ observability_alloy_arch[ansible_facts.architecture] }}"
