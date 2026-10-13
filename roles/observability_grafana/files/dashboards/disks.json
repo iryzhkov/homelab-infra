@@ -817,8 +817,7 @@
           "unit": "celsius",
           "noValue": "Unavailable",
           "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",

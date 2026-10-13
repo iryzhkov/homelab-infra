@@ -493,7 +493,7 @@
         "x": 0,
         "y": 9,
         "w": 24,
-        "h": 9
+        "h": 14
       },
       "datasource": {
         "type": "prometheus",
@@ -578,7 +578,7 @@
       "description": "Same authoritative guest/native fallback as the CPU gauge; excludes misleading parent-visible LXC counters when PVE guest accounting exists.",
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 23,
         "w": 12,
         "h": 8
       },
@@ -645,7 +645,7 @@
       "description": "Mapped guests use PVE reported memory; physical/unmapped hosts use OS total minus available (including ZFS ARC).",
       "gridPos": {
         "x": 12,
-        "y": 18,
+        "y": 23,
         "w": 12,
         "h": 8
       },
@@ -710,7 +710,7 @@
       "description": "Local disks only; network shares and temporary mounts are excluded.",
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 31,
         "w": 12,
         "h": 8
       },
@@ -775,7 +775,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 26,
+        "y": 31,
         "w": 12,
         "h": 8
       },
@@ -840,7 +840,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 34,
+        "y": 39,
         "w": 12,
         "h": 8
       },
@@ -905,7 +905,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 34,
+        "y": 39,
         "w": 12,
         "h": 8
       },
@@ -965,11 +965,11 @@
     },
     {
       "type": "timeseries",
-      "title": "Physical temperature sensors",
-      "description": "Explicit physical temperature capability; inherited LXC sensors excluded.",
+      "title": "Physical sensor hotspot / chip",
+      "description": "Maximum actual sensor reading within each explicitly physical chip; individual sensor identities are shown on CPU/GPU Capacity. Inherited LXC readings excluded.",
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 47,
         "w": 12,
         "h": 8
       },
@@ -980,8 +980,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,chip,sensor)(node_hwmon_temp_celsius{job=\"node\",host=~\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\",host=~\"$host\"})",
-          "legendFormat": "{{chip}} · {{sensor}}",
+          "expr": "max by(host,chip)(node_hwmon_temp_celsius{job=\"node\",host=~\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\",host=~\"$host\"})",
+          "legendFormat": "{{chip}}",
           "range": true,
           "instant": false
         }
@@ -991,8 +991,7 @@
           "unit": "celsius",
           "noValue": "Unavailable",
           "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -1036,7 +1035,7 @@
       "description": "Physical drives only; see Disk health for detail.",
       "gridPos": {
         "x": 12,
-        "y": 42,
+        "y": 47,
         "w": 12,
         "h": 8
       },
@@ -1125,7 +1124,7 @@
       "description": "Cache is included in kernel used-memory reporting. Display its actual size separately; do not infer application memory by subtracting an estimate.",
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 55,
         "w": 24,
         "h": 8
       },
@@ -1192,7 +1191,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 58,
+        "y": 63,
         "w": 24,
         "h": 1
       }
@@ -1204,7 +1203,7 @@
       "description": "Guest ID filter is independent of the Host filter; templates are excluded. Cluster views are deduplicated by guest ID.",
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 64,
         "w": 24,
         "h": 6
       },
@@ -1287,7 +1286,7 @@
       "description": "Proxmox guest CPU ratio. Both exporter cluster views deduplicate by ID.",
       "gridPos": {
         "x": 0,
-        "y": 65,
+        "y": 70,
         "w": 12,
         "h": 8
       },
@@ -1355,7 +1354,7 @@
       "description": "Proxmox-reported memory usage relative to configured memory. QEMU reporting may include guest cache or balloon accounting.",
       "gridPos": {
         "x": 12,
-        "y": 65,
+        "y": 70,
         "w": 12,
         "h": 8
       },
@@ -1423,7 +1422,7 @@
       "description": "LXC root filesystem reporting from Proxmox. VM disk usage is omitted because QEMU does not supply guest filesystem usage here.",
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 78,
         "w": 24,
         "h": 8
       },
@@ -1492,7 +1491,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 81,
+        "y": 86,
         "w": 24,
         "h": 1
       }
@@ -1504,7 +1503,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 87,
         "w": 8,
         "h": 6
       },
@@ -1575,7 +1574,7 @@
       "description": "",
       "gridPos": {
         "x": 8,
-        "y": 82,
+        "y": 87,
         "w": 8,
         "h": 6
       },
@@ -1644,7 +1643,7 @@
       "description": "",
       "gridPos": {
         "x": 16,
-        "y": 82,
+        "y": 87,
         "w": 8,
         "h": 6
       },
@@ -1715,7 +1714,7 @@
       "description": "Online flag only. No data means the exporter did not report status; zero does not by itself identify the cause.",
       "gridPos": {
         "x": 0,
-        "y": 88,
+        "y": 93,
         "w": 24,
         "h": 5
       },

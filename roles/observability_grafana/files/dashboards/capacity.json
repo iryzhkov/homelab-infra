@@ -692,7 +692,7 @@
         "x": 0,
         "y": 17,
         "w": 24,
-        "h": 10
+        "h": 14
       },
       "datasource": {
         "type": "prometheus",
@@ -776,7 +776,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 31,
         "w": 12,
         "h": 9
       },
@@ -862,7 +862,7 @@
       "description": "Authoritative PVE guest CPU ratio, separated from physical host utilization.",
       "gridPos": {
         "x": 12,
-        "y": 27,
+        "y": 31,
         "w": 12,
         "h": 9
       },
@@ -948,9 +948,9 @@
       "description": "Explicit physical temperature capability; inherited LXC sensors excluded.",
       "gridPos": {
         "x": 0,
-        "y": 36,
+        "y": 40,
         "w": 24,
-        "h": 10
+        "h": 17
       },
       "datasource": {
         "type": "prometheus",
@@ -1027,7 +1027,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 57,
         "w": 12,
         "h": 8
       },
@@ -1113,7 +1113,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 46,
+        "y": 57,
         "w": 12,
         "h": 8
       },
@@ -1199,7 +1199,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 54,
+        "y": 65,
         "w": 12,
         "h": 8
       },
@@ -1221,8 +1221,7 @@
           "unit": "hertz",
           "noValue": "Unavailable",
           "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -1264,7 +1263,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 54,
+        "y": 65,
         "w": 12,
         "h": 8
       },
@@ -1336,7 +1335,7 @@
       "title": "Unreported GPU temperature / discrete GPU",
       "gridPos": {
         "x": 0,
-        "y": 77,
+        "y": 88,
         "w": 24,
         "h": 4
       },
@@ -1352,7 +1351,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 62,
+        "y": 73,
         "w": 8,
         "h": 8
       },
@@ -1438,7 +1437,7 @@
       "description": "",
       "gridPos": {
         "x": 8,
-        "y": 62,
+        "y": 73,
         "w": 8,
         "h": 8
       },
@@ -1524,7 +1523,7 @@
       "description": "",
       "gridPos": {
         "x": 16,
-        "y": 62,
+        "y": 73,
         "w": 8,
         "h": 8
       },
@@ -1610,7 +1609,7 @@
       "description": "Arithmetic mean of the same monitored render engine class. A busy-time indicator, not total GPU throughput or FLOP utilization. Only fresh (<180s) Intel producer readings are included.",
       "gridPos": {
         "x": 0,
-        "y": 70,
+        "y": 81,
         "w": 12,
         "h": 7
       },
@@ -1688,7 +1687,7 @@
       "description": "Reported low-power residency, not engine busy utilization.",
       "gridPos": {
         "x": 12,
-        "y": 70,
+        "y": 81,
         "w": 12,
         "h": 7
       },
@@ -1767,7 +1766,7 @@
       "description": "Hottest reported physical hwmon sensor per host; may be CPU, board or storage. Select a host above for individual sensor labels. Not a GPU temperature estimate.",
       "gridPos": {
         "x": 0,
-        "y": 81,
+        "y": 92,
         "w": 24,
         "h": 8
       },
@@ -1846,7 +1845,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 89,
+        "y": 100,
         "w": 24,
         "h": 9
       },
@@ -2025,7 +2024,7 @@
       "description": "Driver-reported busy ratio; no invented Apple or Intel whole-device busy percentage.",
       "gridPos": {
         "x": 0,
-        "y": 98,
+        "y": 109,
         "w": 12,
         "h": 8
       },
@@ -2111,7 +2110,7 @@
       "description": "Only actual vendor temperature readings; absence stays unavailable.",
       "gridPos": {
         "x": 12,
-        "y": 98,
+        "y": 109,
         "w": 12,
         "h": 8
       },
@@ -2189,7 +2188,7 @@
       "description": "Driver-reported visible GPU memory allocation, not total host RAM or a universal shared-memory limit.",
       "gridPos": {
         "x": 0,
-        "y": 106,
+        "y": 117,
         "w": 12,
         "h": 8
       },
@@ -2275,7 +2274,7 @@
       "description": "Actual GPU power only; missing counters are unsupported, not idle zero.",
       "gridPos": {
         "x": 12,
-        "y": 106,
+        "y": 117,
         "w": 12,
         "h": 8
       },
@@ -2353,7 +2352,7 @@
       "description": "Arithmetic mean of vendor-reported busy-time ratios, not physical capacity or mixed CPU/GPU/FLOP throughput. Intel engine-class mean is shown separately. Only successful fresh adapters (<180s) are included.",
       "gridPos": {
         "x": 0,
-        "y": 114,
+        "y": 125,
         "w": 12,
         "h": 7
       },
@@ -2431,7 +2430,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 114,
+        "y": 125,
         "w": 12,
         "h": 7
       },
@@ -2500,7 +2499,7 @@
       "description": "Explicit native adapter status; unsupported Apple has no adapter and no invented status.",
       "gridPos": {
         "x": 0,
-        "y": 121,
+        "y": 132,
         "w": 12,
         "h": 6
       },
@@ -2584,7 +2583,7 @@
       "description": "Vendor-reported visible GPU memory only; does not aggregate unlike dedicated and shared memory pools.",
       "gridPos": {
         "x": 12,
-        "y": 121,
+        "y": 132,
         "w": 12,
         "h": 6
       },
