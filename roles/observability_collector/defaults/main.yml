@@ -1,0 +1,16 @@
+---
+observability_alloy_version: "1.20.1"
+observability_logs_enabled: false
+observability_docker_enabled: "{{ inventory_hostname in groups['docker_hosts'] | default([]) }}"
+observability_cadvisor_enabled: false
+observability_intermittent: "{{ inventory_hostname in ['gaming-pc', 'laptop'] }}"
+observability_alloy_memory_max: 384M
+observability_alloy_memory_high: 256M
+observability_ingest_address: "{{ edge_vip }}"
+observability_extra_scrapes: []
+observability_alloy_zip_sha256:
+  x86_64: 451fe650e8277d22d69cb8db50bba809f581fe78decba7fce4027ef185457be9
+  aarch64: 396827d58158f181c98d5776c908348b38b4099f1d18a1e7554f2fda0fcb9203
+observability_alloy_arch:
+  x86_64: amd64
+  aarch64: arm64

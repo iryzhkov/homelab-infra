@@ -1,0 +1,22 @@
+# {{ ansible_managed }}. No write, exec, archive or export Docker API access.
+services:
+  proxy:
+    image: wollomatic/socket-proxy@sha256:14b0afd0939218e02736794447868b7d5e1d5b231207b727a935845236f08507
+    network_mode: host
+    user: "65534:{{ observability_docker_socket.stat.gid }}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    mem_limit: 64m
+    command:
+      - -listenip=127.0.0.1
+      - -proxyport=2375
+      - -allowfrom=127.0.0.1/32
+      - '-allowGET=^(/v[0-9.]+)?/(version|info|events|containers/json|containers/[a-zA-Z0-9_.-]+/(json|logs|stats))$'
+      - -loglevel=WARN
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "2"}
