@@ -71,6 +71,14 @@
       "keepTime": true,
       "includeVars": true,
       "targetBlank": false
+    },
+    {
+      "title": "Home Assistant",
+      "type": "link",
+      "url": "/d/homelab-observe-homeassistant",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
     }
   ],
   "templating": {

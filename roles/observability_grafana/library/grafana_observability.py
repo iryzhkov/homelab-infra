@@ -3,6 +3,7 @@
 import base64
 import copy
 import json
+import re
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -33,6 +34,37 @@ def replace_loki(value: Any, uid: str) -> Any:
     return uid if value == "__LOKI_UID__" else value
 
 
+def embedding_queries(document: dict) -> list[str]:
+    """Fail closed before changing any dashboard eligible for external access."""
+    allowed = {
+        "homelab-observe-embed-overview",
+        "homelab-observe-embed-agents",
+        "homelab-observe-embed-homeassistant",
+    }
+    if document.get("uid") not in allowed:
+        raise ValueError("External access is confined to reviewed aggregate dashboard UIDs")
+    if document.get("links") or document.get("templating", {}).get("list") or document.get("annotations", {}).get("list"):
+        raise ValueError("Embedding dashboards cannot contain links, variables or annotations")
+    expressions = []
+    for panel in document.get("panels", []):
+        if panel.get("type") not in ("stat", "timeseries", "text"):
+            raise ValueError("Embedding dashboards contain only reviewed metric or text panels")
+        if panel.get("links"):
+            raise ValueError("Embedding panel links are not permitted")
+        for target in panel.get("targets", []):
+            if panel.get("datasource", {}).get("uid") != "homelab-metrics":
+                raise ValueError("Embedding queries must use only homelab-metrics")
+            if target.get("datasource", {}).get("uid", "homelab-metrics") != "homelab-metrics":
+                raise ValueError("Embedding targets cannot override the metrics datasource")
+            expression = target.get("expr", "")
+            if not expression or "$" in expression or re.search(r"(?i)loki|token|quota|secret|password|friendly_name|entity=|ip_address", expression):
+                raise ValueError("Embedding query contains an unsupported or sensitive selection")
+            expressions.append(expression)
+    if not expressions:
+        raise ValueError("Embedding dashboard contains no metric queries")
+    return expressions
+
+
 def main():
     module = AnsibleModule(
         argument_spec=dict(
@@ -43,6 +75,7 @@ def main():
             folder_uid=dict(type="str", required=True),
             folder_title=dict(type="str", required=True),
             dashboards=dict(type="list", elements="dict", required=True),
+            external_shares=dict(type="list", elements="dict", default=[], no_log=True),
         ),
         supports_check_mode=True,
     )
@@ -103,6 +136,25 @@ def main():
         if not module.check_mode:
             api("PUT", folder_path, {"title": p["folder_title"], "version": folder.get("version", 0)})
 
+    documents = {d.get("uid"): d for d in p["dashboards"]}
+    for share in p["external_shares"]:
+        if share.get("dashboard_uid") not in documents:
+            module.fail_json(msg="Shared dashboard must be included in reviewed source documents")
+    for document in p["dashboards"]:
+        if document.get("uid", "").startswith("homelab-observe-embed-"):
+            expressions: list[str] = []
+            try:
+                expressions = embedding_queries(document)
+            except ValueError as exc:
+                module.fail_json(msg=str(exc))
+            if existing_source or not module.check_mode:
+                for expression in expressions:
+                    result = api("GET", "/api/datasources/proxy/uid/homelab-metrics/api/v1/query?" + urlencode({"query": expression}))
+                    if result.get("status") != "success" or any(
+                        series.get("metric") for series in result.get("data", {}).get("result", [])
+                    ):
+                        module.fail_json(msg="Embedding query must return only aggregate series with no labels")
+
     for document in p["dashboards"]:
         desired = replace_loki(copy.deepcopy(document), loki_uid)
         uid = desired.get("uid", "")
@@ -122,7 +174,38 @@ def main():
                     "overwrite": True, "message": "Reconcile Ansible observability source",
                 })
 
+    for share in p["external_shares"]:
+        uid = share["dashboard_uid"]
+        try:
+            embedding_queries(documents[uid])
+        except ValueError as exc:
+            module.fail_json(msg=str(exc))
+        path = "/api/dashboards/uid/" + quote(uid, safe="") + "/public-dashboards/"
+        desired_share = {
+            "uid": share["public_uid"], "accessToken": share["access_token"],
+            "isEnabled": True, "annotationsEnabled": False,
+            "timeSelectionEnabled": False, "share": "public",
+        }
+        actual_share = api("GET", path, missing_ok=True)
+        if actual_share and (
+            actual_share.get("uid") != desired_share["uid"]
+            or actual_share.get("accessToken") != desired_share["accessToken"]
+        ):
+            module.fail_json(msg="Existing external share identity differs; refusing to replace its access capability")
+        if not desired_matches(actual_share, desired_share):
+            changes.append("external share " + uid)
+            if not module.check_mode:
+                if actual_share:
+                    api("PATCH", path.rstrip("/") + "/" + quote(actual_share["uid"], safe=""), {
+                        key: desired_share[key] for key in (
+                            "isEnabled", "annotationsEnabled", "timeSelectionEnabled", "share"
+                        )
+                    })
+                else:
+                    api("POST", path, desired_share)
+
     readiness = "pending datasource creation (check mode)"
+
     if existing_source or not module.check_mode:
         health = api("GET", "/api/datasources/uid/homelab-metrics/health")
         if str(health.get("status", "")).lower() not in ("ok", "success"):

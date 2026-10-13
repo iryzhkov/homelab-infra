@@ -11,3 +11,12 @@ observability_grafana_dashboard_files:
   - logs.json
   - agents.json
   - unifi.json
+  - homeassistant.json
+
+# Optional private aggregate views; sharing is a separate explicitly reviewed action.
+observability_grafana_embedding_dashboard_files:
+  - embed-overview.json
+  - embed-agents.json
+  - embed-homeassistant.json
+observability_grafana_sharing_enabled: false
+# Available: embed-overview.json, embed-agents.json, embed-homeassistant.json.

@@ -13,7 +13,15 @@
 - name: Load dashboard source documents from the controller
   ansible.builtin.set_fact:
     observability_grafana_dashboards: "{{ observability_grafana_dashboards + [lookup('ansible.builtin.file', role_path ~ '/files/dashboards/' ~ item) | from_json] }}"
-  loop: "{{ observability_grafana_dashboard_files }}"
+  loop: "{{ observability_grafana_dashboard_files + observability_grafana_embedding_dashboard_files }}"
+
+- name: Load encrypted aggregate dashboard capabilities only when sharing is authorized
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/observability-grafana-shares.sops.yaml"
+    name: observability_grafana_share_secrets
+  delegate_to: localhost
+  no_log: true
+  when: observability_grafana_sharing_enabled | bool
 
 - name: Reconcile dedicated observability datasource and dashboards
   grafana_observability:
@@ -24,6 +32,7 @@
     folder_uid: "{{ observability_grafana_folder_uid }}"
     folder_title: "{{ observability_grafana_folder_title }}"
     dashboards: "{{ observability_grafana_dashboards }}"
+    external_shares: "{{ observability_grafana_share_secrets.GF_PUBLIC_SHARES if observability_grafana_sharing_enabled | bool else [] }}"
   register: observability_grafana_result
   no_log: true
 
@@ -43,7 +52,9 @@
     status_code: 200
   loop: "{{ observability_grafana_dashboards }}"
   no_log: true
-  when: observability_grafana_result is changed and not ansible_check_mode
+  when:
+    - observability_grafana_result is changed and not ansible_check_mode
+    - not item.uid.startswith('homelab-observe-embed-')
 
 - name: Report observability provisioning and query readiness
   ansible.builtin.debug:
