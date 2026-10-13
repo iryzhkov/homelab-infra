@@ -1,0 +1,5 @@
+---
+# omarchy-pc is this physical desktop's OS hostname; metrics use gaming-pc.
+observability_host_kind: physical
+observability_host_capabilities:
+  - {capability: temperature, mode: physical}

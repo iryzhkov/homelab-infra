@@ -1,0 +1,20 @@
+# HELP node_monitoring_host_info Inventory host classification; not a health signal.
+# TYPE node_monitoring_host_info gauge
+{% for name in observability_metadata_hosts | sort %}
+{% set guest_id = hostvars[name].observability_guest_id | default('lxc/' ~ hostvars[name].proxmox_vmid if hostvars[name].proxmox_vmid is defined else '') %}
+node_monitoring_host_info{host="{{ name }}",kind="{{ hostvars[name].observability_host_kind }}"{% if guest_id %},guest_id="{{ guest_id }}"{% endif %}} 1
+{% endfor %}
+# HELP node_monitoring_gpu_owner_info Physical GPU identity and its sole telemetry owner; not a health signal.
+# TYPE node_monitoring_gpu_owner_info gauge
+{% for name in observability_metadata_hosts | sort %}
+{% for item in hostvars[name].observability_gpu_owners | default([]) | sort(attribute='physical_device') %}
+node_monitoring_gpu_owner_info{host="{{ name }}",physical_host="{{ item.physical_host }}",physical_device="{{ item.physical_device }}",gpu_kind="{{ item.gpu_kind }}",mode="{{ item.mode }}"} 1
+{% endfor %}
+{% endfor %}
+# HELP node_monitoring_capability_info Explicit supported hardware telemetry; missing measurements remain missing.
+# TYPE node_monitoring_capability_info gauge
+{% for name in observability_metadata_hosts | sort %}
+{% for item in hostvars[name].observability_host_capabilities | default([]) | sort(attribute='capability') %}
+node_monitoring_capability_info{host="{{ name }}",capability="{{ item.capability }}",mode="{{ item.mode }}"} 1
+{% endfor %}
+{% endfor %}

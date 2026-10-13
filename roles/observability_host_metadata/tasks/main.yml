@@ -1,0 +1,57 @@
+---
+- name: Name only the current exporter and declared native guest metrics hosts
+  ansible.builtin.set_fact:
+    observability_metadata_hosts: "{{ ([inventory_hostname] + observability_host_metadata_guests) | unique | list }}"
+
+- name: Identify each physical GPU's sole declared telemetry owner
+  ansible.builtin.set_fact:
+    observability_metadata_gpu_owner_keys: >-
+      {%- set keys = [] -%}
+      {%- for name in groups['all'] -%}
+      {%- for gpu in hostvars[name].observability_gpu_owners | default([]) -%}
+      {%- set _ = keys.append(gpu.physical_host ~ '/' ~ gpu.physical_device) -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ keys }}
+
+- name: Bound inventory metadata cardinality and require the existing textfile path
+  ansible.builtin.assert:
+    that:
+      - observability_metadata_hosts | length <= 64
+      - observability_metadata_gpu_owner_keys | length == observability_metadata_gpu_owner_keys | unique | list | length
+      - observability_host_metadata_directory == '/var/lib/observability-textfile'
+    quiet: true
+
+- name: Require explicit kinds and bounded supported hardware declarations
+  ansible.builtin.assert:
+    that:
+      - item is match('^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$')
+      - item in hostvars
+      - hostvars[item].observability_host_kind | default('') in ['physical', 'vm', 'lxc']
+      - hostvars[item].observability_host_capabilities | default([]) | length <= 3
+      - hostvars[item].observability_gpu_owners | default([]) | length <= 2
+      - hostvars[item].observability_guest_id | default('qemu/0') is match('^(qemu|lxc)/[0-9]+$')
+      - hostvars[item].observability_host_capabilities | default([]) | map(attribute='capability') | unique | list | length == hostvars[item].observability_host_capabilities | default([]) | length
+    quiet: true
+  loop: "{{ observability_metadata_hosts }}"
+
+- name: Validate each host's hardware declaration
+  ansible.builtin.include_tasks: capabilities.yml
+  loop: "{{ observability_metadata_hosts }}"
+  loop_control:
+    loop_var: observability_metadata_host
+
+- name: Ensure the existing exporter textfile directory is readable
+  ansible.builtin.file:
+    path: "{{ observability_host_metadata_directory }}"
+    state: directory
+    owner: root
+    mode: '0755'
+
+- name: Publish bounded inventory metadata atomically without restarting exporters
+  ansible.builtin.template:
+    src: host-metadata.prom.j2
+    dest: "{{ observability_host_metadata_directory }}/host-metadata.prom"
+    owner: root
+    group: root
+    mode: '0644'

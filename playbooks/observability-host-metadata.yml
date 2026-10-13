@@ -1,0 +1,9 @@
+---
+# Textfile-only convergence: no packages, service changes or application restarts.
+- name: Publish explicit host metadata to existing node collection
+  hosts: docker_hosts:hypervisors:cloud:gaming-pc:observability_clients:agent_workers:observability_lxc
+  gather_facts: false
+  become: true
+  roles:
+    - role: observability_host_metadata
+      when: observability_alloy_enabled | default(true) | bool

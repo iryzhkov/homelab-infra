@@ -1,4 +1,5 @@
 ---
+observability_guest_id: qemu/108
 # The second edge proxy, VM 108 on proxmox-b, created 2026-10-02 from template
 # 9001 (Debian 13 cloud image) for phase 4 of the serviceable transition. See
 # docs/transition/phase4/2026-10-02-public-api-b.md.

@@ -61,6 +61,10 @@
     - {path: /var/lib/alloy, owner: alloy, mode: "0750"}
     - {path: /var/lib/observability-textfile, owner: root, mode: "0755"}
 
+- name: Publish inventory classification and supported hardware metadata
+  ansible.builtin.include_role:
+    name: observability_host_metadata
+
 - name: Create the empty redaction acceptance input
   ansible.builtin.file:
     path: /var/lib/alloy/redaction-test.log

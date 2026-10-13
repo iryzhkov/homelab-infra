@@ -1,4 +1,7 @@
 ---
+observability_host_capabilities:
+  - {capability: smart, mode: physical}
+  - {capability: temperature, mode: physical}
 # hp-workstation-01.
 
 # ZFS ARC cap, 2 GiB (32 GB of RAM, most of it given to guests).

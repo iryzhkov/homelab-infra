@@ -1,4 +1,7 @@
 ---
+observability_host_kind: physical
+observability_host_capabilities:
+  - {capability: temperature, mode: physical}
 # The mesh works at home and while travelling; both edges serve the TLS names.
 observability_ingest_address: 10.42.0.3
 observability_ingest_fallback_address: 10.42.0.10
