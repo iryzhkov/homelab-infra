@@ -27,6 +27,24 @@
     path: /usr/sbin/rsyslogd
   register: observability_guest_logs_binary
 
+- name: Inspect ownership before touching a distribution syslog service
+  ansible.builtin.stat:
+    path: /etc/observability-guest-logs/rsyslog.conf
+  register: observability_guest_logs_owned_config
+
+- name: Inspect distribution service metadata
+  ansible.builtin.service_facts:
+  register: observability_guest_logs_services
+
+- name: Preserve any preexisting active distribution daemon
+  ansible.builtin.assert:
+    that:
+      - >-
+        observability_guest_logs_services.ansible_facts.services.get('rsyslog.service', {}).get('state', 'stopped') != 'running'
+        or observability_guest_logs_owned_config.stat.exists
+    quiet: true
+    fail_msg: An existing active distribution syslog daemon needs a separate coverage review.
+
 - name: Create private forwarder configuration and persistent cursor directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -65,6 +83,13 @@
     name: rsyslog
     state: present
     policy_rc_d: 101
+
+- name: Keep the newly installed distribution daemon disabled across reboots
+  ansible.builtin.systemd_service:
+    name: rsyslog
+    enabled: false
+    state: stopped
+  when: not ansible_check_mode
 
 - name: Validate and install only the dedicated forwarder configuration
   ansible.builtin.template:
