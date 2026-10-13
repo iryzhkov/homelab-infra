@@ -131,3 +131,56 @@ acceptance and cannot bypass a failed-state barrier. Run these with the deployme
 `/home/igor/.local/share/venvs/ansible/bin/python roles/legacy_influx_transition/tests/test_transition.py`.
 The SMART/GPU/PVE writer selector now names legacy-influx while preserving
 the existing bootstrap ingress address and port.
+
+## Post-cutover backup closure, 2026-10-13
+
+The coordinated transition was accepted (85 ok, 22 changed, zero failures);
+subsequent logging/Grafana convergence passed (33 ok, 4 changed, zero
+failures). InfluxDB now runs as `legacy-influx_influxdb`, using local logs.
+The daily native helper was reconciled on homelab, and the legacy stack's
+snapshot definitions on both workers, through focused backup tasks. No
+application service was restarted. An unrelated full-role proposal to change
+the backup login's `.local/bin` mode was excluded; mode 0700 remains intact.
+
+The first post-cutover native archive attempt exposed Ansible's default
+symlink following: assigning root ownership to `native-backups` had changed
+its existing archive directory's ownership. The role now sets `follow: false`
+when managing the link; only that target directory's original backup-user
+ownership was restored. A fifth production-template regression test guards
+this behavior. The link remains root-owned; its target remains
+`iryzhkov:iryzhkov`, mode 0755. The corrected source commit `e4e4a80`
+passed its exact CI run.
+
+The actual deployed native helper SHA256 is
+`c72c949587567843ff052261dbf28bbd373dc0262e1a5aac169d10edcf9d88e3`.
+It selected the new live service, completed native backup, and produced
+`/home/iryzhkov/app/backups/influxdb/influxdb_2026-10-13_1151.tar.gz`:
+941,286,930 bytes, 43 regular native backup files including one manifest.
+Full gzip/tar validation passed. SHA256:
+`8eac890af55cb63b3015464ef7c3f9b1be3e7c922fe76c786d73947b75ddd383`.
+The existing seven-archive policy expired two older local archives normally.
+
+A genuine hourly snapshot/mirror run exited zero. The corresponding peer
+copy is
+`/mnt/data/peer-snapshots/homelab/legacy-influx/files/native-backups/influxdb_2026-10-13_1151.tar.gz`
+on normandy. Its actual byte count and SHA256 match the owner archive. Both
+the peer `native-backups` directory and its archive are regular filesystem
+objects, not copied dangling symlinks. The real transport produced
+`1791918110 homelab` in `legacy-influx/sync/last-sync`.
+
+Offsite recovery uses the existing native daily archive tier, whose resolved
+directory is the target of `native-backups`. A real checksum upload and
+Backblaze object readback verified
+`b2:igor-offsite-backup/apps/homelab/backups/influxdb/influxdb_2026-10-13_1151.tar.gz`:
+941,286,930 bytes, SHA1
+`bba67d653f4ffcc6c88502981cff12c7757c8529`, equal to the local archive.
+The hourly offsite job also completed; its existing scope is local native
+snapshot directories and the other worker's peer copies. This fresh daily
+archive's offsite proof is the daily tier above, not a claim that hourly
+rclone directly traverses this owner's live state directory.
+
+Influx health and all eight household acceptance routes returned 200 after
+backup closure. The live Influx task remained `2cab5b961612`; no application
+restart or bucket deletion was performed. This fresh archive passed structural
+and transport validation. The earlier isolated restore evidence above proves
+historical sample recovery; no new full identity/token restore is claimed.
