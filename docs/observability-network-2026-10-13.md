@@ -25,5 +25,11 @@ laptop /tmp/monitoring-unifi-baseline.json. Baseline had 300 policies. Update di
 not create or delete a policy. TLS push paths subsequently returned 401 without
 credentials; query returned 404, proving end-to-end backend reachability.
 
-Separate scopes are needed for agent VLAN -> VIP:8443 and OCI mesh -> edge:8443.
-Neither is implied by the backend grant.
+Agent telemetry I1 (same owner/review date): only agent-a 192.168.130.2 and
+agent-b 192.168.130.3 may reach VIP 192.168.20.3 TCP 8443, authenticated push paths
+only. Applied policy 6acdfde31825b50cb1321662 plus its generated return rule;
+readback proved the exact sources, destination and port, with no old policy changed.
+Rollback deletes only that new policy. Existing 443 and isolation remain.
+
+OCI mesh -> edge:8443 was qualified read-only: 10.42.0.1 reaches edge
+10.42.0.3:8443 and gets 404 for an unmatched path. No new mesh rule needed.

@@ -13,7 +13,7 @@ services:
       - -listenip=127.0.0.1
       - -proxyport=2375
       - -allowfrom=127.0.0.1/32
-      - '-allowGET=^(/v[0-9.]+)?/(_ping|version|info|events|containers/json|containers/[a-zA-Z0-9_.-]+/(json|logs|stats))$'
+      - '-allowGET=^(/v[0-9.]+)?/(_ping|version|info|events|networks|networks/[a-zA-Z0-9_.-]+|containers/json|containers/[a-zA-Z0-9_.-]+/(json|logs|stats))$'
       - '-allowHEAD=^(/v[0-9.]+)?/_ping$'
       - -loglevel=WARN
     volumes:
