@@ -45,9 +45,10 @@ class ProvisioningTest(unittest.TestCase):
                 state["starred"] = True; body = {}
             else: raise AssertionError((method,path))
             return io.BytesIO(json.dumps(body).encode())
-        fake = types.ModuleType("ansible.module_utils.basic"); fake.AnsibleModule = Module
+        fake = types.ModuleType("ansible.module_utils.basic"); setattr(fake, "AnsibleModule", Module)
         with patch.dict(sys.modules, {"ansible.module_utils.basic":fake}):
             spec=importlib.util.spec_from_file_location("grafana_test_module", MODULE_PATH)
+            assert spec is not None and spec.loader is not None
             module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with patch.object(module,"urlopen",request):
             try: module.main()
