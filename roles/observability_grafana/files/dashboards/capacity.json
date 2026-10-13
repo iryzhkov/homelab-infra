@@ -1038,7 +1038,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "expr": "(max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}} → {{physical_host}} · {{physical_device}}",
           "range": false,
           "instant": true
@@ -1124,7 +1124,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(igpu_vcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "expr": "(max by(host)(igpu_vcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}} → {{physical_host}}",
           "range": false,
           "instant": true
@@ -1210,7 +1210,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "1e6 * (max by(host)(igpu_actual_freq_mhz{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))",
+          "expr": "(1e6 * (max by(host)(igpu_actual_freq_mhz{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
@@ -1363,7 +1363,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(igpu_vcs1_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "expr": "(max by(host)(igpu_vcs1_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true
@@ -1449,7 +1449,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(igpu_bcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "expr": "(max by(host)(igpu_bcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true
@@ -1535,7 +1535,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(igpu_vecs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "expr": "(max by(host)(igpu_vecs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true
@@ -1607,7 +1607,7 @@
     {
       "type": "gauge",
       "title": "Mean observed Render / 3D duty cycle",
-      "description": "Arithmetic mean of the same monitored render engine class. A busy-time indicator, not total GPU throughput or FLOP utilization.",
+      "description": "Arithmetic mean of the same monitored render engine class. A busy-time indicator, not total GPU throughput or FLOP utilization. Only fresh (<180s) Intel producer readings are included.",
       "gridPos": {
         "x": 0,
         "y": 70,
@@ -1621,7 +1621,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "avg(max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))",
+          "expr": "avg((max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"}))",
           "legendFormat": "Mean observed Render / 3D duty cycle",
           "range": false,
           "instant": true
@@ -1699,7 +1699,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host)(igpu_rc6_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})",
+          "expr": "(max by(host)(igpu_rc6_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true
