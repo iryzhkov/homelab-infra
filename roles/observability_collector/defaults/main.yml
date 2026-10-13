@@ -8,6 +8,7 @@ observability_alloy_memory_max: 384M
 observability_alloy_memory_high: 256M
 observability_alloy_go_memory_limit: 128MiB
 observability_ingest_address: "{{ edge_vip }}"
+observability_ingest_fallback_address: ""
 observability_extra_scrapes: []
 observability_journal_max_use: 256M
 observability_alloy_zip_sha256:

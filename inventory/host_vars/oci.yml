@@ -1,6 +1,7 @@
 ---
 # Cloud traffic reaches the ingest edge over Nebula, with normal TLS names.
 observability_ingest_address: 10.42.0.3
+observability_ingest_fallback_address: 10.42.0.10
 observability_alloy_memory_max: 192M
 observability_alloy_memory_high: 128M
 observability_alloy_go_memory_limit: 64MiB

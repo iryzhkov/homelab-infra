@@ -84,9 +84,16 @@
 - name: Resolve the private ingest names through the explicit reachable edge
   ansible.builtin.lineinfile:
     path: /etc/hosts
-    regexp: '\smetrics-push\.ryzhkov\.dev\s+loki-push\.ryzhkov\.dev(?:\s|$)'
+    regexp: '^(?!.*# observability-ingest-fallback$).*\smetrics-push\.ryzhkov\.dev\s+loki-push\.ryzhkov\.dev(?:\s|$)'
     line: "{{ observability_ingest_address }} metrics-push.ryzhkov.dev loki-push.ryzhkov.dev"
     state: present
+
+- name: Add a scoped second mesh edge for offsite clients
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '# observability-ingest-fallback$'
+    line: "{{ observability_ingest_fallback_address }} metrics-push.ryzhkov.dev loki-push.ryzhkov.dev # observability-ingest-fallback"
+    state: "{{ (observability_ingest_fallback_address | length > 0) | ternary('present', 'absent') }}"
 
 - name: Preserve local journals across reboots within a disk budget
   ansible.builtin.file:

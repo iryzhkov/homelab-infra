@@ -79,7 +79,10 @@ writer. Persistent syslog firewall is required before opening a parent receiver.
 Redaction fixtures cover bearer/basic headers, named token/key/password/secret
 fields, connection strings, provider key formats and JWTs. The live file,
 journal and Docker acceptance script is `scripts/verify-observability-redaction.py`.
-The socket proxy denies write, exec, archive and export operations.
+The socket proxy denies write, exec, archive and export operations. The laptop
+uses mesh addresses while travelling, and both laptop/OCI resolve the ingest
+names to both mesh edges. The LAN collectors use the failover VIP. Native backup
+authentication uses a private stdin pipe rather than a secret in process arguments.
 Metric queries, dashboard provisioning and household route health are checked.
 
 Existing Docker Loki drivers, toolfeedback, Debian Promtail, Influx readers and
