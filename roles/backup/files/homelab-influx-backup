@@ -19,7 +19,18 @@ set -euo pipefail
 
 out="${1:?usage: homelab-influx-backup <output-dir> <keep>}"
 keep="${2:-7}"
-scratch=/var/lib/influxdb2/influxdb-backup
+scratch_root=""
+scratch=""
+partial=""
+umask 077
+mkdir -p "$out"
+# Serialize direct/manual calls as well as the daily service. Keep the lock
+# inode stable: unlinking it would allow a third caller to acquire a new lock.
+exec 9>"$out/.native-backup.lock"
+if ! flock -n 9; then
+    echo "influxdb: another native export is running" >&2
+    exit 1
+fi
 
 : "${INFLUX_TOKEN:?INFLUX_TOKEN is not set}"
 
@@ -44,29 +55,44 @@ if [ -z "$container" ]; then
     exit 1
 fi
 
-stamp=$(date +%Y-%m-%d_%H%M)
-mkdir -p "$out"
+stamp=$(date +%Y-%m-%d_%H%M%S)
 
 cleanup() {
-    docker exec "$container" rm -rf "$scratch" >/dev/null 2>&1 || true
+    [ -z "$partial" ] || rm -f "$partial"
+    if [ -n "$scratch_root" ]; then
+        docker exec "$container" rm -rf "$scratch_root" >/dev/null 2>&1 || true
+    fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-docker exec "$container" rm -rf "$scratch"
+# Unique container storage also isolates an export whose Docker client was
+# interrupted while the server-side native operation was still finishing.
+scratch_root=$(docker exec "$container" mktemp -d /var/lib/influxdb2/influxdb-backup.XXXXXXXX)
+scratch="$scratch_root/influxdb-backup"
+partial=$(mktemp "$out/influxdb_${stamp}_XXXXXXXX.partial")
 # Feed the token through stdin, not Docker argv or service environment.
 printf '%s\n' "$INFLUX_TOKEN" | docker exec -i "$container" sh -c \
     'IFS= read -r INFLUX_TOKEN; export INFLUX_TOKEN; exec influx backup "$1"' \
     influx-backup "$scratch" >/dev/null
 
 # docker cp to stdout emits a tar of the directory; gzip it on the way past.
-docker cp "$container:$scratch" - | gzip >"$out/influxdb_$stamp.tar.gz"
+docker cp "$container:$scratch" - | gzip >"$partial"
 
-size=$(stat -c %s "$out/influxdb_$stamp.tar.gz")
+size=$(stat -c %s "$partial")
 if [ "$size" -lt 100000 ]; then
     echo "influxdb: archive is only $size bytes, treating as a failure" >&2
-    rm -f "$out/influxdb_$stamp.tar.gz"
     exit 1
 fi
+
+gzip -t "$partial"
+tar -tzf "$partial" >/dev/null
+# Publish only a fully validated archive, on the same filesystem. Peers and
+# cloud jobs exclude partials; an interrupted export cannot replace history.
+archive="${partial%.partial}.tar.gz"
+mv "$partial" "$archive"
+partial=""
 
 removed=0
 while [ "$(ls -1 "$out"/influxdb_*.tar.gz 2>/dev/null | wc -l)" -gt "$keep" ]; do

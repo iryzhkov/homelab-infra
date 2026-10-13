@@ -7,6 +7,7 @@ swarm_stacks_legacy_influx:
     prepare_tasks: swarm-prepare.yml
     snapshot:
       class: files
+      exclude: ["*.partial", ".native-backup.lock"]
       # These live copies are crash-consistent. Native archives remain the
       # daily consistent/offsite tier; transition proof also mirrors a native archive.
       files:
