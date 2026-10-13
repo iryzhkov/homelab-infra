@@ -3,7 +3,9 @@ Description=Bounded guest journal and declared-file forwarding to its owning par
 After=systemd-journald.service network-online.target
 Wants=network-online.target
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30
 User=root
 ExecStart=/usr/sbin/rsyslogd -n -i /run/observability-guest-logs/rsyslog.pid -f /etc/observability-guest-logs/rsyslog.conf
 Restart=on-failure

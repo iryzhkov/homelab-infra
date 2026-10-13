@@ -1,6 +1,6 @@
 # {{ ansible_managed }}. No default daemon includes, local outputs or socket takeover.
 global(workDirectory="/var/lib/observability-guest-logs")
-module(load="imjournal" StateFile="journal.cursor" PersistStateInterval="1" Ratelimit.Interval="0")
+module(load="imjournal" StateFile="journal.cursor" PersistStateInterval="1" Ratelimit.Interval="0" IgnorePreviousMessages="on")
 module(load="imfile" PollingInterval="2")
 template(name="JournalToParent" type="string"
          string="<%pri%>1 %timereported:::date-rfc3339% {{ inventory_hostname }} journal - - - %msg%\n")

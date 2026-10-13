@@ -5,7 +5,11 @@ with a dedicated config and systemd unit. It never starts the distribution's
 default daemon, takes over a syslog socket, changes application logging settings,
 or installs Alloy in the tiny guest.
 
-Declared imfile sources and imjournal retain persistent cursors in the private
+First startup tails the guest journal from the current end; existing local
+historical journals stay available. Later starts resume the stored journal cursor.
+This avoids replaying years of previously uncollected journal records as a new
+initial backlog. The parent preserves sender timestamps for correct outage-time
+queries. Declared imfile sources and imjournal retain persistent cursors in the private
 /var/lib/observability-guest-logs directory. Separate pure disk queues allow
 32MiB each for journal and file forwarding, total64MiB, with checkpoint and
 synchronous queue files. CPU is capped at10%, memory at64MiB and tasks at16.

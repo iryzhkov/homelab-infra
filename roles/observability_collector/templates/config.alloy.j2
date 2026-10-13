@@ -221,6 +221,7 @@ loki.source.syslog "debian_guests" {
     address = "{{ ansible_host }}:1515"
     protocol = "tcp"
     syslog_format = "rfc5424"
+    use_incoming_timestamp = true
     labels = { job = "guest-file" }
   }
   relabel_rules = loki.relabel.guest_logs.rules
