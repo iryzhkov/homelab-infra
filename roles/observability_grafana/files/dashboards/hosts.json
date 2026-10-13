@@ -245,8 +245,8 @@
     },
     {
       "type": "gauge",
-      "title": "RAM used",
-      "description": "Mapped Proxmox guests use configured guest memory accounting; physical/unmapped hosts use native OS available memory. Hypervisor ARC remains included.",
+      "title": "RAM used / PVE resident accounting",
+      "description": "Mapped QEMU/LXC values use PVE resident accounting versus configured RAM, which can exceed allocation slightly; bare hosts use MemAvailable.",
       "gridPos": {
         "x": 6,
         "y": 3,
@@ -469,7 +469,7 @@
     },
     {
       "type": "bargauge",
-      "title": "Each reported logical CPU / SMT thread · hottest first",
+      "title": "Logical CPU / SMT thread IDs · numeric order",
       "description": "LXC per-thread /proc CPU counters belong to the parent and are intentionally excluded. Total guest CPU uses authoritative Proxmox accounting.",
       "gridPos": {
         "x": 0,
@@ -484,8 +484,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sort_desc(100 * (1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=\"$host\"}[$__rate_interval])))) and on(host) max by(host)(node_monitoring_host_info{job=\"node\",host=\"$host\",kind!=\"lxc\"})",
-          "legendFormat": "CPU {{cpu}}",
+          "expr": "label_replace(label_replace(sort_desc(100 * (1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=\"$host\"}[$__rate_interval])))) and on(host) max by(host)(node_monitoring_host_info{job=\"node\",host=\"$host\",kind!=\"lxc\"}),\"thread_id\",\"$1\",\"cpu\",\"(.*)\"),\"thread_id\",\"0$1\",\"cpu\",\"([0-9])\")",
+          "legendFormat": "{{thread_id}}",
           "range": false,
           "instant": true
         }
@@ -1332,7 +1332,7 @@
     {
       "id": 19,
       "type": "timeseries",
-      "title": "Guest memory used / configured",
+      "title": "PVE resident RAM / configured",
       "description": "Proxmox-reported memory usage relative to configured memory. QEMU reporting may include guest cache or balloon accounting.",
       "gridPos": {
         "x": 12,
