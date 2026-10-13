@@ -1,0 +1,14 @@
+---
+# Additive rollout: existing logging and Influx feeds remain running.
+swarm_stacks_observability:
+  - name: observability
+    pin: homelab
+    secrets: observability
+    prepare_tasks: swarm-prepare.yml
+    env_extra:
+      INGEST_CONFIG_SHA256: "{{ lookup('file', '../stacks/observability/files/nginx.conf') | hash('sha256') }}"
+    snapshot:
+      files:
+        - /srv/swarm/observability/config
+      # VictoriaMetrics snapshots are managed separately; never claim that a
+      # live rsync of its mutable data directory is a consistent backup.
