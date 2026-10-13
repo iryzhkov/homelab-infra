@@ -6,3 +6,6 @@ collections:
   - name: ansible.posix
   - name: grafana.grafana
     version: 6.0.6
+  # Alloy's listener validation uses this filter collection and netaddr.
+  - name: ansible.utils
+    version: 6.0.0
