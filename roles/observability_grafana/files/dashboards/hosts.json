@@ -470,7 +470,28 @@
     {
       "type": "bargauge",
       "title": "Logical CPU / SMT thread IDs · numeric order",
-      "transformations": [{"id":"reduce","options":{"mode":"seriesToRows","reducers":["lastNotNull"]}},{"id":"sortBy","options":{"sort":[{"field":"Field","desc":false}]}}],
+      "transformations": [
+        {
+          "id": "reduce",
+          "options": {
+            "mode": "seriesToRows",
+            "reducers": [
+              "lastNotNull"
+            ]
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Field",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
       "description": "LXC per-thread /proc CPU counters belong to the parent and are intentionally excluded. Total guest CPU uses authoritative Proxmox accounting.",
       "gridPos": {
         "x": 0,
@@ -533,7 +554,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "orientation": "horizontal",
         "displayMode": "gradient",
