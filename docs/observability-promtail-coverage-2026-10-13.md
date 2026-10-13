@@ -30,6 +30,7 @@ An additional owned temporary file target exercised the same declared_files
 component. All nine dummy-secret patterns were redacted before ingest on both
 nodes. The canary target was then removed by restoring the ordinary Ansible
 configuration, and the owned fixture files and temporary variable file deleted.
+A subsequent Ansible check reported changed=0 and failed=0 on both PVE nodes.
 Alloy and Promtail were both active afterward; Promtail retirement remains a
 separate gated action now that replacement coverage has passed acceptance.
 
