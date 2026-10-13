@@ -2036,7 +2036,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * max by(host,device)(gpu_utilization_ratio{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")",
+          "expr": "(100 * max by(host,device)(gpu_utilization_ratio{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
           "range": false,
           "instant": true
@@ -2122,7 +2122,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(gpu_temperature_celsius{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")",
+          "expr": "(max by(host,device)(gpu_temperature_celsius{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
           "range": false,
           "instant": true
@@ -2200,7 +2200,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * max by(host,device)(gpu_memory_used_bytes{job=\"node\"}) / max by(host,device)(gpu_memory_total_bytes{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")",
+          "expr": "(100 * max by(host,device)(gpu_memory_used_bytes{job=\"node\"}) / (max by(host,device)(gpu_memory_total_bytes{job=\"node\"}) > 0) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
           "range": false,
           "instant": true
@@ -2286,7 +2286,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(gpu_power_watts{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")",
+          "expr": "(max by(host,device)(gpu_power_watts{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
           "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
           "range": false,
           "instant": true
@@ -2350,7 +2350,7 @@
     {
       "type": "gauge",
       "title": "Mean native desktop GPU busy",
-      "description": "Arithmetic mean of vendor-reported busy-time ratios, not physical capacity or mixed CPU/GPU/FLOP throughput. Intel engine-class mean is shown separately.",
+      "description": "Arithmetic mean of vendor-reported busy-time ratios, not physical capacity or mixed CPU/GPU/FLOP throughput. Intel engine-class mean is shown separately. Only successful fresh adapters (<180s) are included.",
       "gridPos": {
         "x": 0,
         "y": 114,
@@ -2364,7 +2364,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * avg(max by(host,device)(gpu_utilization_ratio{job=\"node\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\"))",
+          "expr": "100 * avg((max by(host,device)(gpu_utilization_ratio{job=\"node\"}) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\"))",
           "legendFormat": "Observed desktop GPU busy",
           "range": false,
           "instant": true
@@ -2493,6 +2493,159 @@
         "showThresholdMarkers": true
       },
       "id": 30
+    },
+    {
+      "type": "stat",
+      "title": "Desktop GPU adapter result",
+      "description": "Explicit native adapter status; unsupported Apple has no adapter and no invented status.",
+      "gridPos": {
+        "x": 0,
+        "y": 121,
+        "w": 12,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,device)(gpu_scrape_success{job=\"node\"})",
+          "legendFormat": "{{host}} · {{device}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Reading failed",
+                  "color": "orange"
+                },
+                "1": {
+                  "text": "Reading OK",
+                  "color": "blue"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 31
+    },
+    {
+      "type": "stat",
+      "title": "Reported desktop GPU memory capacity",
+      "description": "Vendor-reported visible GPU memory only; does not aggregate unlike dedicated and shared memory pools.",
+      "gridPos": {
+        "x": 12,
+        "y": 121,
+        "w": 12,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host,device)(gpu_memory_total_bytes{job=\"node\"}) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+          "legendFormat": "{{host}} · {{device}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "id": 32
     }
   ]
 }
