@@ -158,10 +158,17 @@ class NativeBackupTest(unittest.TestCase):
         self.assertEqual(len(list(Path(self.config["restore_root"]).iterdir())), 1)
 
     def test_authentication_key_is_not_in_host_arguments(self):
-        with patch.object(backup, "command", return_value='{"status":"ok"}') as cmd:
+        with patch.object(backup, "command", return_value='HTTP/1.0 200 OK\r\nContent-Length: 15\r\n\r\n{"status":"ok"}\n') as cmd:
             backup.api("container", "/snapshot/create", authenticated=True)
         self.assertNotIn("authKey", " ".join(cmd.call_args.args[0]))
         self.assertIn("/run/secrets/vm_snapshot_key", cmd.call_args.kwargs["stdin"])
+        self.assertNotIn("wget", cmd.call_args.kwargs["stdin"])
+        self.assertIn('"$key" | nc', cmd.call_args.kwargs["stdin"])
+
+    def test_authenticated_api_rejects_error_without_echoing_body(self):
+        with patch.object(backup, "command", return_value='HTTP/1.0 401 Unauthorized\r\n\r\nDUMMY_SECRET'):
+            with self.assertRaisesRegex(RuntimeError, "^private snapshot API rejected request$"):
+                backup.api("container", "/snapshot/create", authenticated=True)
 
     def test_nonowner_without_local_task_skips_api(self):
         (Path(self.config["state_root"]) / ".swarm-owner").write_text("normandy\n")
