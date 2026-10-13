@@ -59,9 +59,12 @@ def api(container, path, params=None, authenticated=False):
         # Builtin printf sends the key through a private pipe, never wget/curl
         # arguments visible in the host's process table.
         script += 'case "$key" in ""|*[!A-Za-z0-9_-]*) exit 1;; esac\n'
-        script += "printf 'GET %s%s HTTP/1.0\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' "
+        script += "{ printf 'GET %s%s HTTP/1.0\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' "
         script += shlex.quote(path + ("?" + query if query else "") + sep + "authKey=")
-        script += ' "$key" | nc -w 30 127.0.0.1 8428\n'
+        # BusyBox nc closes its read side when stdin reaches EOF. Keep the
+        # private request pipe open through the bounded response window so a
+        # snapshot handler is not cancelled before it writes its JSON body.
+        script += ' "$key"; sleep 30; } | nc -w 30 127.0.0.1 8428\n'
         result = command(["docker", "exec", "-i", container, "sh", "-s"],
                          stdin=script, timeout=45, strip_output=False)
 
