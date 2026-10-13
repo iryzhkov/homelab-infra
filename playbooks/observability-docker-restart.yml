@@ -1,0 +1,152 @@
+---
+# Explicit maintenance activation after local-log container migration.
+# One host at a time; autolock uses the existing private Swarm unlock task.
+- name: Activate the prepared Docker local logging default
+  hosts: docker_hosts
+  serial: 1
+  gather_facts: false
+  vars:
+    restart_health_urls:
+      - https://vault.ryzhkov.dev
+      - https://auth.ryzhkov.dev
+      - https://home.ryzhkov.dev
+      - https://photos.ryzhkov.dev
+      - https://emby.ryzhkov.dev
+      - https://logs.ryzhkov.dev
+      - https://git.ryzhkov.dev
+      - https://uptime.ryzhkov.dev
+      - https://rss.ryzhkov.dev
+  pre_tasks:
+    - name: Require the controlled interruption window
+      ansible.builtin.assert:
+        that:
+          - observability_docker_restart_confirm | default(false) | bool
+          - docker_logs_via_alloy | default(false) | bool
+        quiet: true
+    - name: Refuse host maintenance conflicts
+      ansible.builtin.include_role:
+        name: maintenance_guard
+    - name: Validate the prepared daemon configuration
+      ansible.builtin.command:
+        argv: [dockerd, --validate, --config-file=/etc/docker/daemon.json]
+      become: true
+      changed_when: false
+      check_mode: false
+    - name: Require the prepared file to select local logs
+      ansible.builtin.command:
+        argv: [python3, -c, "import json; assert json.load(open('/etc/docker/daemon.json'))['log-driver'] == 'local'"]
+      become: true
+      changed_when: false
+      check_mode: false
+    - name: Inspect active container driver names without private configuration
+      ansible.builtin.shell:
+        cmd: "docker ps -q | xargs -r docker inspect --format '{{ '{{' }}.HostConfig.LogConfig.Type{{ '}}' }}'"
+      register: restart_container_drivers
+      changed_when: false
+      check_mode: false
+    - name: Refuse an active legacy Loki driver
+      ansible.builtin.assert:
+        that: "'loki' not in restart_container_drivers.stdout_lines"
+        quiet: true
+    - name: Read the active daemon logging default
+      ansible.builtin.command:
+        argv: [docker, info, --format, "{{ '{{' }}.LoggingDriver{{ '}}' }}"]
+      register: restart_default
+      changed_when: false
+      check_mode: false
+  tasks:
+    - name: Restart only when the active default differs
+      when:
+        - restart_default.stdout | trim != 'local'
+        - not ansible_check_mode
+      block:
+        - name: Require household health before this restart
+          ansible.builtin.uri:
+            url: "{{ item }}"
+            status_code: 200
+            timeout: 10
+          loop: "{{ restart_health_urls }}"
+          delegate_to: localhost
+          become: false
+          no_log: true
+        - name: Confirm all three Swarm managers are healthy before losing one
+          ansible.builtin.command:
+            argv: [docker, node, ls, --format, "{{ '{{' }}.Status{{ '}}' }} {{ '{{' }}.ManagerStatus{{ '}}' }}"]
+          delegate_to: "{{ swarm_bootstrap_manager }}"
+          register: restart_manager_states
+          changed_when: false
+          when: inventory_hostname in groups['swarm']
+        - name: Preserve manager quorum
+          ansible.builtin.assert:
+            that: restart_manager_states.stdout_lines | select('match', '^Ready (Leader|Reachable)$') | list | length >= 3
+            quiet: true
+          when: inventory_hostname in groups['swarm']
+        - name: Keep the peer edge on the VIP during an edge restart
+          when: inventory_hostname in groups['edge_proxy']
+          block:
+            - name: Relinquish this edge VIP
+              ansible.builtin.systemd_service:
+                name: keepalived
+                state: stopped
+              become: true
+            - name: Confirm the other edge owns the VIP
+              ansible.builtin.shell:
+                cmd: "ip -4 address show | grep -F ' {{ edge_vip }}/'"
+              delegate_to: "{{ (groups['edge_proxy'] | difference([inventory_hostname]))[0] }}"
+              register: restart_peer_vip
+              changed_when: false
+              until: restart_peer_vip.rc == 0
+              retries: 10
+              delay: 1
+        - name: Restart the Docker daemon
+          ansible.builtin.systemd_service:
+            name: docker
+            state: restarted
+          become: true
+        - name: Wait for the new default
+          ansible.builtin.command:
+            argv: [docker, info, --format, "{{ '{{' }}.LoggingDriver{{ '}}' }}"]
+          register: restarted_default
+          changed_when: false
+          until: restarted_default.rc == 0 and restarted_default.stdout | trim == 'local'
+          retries: 20
+          delay: 3
+        - name: Unlock a restarted Swarm manager through the existing secret path
+          when: inventory_hostname in groups['swarm']
+          block:
+            - name: Load private Swarm unlock data
+              community.sops.load_vars:
+                file: "{{ swarm_secret_file }}"
+                name: swarm_secrets
+              delegate_to: localhost
+              no_log: true
+            - name: Read Swarm state
+              ansible.builtin.command:
+                argv: [docker, info, --format, "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"]
+              register: restarted_swarm_state
+              changed_when: false
+            - name: Reuse the manager unlock task
+              ansible.builtin.include_role:
+                name: swarm
+                tasks_from: unlock.yml
+              when: restarted_swarm_state.stdout | trim == 'locked'
+        - name: Require household health before proceeding to another host
+          ansible.builtin.uri:
+            url: "{{ item }}"
+            status_code: 200
+            timeout: 10
+          loop: "{{ restart_health_urls }}"
+          delegate_to: localhost
+          become: false
+          register: restarted_health
+          until: restarted_health.status | default(0) == 200
+          retries: 30
+          delay: 3
+          no_log: true
+      always:
+        - name: Restore edge VIP failover membership
+          ansible.builtin.systemd_service:
+            name: keepalived
+            state: started
+          become: true
+          when: inventory_hostname in groups['edge_proxy']
