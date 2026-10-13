@@ -116,7 +116,11 @@
       "options": {
         "alignValue": "left",
         "mergeValues": true,
-        "showValue": "never"
+        "showValue": "auto",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
       },
       "targets": [
         {
@@ -130,7 +134,50 @@
       "fieldConfig": {
         "defaults": {
           "displayName": "${__field.labels.entity_id}",
-          "noValue": "No observed state"
+          "noValue": "No observed state",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "gray"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Absent",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "Present",
+                  "color": "blue"
+                },
+                "off": {
+                  "text": "Off",
+                  "color": "gray"
+                },
+                "on": {
+                  "text": "On",
+                  "color": "blue"
+                },
+                "home": {
+                  "text": "Home",
+                  "color": "blue"
+                },
+                "not_home": {
+                  "text": "Away",
+                  "color": "gray"
+                },
+                "unknown": {
+                  "text": "Unknown",
+                  "color": "orange"
+                },
+                "unavailable": {
+                  "text": "Unavailable",
+                  "color": "orange"
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       }
@@ -149,7 +196,11 @@
       "id": 4,
       "options": {
         "mergeValues": true,
-        "showValue": "never"
+        "showValue": "auto",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
       },
       "targets": [
         {
@@ -163,7 +214,50 @@
       "fieldConfig": {
         "defaults": {
           "displayName": "${__field.labels.entity_id}",
-          "noValue": "No observed state"
+          "noValue": "No observed state",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "gray"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Off",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "On",
+                  "color": "blue"
+                },
+                "off": {
+                  "text": "Off",
+                  "color": "gray"
+                },
+                "on": {
+                  "text": "On",
+                  "color": "blue"
+                },
+                "home": {
+                  "text": "Home",
+                  "color": "blue"
+                },
+                "not_home": {
+                  "text": "Away",
+                  "color": "gray"
+                },
+                "unknown": {
+                  "text": "Unknown",
+                  "color": "orange"
+                },
+                "unavailable": {
+                  "text": "Unavailable",
+                  "color": "orange"
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       }
