@@ -1,0 +1,146 @@
+---
+- name: Install private Python environment support
+  ansible.builtin.apt:
+    name: [python3-venv]
+    state: present
+    install_recommends: false
+  become: true
+
+- name: Create an unprivileged exporter service identity
+  ansible.builtin.user:
+    name: "{{ observability_pve_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+  become: true
+
+- name: Install the pinned exporter in its private virtual environment
+  ansible.builtin.pip:
+    name: "prometheus-pve-exporter=={{ observability_pve_exporter_version }}"
+    virtualenv: "{{ observability_pve_venv }}"
+    virtualenv_command: /usr/bin/python3 -m venv
+  become: true
+  notify: Restart observability PVE exporter
+
+- name: Create the private exporter configuration directory
+  ansible.builtin.file:
+    path: "{{ observability_pve_config_dir }}"
+    state: directory
+    owner: "{{ observability_pve_user }}"
+    group: "{{ observability_pve_user }}"
+    mode: "0700"
+  become: true
+
+- name: Require the existing cluster trust root
+  ansible.builtin.stat:
+    path: /etc/pve/pve-root-ca.pem
+  become: true
+  register: observability_pve_ca
+
+- name: Refuse deployment without the existing cluster CA
+  ansible.builtin.assert:
+    that:
+      - observability_pve_ca.stat.exists
+      - observability_pve_ca.stat.isreg
+    fail_msg: Existing Proxmox cluster CA is required; TLS verification stays enabled.
+    quiet: true
+
+- name: Copy the public cluster CA for the unprivileged exporter
+  ansible.builtin.copy:
+    src: /etc/pve/pve-root-ca.pem
+    remote_src: true
+    dest: "{{ observability_pve_config_dir }}/pve-root-ca.pem"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart observability PVE exporter
+
+- name: Load the dedicated read-only API credential on the controller
+  community.sops.load_vars:
+    file: "{{ observability_pve_secret_file }}"
+    name: observability_pve_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Require the supplied dedicated exporter identity
+  ansible.builtin.assert:
+    that:
+      - observability_pve_secrets.PVE_USER == 'observability@pve'
+      - observability_pve_secrets.PVE_TOKEN_NAME == 'metrics'
+      - observability_pve_secrets.PVE_TOKEN_VALUE | length > 0
+    quiet: true
+  no_log: true
+
+- name: Render service-owned API configuration with verified TLS
+  ansible.builtin.template:
+    src: pve.yml.j2
+    dest: "{{ observability_pve_config_dir }}/pve.yml"
+    owner: "{{ observability_pve_user }}"
+    group: "{{ observability_pve_user }}"
+    mode: "0600"
+  become: true
+  no_log: true
+  diff: false
+  notify: Restart observability PVE exporter
+
+- name: Validate exporter configuration without printing credential values
+  ansible.builtin.command:
+    argv:
+      - "{{ observability_pve_venv }}/bin/python"
+      - -c
+      - >-
+        import sys,yaml;
+        from pve_exporter.config import config_from_yaml;
+        c=config_from_yaml(yaml.safe_load(open(sys.argv[1])));
+        assert c.valid and c['default']['verify_ssl']==sys.argv[2]
+      - "{{ observability_pve_config_dir }}/pve.yml"
+      - "{{ observability_pve_config_dir }}/pve-root-ca.pem"
+  become: true
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Install the local-only constrained exporter service
+  ansible.builtin.template:
+    src: observability-pve.service.j2
+    dest: /etc/systemd/system/observability-pve.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart observability PVE exporter
+
+- name: Apply exporter service changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the exporter without touching any Proxmox application service
+  ansible.builtin.systemd_service:
+    name: observability-pve.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  become: true
+  when: not ansible_check_mode
+
+- name: Verify real Proxmox guest collection through the loopback exporter
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9221/pve?target=127.0.0.1&module=default&cluster=1&node=1
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: observability_pve_ready
+  until: >-
+    observability_pve_ready.status | default(0) == 200
+    and (observability_pve_ready.content | default('') is search('pve_up[{]id="(qemu|lxc)/'))
+  retries: 3
+  delay: 3
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Report exporter guest collection readiness
+  ansible.builtin.debug:
+    msg: Proxmox guest metrics passed through 127.0.0.1:9221/pve with cluster CA verification.
+  when: not ansible_check_mode

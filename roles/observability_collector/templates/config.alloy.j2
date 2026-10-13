@@ -64,7 +64,15 @@ prometheus.scrape "{{ scrape.name }}" {
   targets = [{ __address__ = "{{ scrape.address }}", instance = "{{ inventory_hostname }}" }]
   job_name = "{{ scrape.name }}"
   metrics_path = "{{ scrape.path | default('/metrics') }}"
-  scrape_interval = "30s"
+  scrape_interval = "{{ scrape.interval | default('30s') }}"
+  scrape_timeout = "{{ scrape.timeout | default('10s') }}"
+{% if scrape.params is defined %}
+  params = {
+{% for key, value in scrape.params.items() %}
+    {{ key }} = {{ value | to_json }},
+{% endfor %}
+  }
+{% endif %}
   forward_to = [prometheus.remote_write.homelab.receiver]
 }
 {% endfor %}
