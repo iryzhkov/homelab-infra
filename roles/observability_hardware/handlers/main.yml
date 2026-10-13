@@ -1,0 +1,7 @@
+---
+- name: Restart observability SMART exporter
+  ansible.builtin.systemd_service:
+    name: observability-smartctl-exporter.service
+    daemon_reload: true
+    state: restarted
+  when: not ansible_check_mode

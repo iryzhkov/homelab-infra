@@ -69,7 +69,7 @@ prometheus.scrape "{{ scrape.name }}" {
 }
 {% endfor %}
 
-{% if observability_cadvisor_enabled | bool %}
+{% if observability_cadvisor_embedded | default(false) | bool %}
 prometheus.exporter.cadvisor "containers" {
   docker_host = "tcp://127.0.0.1:2375"
   docker_only = true

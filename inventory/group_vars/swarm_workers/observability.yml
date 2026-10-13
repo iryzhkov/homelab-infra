@@ -1,0 +1,5 @@
+---
+observability_cadvisor_enabled: true
+observability_extra_scrapes:
+  - name: gatus
+    address: "{{ ansible_host }}:3002"

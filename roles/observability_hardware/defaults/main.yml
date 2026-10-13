@@ -1,0 +1,12 @@
+---
+observability_smartctl_exporter_version: "0.15.0"
+observability_smartctl_exporter_archive_sha256: 32ff269f2ca5708e2aa8209c715192efcc32f87bd575cae50a76d391a484976e
+observability_smartctl_exporter_archive: "smartctl_exporter-{{ observability_smartctl_exporter_version }}.linux-amd64"
+observability_smartctl_exporter_download_url: "https://github.com/prometheus-community/smartctl_exporter/releases/download/v{{ observability_smartctl_exporter_version }}/{{ observability_smartctl_exporter_archive }}.tar.gz"
+observability_smartctl_exporter_install_dir: /opt/observability-smartctl-exporter
+observability_smartctl_exporter_cache_dir: /var/cache/observability-smartctl-exporter
+observability_smartctl_exporter_listen_address: "127.0.0.1:9633"
+observability_smartctl_exporter_smartctl_path: /usr/sbin/smartctl
+observability_smartctl_exporter_poll_interval: 5m
+observability_smartctl_exporter_memory_max: 128M
+observability_smartctl_exporter_cpu_quota: "10%"

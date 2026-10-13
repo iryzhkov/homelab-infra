@@ -183,6 +183,12 @@
     daemon_reload: true
   when: not ansible_check_mode
 
+- name: Install the filesystem-restricted container metrics helper
+  ansible.builtin.include_tasks: cadvisor.yml
+  when:
+    - observability_cadvisor_enabled | bool
+    - observability_docker_enabled | bool
+
 - name: Check the collector readiness
   ansible.builtin.uri:
     url: http://127.0.0.1:12345/-/ready

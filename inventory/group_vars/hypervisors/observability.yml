@@ -1,0 +1,4 @@
+---
+observability_extra_scrapes:
+  - name: smartctl
+    address: 127.0.0.1:9633

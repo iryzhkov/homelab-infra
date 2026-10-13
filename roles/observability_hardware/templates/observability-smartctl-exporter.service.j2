@@ -1,0 +1,50 @@
+[Unit]
+Description=Homelab read-only SMART metrics exporter
+Documentation=https://github.com/prometheus-community/smartctl_exporter
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart={{ observability_smartctl_exporter_install_dir }}/{{ observability_smartctl_exporter_archive }}/smartctl_exporter \
+  --web.listen-address={{ observability_smartctl_exporter_listen_address }} \
+  --smartctl.path={{ observability_smartctl_exporter_smartctl_path }} \
+  --smartctl.interval={{ observability_smartctl_exporter_poll_interval }} \
+  --smartctl.powermode-check=standby \
+  --no-smartctl.scan \
+{% for drive in observability_smartctl_exporter_devices %}
+  --smartctl.device={{ drive.device }}{{ ' \\' if not loop.last else '' }}
+{% endfor %}
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+Environment=GOMEMLIMIT=64MiB
+Environment=GOMAXPROCS=1
+MemoryMax={{ observability_smartctl_exporter_memory_max }}
+CPUQuota={{ observability_smartctl_exporter_cpu_quota }}
+TasksMax=32
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# smartctl requires access to the host's physical device nodes.
+PrivateDevices=false
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_ADMIN
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
