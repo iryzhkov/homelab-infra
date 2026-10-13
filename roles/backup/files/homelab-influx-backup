@@ -23,16 +23,24 @@ scratch=/var/lib/influxdb2/influxdb-backup
 
 : "${INFLUX_TOKEN:?INFLUX_TOKEN is not set}"
 
-# The running InfluxDB on this host: the Swarm task of the logging stack's
-# influxdb service (stacks/logging/stack.yml, batch F5), whose container name
-# is logging_influxdb.<slot>.<id>, or before that cutover the Compose
-# container named influxdb. Found by label and name rather than assumed, so
-# the cutover does not silently break this tier. When pin.logging is on the
-# other worker, there is nothing to back up here: that is a failure, said so.
-container=$(docker ps -q --filter label=com.docker.swarm.service.name=logging_influxdb | head -1)
-[ -n "$container" ] || container=$(docker ps -q --filter name='^influxdb$' | head -1)
+# Select the independently pinned legacy-influx task, the pre-isolation
+# logging task, or the pre-Swarm Compose container. Refuse two writers rather
+# than silently backing up whichever Docker happens to return first.
+# The native daily tier remains pinned to homelab with legacy-influx.
+mapfile -t containers < <(
+    {
+        docker ps -q --filter label=com.docker.swarm.service.name=legacy-influx_influxdb
+        docker ps -q --filter label=com.docker.swarm.service.name=logging_influxdb
+        docker ps -q --filter name='^influxdb$'
+    } | sort -u
+)
+if [ "${#containers[@]}" -gt 1 ]; then
+    echo "influxdb: refusing ambiguous simultaneous running databases" >&2
+    exit 1
+fi
+container="${containers[0]:-}"
 if [ -z "$container" ]; then
-    echo "influxdb: no running container on $(hostname -s) (Swarm service logging_influxdb or Compose container influxdb)" >&2
+    echo "influxdb: no running container on $(hostname -s) (legacy-influx_influxdb, logging_influxdb or Compose influxdb)" >&2
     exit 1
 fi
 
@@ -45,8 +53,10 @@ cleanup() {
 trap cleanup EXIT
 
 docker exec "$container" rm -rf "$scratch"
-docker exec -e INFLUX_TOKEN="$INFLUX_TOKEN" "$container" \
-    influx backup "$scratch" >/dev/null
+# Feed the token through stdin, not Docker argv or service environment.
+printf '%s\n' "$INFLUX_TOKEN" | docker exec -i "$container" sh -c \
+    'IFS= read -r INFLUX_TOKEN; export INFLUX_TOKEN; exec influx backup "$1"' \
+    influx-backup "$scratch" >/dev/null
 
 # docker cp to stdout emits a tar of the directory; gzip it on the way past.
 docker cp "$container:$scratch" - | gzip >"$out/influxdb_$stamp.tar.gz"

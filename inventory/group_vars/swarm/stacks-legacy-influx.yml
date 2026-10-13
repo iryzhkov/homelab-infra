@@ -1,0 +1,14 @@
+---
+# Do not deploy until playbooks/legacy-influx-transition.yml cold-seeds it.
+swarm_stacks_legacy_influx:
+  - name: legacy-influx
+    pin: homelab
+    secrets: homelab-logging
+    prepare_tasks: swarm-prepare.yml
+    snapshot:
+      class: files
+      # These live copies are crash-consistent. Native archives remain the
+      # daily consistent/offsite tier; transition proof also mirrors a native archive.
+      files:
+        - /srv/swarm/legacy-influx/influxdb
+        - /srv/swarm/legacy-influx/native-backups

@@ -1,0 +1,21 @@
+---
+# Ordinary deploy must never initialize a second, empty InfluxDB.
+- name: Require a cold-seeded legacy InfluxDB
+  ansible.builtin.stat:
+    path: "{{ swarm_state_root }}/legacy-influx/influxdb/data/influxd.bolt"
+  delegate_to: "{{ swarm_stack.pin }}"
+  become: true
+  register: legacy_influx_bolt
+- name: Read the separate owner marker
+  ansible.builtin.slurp:
+    src: "{{ swarm_state_root }}/legacy-influx/.swarm-owner"
+  delegate_to: "{{ swarm_stack.pin }}"
+  become: true
+  register: legacy_influx_owner
+- name: Refuse empty or unowned legacy InfluxDB
+  ansible.builtin.assert:
+    that:
+      - legacy_influx_bolt.stat.isreg | default(false)
+      - legacy_influx_bolt.stat.size | default(0) | int > 0
+      - legacy_influx_owner.content | b64decode | trim == swarm_stack.pin
+    quiet: true

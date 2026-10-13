@@ -1,4 +1,41 @@
 ---
+# Removing Influx from this source must never prune the sole running writer.
+# The proof travels with logging's state; read its current pin after a move.
+- name: Find the current logging state pin
+  ansible.builtin.command:
+    argv: [docker, node, ls, -q, --filter, node.label=pin.logging=true]
+  register: logging_guard_pin
+  changed_when: false
+  check_mode: false
+- name: Require exactly one current logging pin
+  ansible.builtin.assert:
+    that: logging_guard_pin.stdout_lines | length == 1
+    quiet: true
+- name: Read the current logging owner's inventory label
+  ansible.builtin.command:
+    argv: [docker, node, inspect, --format, "{{ '{{' }}index .Spec.Labels \"host\"{{ '}}' }}", "{{ logging_guard_pin.stdout | trim }}"]
+  register: logging_guard_host
+  changed_when: false
+  check_mode: false
+- name: Read the accepted Influx isolation proof
+  ansible.builtin.slurp:
+    src: "{{ swarm_state_root }}/logging/.influx-isolated.json"
+  delegate_to: "{{ logging_guard_host.stdout | trim }}"
+  become: true
+  register: logging_influx_isolation
+- name: Require the independently running InfluxDB service
+  ansible.builtin.command:
+    argv: [docker, service, ls, --filter, name=legacy-influx_influxdb, --format, "{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}.Replicas{{ '}}' }}"]
+  register: logging_influx_service
+  changed_when: false
+  check_mode: false
+- name: Refuse logging deploy until legacy history and new writes were accepted
+  ansible.builtin.assert:
+    that:
+      - (logging_influx_isolation.content | b64decode | from_json).accepted | bool
+      - logging_influx_service.stdout_lines == ['legacy-influx_influxdb 1/1']
+    fail_msg: Run the coordinated legacy-influx-transition play first; logging deploy would otherwise prune the only InfluxDB.
+    quiet: true
 # Seed /srv/swarm/logging from the Compose project at cutover (phase 5, batch F5).
 #
 # Included by roles/swarm/tasks/stack.yml on the bootstrap manager on every

@@ -1,0 +1,11 @@
+---
+# Explicitly coordinated cold window; never called by normal convergence.
+- name: Isolate retained InfluxDB from the logging stack
+  hosts: swarm_workers
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Transition from the bootstrap manager
+      ansible.builtin.include_role:
+        name: legacy_influx_transition
+      when: inventory_hostname == swarm_bootstrap_manager
