@@ -101,7 +101,7 @@
     name: grafana.grafana.alloy
   vars:
     alloy_version: "{{ observability_alloy_version }}"
-    alloy_config: "{{ lookup('template', 'config.alloy.j2') }}"
+    alloy_config: "{{ lookup('template', playbook_dir ~ '/../roles/observability_collector/templates/config.alloy.j2') }}"
     alloy_user_groups: [systemd-journal]
     alloy_env_file_vars:
       CUSTOM_ARGS: --server.http.listen-addr=127.0.0.1:12345 --disable-reporting
