@@ -4,18 +4,19 @@
 - name: Activate the prepared Docker local logging default
   hosts: docker_hosts
   serial: 1
+  any_errors_fatal: true
   gather_facts: false
   vars:
     restart_health_urls:
-      - https://vault.ryzhkov.dev
-      - https://auth.ryzhkov.dev
+      - https://vault.ryzhkov.dev/alive
+      - https://auth.ryzhkov.dev/-/health/ready/
       - https://home.ryzhkov.dev
-      - https://photos.ryzhkov.dev
-      - https://emby.ryzhkov.dev
-      - https://logs.ryzhkov.dev
-      - https://git.ryzhkov.dev
-      - https://uptime.ryzhkov.dev
-      - https://rss.ryzhkov.dev
+      - https://photos.ryzhkov.dev/api/server/ping
+      - https://emby.ryzhkov.dev/System/Info/Public
+      - https://logs.ryzhkov.dev/api/health
+      - https://git.ryzhkov.dev/api/healthz
+      - https://uptime.ryzhkov.dev/health
+      - https://rss.ryzhkov.dev/healthcheck
   pre_tasks:
     - name: Require the controlled interruption window
       ansible.builtin.assert:
@@ -98,6 +99,15 @@
               until: restart_peer_vip.rc == 0
               retries: 10
               delay: 1
+        - name: Require backend health after any edge VIP handoff
+          ansible.builtin.uri:
+            url: "{{ item }}"
+            status_code: 200
+            timeout: 10
+          loop: "{{ restart_health_urls }}"
+          delegate_to: localhost
+          become: false
+          no_log: true
         - name: Restart the Docker daemon
           ansible.builtin.systemd_service:
             name: docker
