@@ -22,11 +22,11 @@
     path: "{{ item.path }}"
     state: directory
     owner: root
-    group: root
+    group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - {path: /etc/observability-native-gpu, mode: '0700'}
-    - {path: /var/lib/observability-textfile, mode: '0755'}
+    - {path: /etc/observability-native-gpu, group: root, mode: '0700'}
+    - {path: /var/lib/observability-textfile, group: alloy, mode: '0755'}
 
 - name: Install bounded standard-library native GPU reader
   ansible.builtin.copy:
