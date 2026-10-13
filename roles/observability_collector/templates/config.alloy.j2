@@ -60,11 +60,20 @@ prometheus.scrape "alloy" {
 }
 
 {% set poller_scrapes = [{"name": "unifi", "address": "127.0.0.1:9130", "interval": "60s"}] if inventory_hostname in groups.get("observability_unifi_pollers", []) else [] %}
-{% for scrape in observability_extra_scrapes + (observability_lxc_scrapes | default([])) + poller_scrapes %}
+{% for scrape in observability_extra_scrapes + (observability_lxc_scrapes | default([])) + (observability_homeassistant_scrapes | default([])) + poller_scrapes %}
 prometheus.scrape "{{ scrape.name }}" {
   targets = [{ __address__ = "{{ scrape.address }}", instance = "{{ scrape.host | default(inventory_hostname) }}", host = "{{ scrape.host | default(inventory_hostname) }}" }]
   job_name = "{{ scrape.job | default(scrape.name) }}"
   metrics_path = "{{ scrape.path | default('/metrics') }}"
+{% if scrape.scheme is defined %}
+  scheme = "{{ scrape.scheme }}"
+{% endif %}
+{% if scrape.credentials_file is defined %}
+  authorization {
+    type = "Bearer"
+    credentials_file = "{{ scrape.credentials_file }}"
+  }
+{% endif %}
   scrape_interval = "{{ scrape.interval | default('30s') }}"
   scrape_timeout = "{{ scrape.timeout | default('10s') }}"
 {% if scrape.params is defined %}

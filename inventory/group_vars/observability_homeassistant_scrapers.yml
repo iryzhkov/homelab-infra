@@ -1,0 +1,11 @@
+---
+# Only the single declared scraper reads the dedicated HA identity.
+observability_homeassistant_scrapes:
+  - name: homeassistant
+    address: home.ryzhkov.dev:443
+    host: home-assistant
+    job: homeassistant
+    scheme: https
+    path: /api/prometheus
+    interval: 30s
+    credentials_file: /etc/alloy/homeassistant-token

@@ -1,0 +1,4 @@
+---
+observability_homeassistant_url: https://home.ryzhkov.dev/api/prometheus
+observability_homeassistant_token_path: /etc/alloy/homeassistant-token
+observability_homeassistant_require_ready: true
