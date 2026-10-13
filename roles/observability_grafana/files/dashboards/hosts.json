@@ -487,8 +487,8 @@
     },
     {
       "type": "bargauge",
-      "title": "Each reported logical CPU / SMT thread",
-      "description": "",
+      "title": "Each reported logical CPU / SMT thread · hottest first",
+      "description": " Sorted by actual utilization descending; CPU labels are reported logical IDs.",
       "gridPos": {
         "x": 0,
         "y": 9,
@@ -502,7 +502,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval])))",
+          "expr": "sort_desc(100 * (1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval]))))",
           "legendFormat": "Logical CPU {{cpu}}",
           "range": false,
           "instant": true
@@ -559,7 +559,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 6
     },

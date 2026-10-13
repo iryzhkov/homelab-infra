@@ -252,7 +252,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 9,
+        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -313,7 +313,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 3
     },
@@ -323,7 +327,7 @@
       "description": "Vendor operating limit minus current temperature; unavailable without reported limit.",
       "gridPos": {
         "x": 12,
-        "y": 9,
+        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -384,7 +388,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 4
     },
@@ -394,7 +402,7 @@
       "description": "100% means manufacturer estimated endurance consumed, not a predicted failure time.",
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 21,
         "w": 12,
         "h": 8
       },
@@ -455,7 +463,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 5
     },
@@ -465,7 +477,7 @@
       "description": "Vendor-specific normalized attribute, separate from NVMe wear.",
       "gridPos": {
         "x": 12,
-        "y": 17,
+        "y": 21,
         "w": 12,
         "h": 8
       },
@@ -526,7 +538,11 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 6
     },
@@ -536,7 +552,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 25,
+        "y": 29,
         "w": 8,
         "h": 6
       },
@@ -591,7 +607,11 @@
         },
         "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 7
     },
@@ -601,7 +621,7 @@
       "description": "Bitmask; unavailable is not zero.",
       "gridPos": {
         "x": 8,
-        "y": 25,
+        "y": 29,
         "w": 8,
         "h": 6
       },
@@ -656,7 +676,11 @@
         },
         "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 8
     },
@@ -666,7 +690,7 @@
       "description": "",
       "gridPos": {
         "x": 16,
-        "y": 25,
+        "y": 29,
         "w": 8,
         "h": 6
       },
@@ -722,7 +746,11 @@
         },
         "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 9
     },
@@ -732,7 +760,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 31,
+        "y": 35,
         "w": 12,
         "h": 9
       },
@@ -799,7 +827,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 31,
+        "y": 35,
         "w": 12,
         "h": 9
       },
@@ -854,7 +882,11 @@
         },
         "orientation": "horizontal",
         "displayMode": "gradient",
-        "showUnfilled": true
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 11
     },
@@ -864,7 +896,7 @@
       "description": "Manufacturer attribute names preserved; counters are not universal failure probability.",
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 44,
         "w": 24,
         "h": 9
       },
@@ -923,9 +955,162 @@
         "colorMode": "value",
         "graphMode": "none",
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "sizing": "manual",
+        "minVizHeight": 24,
+        "maxVizHeight": 48,
+        "namePlacement": "top"
       },
       "id": 12
+    },
+    {
+      "type": "stat",
+      "title": "Declared physical drives / host",
+      "description": "Count from Ansible smart_drives inventory; absent on unsupported hosts. Independent of selected drive filter.",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by(host)(node_monitoring_smart_expected_devices{job=\"node\"})",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 36
+        }
+      },
+      "id": 13
+    },
+    {
+      "type": "stat",
+      "title": "Declared drives not reporting",
+      "description": "Known inventory count minus drives reported by healthy SMART exporters. Exporter downtime reports missing coverage, never healthy SMART. Independent of selected drive filter.",
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clamp_min(max by(host)(node_monitoring_smart_expected_devices{job=\"node\"}) - (count by(host)(max by(host,device)(smartctl_device{job=\"smartctl\"}) and on(host)(max by(host)(up{job=\"smartctl\"}) == 1)) or on(host)(0 * max by(host)(node_monitoring_smart_expected_devices{job=\"node\"}))), 0)",
+          "legendFormat": "{{host}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Unavailable",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 36
+        }
+      },
+      "id": 14
     }
   ]
 }
