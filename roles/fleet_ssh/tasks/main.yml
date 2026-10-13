@@ -8,7 +8,9 @@
 #
 # Each name in fleet_ssh_authorized refers to an entry in fleet_ssh_keys.
 # Access is restricted with `from=`, so a key taken off one host is not a key
-# to the fleet from anywhere else.
+# to the fleet from anywhere else. An entry with `command` is also pinned to
+# that one command, with `restrict` (no PTY, no forwarding): sshd runs it
+# whatever the client asks for.
 
 - name: Gather the facts this role needs
   ansible.builtin.setup:
@@ -22,7 +24,9 @@
     user: "{{ ansible_user }}"
     key: "{{ fleet_ssh_keys[item].key }}"
     comment: "{{ fleet_ssh_keys[item].comment }}"
-    key_options: 'from="{{ fleet_ssh_keys[item].from }}"'
+    key_options: >-
+      from="{{ fleet_ssh_keys[item].from }}"{% if fleet_ssh_keys[item].command is defined
+      %},command="{{ fleet_ssh_keys[item].command }}",restrict{% endif %}
     state: present
     exclusive: false
   loop: "{{ fleet_ssh_authorized | default([]) }}"

@@ -28,9 +28,26 @@ A second service account, `drift-check`, is a member of the default
 `authentik Read-only` group only: it can read every object and change none.
 Its token, `drift-check-api`, expires on **2027-10-12** and sits in the same
 SOPS file as `authentik_drift_token`; `playbooks/authentik.yml` installs it
-on homelab for the nightly drift check. Renew it the same way. It must be an
-API token: `POST /core/users/service_account/` issues an app password, which
-the API refuses as "Token invalid/expired".
+on homelab for the nightly drift check.
+
+Both tokens must be created or renewed with `ak shell` in the server
+container (`Token.objects.create(..., intent=TokenIntents.INTENT_API,
+expiring=True, expires=...)`), never through the API, because of three
+behaviours of the token API in 2025.8.6, all met on 2026-10-12:
+
+- An API-intent token always gets the default lifetime of 30 minutes;
+  `expires` is overwritten (`authentik/core/api/tokens.py`, `validate`). An
+  expiring token is then rotated to a new key when it lapses, so its holder
+  starts getting 403.
+- Any create or update that omits `user` assigns the token to the caller.
+  A PATCH that only changed `expires` moved `drift-check-api` to `agent-iac`,
+  which put a superuser token on homelab for about fifteen minutes before it
+  was revoked. Check `user_obj` after touching a token.
+- `POST /core/users/service_account/` issues an app password, which the API
+  refuses as "Token invalid/expired".
+
+The key can then be read with `GET /core/tokens/<identifier>/view_key/`, which
+changes nothing.
 
 ## Findings
 

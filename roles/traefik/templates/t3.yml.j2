@@ -58,6 +58,18 @@ http:
       rule: "Host(`t3-normandy.ryzhkov.dev`)"
       service: t3-normandy-service
 {% include 'router-tls.j2' %}
+{# The agent VMs (agent_workers, VLAN 130), added by hand on the edges on
+   2026-10-06 and adopted here on 2026-10-12. Their addresses come from the
+   inventory, unlike the four above. #}
+{% for agent in groups['agent_workers'] | default([]) | sort %}
+
+    t3-{{ agent }}-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`t3-{{ agent }}.ryzhkov.dev`)"
+      service: t3-{{ agent }}-service
+{% include 'router-tls.j2' %}
+{% endfor %}
 
   services:
     # LAN first, Nebula once the laptop is off the LAN.
@@ -99,3 +111,10 @@ http:
       loadBalancer:
         servers:
           - url: "http://192.168.70.234:7391"
+{% for agent in groups['agent_workers'] | default([]) | sort %}
+
+    t3-{{ agent }}-service:
+      loadBalancer:
+        servers:
+          - url: "http://{{ hostvars[agent].ansible_host }}:7391"
+{% endfor %}

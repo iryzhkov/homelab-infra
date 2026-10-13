@@ -19,8 +19,11 @@ status=$?
 # public-api sits on the Public API VLAN, which is not permitted to reach the
 # feed on homelab, and opening that path so the edge proxy could write into a
 # LAN service would be a worse trade than pulling the answer from here.
+# The key is the drift-check entry in fleet_ssh_keys, which each peer pins to
+# running its checker, so the command named here is only for the reader.
 for peer in {{ drift_check_peers | join(' ') }}; do
-    peer_output=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$peer" \
+    peer_output=$(ssh -o BatchMode=yes -o ConnectTimeout=10 \
+        -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_drift "$peer" \
         '.local/bin/homelab-drift-check' 2>&1)
     peer_status=$?
     printf '\n%s:\n%s\n' "$peer" "$peer_output" >>"$output"
