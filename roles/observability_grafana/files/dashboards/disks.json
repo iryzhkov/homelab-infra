@@ -1160,7 +1160,7 @@
     {
       "type": "table",
       "title": "Physical drive inventory · unsupported stays visible",
-      "description": "Each physical SSD inventory identity is counted once. SMART means supported telemetry; unsupported/unproven is not PASS or zero wear. Values below come only from actual SMART readings.",
+      "description": "Each physical SSD inventory identity is counted once. SMART means supported telemetry; unsupported/unproven is not PASS or zero wear. Values below come only from actual SMART readings. Optional detailed error-history logs are a separate capability; unsupported history does not turn supported health-log media/error counters into zero or unknown.",
       "gridPos": {
         "x": 0,
         "y": 3,
@@ -1174,7 +1174,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,serial_number,model_name,transport,telemetry)(node_monitoring_physical_drive_info{job=\"node\",serial_number=~\"$drive\"})",
+          "expr": "max by(host,serial_number,model_name,transport,telemetry,error_history)(node_monitoring_physical_drive_info{job=\"node\",serial_number=~\"$drive\"})",
           "legendFormat": "",
           "range": false,
           "instant": true,
@@ -1284,6 +1284,40 @@
                 "value": 145
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error history"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "unsupported": {
+                        "text": "Unsupported",
+                        "color": "orange"
+                      },
+                      "unknown": {
+                        "text": "Not declared",
+                        "color": "gray"
+                      },
+                      "supported": {
+                        "text": "Supported",
+                        "color": "blue"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -1312,14 +1346,16 @@
               "serial_number": "Drive identity",
               "model_name": "Model",
               "transport": "Interface",
-              "telemetry": "Readings"
+              "telemetry": "Readings",
+              "error_history": "Error history"
             },
             "indexByName": {
               "host": 0,
               "model_name": 1,
               "telemetry": 2,
-              "transport": 3,
-              "serial_number": 4
+              "error_history": 3,
+              "transport": 4,
+              "serial_number": 5
             }
           }
         }
