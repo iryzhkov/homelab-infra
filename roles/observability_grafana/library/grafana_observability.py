@@ -226,14 +226,15 @@ def main():
                 payload = dict(preferences, homeDashboardUID=home_uid)
                 payload.pop("homeDashboardId", None)
                 api("PUT", "/api/org/preferences", payload)
+    starred_uids = {item["uid"] for item in api("GET", "/api/search?starred=true")} if p["starred_dashboard_uids"] else set()
     for uid in p["starred_dashboard_uids"]:
         if uid not in documents or uid.startswith("homelab-observe-embed-"):
             module.fail_json(msg="Bookmarks must be managed private dashboards")
         dashboard = api("GET", "/api/dashboards/uid/" + quote(uid, safe=""), missing_ok=True)
-        if not dashboard or not dashboard.get("meta", {}).get("isStarred", False):
+        if uid not in starred_uids:
             changes.append("administrator bookmark " + uid)
             if not module.check_mode:
-                api("POST", "/api/user/stars/dashboard/" + str(dashboard["dashboard"]["id"]))
+                api("POST", "/api/user/stars/dashboard/uid/" + quote(uid, safe=""))
 
     readiness = "pending datasource creation (check mode)"
 

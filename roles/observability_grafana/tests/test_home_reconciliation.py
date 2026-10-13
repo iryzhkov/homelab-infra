@@ -33,6 +33,7 @@ class ProvisioningTest(unittest.TestCase):
                 if path == "/api/datasources":
                     body = [{"uid":"loki", "type":"loki"}, {"uid":"homelab-metrics","name":"Homelab Metrics","type":"prometheus","access":"proxy","url":"http://metrics","basicAuth":False,"jsonData":{"httpMethod":"POST","timeInterval":"30s"}}]
                 elif path == "/api/folders/folder": body = {"title":"Folder"}
+                elif path == "/api/search?starred=true": body = [{"uid":doc["uid"]}] if state["starred"] else []
                 elif path == "/api/org/preferences": body = state["preferences"]
                 elif path.startswith("/api/dashboards/uid/"): body = {"dashboard":dict(doc,id=7), "meta":{"folderUid":"folder","isStarred":state["starred"]}}
                 elif path.endswith("/health"): body = {"status":"OK"}
@@ -40,7 +41,7 @@ class ProvisioningTest(unittest.TestCase):
                 else: raise AssertionError(path)
             elif method == "PUT" and path == "/api/org/preferences":
                 state["preferences"] = json.loads(req.data); body = {}
-            elif method == "POST" and path == "/api/user/stars/dashboard/7":
+            elif method == "POST" and path == "/api/user/stars/dashboard/uid/homelab-observe-home":
                 state["starred"] = True; body = {}
             else: raise AssertionError((method,path))
             return io.BytesIO(json.dumps(body).encode())
