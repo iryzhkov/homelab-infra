@@ -31,13 +31,16 @@ component. All nine dummy-secret patterns were redacted before ingest on both
 nodes. The canary target was then removed by restoring the ordinary Ansible
 configuration, and the owned fixture files and temporary variable file deleted.
 A subsequent Ansible check reported changed=0 and failed=0 on both PVE nodes.
-Alloy and Promtail were both active afterward; Promtail retirement remains a
-separate gated action now that replacement coverage has passed acceptance.
+The explicitly gated retirement then stopped and disabled only Promtail on both
+PVE nodes, with Alloy active. Original private config/positions, binary and unit
+remain available for rollback; no application services were restarted.
 
-## Tiny Debian guest proposal
+## Tiny Debian guest deployment and acceptance
 
-No rsyslog or syslog-ng is installed in ct100/104/107. Native Debian rsyslog
-packages require about 1.9MiB installed rather than the large Alloy binary.
+No rsyslog or syslog-ng was initially installed in ct100/104/107. Native Debian
+rsyslog packages add about 1.9MiB plus three small library dependencies. Signed
+official Debian indexes were refreshed independently of unrelated vendor feeds;
+existing repositories, application packages and configuration were preserved.
 Run a dedicated bounded forwarder with an independent config/unit, suppressing
 package default service startup and creation of extra local logs.
 
@@ -54,9 +57,36 @@ I1 policy. Map host labels from connection IP; reject all unknown peers and
 ignore message-supplied host identity. Feed the existing common redaction
 receiver. Persist input offsets and bound forwarding queue storage to64MiB.
 
-Acceptance must use an owned synthetic journal marker and an owned temporary
-file input, test all dummy redaction patterns, and prove queued delivery after
-a bounded receiver outage. Only then disable the existing Promtail daemon,
-preserving its configuration and positions for rollback. The old missing
-/var/log/messages input provides no evidence of guest journal or application
-log coverage; those new inputs require their own acceptance.
+Acceptance passed all nine dummy-secret patterns for all six guest journal/file
+canary paths through the actual parent receiver and shared redaction. The file
+fixture used foreign UID103/GID112 and mode0600, confirming read permission with
+only CAP_DAC_READ_SEARCH without changing application file permissions. A ct100
+message claiming ct107 was attributed to ct100; no ct107 marker appeared. An
+undeclared parent-local TCP peer was rejected.
+
+A temporary source-scoped TCP reject interrupted only ct100 forwarding. Journal
+and file markers stayed absent during the outage, survived a restart of only
+the dedicated forwarder, and arrived redacted after the rule was removed.
+Journal timestamps stayed inside the outage interval. The reject was removed
+in finally; household/application services were untouched. Pure-disk action
+queues are capped at 32MiB each with persistent input cursors; capacity exhaustion
+or a prolonged outage can still lose telemetry. TCP1515 is unencrypted on the
+scoped LAN, so only explicitly permitted guests may reach the receiver.
+
+New journals begin at first deployment; retained local history is not deleted.
+Existing cursors resume after restart. ct100 initially replayed local history
+before this first-start bound was added, and caught up before acceptance. The
+default package rsyslog service is stopped and disabled to prevent duplicate
+local logging at reboot. The dedicated forwarder limits memory to64MiB, CPU to10%
+and tasks to16; final RSS was1.8–2.1MiB with5–6 tasks and no automatic restarts.
+
+After normal configuration was reconciled without canary inputs, each guest
+check returned changed=0/failed=0. The gated retirement returned ok13/changed3/
+failed0 for each guest, stopped/disabled only Promtail, and retained its original
+private config/positions, binary and unit. Dedicated forwarders and AdGuard
+(ct100/107) or Mosquitto(ct104) were active; distro rsyslog remained disabled.
+State and retirement directories are root0700. Owned canary files and controller
+variables were deleted, and their targets and outage rule were confirmed absent.
+The old missing /var/log/messages input watched nothing; journal and native file
+streams are additional accepted coverage. Quiet/empty AdGuard stdout does not
+produce entries until the application writes it.
