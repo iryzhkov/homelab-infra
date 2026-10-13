@@ -483,7 +483,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Memory used by host",
-      "description": "Proxmox guest accounting takes priority for mapped VMs/LXCs; node counters are the fallback.",
+      "description": "OS used RAM = 1 - MemAvailable / MemTotal when available (including correctly virtualized LXC memory). Only hosts without OS metrics, such as HA, fall back to PVE residency/configured RAM. Residency is separately shown below and is not guest memory pressure.",
       "gridPos": {
         "x": 12,
         "y": 8,
@@ -497,8 +497,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(100 * max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) / max by(guest_id)(label_replace(pve_memory_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - max by(host)(node_memory_MemAvailable_bytes{job=\"node\",host=~\"$host\"}) / max by(host)(node_memory_MemTotal_bytes{job=\"node\",host=~\"$host\"})))",
-          "legendFormat": "{{host}}",
+          "expr": "label_replace((100 * (1 - max by(host)(node_memory_MemAvailable_bytes{job=\"node\",host=~\"$host\"}) / max by(host)(node_memory_MemTotal_bytes{job=\"node\",host=~\"$host\"}))),\"memory_source\",\"OS used\",\"host\",\".*\") or on(host) label_replace((100 * max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) / max by(guest_id)(label_replace(pve_memory_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})),\"memory_source\",\"PVE residency\",\"host\",\".*\")",
+          "legendFormat": "{{host}} / {{memory_source}}",
           "range": true,
           "instant": false
         }
