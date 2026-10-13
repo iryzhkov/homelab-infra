@@ -88,6 +88,9 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
       GF_SERVER_ROOT_URL: https://logs.ryzhkov.dev
+      # Keep the Go heap below the cgroup limit. Grafana repeatedly hit its
+      # 1 GiB limit and was OOM-killed during the 2026-10-13 baseline audit.
+      GOMEMLIMIT: 768MiB
     secrets:
       - grafana_password
     deploy:
@@ -97,9 +100,9 @@ services:
           - node.labels.pin.logging == true
       resources:
         limits:
-          memory: 1G
+          memory: 1536M
         reservations:
-          memory: 384M
+          memory: 768M
       update_config:
         order: stop-first
       rollback_config:
