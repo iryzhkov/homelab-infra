@@ -41,6 +41,13 @@ class ActivationTests(unittest.TestCase):
         template=Templar(loader=loader,variables={'restart_default':{'stdout':'local'},'restart_state':{'stat':{'exists':False}}})
         self.assertFalse(template.evaluate_conditional(TrustedAsTemplate().tag(play['tasks'][0]['when'][0])))
 
+    def test_recorded_recovery_starts_daemon_before_docker_queries(self):
+        names=[t['name'] for t in play['pre_tasks']]
+        self.assertLess(names.index('Start a stopped Docker daemon only for recorded recovery'),names.index('Inspect active container driver names without private configuration'))
+        entry=next(t for t in play['pre_tasks'] if t['name']=='Start a stopped Docker daemon only for recorded recovery')
+        self.assertEqual(entry['when'],['restart_state.stat.exists','not ansible_check_mode'])
+        self.assertEqual(entry['ansible.builtin.systemd_service']['state'],'started')
+
     def test_journal_survives_failure_and_unlock_is_preflighted(self):
         names=[t['name'] for t in tasks]
         self.assertLess(names.index('Persist original IDs before interrupting services'),names.index('Stop captured Compose containers before a manager restart'))

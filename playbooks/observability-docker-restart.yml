@@ -40,6 +40,20 @@
       become: true
       changed_when: false
       check_mode: false
+    - name: Inspect durable activation recovery state
+      ansible.builtin.stat:
+        path: "{{ restart_state_path }}"
+      become: true
+      register: restart_state
+      check_mode: false
+    - name: Start a stopped Docker daemon only for recorded recovery
+      ansible.builtin.systemd_service:
+        name: docker
+        state: started
+      become: true
+      when:
+        - restart_state.stat.exists
+        - not ansible_check_mode
     - name: Inspect active container driver names without private configuration
       ansible.builtin.shell:
         cmd: "docker ps -q | xargs -r docker inspect --format '{{ '{{' }}.HostConfig.LogConfig.Type{{ '}}' }}'"
@@ -55,12 +69,6 @@
         argv: [docker, info, --format, "{{ '{{' }}.LoggingDriver{{ '}}' }}"]
       register: restart_default
       changed_when: false
-      check_mode: false
-    - name: Inspect durable activation recovery state
-      ansible.builtin.stat:
-        path: "{{ restart_state_path }}"
-      become: true
-      register: restart_state
       check_mode: false
     - name: Load interrupted activation state
       ansible.builtin.slurp:
@@ -197,7 +205,7 @@
             argv: "{{ ['docker', 'stop', '--time', '30'] + restart_compose_ids }}"
           when:
             - inventory_hostname in groups['swarm']
-            - restart_default.stdout | trim != 'local'
+            - restart_default.stdout | trim != 'local' or restart_state.stat.exists
             - restart_compose_ids | length > 0
           changed_when: true
         - name: Restart the Docker daemon
