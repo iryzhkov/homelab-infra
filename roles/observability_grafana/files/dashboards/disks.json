@@ -231,7 +231,7 @@
           "fields": "",
           "values": false
         },
-        "orientation": "vertical",
+        "orientation": "horizontal",
         "displayMode": "gradient",
         "showUnfilled": true,
         "textMode": "value_and_name",
