@@ -6,6 +6,27 @@
       - ansible_facts.architecture in observability_alloy_arch
     quiet: true
 
+- name: Check native collector installation before allocating guest disk
+  ansible.builtin.stat:
+    path: /usr/bin/alloy
+  register: observability_native_alloy
+
+- name: Check root filesystem capacity before a new native package install
+  ansible.builtin.command:
+    argv: [df, --output=avail, -BM, /]
+  register: observability_install_free
+  changed_when: false
+  check_mode: false
+  when: ansible_facts.os_family == 'Debian' and not observability_native_alloy.stat.exists
+
+- name: Require space for the binary, installation staging and application headroom
+  ansible.builtin.assert:
+    that:
+      - (observability_install_free.stdout_lines[-1] | trim | regex_replace('M$', '') | int) >= 1200
+    fail_msg: Use the lightweight LXC exporter on small disks; preserve application operating space.
+    quiet: true
+  when: ansible_facts.os_family == 'Debian' and not observability_native_alloy.stat.exists
+
 - name: Load only the encrypted ingest credential on the controller
   community.sops.load_vars:
     file: "{{ playbook_dir }}/../secrets/observability.sops.yaml"
@@ -38,7 +59,7 @@
   loop:
     - {path: /etc/alloy, owner: root, mode: "0750"}
     - {path: /var/lib/alloy, owner: alloy, mode: "0750"}
-    - {path: /var/lib/alloy/textfile, owner: alloy, mode: "0750"}
+    - {path: /var/lib/observability-textfile, owner: root, mode: "0755"}
 
 - name: Create the empty redaction acceptance input
   ansible.builtin.file:
@@ -106,11 +127,6 @@
   ansible.builtin.include_role:
     name: observability_syslog_parent
   when: observability_syslog_guest is defined
-
-- name: Check whether the native Alloy validator is available
-  ansible.builtin.stat:
-    path: /usr/bin/alloy
-  register: observability_native_alloy
 
 - name: Validate a prepared native configuration before changing collection
   ansible.builtin.template:

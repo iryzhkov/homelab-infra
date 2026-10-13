@@ -20,7 +20,7 @@ prometheus.remote_write "homelab" {
 prometheus.exporter.unix "host" {
   enable_collectors = ["systemd"]
   textfile {
-    directory = "/var/lib/alloy/textfile"
+    directory = "/var/lib/observability-textfile"
   }
 }
 discovery.relabel "host_metrics" {

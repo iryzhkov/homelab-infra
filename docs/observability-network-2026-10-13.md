@@ -31,5 +31,23 @@ only. Applied policy 6acdfde31825b50cb1321662 plus its generated return rule;
 readback proved the exact sources, destination and port, with no old policy changed.
 Rollback deletes only that new policy. Existing 443 and isolation remain.
 
+Alpine I1 (same owner/review date): ct110 192.168.70.250 reaches its owning
+proxmox-a 192.168.1.5 UDP 1514 through existing routing. ct201 192.168.20.83
+needed new UniFi policy 6ace05fc1825b50cb132a9d9 to only proxmox-b
+192.168.1.29 UDP 1514. It has no generated return rule because syslog is
+unidirectional. Readback verified all 302 prior rules remained semantically
+unchanged. Rollback deletes only this new policy. Each hypervisor additionally
+has a persistent INPUT rule restricted to its declared guest; Alloy requires
+that firewall unit at boot. Local guest logs remain available. UDP forwarding
+is best effort and has no delivery acknowledgement or encryption on this LAN.
+
+I2 Proxmox identity: observability@pve!metrics, privilege separation enabled;
+PVEAuditor on / for both user and token, propagated. Only Audit privileges
+were read back. Owner: homelab-infra maintainer; review 2026-11-13; token expiry
+2027-10-13. Credential is SOPS-held in observability-exporters.sops.yaml,
+service-owned 0600 on each node, used only against its local verified API.
+Rollback stops observability-pve, removes its token ACL and token, then its
+user ACL and user. Existing cluster identities are untouched.
+
 OCI mesh -> edge:8443 was qualified read-only: 10.42.0.1 reaches edge
 10.42.0.3:8443 and gets 404 for an unmatched path. No new mesh rule needed.

@@ -28,6 +28,7 @@ import platform
 import re
 import struct
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -110,11 +111,15 @@ def write_textfile(path, host, device, values):
         for key, value in sorted(values.items())
     ]
     lines.append(f'igpu_last_success_timestamp_seconds{{host="{host}"}} {int(time.time())}')
-    temporary = path + ".tmp"
-    with open(temporary, "w") as handle:
-        handle.write("\n".join(lines) + "\n")
-    os.chmod(temporary, 0o644)
-    os.replace(temporary, path)
+    fd, temporary = tempfile.mkstemp(prefix=".igpu-", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write("\n".join(lines) + "\n")
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def main():

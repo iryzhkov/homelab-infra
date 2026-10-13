@@ -3,8 +3,6 @@
   hosts: docker_hosts
   become: true
   gather_facts: false
-  vars:
-    observability_gpu_textfile: /var/lib/alloy/textfile/igpu.prom
   tasks:
     - name: Preserve the existing encrypted Influx write credential
       community.sops.load_vars:

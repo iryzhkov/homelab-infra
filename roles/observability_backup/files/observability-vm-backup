@@ -99,6 +99,22 @@ def peer_copy(config, root):
              "-e", shlex.join(ssh), str(root) + "/", target], timeout=1800)
 
 
+def record_backup_success(config):
+    target = config.get("metrics_file")
+    if not target:
+        return
+    target = Path(target)
+    fd, temporary = tempfile.mkstemp(prefix=".backup-", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(f'observability_backup_last_success_timestamp_seconds{{stack="observability"}} {int(time.time())}\n')
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def backup(config):
     state = Path(config["state_root"])
     owner_file = state / ".swarm-owner"
@@ -165,6 +181,7 @@ def backup(config):
         shutil.rmtree(stale)
     if config.get("peer_copy", True):
         peer_copy(config, root)
+    record_backup_success(config)
     print(f"observability: native backup {stamp}; historical series={len(proof)}")
 
 

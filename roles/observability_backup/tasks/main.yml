@@ -36,6 +36,7 @@
   vars:
     observability_native_backup_config:
       host: "{{ inventory_hostname }}"
+      metrics_file: /var/lib/observability-textfile/observability_backup.prom
       state_root: "{{ swarm_state_root }}/observability"
       backup_root: "{{ observability_backup_root }}"
       restore_root: "{{ observability_restore_root }}"

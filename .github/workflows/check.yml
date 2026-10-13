@@ -16,6 +16,9 @@ jobs:
       - run: python3 scripts/test-helper-backups.py
       - run: python3 scripts/test-jocasta-backup.py
       - run: python3 scripts/test-swarm-snapshot.py
+      - run: python3 scripts/test-observability-backup.py
+      - run: python3 scripts/test-observability-textfile.py
+      - run: python3 -m py_compile roles/base/files/homelab-gpu-report roles/observability_pve/files/pve-exporter-launcher.py roles/observability_grafana/library/grafana_observability.py
       - run: python3 -m py_compile roles/backup/files/homelab-swarm-snapshot roles/backup/files/homelab-sqlite-backup
       - run: python3 -m py_compile stacks/jocasta/files/jocasta-backup scripts/jocasta-credentials.py
       - run: shellcheck -S warning stacks/jocasta/files/jocasta-firewall

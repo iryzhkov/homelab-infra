@@ -27,6 +27,24 @@
   register: observability_grafana_result
   no_log: true
 
+- name: Mark changed dashboards with their source deployment
+  ansible.builtin.uri:
+    url: "{{ observability_grafana_api_url }}/api/annotations"
+    method: POST
+    user: "{{ observability_grafana_admin_user }}"
+    password: "{{ observability_grafana_secrets.GRAFANA_PASSWORD }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      dashboardUID: "{{ item.uid }}"
+      time: "{{ (lookup('pipe', 'date +%s') | int) * 1000 }}"
+      tags: [observability-deploy, ansible]
+      text: "Observability dashboards provisioned from {{ lookup('pipe', 'git rev-parse --short HEAD') }}."
+    status_code: 200
+  loop: "{{ observability_grafana_dashboards }}"
+  no_log: true
+  when: observability_grafana_result is changed and not ansible_check_mode
+
 - name: Report observability provisioning and query readiness
   ansible.builtin.debug:
     msg: "{{ observability_grafana_result.summary }}"
