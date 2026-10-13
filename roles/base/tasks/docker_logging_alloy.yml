@@ -23,6 +23,7 @@
     owner: root
     group: root
     mode: "0644"
+    backup: true
     validate: /usr/bin/dockerd --validate --config-file=%s
   become: true
   no_log: true
