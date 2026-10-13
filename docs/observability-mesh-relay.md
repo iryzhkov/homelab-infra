@@ -21,3 +21,35 @@ endpoint blocks send to each destination rather than implementing failover.
 The relay is a separate unprivileged service with no capabilities, a read-only
 filesystem, a 64 MiB memory limit and a 10% CPU quota. Its config, unit and
 collector routing are managed by Ansible and survive host rebuilds.
+
+## Acceptance on 2026-10-13
+
+Both laptop and OCI deployed successfully; a subsequent Ansible check reported
+changed=0 and failed=0 on both. HAProxy configuration validates on both hosts,
+both collectors are ready, and both relay listeners bind only to loopback.
+OCI's relay used about 2.1 MiB; laptop's used about 20 MiB, within the 64 MiB
+limit. No kernel OOM events were observed during deployment and drills.
+
+The fault drills changed only laptop's relay cgroup through uniquely named
+runtime systemd drop-ins. No edge, host or household application was stopped.
+
+| Scoped fault or check | Observed result |
+| --- | --- |
+| Primary mesh address denied | Primary marked DOWN; two secondary connections; a host metric sample 41.156 seconds newer than the failure and owned journal marker arrived |
+| Secondary mesh address denied | Primary connection remained usable; verified TLS unauthenticated POST answered 401 |
+| Both mesh addresses denied for 60 seconds, then restored | Both marked DOWN; historical sample generated during the outage arrived after recovery; queued journal marker arrived with dummy token redacted |
+| Wrong TLS hostname / unrelated test CA | Both rejected with certificate verification error (curl exit 60) |
+| Query and snapshot paths through relay | Both 404; unauthenticated write 401 |
+| LAN access to relay | Unreachable; kernel listener shows 127.0.0.1:18443 only |
+
+All owned runtime deny files were removed, daemon configuration reloaded, and
+the relay restored. Relay and Alloy remained active afterward, with empty
+IPAddressDeny and no unsupported firewall warnings. Temporary negative TLS
+fixtures were removed. The fault matrix ran on laptop; OCI received the same
+checked relay configuration and steady-state runtime verification.
+
+This provides automatic edge transport failover, not zero interruption or
+unlimited offline retention. Native queue/backoff limits still apply, and Loki
+delivery can repeat entries after retries. The 401 health check does not prove
+that the shared metrics/log stores are writable; storage recovery and movement
+are separate acceptance gates.
