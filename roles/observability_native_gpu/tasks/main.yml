@@ -66,8 +66,15 @@
 - name: Refresh only the owned GPU reader after source or config changes
   ansible.builtin.systemd_service:
     name: observability-native-gpu.service
-    state: started
+    state: restarted
   when: not ansible_check_mode and (observability_native_gpu_script is changed or observability_native_gpu_config is changed or observability_native_gpu_units is changed)
+
+- name: Wait for first atomic output after the owned oneshot completes
+  ansible.builtin.wait_for:
+    path: "{{ observability_native_gpu_directory }}/native-gpu.prom"
+    state: present
+    timeout: 35
+  when: not ansible_check_mode
 
 - name: Inspect fresh native adapter output
   ansible.builtin.slurp:

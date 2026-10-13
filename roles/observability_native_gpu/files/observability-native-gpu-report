@@ -134,7 +134,18 @@ def validate_config(config):
 
 def samples(config, read=collect_gpu, now=time.time):
     validate_config(config)
+    descriptions = {
+        'utilization_ratio': 'Native sampled GPU duty cycle, not FLOPs or throughput.',
+        'temperature_celsius': 'Native GPU temperature; unsupported sensors are omitted.',
+        'memory_total_bytes': 'Native vendor-reported VRAM capacity.',
+        'memory_used_bytes': 'Native vendor-reported VRAM use.',
+        'power_watts': 'Native GPU power only, excluding ambiguous package power.',
+        'last_success_timestamp_seconds': 'Time of the last successful native device read.',
+        'scrape_success': 'Whether this explicitly supported adapter returned native readings.',
+    }
     lines = []
+    for name, help_text in descriptions.items():
+        lines.extend(['# HELP gpu_' + name + ' ' + help_text, '# TYPE gpu_' + name + ' gauge'])
     timestamp = int(now())
     for item in config["devices"]:
         device = item["physical_device"].lower()
