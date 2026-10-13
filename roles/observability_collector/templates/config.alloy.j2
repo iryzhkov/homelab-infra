@@ -156,6 +156,32 @@ loki.source.file "redaction_validation" {
 }
 
 {% if observability_logs_enabled | bool %}
+// Local toolfeedback push only; original spool timestamps and host/source survive.
+// Remote access is impossible. Drop arbitrary labels before common redaction.
+loki.relabel "toolfeedback" {
+  forward_to = []
+  rule {
+    action = "labelkeep"
+    regex = "host|source"
+  }
+  rule {
+    target_label = "job"
+    replacement = "toolfeedback"
+  }
+}
+loki.source.api "toolfeedback" {
+  http {
+    listen_address = "127.0.0.1"
+    listen_port = 12347
+    server_read_timeout = "10s"
+    server_write_timeout = "10s"
+  }
+  use_incoming_timestamp = true
+  max_send_message_size = "4MiB"
+  relabel_rules = loki.relabel.toolfeedback.rules
+  forward_to = [loki.process.redact.receiver]
+}
+
 {% if observability_file_inputs | length > 0 %}
 // Explicit file paths only, using the same redaction and persistent source state.
 loki.source.file "declared_files" {
