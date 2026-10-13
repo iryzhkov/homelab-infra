@@ -23,15 +23,37 @@ prometheus.exporter.unix "host" {
     directory = "/var/lib/alloy/textfile"
   }
 }
-prometheus.scrape "host" {
+discovery.relabel "host_metrics" {
   targets = prometheus.exporter.unix.host.targets
+  rule {
+    target_label = "job"
+    replacement = "node"
+  }
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+}
+prometheus.scrape "host" {
+  targets = discovery.relabel.host_metrics.output
   job_name = "node"
   scrape_interval = "30s"
   forward_to = [prometheus.remote_write.homelab.receiver]
 }
 prometheus.exporter.self "alloy" {}
-prometheus.scrape "alloy" {
+discovery.relabel "alloy_metrics" {
   targets = prometheus.exporter.self.alloy.targets
+  rule {
+    target_label = "job"
+    replacement = "alloy"
+  }
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+}
+prometheus.scrape "alloy" {
+  targets = discovery.relabel.alloy_metrics.output
   job_name = "alloy"
   scrape_interval = "30s"
   forward_to = [prometheus.remote_write.homelab.receiver]
@@ -55,8 +77,19 @@ prometheus.exporter.cadvisor "containers" {
   allowlisted_container_labels = ["com.docker.swarm.service.name", "com.docker.stack.namespace", "com.docker.compose.project", "com.docker.compose.service"]
   enabled_metrics = ["cpu", "memory", "network", "disk", "diskIO", "oom_event"]
 }
-prometheus.scrape "containers" {
+discovery.relabel "container_metrics" {
   targets = prometheus.exporter.cadvisor.containers.targets
+  rule {
+    target_label = "job"
+    replacement = "cadvisor"
+  }
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+}
+prometheus.scrape "containers" {
+  targets = discovery.relabel.container_metrics.output
   job_name = "cadvisor"
   scrape_interval = "30s"
   forward_to = [prometheus.remote_write.homelab.receiver]
