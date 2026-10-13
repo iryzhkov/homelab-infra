@@ -294,7 +294,8 @@
             "spanNulls": false
           },
           "min": 0,
-          "max": 100
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -317,7 +318,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 3
     },
@@ -369,7 +374,8 @@
             "spanNulls": false
           },
           "min": 0,
-          "max": 100
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -392,7 +398,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 4
     },
@@ -444,7 +454,8 @@
             "spanNulls": false
           },
           "min": 0,
-          "max": 100
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -467,7 +478,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 5
     },
@@ -519,7 +534,8 @@
             "spanNulls": false
           },
           "min": 0,
-          "max": 100
+          "max": 100,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -542,7 +558,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 6
     },
@@ -593,7 +613,8 @@
             "showPoints": "never",
             "spanNulls": false
           },
-          "min": 0
+          "min": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -611,7 +632,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 7
     },
@@ -662,7 +687,8 @@
             "showPoints": "never",
             "spanNulls": false
           },
-          "min": 0
+          "min": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -680,7 +706,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 8
     },
@@ -732,7 +762,8 @@
             "spanNulls": false
           },
           "min": 0,
-          "decimals": 0
+          "decimals": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -750,7 +781,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 9
     },
@@ -868,7 +903,8 @@
             "showPoints": "never",
             "spanNulls": false
           },
-          "min": 0
+          "min": 0,
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label}"
         },
         "overrides": []
       },
@@ -886,7 +922,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 11
     },
@@ -936,7 +976,8 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false
-          }
+          },
+          "displayName": "${__field.labels.host} · ${__field.labels.drive_label} · ${__field.labels.attribute_name}"
         },
         "overrides": []
       },
@@ -959,7 +1000,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 12
     },

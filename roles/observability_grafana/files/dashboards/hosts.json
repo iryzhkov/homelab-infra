@@ -561,9 +561,13 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "sizing": "manual",
-        "minVizHeight": 24,
-        "maxVizHeight": 48,
-        "namePlacement": "top"
+        "minVizHeight": 28,
+        "maxVizHeight": 32,
+        "namePlacement": "left",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 16
+        }
       },
       "id": 6
     },

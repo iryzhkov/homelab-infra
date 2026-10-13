@@ -760,9 +760,13 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "sizing": "manual",
-        "minVizHeight": 24,
-        "maxVizHeight": 48,
-        "namePlacement": "top"
+        "minVizHeight": 28,
+        "maxVizHeight": 32,
+        "namePlacement": "left",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 16
+        }
       },
       "id": 9
     },
@@ -844,7 +848,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 10
     },
@@ -926,7 +934,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 11
     },
@@ -999,9 +1011,13 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "sizing": "manual",
-        "minVizHeight": 24,
-        "maxVizHeight": 48,
-        "namePlacement": "top"
+        "minVizHeight": 28,
+        "maxVizHeight": 32,
+        "namePlacement": "left",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 16
+        }
       },
       "id": 12
     },
@@ -1083,7 +1099,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 13
     },
@@ -1165,7 +1185,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 14
     },
@@ -1400,7 +1424,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 18
     },
@@ -1482,7 +1510,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 19
     },
@@ -1564,7 +1596,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 20
     },
@@ -1717,7 +1753,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 22
     },
@@ -1792,7 +1832,11 @@
         "sizing": "manual",
         "minVizHeight": 24,
         "maxVizHeight": 48,
-        "namePlacement": "top"
+        "namePlacement": "top",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        }
       },
       "id": 23
     }
