@@ -6,7 +6,7 @@ prometheus.remote_write "homelab" {
     url = "https://metrics-push.ryzhkov.dev:{{ observability_ingest_port }}/api/v1/write"
     basic_auth {
       username = "{{ inventory_hostname }}"
-      password_file = "/etc/alloy/ingest-password"
+      password_file = "/etc/alloy/cadvisor-ingest-password"
     }
   }
 }
