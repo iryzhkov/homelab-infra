@@ -20,9 +20,14 @@ The metrics are descriptive gauges with value1, never health substitutes:
 - `node_monitoring_smart_expected_devices{host}` (inventory coverage count)
 - `node_monitoring_gpu_owner_info{host,physical_host,physical_device,gpu_kind,mode}`
 
-Capabilities exist only for explicitly supported telemetry: SMART on the two
-PVE exporters, physical temperatures on both PVE hosts, gaming-pc and laptop,
-and passthrough iGPU on homelab/normandy. No unsupported capability emits a
+Capabilities exist only for explicitly supported telemetry: SMART on both PVE
+hosts, gaming-pc and the laptop (seven physical SSDs; Apple namespace aliases
+count once), physical temperatures on all four, native desktop NVIDIA/AMD GPU
+readings and passthrough Intel iGPU on homelab/normandy. Independent inventory
+families node_monitoring_physical_drive_info and node_monitoring_gpu_inventory_info
+include every declared physical device, including unsupported/unproven drive
+telemetry and inventory-only Apple AGX. Inventory is not a health signal; missing
+measurements stay missing. All five physical GPU ownership keys remain unique. No unsupported capability emits a
 zero. An existing capability with missing measurements must still show
 missing data; value1 does not claim sensor health. The desktop OS hostname
 omarchy-pc is the existing gaming-pc inventory identity, not a second machine.

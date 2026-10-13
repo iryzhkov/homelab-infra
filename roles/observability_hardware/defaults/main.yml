@@ -1,7 +1,10 @@
 ---
 observability_smartctl_exporter_version: "0.15.0"
-observability_smartctl_exporter_archive_sha256: 32ff269f2ca5708e2aa8209c715192efcc32f87bd575cae50a76d391a484976e
-observability_smartctl_exporter_archive: "smartctl_exporter-{{ observability_smartctl_exporter_version }}.linux-amd64"
+observability_smartctl_exporter_architectures:
+  x86_64: {name: amd64, sha256: 32ff269f2ca5708e2aa8209c715192efcc32f87bd575cae50a76d391a484976e}
+  aarch64: {name: arm64, sha256: 9a870fe6401748f51f5edcd73057f1c90c0b975f1f48d986eacc61443320276c}
+observability_smartctl_exporter_archive_sha256: "{{ observability_smartctl_exporter_architectures[ansible_architecture].sha256 }}"
+observability_smartctl_exporter_archive: "smartctl_exporter-{{ observability_smartctl_exporter_version }}.linux-{{ observability_smartctl_exporter_architectures[ansible_architecture].name }}"
 observability_smartctl_exporter_download_url: "https://github.com/prometheus-community/smartctl_exporter/releases/download/v{{ observability_smartctl_exporter_version }}/{{ observability_smartctl_exporter_archive }}.tar.gz"
 observability_smartctl_exporter_install_dir: /opt/observability-smartctl-exporter
 observability_smartctl_exporter_cache_dir: /var/cache/observability-smartctl-exporter

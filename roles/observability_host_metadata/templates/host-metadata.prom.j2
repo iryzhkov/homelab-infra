@@ -11,7 +11,21 @@ node_monitoring_host_info{host="{{ name }}",kind="{{ hostvars[name].observabilit
 node_monitoring_smart_expected_devices{host="{{ name }}"} {{ hostvars[name].smart_drives | length }}
 {% endif %}
 {% endfor %}
-# HELP node_monitoring_gpu_owner_info Physical GPU identity and its sole telemetry owner; not a health signal.
+# HELP node_monitoring_physical_drive_info Declared physical disk inventory; unsupported telemetry does not imply healthy.
+# TYPE node_monitoring_physical_drive_info gauge
+{% for name in observability_metadata_hosts | sort %}
+{% for drive in hostvars[name].smart_drives | default([]) | sort(attribute='serial') %}
+node_monitoring_physical_drive_info{host="{{ name }}",serial_number="{{ drive.serial }}",model_name="{{ drive.model }}",transport="{{ drive.transport | default('unknown') }}",telemetry="{{ drive.telemetry | default('smart') }}"} 1
+{% endfor %}
+{% endfor %}
+# HELP node_monitoring_gpu_inventory_info Physical GPU inventory and native measurement support, including inventory-only hardware.
+# TYPE node_monitoring_gpu_inventory_info gauge
+{% for name in observability_metadata_hosts | sort %}
+{% for item in hostvars[name].observability_gpu_owners | default([]) | sort(attribute='physical_device') %}
+node_monitoring_gpu_inventory_info{host="{{ name }}",physical_host="{{ item.physical_host }}",physical_device="{{ item.physical_device }}",gpu_kind="{{ item.gpu_kind }}",mode="{{ item.mode }}",vendor="{{ item.vendor | default('intel') }}",model_name="{{ item.model_name | default('Intel integrated GPU') }}",telemetry="{{ item.telemetry | default('native') }}"} 1
+{% endfor %}
+{% endfor %}
+# HELP node_monitoring_gpu_owner_info Physical GPU identity and its sole declared owner; measurement support is separate.
 # TYPE node_monitoring_gpu_owner_info gauge
 {% for name in observability_metadata_hosts | sort %}
 {% for item in hostvars[name].observability_gpu_owners | default([]) | sort(attribute='physical_device') %}

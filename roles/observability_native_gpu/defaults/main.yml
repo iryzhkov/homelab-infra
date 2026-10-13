@@ -1,0 +1,3 @@
+---
+observability_native_gpu_directory: /var/lib/observability-textfile
+observability_native_gpu_interval: 60s

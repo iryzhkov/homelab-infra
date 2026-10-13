@@ -30,6 +30,8 @@
       - hostvars[item].observability_host_kind | default('') in ['physical', 'vm', 'lxc']
       - hostvars[item].observability_host_capabilities | default([]) | length <= 3
       - hostvars[item].observability_gpu_owners | default([]) | length <= 2
+      - hostvars[item].smart_drives | default([]) | length <= 32
+      - hostvars[item].smart_drives | default([]) | map(attribute='serial') | unique | list | length == hostvars[item].smart_drives | default([]) | length
       - hostvars[item].observability_guest_id | default('qemu/0') is match('^(qemu|lxc)/[0-9]+$')
       - hostvars[item].observability_host_capabilities | default([]) | map(attribute='capability') | unique | list | length == hostvars[item].observability_host_capabilities | default([]) | length
     quiet: true

@@ -17,5 +17,7 @@ observability_alpine_promtail_retire: true
 smart_drives:
   - model: WD PC SN810 SDCPNRY-256G-1006   # WD SN810 256 GB NVMe, boot
     serial: "231231800792"
+    transport: nvme
   - model: CT1000BX500SSD1                 # Crucial BX500 1 TB SATA
     serial: "2438E98C8AD2"
+    transport: sata

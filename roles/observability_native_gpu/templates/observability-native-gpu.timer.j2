@@ -1,0 +1,11 @@
+[Unit]
+Description=Bounded sampled native desktop GPU readings
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec={{ observability_native_gpu_interval }}
+AccuracySec=5s
+Unit=observability-native-gpu.service
+
+[Install]
+WantedBy=timers.target

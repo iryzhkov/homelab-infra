@@ -1,0 +1,29 @@
+[Unit]
+Description=Read-only native desktop GPU textfile readings
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/bin/observability-native-gpu-report --config /etc/observability-native-gpu/devices.json --output {{ observability_native_gpu_directory }}/native-gpu.prom
+TimeoutStartSec=30
+MemoryMax=128M
+CPUQuota=10%
+TasksMax=16
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=false
+CapabilityBoundingSet=
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths={{ observability_native_gpu_directory }}
+UMask=0077

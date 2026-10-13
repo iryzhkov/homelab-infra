@@ -2,11 +2,11 @@
 - name: Require declared physical drives and supported host architecture
   ansible.builtin.assert:
     that:
-      - ansible_architecture == 'x86_64'
+      - ansible_architecture in observability_smartctl_exporter_architectures
       - smart_drives is defined
       - smart_drives | length > 0
       - observability_smartctl_exporter_listen_address == '127.0.0.1:9633'
-    fail_msg: "This role requires amd64, declared smart_drives and a loopback-only listener."
+    fail_msg: "This role requires a checksum-pinned supported architecture, declared smart_drives and a loopback-only listener."
 
 - name: Inspect existing smartctl
   ansible.builtin.stat:

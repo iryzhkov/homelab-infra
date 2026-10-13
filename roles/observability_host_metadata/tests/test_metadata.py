@@ -44,14 +44,32 @@ class MetadataAcceptanceTest(unittest.TestCase):
             self.assertIn('host="' + name + '",kind="physical"', text)
         self.assertIn('host="ct105",kind="lxc",guest_id="lxc/105"', text)
         self.assertNotIn('node_monitoring_capability_info{host="ct105"', text)
-        self.assertNotIn('host="gaming-pc",capability="smart"', text)
-        self.assertNotIn('host="laptop",capability="smart"', text)
+        self.assertIn('host="gaming-pc",capability="smart"', text)
+        self.assertIn('host="laptop",capability="smart"', text)
         self.assertIn('node_monitoring_smart_expected_devices{host="proxmox-a"} 2', text)
         self.assertIn('node_monitoring_smart_expected_devices{host="proxmox-b"} 2', text)
-        self.assertNotIn('node_monitoring_smart_expected_devices{host="gaming-pc"}', text)
+        self.assertIn('node_monitoring_smart_expected_devices{host="gaming-pc"} 2', text)
+        self.assertIn('node_monitoring_smart_expected_devices{host="laptop"} 1', text)
+        self.assertEqual(len([line for line in text.splitlines() if line.startswith('node_monitoring_physical_drive_info{')]), 7)
+        gpu_rows = [line for line in text.splitlines() if line.startswith('node_monitoring_gpu_inventory_info{')]
+        self.assertEqual(len(gpu_rows), 5)
+        self.assertTrue(any('vendor="apple"' in line and 'telemetry="inventory_only"' in line for line in gpu_rows))
+        self.assertNotIn('host="laptop",capability="gpu"', text)
         self.assertNotIn('node_monitoring_smart_expected_devices{host="ct105"}', text)
         self.assertIn('host="homelab",physical_host="proxmox-a",physical_device="0000:00:02.0",gpu_kind="igpu",mode="passthrough"', text)
         self.assertIn('host="normandy",physical_host="proxmox-b",physical_device="0000:00:02.0",gpu_kind="igpu",mode="passthrough"', text)
+
+    def test_unsupported_physical_drive_stays_visible_without_health_claim(self):
+        name = "metadata-fixture-storage"
+        self.inventory.add_host(name, group="external")
+        host = self.inventory.get_host(name)
+        host.vars["observability_host_kind"] = "physical"
+        host.vars["smart_drives"] = [{"model": "Unsupported drive", "serial": "UNKNOWN1", "telemetry": "unsupported"}]
+        text = self.metadata([name])
+        self.assertIn('node_monitoring_physical_drive_info{host="metadata-fixture-storage"', text)
+        self.assertIn('telemetry="unsupported"} 1', text)
+        self.assertNotIn('node_monitoring_smart_expected_devices{', text)
+        self.assertNotIn('capability="smart"', text)
 
     def test_parent_exported_guest_metadata_preserves_explicit_guest_identity(self):
         text = self.metadata(["proxmox-a", "ct100", "ct104", "ct107"])

@@ -13,8 +13,10 @@ zfs_arc_max_bytes: 4294967296
 smart_drives:
   - model: CT500P3SSD8        # Crucial P3 500 GB NVMe, boot
     serial: "24244958383E"
+    transport: nvme
   - model: CT2000P3SSD8       # Crucial P3 2 TB NVMe
     serial: "2420E8AFBCE0"
+    transport: nvme
 
 # Small guests retain Promtail; only the owning node can scrape these ports.
 observability_tcp_syslog_guests:

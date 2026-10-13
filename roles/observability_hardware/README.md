@@ -1,6 +1,13 @@
 # Physical SMART telemetry
 
-Apply `playbooks/observability-hardware.yml` to the hypervisors. This adds only
+Apply `playbooks/observability-hardware.yml` to the explicitly declared physical
+hardware owners: both hypervisors, gaming-pc and laptop. The laptop's native
+smartmontools utility was installed by the scoped probe play, and read-only
+SMART health/temperature/wear/spare/error commands succeeded before claiming
+supported telemetry. Its three namespaces share one Apple SSD controller;
+namespace1 is explicitly selected and the physical drive is counted once.
+Both amd64 and arm64 official0.15.0 assets have separate checksum pins.
+The desktop uses its existing /usr/bin/smartctl; no app or driver changes. This adds only
 `observability-smartctl-exporter.service` and its versioned binary/cache directories.
 Existing SMART/Influx/Gatus collectors and timers are retained.
 
