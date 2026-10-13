@@ -1,0 +1,163 @@
+{
+  "uid": "homelab-observe-logs",
+  "title": "Homelab · Log Explorer",
+  "description": "Managed in Ansible. Host names are inventory identities, independent of IP or Swarm placement. Empty panels mean the exporter has not reported that metric; they do not imply a healthy zero.",
+  "tags": [
+    "homelab",
+    "observability",
+    "ansible-managed"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/homelab-observe-overview",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Hosts & hardware",
+      "type": "link",
+      "url": "/d/homelab-observe-hosts",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Containers",
+      "type": "link",
+      "url": "/d/homelab-observe-containers",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Log explorer",
+      "type": "link",
+      "url": "/d/homelab-observe-logs",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Agent hosts",
+      "type": "link",
+      "url": "/d/homelab-observe-agents",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "homelab-metrics"
+        },
+        "query": {
+          "query": "label_values(up, host)",
+          "refId": "host"
+        },
+        "definition": "label_values(up, host)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": []
+      },
+      {
+        "name": "search",
+        "label": "Text search",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Explore central logs",
+      "gridPos": {
+        "x": 0,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### Fleet logs\nFilter by host and a plain text search. Use Grafana Explore for additional labels or a custom LogQL expression. Logs retain the existing Loki datasource and retention policy."
+      }
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "Recent log lines",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 24,
+        "h": 18
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "__LOKI_UID__"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{host=~\"$host\",job=~\".+\"} |= \"$search\"",
+          "queryType": "range",
+          "datasource": {
+            "type": "loki",
+            "uid": "__LOKI_UID__"
+          }
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    }
+  ]
+}

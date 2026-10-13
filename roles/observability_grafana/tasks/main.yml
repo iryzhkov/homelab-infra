@@ -1,0 +1,32 @@
+---
+- name: Load existing Grafana administrator credentials on the controller
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/homelab-logging.sops.yaml"
+    name: observability_grafana_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Initialize dashboard source documents
+  ansible.builtin.set_fact:
+    observability_grafana_dashboards: []
+
+- name: Load dashboard source documents from the controller
+  ansible.builtin.set_fact:
+    observability_grafana_dashboards: "{{ observability_grafana_dashboards + [lookup('ansible.builtin.file', role_path ~ '/files/dashboards/' ~ item) | from_json] }}"
+  loop: "{{ observability_grafana_dashboard_files }}"
+
+- name: Reconcile dedicated observability datasource and dashboards
+  grafana_observability:
+    api_url: "{{ observability_grafana_api_url }}"
+    username: "{{ observability_grafana_admin_user }}"
+    password: "{{ observability_grafana_secrets.GRAFANA_PASSWORD }}"
+    metrics_url: "{{ observability_grafana_metrics_url }}"
+    folder_uid: "{{ observability_grafana_folder_uid }}"
+    folder_title: "{{ observability_grafana_folder_title }}"
+    dashboards: "{{ observability_grafana_dashboards }}"
+  register: observability_grafana_result
+  no_log: true
+
+- name: Report observability provisioning and query readiness
+  ansible.builtin.debug:
+    msg: "{{ observability_grafana_result.summary }}"

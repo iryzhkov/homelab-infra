@@ -31,6 +31,8 @@
     project_name: observability-socket-proxy
     state: present
     pull: missing
+  # Check mode cannot read a Compose file in a directory it only predicted.
+  when: not ansible_check_mode
 
 - name: Verify allowed runtime discovery and denied filesystem access
   ansible.builtin.uri:
