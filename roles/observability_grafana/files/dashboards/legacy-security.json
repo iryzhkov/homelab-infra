@@ -151,7 +151,7 @@
     "to": "now"
   },
   "timezone": "browser",
-  "title": "Security & Auth",
+  "title": "Homelab · Security History",
   "uid": "33b22e09-fa0c-468a-b507-f87d71700a25",
   "links": [
     {
@@ -235,5 +235,5 @@
       "targetBlank": false
     }
   ],
-  "description": "Private retained dashboard updated for current collection. Historical records and UID are preserved; external sharing is restricted to separate aggregate copies."
+  "description": "Retained security events and current allowed host journal activity. Authentication and vault inputs are intentionally excluded from new collection; their history is preserved."
 }
