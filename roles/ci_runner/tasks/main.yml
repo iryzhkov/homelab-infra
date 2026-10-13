@@ -82,7 +82,7 @@
 - name: Reject a runner registered to another repository
   ansible.builtin.assert:
     that:
-      - (ci_runner_metadata.content | b64decode | from_json).gitHubUrl == ci_runner_repository
+      - (ci_runner_metadata.content | b64decode(encoding='utf-8-sig') | from_json).gitHubUrl == ci_runner_repository
     quiet: true
   when: ci_runner_registration.stat.exists
 
