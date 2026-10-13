@@ -1,0 +1,7 @@
+---
+- name: Retire only accepted obsolete guest log shipping
+  hosts: ct100:ct104:ct107
+  serial: 1
+  gather_facts: false
+  roles:
+    - observability_guest_promtail_retire
