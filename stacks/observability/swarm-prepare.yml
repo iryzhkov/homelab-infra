@@ -1,0 +1,60 @@
+---
+- name: Find the current metrics stack pin
+  ansible.builtin.command:
+    argv: [docker, node, ls, -q, --filter, node.label=pin.observability=true]
+  register: observability_pin
+  changed_when: false
+  check_mode: false
+
+- name: Read the pinned inventory host
+  ansible.builtin.command:
+    argv: [docker, node, inspect, --format, "{{ '{{' }}index .Spec.Labels \"host\"{{ '}}' }}", "{{ observability_pin.stdout_lines[0] }}"]
+  register: observability_pin_host
+  changed_when: false
+  check_mode: false
+  when: observability_pin.stdout_lines | length == 1
+
+- name: Retain the current placement
+  ansible.builtin.set_fact:
+    observability_owner: "{{ observability_pin_host.stdout | default(swarm_stack.pin) | trim }}"
+
+- name: Create private stack state
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/observability"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  delegate_to: "{{ observability_owner }}"
+  become: true
+
+- name: Create metrics and configuration directories
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/observability/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop: [victoriametrics, config]
+  delegate_to: "{{ observability_owner }}"
+  become: true
+
+- name: Record snapshot ownership
+  ansible.builtin.copy:
+    content: "{{ observability_owner }}\n"
+    dest: "{{ swarm_state_root }}/observability/.swarm-owner"
+    owner: root
+    group: root
+    mode: "0600"
+  delegate_to: "{{ observability_owner }}"
+  become: true
+
+- name: Install the push gateway configuration
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/files/nginx.conf"
+    dest: "{{ swarm_state_root }}/observability/config/nginx.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: "{{ observability_owner }}"
+  become: true

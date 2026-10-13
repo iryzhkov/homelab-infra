@@ -1,0 +1,73 @@
+---
+- name: Require two distinct explicitly declared mesh edges
+  ansible.builtin.assert:
+    that:
+      - observability_ingest_address is match('^10[.]42[.]0[.][0-9]+$')
+      - observability_ingest_fallback_address is match('^10[.]42[.]0[.][0-9]+$')
+      - observability_ingest_address != observability_ingest_fallback_address
+    quiet: true
+
+- name: Install the Debian relay without starting an unrelated default service
+  ansible.builtin.apt:
+    name: haproxy
+    state: present
+    policy_rc_d: 101
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Install the Arch relay package
+  ansible.builtin.package:
+    name: haproxy
+    state: present
+  when: ansible_facts.os_family == 'Archlinux'
+
+- name: Create a dedicated unprivileged mesh relay identity
+  ansible.builtin.user:
+    name: observability-relay
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create private relay configuration directory
+  ansible.builtin.file:
+    path: /etc/observability-mesh-relay
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure a TLS passthrough primary and backup relay
+  ansible.builtin.template:
+    src: mesh-relay.cfg.j2
+    dest: /etc/observability-mesh-relay/haproxy.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/haproxy -c -f %s
+  notify: Restart the observability mesh relay
+
+- name: Install the bounded mesh relay service
+  ansible.builtin.template:
+    src: mesh-relay.service.j2
+    dest: /etc/systemd/system/observability-mesh-relay.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart the observability mesh relay
+
+- name: Apply relay changes before moving collector traffic
+  ansible.builtin.meta: flush_handlers
+
+- name: Start the dedicated relay
+  ansible.builtin.systemd_service:
+    name: observability-mesh-relay
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Require the loopback relay before updating collector routing
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ observability_mesh_relay_port }}"
+    timeout: 20
+  when: not ansible_check_mode

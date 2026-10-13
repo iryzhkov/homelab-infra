@@ -1,0 +1,31 @@
+[Unit]
+Description=Read-only Proxmox guest metrics on loopback
+After=network.target pveproxy.service
+
+[Service]
+Type=simple
+User={{ observability_pve_user }}
+Group={{ observability_pve_user }}
+ExecStart={{ observability_pve_venv }}/bin/python /usr/local/libexec/observability-pve/pve-exporter-launcher.py --config.file {{ observability_pve_config_dir }}/pve.yml --web.listen-address 127.0.0.1:9221
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+MemoryMax=256M
+CPUQuota=20%
+TasksMax=32
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

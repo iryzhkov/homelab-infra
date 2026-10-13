@@ -1,0 +1,66 @@
+---
+- name: Read the runtime socket group without granting it to Alloy
+  ansible.builtin.stat:
+    path: /var/run/docker.sock
+  register: observability_docker_socket
+
+- name: Require an existing Docker runtime socket
+  ansible.builtin.assert:
+    that: observability_docker_socket.stat.exists
+    quiet: true
+
+- name: Create a distinct non-login proxy identity
+  ansible.builtin.user:
+    name: observability-proxy
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+  register: observability_proxy_identity
+
+- name: Create the persistent private socket directory with inherited collector group
+  ansible.builtin.file:
+    path: /var/lib/observability-docker-proxy
+    state: directory
+    owner: observability-proxy
+    group: alloy
+    mode: "2750"
+
+- name: Create the managed proxy directory
+  ansible.builtin.file:
+    path: /opt/observability/docker-socket-proxy
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the restricted proxy definition
+  ansible.builtin.template:
+    src: docker-socket-proxy.yml.j2
+    dest: /opt/observability/docker-socket-proxy/docker-compose.yml
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Run only the new read-only socket proxy
+  community.docker.docker_compose_v2:
+    project_src: /opt/observability/docker-socket-proxy
+    project_name: observability-socket-proxy
+    state: present
+    pull: missing
+  # Check mode cannot read a Compose file in a directory it only predicted.
+  when: not ansible_check_mode
+
+- name: Verify allowed runtime discovery and denied filesystem access
+  ansible.builtin.uri:
+    url: "http://localhost/{{ item.path }}"
+    unix_socket: /var/lib/observability-docker-proxy/proxy.sock
+    status_code: "{{ item.status }}"
+    return_content: false
+    timeout: 5
+  loop:
+    - {path: version, status: 200}
+    - {path: containers/json, status: 200}
+    - {path: containers/unused/archive?path=/, status: 403}
+  loop_control:
+    label: "{{ item.path }}"
+  when: not ansible_check_mode

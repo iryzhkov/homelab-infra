@@ -1,0 +1,11 @@
+---
+# Additive until redaction and data coverage pass. Target hosts deliberately;
+# enabling a collector never restarts Docker or an application.
+- name: Roll out collection one host at a time
+  hosts: docker_hosts:hypervisors:cloud:gaming-pc:observability_clients:agent_workers:observability_lxc
+  serial: 1
+  gather_facts: true
+  become: true
+  roles:
+    - role: observability_collector
+      when: observability_alloy_enabled | default(true) | bool

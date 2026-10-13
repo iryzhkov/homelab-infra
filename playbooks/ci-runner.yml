@@ -1,0 +1,7 @@
+---
+- name: Configure the private homelab infrastructure CI runner
+  hosts: agent-a
+  gather_facts: true
+  become: true
+  roles:
+    - ci_runner

@@ -1,0 +1,7 @@
+---
+- name: Restart dedicated UniFi poller
+  ansible.builtin.systemd_service:
+    name: observability-unifi.service
+    daemon_reload: true
+    state: restarted
+  when: not ansible_check_mode

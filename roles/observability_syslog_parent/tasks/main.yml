@@ -1,0 +1,45 @@
+---
+- name: Require one explicitly declared Alpine source
+  ansible.builtin.assert:
+    that:
+      - observability_syslog_guest is defined
+      - observability_syslog_guest.address is match('^[0-9.]+$')
+      - ansible_host is match('^[0-9.]+$')
+      - observability_syslog_port | int == 1514
+    quiet: true
+
+- name: Install scoped syslog firewall controller
+  ansible.builtin.template:
+    src: observability-syslog-firewall.j2
+    dest: /usr/local/sbin/observability-syslog-firewall
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  register: observability_syslog_firewall_script
+
+- name: Install persistent firewall unit before Alloy
+  ansible.builtin.copy:
+    src: observability-syslog-firewall.service
+    dest: /etc/systemd/system/observability-syslog-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: observability_syslog_firewall_unit
+
+- name: Apply scoped firewall before opening the listener
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/observability-syslog-firewall]
+  become: true
+  changed_when: observability_syslog_firewall_script is changed
+  when: not ansible_check_mode
+
+- name: Persist the scoped source restriction
+  ansible.builtin.systemd_service:
+    name: observability-syslog-firewall.service
+    daemon_reload: "{{ observability_syslog_firewall_unit is changed }}"
+    enabled: true
+    state: started
+  become: true
+  when: not ansible_check_mode

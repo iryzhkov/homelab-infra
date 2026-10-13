@@ -1,0 +1,20 @@
+---
+observability_extra_scrapes:
+  - name: nut
+    address: 127.0.0.1:9199
+    path: /ups_metrics
+    interval: 60s
+    params:
+      ups: ["ups-{{ inventory_hostname | regex_replace('^proxmox-', '') }}"]
+  - name: smartctl
+    address: 127.0.0.1:9633
+  - name: pve
+    address: 127.0.0.1:9221
+    path: /pve
+    interval: 60s
+    timeout: 30s
+    params:
+      target: ["127.0.0.1"]
+      module: [default]
+      cluster: ["1"]
+      node: ["1"]

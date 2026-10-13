@@ -1,0 +1,260 @@
+---
+- name: Require a known supported host platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family in ['Debian', 'Archlinux']
+      - ansible_facts.architecture in observability_alloy_arch
+    quiet: true
+
+- name: Check native collector installation before allocating guest disk
+  ansible.builtin.stat:
+    path: /usr/bin/alloy
+  register: observability_native_alloy
+
+- name: Check root filesystem capacity before a new native package install
+  ansible.builtin.command:
+    argv: [df, --output=avail, -BM, /]
+  register: observability_install_free
+  changed_when: false
+  check_mode: false
+  when: ansible_facts.os_family == 'Debian' and not observability_native_alloy.stat.exists
+
+- name: Require space for the binary, installation staging and application headroom
+  ansible.builtin.assert:
+    that:
+      - (observability_install_free.stdout_lines[-1] | trim | regex_replace('M$', '') | int) >= 1200
+    fail_msg: Use the lightweight LXC exporter on small disks; preserve application operating space.
+    quiet: true
+  when: ansible_facts.os_family == 'Debian' and not observability_native_alloy.stat.exists
+
+- name: Load only the encrypted ingest credential on the controller
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/observability.sops.yaml"
+    name: observability_credentials
+  delegate_to: localhost
+  no_log: true
+
+- name: Create the collection identity
+  ansible.builtin.group:
+    name: alloy
+    system: true
+
+- name: Create the unprivileged collection user
+  ansible.builtin.user:
+    name: alloy
+    group: alloy
+    groups: systemd-journal
+    append: true
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create private configuration and persistent collector state
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: alloy
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/alloy, owner: root, mode: "0750"}
+    - {path: /var/lib/alloy, owner: alloy, mode: "0750"}
+    - {path: /var/lib/observability-textfile, owner: root, mode: "0755"}
+
+- name: Create the empty redaction acceptance input
+  ansible.builtin.file:
+    path: /var/lib/alloy/redaction-test.log
+    state: touch
+    owner: alloy
+    group: alloy
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Install this host's private ingest password
+  ansible.builtin.copy:
+    content: "{{ observability_credentials['INGEST_PASSWORD_' ~ (inventory_hostname | upper | replace('-', '_'))] }}"
+    dest: /etc/alloy/ingest-password
+    owner: alloy
+    group: alloy
+    mode: "0600"
+  no_log: true
+  notify: Restart the observability collector
+
+- name: Prepare checked primary and backup routing for offsite collectors
+  ansible.builtin.include_tasks: mesh-relay.yml
+  when: observability_ingest_fallback_address | length > 0
+
+- name: Resolve the private ingest names through the explicit reachable edge
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^(?!.*# observability-ingest-fallback$).*\smetrics-push\.ryzhkov\.dev\s+loki-push\.ryzhkov\.dev(?:\s|$)'
+    line: "{{ '127.0.0.1' if observability_ingest_fallback_address | length > 0 else observability_ingest_address }} metrics-push.ryzhkov.dev loki-push.ryzhkov.dev"
+    state: present
+
+- name: Add a scoped second mesh edge for offsite clients
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '# observability-ingest-fallback$'
+    line: "{{ observability_ingest_fallback_address }} metrics-push.ryzhkov.dev loki-push.ryzhkov.dev # observability-ingest-fallback"
+    state: absent
+
+- name: Preserve local journals across reboots within a disk budget
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure bounded persistent journald storage
+  ansible.builtin.copy:
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse={{ observability_journal_max_use }}
+      RuntimeMaxUse=64M
+      MaxRetentionSec=30day
+    dest: /etc/systemd/journald.conf.d/observability.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the persistent journal directory
+  ansible.builtin.file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "2755"
+
+- name: Flush journals to persistent storage
+  ansible.builtin.command:
+    argv: [journalctl, --flush]
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Restrict any declared Alpine log source before opening its receiver
+  ansible.builtin.include_role:
+    name: observability_syslog_parent
+  when: observability_syslog_guest is defined
+
+- name: Validate a prepared native configuration before changing collection
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy.prepared
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/bin/alloy validate %s
+  when: ansible_facts.os_family == 'Debian' and observability_native_alloy.stat.exists
+
+- name: Install a restricted Docker API proxy for container collection
+  ansible.builtin.include_tasks: docker-proxy.yml
+  when: observability_docker_enabled | bool
+
+- name: Install native Debian and Ubuntu Alloy packages
+  ansible.builtin.include_role:
+    name: grafana.grafana.alloy
+  vars:
+    alloy_version: "{{ observability_alloy_version }}"
+    alloy_config: "{{ lookup('template', playbook_dir ~ '/../roles/observability_collector/templates/config.alloy.j2') }}"
+    alloy_user_groups: [systemd-journal]
+    alloy_env_file_vars:
+      CUSTOM_ARGS: --server.http.listen-addr=127.0.0.1:12345 --disable-reporting
+      GOMEMLIMIT: "{{ observability_alloy_go_memory_limit }}"
+    alloy_systemd_override: |
+      {% if observability_syslog_guest is defined %}
+      [Unit]
+      Requires=observability-syslog-firewall.service
+      After=observability-syslog-firewall.service
+      {% endif %}
+      [Service]
+      MemoryHigh={{ observability_alloy_memory_high }}
+      MemoryMax={{ observability_alloy_memory_max }}
+      NoNewPrivileges=true
+  when: ansible_facts.os_family == 'Debian'
+
+# Alloy is absent from this host's configured Arch repos. Use the upstream
+# release zip with its published checksum, rather than an unreviewed AUR build.
+- name: Install Alloy from the official pinned archive on Arch
+  when: ansible_facts.os_family == 'Archlinux'
+  block:
+    - name: Ensure archive tools are present
+      community.general.pacman:
+        name: unzip
+        state: present
+
+    - name: Fetch the official release archive
+      ansible.builtin.get_url:
+        url: "https://github.com/grafana/alloy/releases/download/v{{ observability_alloy_version }}/alloy-linux-{{ observability_alloy_arch[ansible_facts.architecture] }}.zip"
+        dest: "/var/cache/alloy-{{ observability_alloy_version }}.zip"
+        checksum: "sha256:{{ observability_alloy_zip_sha256[ansible_facts.architecture] }}"
+        mode: "0644"
+
+    - name: Extract the versioned binary
+      ansible.builtin.unarchive:
+        src: "/var/cache/alloy-{{ observability_alloy_version }}.zip"
+        dest: /usr/local/bin
+        remote_src: true
+        creates: "/usr/local/bin/alloy-linux-{{ observability_alloy_arch[ansible_facts.architecture] }}"
+
+    - name: Set executable permissions on the official binary
+      ansible.builtin.file:
+        path: "/usr/local/bin/alloy-linux-{{ observability_alloy_arch[ansible_facts.architecture] }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Name the managed binary
+      ansible.builtin.file:
+        src: "/usr/local/bin/alloy-linux-{{ observability_alloy_arch[ansible_facts.architecture] }}"
+        dest: /usr/local/bin/alloy
+        state: link
+
+    - name: Render and validate Alloy configuration before replacing it
+      ansible.builtin.template:
+        src: config.alloy.j2
+        dest: /etc/alloy/config.alloy
+        owner: root
+        group: alloy
+        mode: "0640"
+        validate: /usr/local/bin/alloy validate %s
+      notify: Restart the observability collector
+
+    - name: Install the unprivileged collection service
+      ansible.builtin.template:
+        src: alloy.service.j2
+        dest: /etc/systemd/system/alloy.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart the observability collector
+
+- name: Flush collector restart handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable collection
+  ansible.builtin.systemd_service:
+    name: alloy
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Install the filesystem-restricted container metrics helper
+  ansible.builtin.include_tasks: cadvisor.yml
+  when:
+    - observability_cadvisor_enabled | bool
+    - observability_docker_enabled | bool
+
+- name: Check the collector readiness
+  ansible.builtin.uri:
+    url: http://127.0.0.1:12345/-/ready
+    use_proxy: false
+    timeout: 5
+  register: observability_ready
+  until: observability_ready.status == 200
+  retries: 6
+  delay: 3
+  when: not ansible_check_mode

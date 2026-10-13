@@ -1,0 +1,137 @@
+---
+- name: Require a supported platform and private polling endpoints
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['Debian', 'Archlinux']
+      - ansible_architecture == 'x86_64'
+      - observability_unifi_listen_address == '127.0.0.1:9130'
+      - observability_unifi_controller_address is match('^(?:[0-9]{1,3}[.]){3}[0-9]{1,3}$')
+      - observability_unifi_controller_url == 'https://' ~ observability_unifi_controller_address
+
+- name: Load only the dedicated encrypted local viewer credential
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/observability-unifi.sops.yaml"
+    name: observability_unifi_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Require the dedicated polling identity
+  ansible.builtin.assert:
+    that:
+      - observability_unifi_secrets.UNIFI_USERNAME == 'unpoller'
+      - observability_unifi_secrets.UNIFI_PASSWORD | length >= 40
+  no_log: true
+
+- name: Create an isolated unprivileged polling group
+  ansible.builtin.group:
+    name: "{{ observability_unifi_user }}"
+    system: true
+
+- name: Create an isolated unprivileged polling user
+  ansible.builtin.user:
+    name: "{{ observability_unifi_user }}"
+    group: "{{ observability_unifi_user }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create versioned binary and cache directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ observability_unifi_install_dir }}"
+    - "{{ observability_unifi_cache_dir }}"
+
+- name: Create the private configuration directory
+  ansible.builtin.file:
+    path: "{{ observability_unifi_config_dir }}"
+    state: directory
+    owner: "{{ observability_unifi_user }}"
+    group: "{{ observability_unifi_user }}"
+    mode: "0700"
+
+- name: Fetch the checksum-pinned official native Unpoller release
+  ansible.builtin.get_url:
+    url: "https://github.com/unpoller/unpoller/releases/download/v{{ observability_unifi_version }}/unpoller_{{ observability_unifi_version }}_linux_amd64.tar.gz"
+    dest: "{{ observability_unifi_cache_dir }}/unpoller_{{ observability_unifi_version }}_linux_amd64.tar.gz"
+    checksum: "sha256:{{ observability_unifi_archive_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+
+- name: Extract the reviewed versioned binary
+  ansible.builtin.unarchive:
+    src: "{{ observability_unifi_cache_dir }}/unpoller_{{ observability_unifi_version }}_linux_amd64.tar.gz"
+    dest: "{{ observability_unifi_install_dir }}"
+    remote_src: true
+    owner: root
+    group: root
+    creates: "{{ observability_unifi_install_dir }}/unpoller"
+  notify: Restart dedicated UniFi poller
+  when: not ansible_check_mode
+
+- name: Install the dedicated secret readable only by the poller
+  ansible.builtin.copy:
+    content: "{{ observability_unifi_secrets.UNIFI_PASSWORD }}"
+    dest: "{{ observability_unifi_config_dir }}/password"
+    owner: "{{ observability_unifi_user }}"
+    group: "{{ observability_unifi_user }}"
+    mode: "0600"
+  no_log: true
+  notify: Restart dedicated UniFi poller
+
+- name: Install the explicitly reviewed self-signed console certificate pin
+  ansible.builtin.copy:
+    src: controller.crt
+    dest: "{{ observability_unifi_config_dir }}/controller.crt"
+    owner: "{{ observability_unifi_user }}"
+    group: "{{ observability_unifi_user }}"
+    mode: "0600"
+  notify: Restart dedicated UniFi poller
+
+- name: Configure only network metrics using native upstream options
+  ansible.builtin.template:
+    src: up.conf.j2
+    dest: "{{ observability_unifi_config_dir }}/up.conf"
+    owner: "{{ observability_unifi_user }}"
+    group: "{{ observability_unifi_user }}"
+    mode: "0600"
+  notify: Restart dedicated UniFi poller
+
+- name: Install the constrained loopback poller service
+  ansible.builtin.template:
+    src: observability-unifi.service.j2
+    dest: /etc/systemd/system/observability-unifi.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart dedicated UniFi poller
+
+- name: Apply only dedicated monitoring service changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the dedicated polling service
+  ansible.builtin.systemd_service:
+    name: observability-unifi.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Confirm real UniFi device metrics on the private listener
+  ansible.builtin.uri:
+    url: "http://{{ observability_unifi_listen_address }}/metrics"
+    return_content: true
+    use_proxy: false
+    timeout: 30
+    status_code: 200
+  register: observability_unifi_ready
+  until: "'unifi_' in observability_unifi_ready.content | default('') and 'unifi_device_' in observability_unifi_ready.content | default('')"
+  retries: 5
+  delay: 15
+  when: not ansible_check_mode

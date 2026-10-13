@@ -1,0 +1,6 @@
+---
+observability_pve_exporter_version: "3.10.1"
+observability_pve_user: observability-pve
+observability_pve_venv: /opt/observability-pve
+observability_pve_config_dir: /etc/observability-pve
+observability_pve_secret_file: "{{ playbook_dir }}/../secrets/observability-exporters.sops.yaml"

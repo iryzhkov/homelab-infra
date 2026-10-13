@@ -1,0 +1,13 @@
+---
+observability_grafana_api_url: http://127.0.0.1:3200
+observability_grafana_admin_user: admin
+observability_grafana_metrics_url: http://observability_victoriametrics:8428
+observability_grafana_folder_uid: homelab-observability
+observability_grafana_folder_title: Homelab Observability
+observability_grafana_dashboard_files:
+  - overview.json
+  - hosts.json
+  - containers.json
+  - logs.json
+  - agents.json
+  - unifi.json

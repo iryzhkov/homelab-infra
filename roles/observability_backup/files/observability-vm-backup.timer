@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly native VictoriaMetrics backup
+
+[Timer]
+OnCalendar=*-*-* *:17:00
+RandomizedDelaySec=120
+Persistent=true
+Unit=observability-vm-backup.service
+
+[Install]
+WantedBy=timers.target

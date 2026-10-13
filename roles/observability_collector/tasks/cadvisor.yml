@@ -1,0 +1,56 @@
+---
+# cAdvisor must read root-owned Docker layer metadata even for CPU/memory.
+# Isolate that access from the unprivileged journal and Docker log collector.
+- name: Create private container metrics state
+  ansible.builtin.file:
+    path: /var/lib/alloy-cadvisor
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install a private credential owned by the restricted helper identity
+  ansible.builtin.copy:
+    content: "{{ observability_credentials['INGEST_PASSWORD_' ~ (inventory_hostname | upper | replace('-', '_'))] }}"
+    dest: /etc/alloy/cadvisor-ingest-password
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Validate isolated container metrics configuration
+  ansible.builtin.template:
+    src: cadvisor.alloy.j2
+    dest: /etc/alloy/cadvisor.alloy
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "{{ '/usr/local/bin/alloy' if ansible_facts.os_family == 'Archlinux' else '/usr/bin/alloy' }} validate %s"
+  register: observability_cadvisor_config
+
+- name: Install the restricted helper service
+  ansible.builtin.template:
+    src: cadvisor.service.j2
+    dest: /etc/systemd/system/observability-cadvisor.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: observability_cadvisor_unit
+
+- name: Start or reload only container metrics collection
+  ansible.builtin.systemd_service:
+    name: observability-cadvisor
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if observability_cadvisor_config is changed or observability_cadvisor_unit is changed else 'started' }}"
+  when: not ansible_check_mode
+
+- name: Check the isolated helper readiness
+  ansible.builtin.uri:
+    url: http://127.0.0.1:12346/-/ready
+    timeout: 5
+  register: observability_cadvisor_ready
+  until: observability_cadvisor_ready.status == 200
+  retries: 6
+  delay: 2
+  when: not ansible_check_mode

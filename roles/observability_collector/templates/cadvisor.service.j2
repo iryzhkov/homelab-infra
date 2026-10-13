@@ -1,0 +1,29 @@
+[Unit]
+Description=Filesystem-restricted homelab container metrics
+After=docker.service network-online.target
+Wants=network-online.target
+[Service]
+User=root
+SupplementaryGroups=alloy
+Environment=GOMEMLIMIT=192MiB
+ExecStart={{ '/usr/local/bin/alloy' if ansible_facts.os_family == 'Archlinux' else '/usr/bin/alloy' }} run --storage.path=/var/lib/alloy-cadvisor --server.http.listen-addr=127.0.0.1:12346 --disable-reporting /etc/alloy/cadvisor.alloy
+Restart=on-failure
+RestartSec=5
+MemoryHigh=256M
+MemoryMax=384M
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/alloy-cadvisor
+# No application data, raw runtime socket or volumes. The private proxy
+# permits metadata inspection (which can include environments) only to trusted
+# collector identities; cAdvisor exports allowlisted labels, never environments.
+InaccessiblePaths=-/srv/swarm -{{ swarm_pool_path | default('/srv') }}/swarm -{{ docker_data_root | default('/var/lib/docker') }}/containers -{{ docker_data_root | default('/var/lib/docker') }}/volumes -{{ docker_data_root | default('/var/lib/docker') }}/overlay2 -/run/docker.sock -/run/containerd/containerd.sock
+[Install]
+WantedBy=multi-user.target

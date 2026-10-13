@@ -1,0 +1,9 @@
+---
+ci_runner_name: agent-a-homelab-infra-1
+ci_runner_user: igor
+ci_runner_root: /srv/agent/actions-runner-homelab-infra-1
+ci_runner_home: /srv/agent/runner-home/homelab-infra-1
+ci_runner_tmp: /srv/agent/runner-tmp/homelab-infra-1
+ci_runner_repository: https://github.com/iryzhkov/homelab-infra
+ci_runner_download_url: https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz
+ci_runner_sha256: 70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613

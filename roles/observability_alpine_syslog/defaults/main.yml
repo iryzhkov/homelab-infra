@@ -1,0 +1,5 @@
+---
+# Set true for a guest only after real UDP delivery and receiver redaction pass.
+observability_alpine_forwarding_verified: false
+# Explicit opt-in after every legacy source and nine redaction patterns pass.
+observability_alpine_promtail_retire: false

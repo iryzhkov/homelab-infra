@@ -1,0 +1,219 @@
+// {{ ansible_managed }}. Credentials are private files, never template values.
+logging {
+  level = "warn"
+}
+
+prometheus.remote_write "homelab" {
+  external_labels = {
+    host = "{{ inventory_hostname }}",
+    intermittent = "{{ observability_intermittent | bool | ternary('true', 'false') }}",
+  }
+  endpoint {
+    url = "https://metrics-push.ryzhkov.dev:{{ observability_ingest_client_port }}/api/v1/write"
+    basic_auth {
+      username = "{{ inventory_hostname }}"
+      password_file = "/etc/alloy/ingest-password"
+    }
+  }
+}
+
+prometheus.exporter.unix "host" {
+  enable_collectors = ["systemd"]
+  textfile {
+    directory = "/var/lib/observability-textfile"
+  }
+}
+discovery.relabel "host_metrics" {
+  targets = prometheus.exporter.unix.host.targets
+  rule {
+    target_label = "job"
+    replacement = "node"
+  }
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+}
+prometheus.scrape "host" {
+  targets = discovery.relabel.host_metrics.output
+  job_name = "node"
+  scrape_interval = "30s"
+  forward_to = [prometheus.remote_write.homelab.receiver]
+}
+prometheus.exporter.self "alloy" {}
+discovery.relabel "alloy_metrics" {
+  targets = prometheus.exporter.self.alloy.targets
+  rule {
+    target_label = "job"
+    replacement = "alloy"
+  }
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+}
+prometheus.scrape "alloy" {
+  targets = discovery.relabel.alloy_metrics.output
+  job_name = "alloy"
+  scrape_interval = "30s"
+  forward_to = [prometheus.remote_write.homelab.receiver]
+}
+
+{% set poller_scrapes = [{"name": "unifi", "address": "127.0.0.1:9130", "interval": "60s"}] if inventory_hostname in groups.get("observability_unifi_pollers", []) else [] %}
+{% for scrape in observability_extra_scrapes + (observability_lxc_scrapes | default([])) + poller_scrapes %}
+prometheus.scrape "{{ scrape.name }}" {
+  targets = [{ __address__ = "{{ scrape.address }}", instance = "{{ scrape.host | default(inventory_hostname) }}", host = "{{ scrape.host | default(inventory_hostname) }}" }]
+  job_name = "{{ scrape.job | default(scrape.name) }}"
+  metrics_path = "{{ scrape.path | default('/metrics') }}"
+  scrape_interval = "{{ scrape.interval | default('30s') }}"
+  scrape_timeout = "{{ scrape.timeout | default('10s') }}"
+{% if scrape.params is defined %}
+  params = {
+{% for key, value in scrape.params.items() %}
+    {{ key }} = {{ value | to_json }},
+{% endfor %}
+  }
+{% endif %}
+  forward_to = [prometheus.remote_write.homelab.receiver]
+}
+{% endfor %}
+
+{% if observability_cadvisor_embedded | default(false) | bool %}
+prometheus.exporter.cadvisor "containers" {
+  docker_host = "unix:///var/lib/observability-docker-proxy/proxy.sock"
+  docker_only = true
+  store_container_labels = false
+  allowlisted_container_labels = ["com.docker.swarm.service.name", "com.docker.stack.namespace", "com.docker.compose.project", "com.docker.compose.service"]
+  enabled_metrics = ["cpu", "memory", "network", "disk", "diskIO", "oom_event"]
+}
+discovery.relabel "container_metrics" {
+  targets = prometheus.exporter.cadvisor.containers.targets
+  rule {
+    target_label = "job"
+    replacement = "cadvisor"
+  }
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+}
+prometheus.scrape "containers" {
+  targets = discovery.relabel.container_metrics.output
+  job_name = "cadvisor"
+  scrape_interval = "30s"
+  forward_to = [prometheus.remote_write.homelab.receiver]
+}
+{% endif %}
+
+loki.write "homelab" {
+  endpoint {
+    url = "https://loki-push.ryzhkov.dev:{{ observability_ingest_client_port }}/loki/api/v1/push"
+    basic_auth {
+      username = "{{ inventory_hostname }}"
+      password_file = "/etc/alloy/ingest-password"
+    }
+  }
+}
+
+// Every input uses this same redaction receiver. No bypass is permitted.
+loki.process "redact" {
+  forward_to = [loki.write.homelab.receiver]
+  stage.replace {
+    expression = "(?i)(?:bearer|basic)[[:space:]]+([A-Za-z0-9+/=._-]+)"
+    replace = "[REDACTED]"
+  }
+  stage.replace {
+    expression = `(?i)(?:[a-z0-9_]*(?:token|key|password|secret)[a-z0-9_]*)["[:space:]]*[:=]["[:space:]]*([^&"'[:space:]]+)`
+    replace = "[REDACTED]"
+  }
+  stage.replace {
+    expression = "://[^:/[:space:]]+:([^@/[:space:]]+)@"
+    replace = "[REDACTED]"
+  }
+  stage.replace {
+    expression = "((?:ghp_|github_pat_|xox[baprs]-|sk-[a-zA-Z0-9_-]*|AKIA)[A-Za-z0-9_-]{8,})"
+    replace = "[REDACTED]"
+  }
+  stage.replace {
+    expression = `(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)`
+    replace = "[REDACTED]"
+  }
+}
+
+// Test-only local file exists solely to prove redaction before log rollout.
+loki.source.file "redaction_validation" {
+  targets = [{ __path__ = "/var/lib/alloy/redaction-test.log", job = "redaction-validation", host = "{{ inventory_hostname }}" }]
+  forward_to = [loki.process.redact.receiver]
+}
+
+{% if observability_logs_enabled | bool %}
+{% if observability_syslog_guest is defined %}
+// Source IP is restricted by the owning hypervisor firewall. Guest labels
+// are assigned here, never accepted from arbitrary log message contents.
+loki.source.syslog "alpine" {
+  listener {
+    address = "{{ ansible_host }}:1514"
+    protocol = "udp"
+    syslog_format = "rfc3164"
+    labels = { job = "syslog", host = "{{ observability_syslog_guest.name }}" }
+  }
+  forward_to = [loki.process.redact.receiver]
+}
+{% endif %}
+loki.relabel "journal" {
+  forward_to = []
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label = "unit"
+  }
+}
+loki.source.journal "host" {
+  max_age = "24h"
+  labels = { job = "journal", host = "{{ inventory_hostname }}" }
+  relabel_rules = loki.relabel.journal.rules
+  forward_to = [loki.process.redact.receiver]
+}
+{% if observability_docker_enabled | bool %}
+discovery.docker "containers" {
+  host = "unix:///var/lib/observability-docker-proxy/proxy.sock"
+  refresh_interval = "10s"
+}
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex = "/(?:authentik.*|vaultwarden.*)"
+    action = "drop"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex = "/(.*)"
+    target_label = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_stack_namespace"]
+    target_label = "stack"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_swarm_service_name"]
+    target_label = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex = "(.+)"
+    target_label = "stack"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex = "(.+)"
+    target_label = "service"
+  }
+}
+loki.source.docker "containers" {
+  host = "unix:///var/lib/observability-docker-proxy/proxy.sock"
+  targets = discovery.relabel.containers.output
+  labels = { job = "docker", host = "{{ inventory_hostname }}" }
+  forward_to = [loki.process.redact.receiver]
+}
+{% endif %}
+{% endif %}

@@ -1,0 +1,12 @@
+---
+# Add native backups without changing any existing application backup jobs.
+# ansible-playbook playbooks/observability-backup.yml --check --diff
+# ansible-playbook playbooks/observability-backup.yml
+# Then on the active owner:
+# sudo /usr/local/sbin/observability-vm-backup backup
+# sudo /usr/local/sbin/observability-vm-backup restore-check
+- name: Configure native metrics backups on both possible owners
+  hosts: swarm_workers
+  gather_facts: false
+  roles:
+    - observability_backup

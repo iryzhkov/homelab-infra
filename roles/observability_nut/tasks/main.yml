@@ -1,0 +1,57 @@
+---
+- name: Install the pinned native read-only NUT exporter
+  ansible.builtin.get_url:
+    url: https://github.com/DRuggeri/nut_exporter/releases/download/v3.3.0/nut_exporter-v3.3.0-linux-amd64
+    dest: /usr/local/bin/observability-nut-exporter
+    checksum: sha256:8183da720ff547b7be56cc60505a3e0b731ccbf23aa18b3e297159b261500d8a
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart observability NUT exporter
+
+- name: Install the constrained loopback NUT exporter unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/observability-nut.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Read-only local UPS metrics
+      After=network.target nut-server.service
+      [Service]
+      DynamicUser=true
+      ExecStart=/usr/local/bin/observability-nut-exporter --nut.server=127.0.0.1 --web.listen-address=127.0.0.1:9199 --nut.vars_enable=battery.charge,battery.runtime,battery.voltage,input.voltage,ups.load,ups.status,ups.realpower,ups.temperature
+      Restart=on-failure
+      MemoryMax=64M
+      CPUQuota=5%
+      NoNewPrivileges=true
+      PrivateTmp=true
+      PrivateDevices=true
+      ProtectSystem=strict
+      ProtectHome=true
+      CapabilityBoundingSet=
+      IPAddressDeny=any
+      IPAddressAllow=localhost
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart observability NUT exporter
+
+- name: Apply only exporter changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the exporter without touching UPS controls
+  ansible.builtin.systemd_service:
+    name: observability-nut.service
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Verify UPS telemetry through the loopback listener
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:9199/ups_metrics?ups=ups-{{ inventory_hostname | regex_replace('^proxmox-', '') }}"
+    return_content: true
+  register: observability_nut_ready
+  failed_when: "'network_ups_tools_battery_charge' not in observability_nut_ready.content"
+  when: not ansible_check_mode

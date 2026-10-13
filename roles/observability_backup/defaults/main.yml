@@ -1,0 +1,12 @@
+---
+# v1.154.0 linux/amd64, matching the deployed single-node VM (2026-10-13).
+observability_vmbackup_image: victoriametrics/vmbackup@sha256:172bac50c900d7696bb4ecf5f61596e2e3f22b3d6a5073933ab2353c0b244b17
+observability_vmrestore_image: victoriametrics/vmrestore@sha256:682d0102d43af1054f1c420e90189957bad3d454db159237cae34cf671f5b2a2
+observability_backup_keep: 6
+observability_backup_minimum_free_bytes: 5368709120
+observability_backup_max_bytes: 21474836480
+observability_backup_root: "{{ swarm_snapshot_dir }}/observability/victoriametrics"
+observability_restore_root: "{{ swarm_pool_path }}/observability-restore-check"
+observability_backup_proof_query: up
+observability_backup_peer_copy: true
+observability_restore_max_age_seconds: 7200

@@ -1,0 +1,35 @@
+// {{ ansible_managed }}. Root access is restricted to cgroup/layer metadata.
+logging { level = "warn" }
+prometheus.remote_write "homelab" {
+  external_labels = { host = "{{ inventory_hostname }}" }
+  endpoint {
+    url = "https://metrics-push.ryzhkov.dev:{{ observability_ingest_client_port }}/api/v1/write"
+    basic_auth {
+      username = "{{ inventory_hostname }}"
+      password_file = "/etc/alloy/cadvisor-ingest-password"
+    }
+  }
+}
+prometheus.exporter.cadvisor "containers" {
+  docker_host = "unix:///var/lib/observability-docker-proxy/proxy.sock"
+  docker_only = true
+  store_container_labels = false
+  allowlisted_container_labels = ["com.docker.swarm.service.name", "com.docker.stack.namespace", "com.docker.compose.project", "com.docker.compose.service"]
+  enabled_metrics = ["cpu", "memory", "network", "diskIO", "oom_event"]
+}
+discovery.relabel "containers" {
+  targets = prometheus.exporter.cadvisor.containers.targets
+  rule {
+    target_label = "job"
+    replacement = "cadvisor"
+  }
+  rule {
+    target_label = "instance"
+    replacement = "{{ inventory_hostname }}"
+  }
+}
+prometheus.scrape "containers" {
+  targets = discovery.relabel.containers.output
+  scrape_interval = "30s"
+  forward_to = [prometheus.remote_write.homelab.receiver]
+}

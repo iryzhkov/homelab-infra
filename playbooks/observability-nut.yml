@@ -1,0 +1,7 @@
+---
+- name: Export existing UPS telemetry without UPS control credentials
+  hosts: hypervisors
+  become: true
+  gather_facts: false
+  roles:
+    - observability_nut

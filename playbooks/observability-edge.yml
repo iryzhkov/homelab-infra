@@ -1,0 +1,70 @@
+---
+# One edge at a time. Transfer the VIP before touching Traefik, so household
+# traffic uses the other edge throughout the container's restart.
+- name: Roll out the dedicated ingest listener without restarting the active edge
+  hosts: edge_proxy
+  serial: 1
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse to interfere with host maintenance
+      ansible.builtin.include_role:
+        name: maintenance_guard
+    - name: Verify the other edge answers a household route
+      ansible.builtin.uri:
+        url: "https://{{ hostvars[item].ansible_host }}/"
+        headers: {Host: vault.ryzhkov.dev}
+        validate_certs: false
+        status_code: [200, 301, 302]
+        timeout: 10
+      loop: "{{ groups['edge_proxy'] | difference([inventory_hostname]) }}"
+      check_mode: false
+  tasks:
+    - name: Deploy while the peer holds the VIP
+      block:
+        - name: Relinquish this edge's VIP
+          ansible.builtin.systemd_service:
+            name: keepalived
+            state: stopped
+          become: true
+          when: not ansible_check_mode
+
+        - name: Wait until the peer owns the VIP
+          ansible.builtin.shell:
+            cmd: "ip -4 address show | grep -F ' {{ edge_vip }}/'"
+          delegate_to: "{{ (groups['edge_proxy'] | difference([inventory_hostname]))[0] }}"
+          register: ingest_peer_vip
+          changed_when: false
+          retries: 10
+          delay: 1
+          until: ingest_peer_vip.rc == 0
+          when: not ansible_check_mode
+
+        - name: Converge only the Traefik Compose stack
+          ansible.builtin.include_role:
+            name: compose_stack
+          vars:
+            stack: "{{ stacks | selectattr('name', 'equalto', 'traefik') | first }}"
+
+        - name: Render and verify dynamic routes
+          ansible.builtin.include_role:
+            name: traefik
+
+        - name: Verify this edge's household route after restart
+          ansible.builtin.uri:
+            url: https://127.0.0.1/
+            headers: {Host: vault.ryzhkov.dev}
+            validate_certs: false
+            status_code: [200, 301, 302]
+            timeout: 10
+          register: ingest_edge_route
+          until: ingest_edge_route.status in [200, 301, 302]
+          retries: 12
+          delay: 2
+          when: not ansible_check_mode
+      always:
+        - name: Rejoin VIP failover
+          ansible.builtin.systemd_service:
+            name: keepalived
+            state: started
+          become: true
+          when: not ansible_check_mode

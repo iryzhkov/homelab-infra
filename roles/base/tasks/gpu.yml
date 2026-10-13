@@ -4,6 +4,15 @@
 # the collector's docstring for why it reads the PMU itself. Standard-library
 # Python only, and it touches neither Docker nor any container.
 
+- name: Create root-owned Prometheus output independently of collector deployment
+  ansible.builtin.file:
+    path: "{{ observability_gpu_textfile | dirname }}"
+    state: directory
+    owner: root
+    mode: "0755"
+  become: true
+  when: observability_gpu_textfile | default('') | length > 0
+
 - name: Install the iGPU collector
   ansible.builtin.copy:
     src: homelab-gpu-report
@@ -27,6 +36,7 @@
   ansible.builtin.copy:
     content: |
       GPU_HOST={{ inventory_hostname }}
+      GPU_TEXTFILE={{ observability_gpu_textfile | default('') }}
       INFLUX_WRITE_URL={{ smart_influx_url }}/api/v2/write?org={{ smart_influx_org }}&bucket={{ smart_influx_bucket }}&precision=s
       INFLUX_TOKEN={{ metrics_secrets.INFLUX_TOKEN }}
     dest: /etc/homelab-gpu/env

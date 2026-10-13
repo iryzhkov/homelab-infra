@@ -1,0 +1,44 @@
+[Unit]
+Description=Dedicated read-only UniFi network metrics
+Documentation=https://unpoller.com/docs/install/controllerlogin/
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ observability_unifi_user }}
+Group={{ observability_unifi_user }}
+ExecStart={{ observability_unifi_install_dir }}/unpoller --config={{ observability_unifi_config_dir }}/up.conf
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+Environment=GOMEMLIMIT=96MiB
+Environment=GOMAXPROCS=1
+MemoryHigh={{ observability_unifi_memory_high }}
+MemoryMax={{ observability_unifi_memory_max }}
+CPUQuota=10%
+TasksMax=48
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow={{ observability_unifi_controller_address }}/32
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

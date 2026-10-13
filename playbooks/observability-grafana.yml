@@ -1,0 +1,6 @@
+---
+- name: Provision reproducible homelab observability dashboards
+  hosts: homelab
+  gather_facts: false
+  roles:
+    - observability_grafana

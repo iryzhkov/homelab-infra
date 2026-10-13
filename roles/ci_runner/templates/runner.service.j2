@@ -1,0 +1,26 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Private homelab-infra GitHub Actions runner {{ ci_runner_name }}
+After=network-online.target docker.service
+Wants=network-online.target
+[Service]
+Type=simple
+User={{ ci_runner_user }}
+Group={{ ci_runner_user }}
+WorkingDirectory={{ ci_runner_root }}
+ExecStart={{ ci_runner_root }}/run.sh
+Environment=HOME={{ ci_runner_home }}
+Environment=XDG_CACHE_HOME={{ ci_runner_home }}/.cache
+Environment=TMPDIR={{ ci_runner_tmp }}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UMask=0077
+CPUWeight=50
+IOWeight=50
+MemoryHigh=1G
+MemoryMax=2G
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=60
+[Install]
+WantedBy=multi-user.target

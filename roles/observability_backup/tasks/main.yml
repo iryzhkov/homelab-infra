@@ -1,0 +1,97 @@
+---
+- name: Require pinned native helpers and positive retention
+  ansible.builtin.assert:
+    that:
+      - observability_vmbackup_image is match('^.+@sha256:[a-f0-9]{64}$')
+      - observability_vmrestore_image is match('^.+@sha256:[a-f0-9]{64}$')
+      - observability_backup_keep | int > 0
+    quiet: true
+
+- name: Create root-owned backup telemetry output independently of collector deployment
+  ansible.builtin.file:
+    path: /var/lib/observability-textfile
+    state: directory
+    owner: root
+    mode: "0755"
+  become: true
+
+- name: Create private observability backup configuration directory
+  ansible.builtin.file:
+    path: /etc/observability-backup
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+- name: Install the native backup and isolated restore helper
+  ansible.builtin.copy:
+    src: observability-vm-backup
+    dest: /usr/local/sbin/observability-vm-backup
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Describe native backups without copying snapshot credentials
+  ansible.builtin.copy:
+    content: "{{ observability_native_backup_config | to_nice_json }}\n"
+    dest: /etc/observability-backup/config.json
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  vars:
+    observability_native_backup_config:
+      host: "{{ inventory_hostname }}"
+      metrics_file: /var/lib/observability-textfile/observability_backup.prom
+      state_root: "{{ swarm_state_root }}/observability"
+      backup_root: "{{ observability_backup_root }}"
+      restore_root: "{{ observability_restore_root }}"
+      swarm_sync_config: "{{ swarm_sync_dir }}/config.json"
+      lock_file: /etc/observability-backup/run.lock
+      vmbackup_image: "{{ observability_vmbackup_image }}"
+      vmrestore_image: "{{ observability_vmrestore_image }}"
+      keep: "{{ observability_backup_keep | int }}"
+      minimum_free_bytes: "{{ observability_backup_minimum_free_bytes | int }}"
+      max_backup_bytes: "{{ observability_backup_max_bytes | int }}"
+      proof_query: "{{ observability_backup_proof_query }}"
+      peer_copy: "{{ observability_backup_peer_copy | bool }}"
+      restore_max_age_seconds: "{{ observability_restore_max_age_seconds | int }}"
+
+- name: Pre-pull immutable native helpers on both possible owners
+  ansible.builtin.command:
+    argv: [docker, pull, "{{ item }}"]
+  loop: ["{{ observability_vmbackup_image }}", "{{ observability_vmrestore_image }}"]
+  register: observability_helper_pull
+  changed_when: "'Downloaded newer image' in observability_helper_pull.stdout"
+  when: not ansible_check_mode
+
+- name: Install the owner-aware hourly backup service
+  ansible.builtin.copy:
+    src: observability-vm-backup.service
+    dest: /etc/systemd/system/observability-vm-backup.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: observability_backup_service
+
+- name: Install the hourly backup timer
+  ansible.builtin.copy:
+    src: observability-vm-backup.timer
+    dest: /etc/systemd/system/observability-vm-backup.timer
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: observability_backup_timer
+
+- name: Activate backup scheduling on both workers
+  ansible.builtin.systemd_service:
+    name: observability-vm-backup.timer
+    daemon_reload: "{{ observability_backup_service is changed or observability_backup_timer is changed }}"
+    enabled: true
+    state: started
+  become: true
+  when: not ansible_check_mode

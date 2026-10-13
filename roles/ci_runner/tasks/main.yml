@@ -1,0 +1,96 @@
+---
+- name: Require the declared Debian amd64 CI host
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+      - ansible_facts.architecture == 'x86_64'
+      - ci_runner_repository == 'https://github.com/iryzhkov/homelab-infra'
+    quiet: true
+
+- name: Create separate runner state, home and temporary directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ci_runner_user }}"
+    group: "{{ ci_runner_user }}"
+    mode: "0700"
+  loop:
+    - "{{ ci_runner_root }}"
+    - "{{ ci_runner_home }}"
+    - "{{ ci_runner_tmp }}"
+
+- name: Check whether the runner distribution is installed
+  ansible.builtin.stat:
+    path: "{{ ci_runner_root }}/config.sh"
+  register: ci_runner_distribution
+
+- name: Install the checksum-verified official runner distribution
+  when: not ci_runner_distribution.stat.exists
+  block:
+    - name: Download the official runner archive
+      ansible.builtin.get_url:
+        url: "{{ ci_runner_download_url }}"
+        dest: "{{ ci_runner_root }}/runner.tar.gz"
+        checksum: "sha256:{{ ci_runner_sha256 }}"
+        owner: "{{ ci_runner_user }}"
+        group: "{{ ci_runner_user }}"
+        mode: "0600"
+
+    - name: Extract runner binaries without registration credentials
+      ansible.builtin.unarchive:
+        src: "{{ ci_runner_root }}/runner.tar.gz"
+        dest: "{{ ci_runner_root }}"
+        remote_src: true
+        owner: "{{ ci_runner_user }}"
+        group: "{{ ci_runner_user }}"
+        creates: "{{ ci_runner_root }}/config.sh"
+      when: not ansible_check_mode
+
+    - name: Remove the downloaded archive after extraction
+      ansible.builtin.file:
+        path: "{{ ci_runner_root }}/runner.tar.gz"
+        state: absent
+      when: not ansible_check_mode
+
+- name: Install the dedicated runner service
+  ansible.builtin.template:
+    src: runner.service.j2
+    dest: /etc/systemd/system/actions-runner-homelab-infra-1.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: ci_runner_unit
+
+- name: Reload the service manager when the unit changes
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - ci_runner_unit is changed
+    - not ansible_check_mode
+
+- name: Check whether operator registration has completed
+  ansible.builtin.stat:
+    path: "{{ ci_runner_root }}/.runner"
+  register: ci_runner_registration
+
+- name: Read the non-secret runner registration metadata
+  ansible.builtin.slurp:
+    src: "{{ ci_runner_root }}/.runner"
+  register: ci_runner_metadata
+  when: ci_runner_registration.stat.exists
+
+- name: Reject a runner registered to another repository
+  ansible.builtin.assert:
+    that:
+      - (ci_runner_metadata.content | b64decode(encoding='utf-8-sig') | from_json).gitHubUrl == ci_runner_repository
+    quiet: true
+  when: ci_runner_registration.stat.exists
+
+- name: Enable only the registered repository runner
+  ansible.builtin.systemd_service:
+    name: actions-runner-homelab-infra-1
+    enabled: true
+    state: started
+  when:
+    - ci_runner_registration.stat.exists
+    - not ansible_check_mode

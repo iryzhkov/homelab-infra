@@ -1,0 +1,20 @@
+[Unit]
+Description=Homelab metrics and log collection
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=alloy
+Group=alloy
+SupplementaryGroups=systemd-journal
+Environment=GOMEMLIMIT={{ observability_alloy_go_memory_limit }}
+ExecStart=/usr/local/bin/alloy run --storage.path=/var/lib/alloy --server.http.listen-addr=127.0.0.1:12345 --disable-reporting /etc/alloy/config.alloy
+Restart=on-failure
+RestartSec=5
+MemoryHigh={{ observability_alloy_memory_high }}
+MemoryMax={{ observability_alloy_memory_max }}
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/alloy
+[Install]
+WantedBy=multi-user.target

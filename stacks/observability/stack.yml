@@ -1,0 +1,86 @@
+# Independent metrics stack, sharing logging's private overlay for Grafana
+# queries and Loki push forwarding. No VictoriaMetrics query/admin port is
+# published. Only the authenticated, POST-only gateway is published.
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics@sha256:d83112326f700fe65f6fe66b12348406191cb20826ae0df72d676a2e69d3f3c9
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=400d
+      - -storage.minFreeDiskSpaceBytes=5GB
+      - -memory.allowedBytes=256MiB
+      - -selfScrapeInterval=30s
+      - -selfScrapeJob=victoriametrics
+      - -selfScrapeInstance=observability
+      - -deleteAuthKey=file:///run/secrets/vm_delete_key
+      - -snapshotAuthKey=file:///run/secrets/vm_snapshot_key
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/observability/victoriametrics
+        target: /storage
+    secrets: [vm_delete_key, vm_snapshot_key]
+    networks: [logging]
+    logging:
+      driver: local
+      options: {max-size: "20m", max-file: "3"}
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.pin.observability == true]
+      resources:
+        limits: {memory: 512M}
+        reservations: {memory: 128M}
+      update_config: {order: stop-first}
+      rollback_config: {order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+
+  ingest:
+    image: nginx@sha256:8f84ed99befc3891b8f329c5c202785278a2cfb7c25107d57fb2a134a3117433
+    ports:
+      - target: 8080
+        published: 8429
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/observability/config/nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+    environment:
+      INGEST_CONFIG_SHA256: ${INGEST_CONFIG_SHA256:?set by env_extra}
+    secrets: [ingest_users]
+    networks: [logging]
+    logging:
+      driver: local
+      options: {max-size: "20m", max-file: "3"}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/ready]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.pin.observability == true]
+      resources:
+        limits: {memory: 128M}
+        reservations: {memory: 32M}
+      update_config: {order: stop-first}
+      rollback_config: {order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+
+networks:
+  logging:
+    external: true
+    name: logging_default
+
+secrets:
+  vm_delete_key:
+    name: observability_vm_delete_key_${SECRET_HASH_VM_DELETE_KEY}
+    file: ./secrets/VM_DELETE_KEY
+  vm_snapshot_key:
+    name: observability_vm_snapshot_key_${SECRET_HASH_VM_SNAPSHOT_KEY}
+    file: ./secrets/VM_SNAPSHOT_KEY
+  ingest_users:
+    name: observability_ingest_users_${SECRET_HASH_INGEST_USERS}
+    file: ./secrets/INGEST_USERS

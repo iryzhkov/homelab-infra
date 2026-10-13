@@ -1,0 +1,232 @@
+---
+- name: Keep original Alpine logging while its forwarding path is unverified
+  ansible.builtin.debug:
+    msg: Alpine syslog forwarding is skipped; local logging and Promtail remain unchanged.
+  when: not observability_alpine_forwarding_verified | bool
+
+- name: Configure additive Alpine forwarding only after path verification
+  when: observability_alpine_forwarding_verified | bool
+  block:
+    - name: Require an explicitly declared CT and receiver address
+      ansible.builtin.assert:
+        that:
+          - observability_syslog_guest.name is match('^ct[0-9]+$')
+          - ansible_host is match('^[0-9.]+$')
+        quiet: true
+
+    - name: Derive the declared container ID and harmless local proof marker
+      ansible.builtin.set_fact:
+        observability_alpine_ctid: "{{ observability_syslog_guest.name | regex_replace('^ct', '') | int }}"
+        observability_alpine_marker: "observability-local-{{ observability_syslog_guest.name }}-{{ lookup('pipe', 'date +%s') }}"
+        observability_alpine_desired: 'SYSLOGD_OPTS="-t -R {{ ansible_host }}:1514 -L"'
+
+    - name: Read existing BusyBox syslog options without touching guest services
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --, cat, /etc/conf.d/syslog]
+      become: true
+      register: observability_alpine_before
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse to overwrite an unknown logging configuration
+      ansible.builtin.assert:
+        that:
+          - observability_alpine_before.stdout | trim in ['SYSLOGD_OPTS="-t"', observability_alpine_desired]
+        fail_msg: Existing Alpine syslog options differ; preserve them and review before changing.
+        quiet: true
+
+    - name: Require the scoped parent firewall to be active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, observability-syslog-firewall.service]
+      become: true
+      changed_when: false
+      check_mode: false
+
+    - name: Require the parent syslog listener before configuring a sender
+      ansible.builtin.command:
+        argv: [ss, -H, -uln, "sport = :1514"]
+      become: true
+      register: observability_alpine_listener
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        observability_alpine_listener.rc != 0
+        or ansible_host ~ ':1514' not in observability_alpine_listener.stdout
+
+    - name: Prepare additive syslog options on the parent
+      ansible.builtin.copy:
+        content: "{{ observability_alpine_desired }}\n"
+        dest: "/run/observability-syslog-{{ observability_alpine_ctid }}.conf"
+        owner: root
+        group: root
+        mode: "0600"
+      become: true
+      when: observability_alpine_before.stdout | trim != observability_alpine_desired
+
+    - name: Apply forwarding and prove that local logging still works
+      when:
+        - observability_alpine_before.stdout | trim != observability_alpine_desired
+        - not ansible_check_mode
+      block:
+        - name: Preserve the known original guest syslog configuration
+          ansible.builtin.command:
+            argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --, cp,
+                   /etc/conf.d/syslog, /etc/conf.d/syslog.observability-bak]
+          become: true
+          changed_when: true
+
+        - name: Push additive forwarding options with local logging retained
+          ansible.builtin.command:
+            argv: [pct, push, "{{ observability_alpine_ctid | string }}",
+                   "/run/observability-syslog-{{ observability_alpine_ctid }}.conf",
+                   /etc/conf.d/syslog, --perms, "0644"]
+          become: true
+          changed_when: true
+
+        - name: Restart only BusyBox syslog after changing its options
+          ansible.builtin.command:
+            argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+                   rc-service, --nodeps, syslog, restart]
+          become: true
+          changed_when: true
+
+        - name: Write a harmless local logging acceptance marker
+          ansible.builtin.command:
+            argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+                   logger, -t, observability-local, "{{ observability_alpine_marker }}"]
+          become: true
+          changed_when: false
+
+        - name: Require the acceptance marker in the guest's original local log
+          ansible.builtin.command:
+            argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+                   grep, -Fq, "{{ observability_alpine_marker }}", /var/log/messages]
+          become: true
+          changed_when: false
+          register: observability_alpine_local_proof
+          until: observability_alpine_local_proof.rc == 0
+          retries: 3
+          delay: 1
+
+      rescue:
+        - name: Restore the original guest syslog configuration
+          ansible.builtin.command:
+            argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+                   cp, /etc/conf.d/syslog.observability-bak, /etc/conf.d/syslog]
+          become: true
+          changed_when: true
+
+        - name: Restart only syslog using its original options
+          ansible.builtin.command:
+            argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+                   rc-service, --nodeps, syslog, restart]
+          become: true
+          changed_when: true
+
+        - name: Report the safe rollback
+          ansible.builtin.fail:
+            msg: Alpine syslog forwarding failed acceptance and original options were restored.
+
+      always:
+        - name: Remove parent staging material
+          ansible.builtin.file:
+            path: "/run/observability-syslog-{{ observability_alpine_ctid }}.conf"
+            state: absent
+          become: true
+
+- name: Retire only the verified replacement's legacy Promtail
+  when: observability_alpine_promtail_retire | bool
+  block:
+    - name: Require completed forwarding and redaction acceptance
+      ansible.builtin.assert:
+        that:
+          - observability_alpine_forwarding_verified | bool
+          - observability_alpine_ctid is defined
+        fail_msg: Promtail retirement requires the explicit verified forwarding flag.
+        quiet: true
+
+    - name: Inspect only the legacy input file paths
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+               awk, '/__path__:/{print $2}', /etc/promtail/config.yml]
+      become: true
+      register: observability_alpine_promtail_paths
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse retirement if any old input lacks replacement coverage
+      ansible.builtin.assert:
+        that:
+          - observability_alpine_promtail_paths.stdout_lines == ['/var/log/messages']
+        fail_msg: Only the verified /var/log/messages source can be retired here.
+        quiet: true
+
+    - name: Read existing Promtail runlevel membership
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+               rc-update, show]
+      become: true
+      register: observability_alpine_runlevels
+      changed_when: false
+      check_mode: false
+
+    - name: Require only the known default runlevel or already disabled service
+      ansible.builtin.assert:
+        that:
+          - >-
+            observability_alpine_runlevels.stdout_lines
+            | select('search', '^\\s*promtail\\s*[|]') | list | length == 0
+            or observability_alpine_runlevels.stdout_lines
+            | select('search', '^\\s*promtail\\s*[|]\\s*default\\s*$') | list | length == 1
+        fail_msg: Unexpected Promtail runlevel; preserve it and review before changing.
+        quiet: true
+
+    - name: Read the existing Promtail daemon state
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+               rc-service, --nodeps, promtail, status]
+      become: true
+      register: observability_alpine_promtail_status
+      changed_when: false
+      failed_when: observability_alpine_promtail_status.rc not in [0, 3]
+      check_mode: false
+
+    - name: Stop only the verified old Promtail daemon
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+               env, retry=TERM/10/KILL/5, rc-service, --nodeps, promtail, stop]
+      become: true
+      changed_when: true
+      when: observability_alpine_promtail_status.rc == 0
+
+    - name: Disable only its known default boot membership
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+               rc-update, del, promtail, default]
+      become: true
+      changed_when: true
+      when: >-
+        observability_alpine_runlevels.stdout_lines
+        | select('search', '^\\s*promtail\\s*[|]') | list | length > 0
+
+    - name: Confirm the old daemon is stopped
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+               rc-service, --nodeps, promtail, status]
+      become: true
+      changed_when: false
+      register: observability_alpine_promtail_stopped
+      failed_when: observability_alpine_promtail_stopped.rc != 3
+      when: not ansible_check_mode
+
+    - name: Confirm Promtail has no boot runlevel membership
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ observability_alpine_ctid | string }}", --,
+               rc-update, show]
+      become: true
+      changed_when: false
+      register: observability_alpine_promtail_disabled
+      failed_when: >-
+        observability_alpine_promtail_disabled.stdout_lines
+        | select('search', '^\\s*promtail\\s*[|]') | list | length != 0
+      when: not ansible_check_mode

@@ -1,0 +1,26 @@
+# {{ ansible_managed }}. Only this port admits authenticated push paths.
+http:
+  routers:
+    metrics-ingest:
+      entryPoints: [ingest]
+      rule: 'Host(`metrics-push.ryzhkov.dev`) && Path(`/api/v1/write`) && Method(`POST`)'
+      service: observability-ingest
+      tls:
+        certResolver: {{ traefik_cert_resolver }}
+    logs-ingest:
+      entryPoints: [ingest]
+      rule: 'Host(`loki-push.ryzhkov.dev`) && Path(`/loki/api/v1/push`) && Method(`POST`)'
+      service: observability-ingest
+      tls:
+        certResolver: {{ traefik_cert_resolver }}
+  services:
+    observability-ingest:
+      loadBalancer:
+        healthCheck:
+          path: /ready
+          interval: 5s
+          timeout: 3s
+        servers:
+{% for host in groups['swarm_workers'] | sort %}
+          - url: "http://{{ hostvars[host].ansible_host }}:{{ observability_ingest_backend_port }}"
+{% endfor %}

@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+# Restore only our dedicated chain atomically. Existing INPUT/FORWARD/OUTPUT
+# policies, application ports and all other chains remain untouched.
+/usr/sbin/iptables-restore --wait 10 --noflush <<'RULES'
+*filter
+:OBSV-LXC-NODE - [0:0]
+-F OBSV-LXC-NODE
+-A OBSV-LXC-NODE -i lo -j ACCEPT
+-A OBSV-LXC-NODE -s {{ observability_lxc_node_collector_address }}/32 -j ACCEPT
+-A OBSV-LXC-NODE -j DROP
+COMMIT
+RULES
+if ! /usr/sbin/iptables --wait 10 -C INPUT -p tcp --dport {{ observability_lxc_node_port }} -j OBSV-LXC-NODE 2>/dev/null; then
+  /usr/sbin/iptables --wait 10 -I INPUT 1 -p tcp --dport {{ observability_lxc_node_port }} -j OBSV-LXC-NODE
+fi

@@ -1,0 +1,11 @@
+---
+# Refresh the existing peer transport/configuration for the new metrics stack.
+# Native metrics data uses observability-backup.yml; this copies config only.
+- name: Converge the existing Swarm peer snapshot configuration
+  hosts: swarm_workers
+  gather_facts: true
+  tasks:
+    - name: Configure Swarm peer snapshots
+      ansible.builtin.include_role:
+        name: backup
+        tasks_from: swarm.yml

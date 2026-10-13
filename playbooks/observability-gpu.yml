@@ -1,0 +1,18 @@
+---
+- name: Add Prometheus output to the existing iGPU collector
+  hosts: docker_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Preserve the existing encrypted Influx write credential
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/hardware-metrics.sops.yaml"
+        name: metrics_secrets
+      delegate_to: localhost
+      no_log: true
+      when: gpu_metrics | default(false)
+    - name: Converge only the iGPU reporting service
+      ansible.builtin.include_role:
+        name: base
+        tasks_from: gpu.yml
+      when: gpu_metrics | default(false)

@@ -1,0 +1,9 @@
+---
+# The dedicated PVEAuditor user/token must already exist in Proxmox and SOPS.
+# ansible-playbook playbooks/observability-pve.yml --check --diff
+# ansible-playbook playbooks/observability-pve.yml
+- name: Install local read-only Proxmox guest metrics exporters
+  hosts: hypervisors
+  gather_facts: false
+  roles:
+    - observability_pve

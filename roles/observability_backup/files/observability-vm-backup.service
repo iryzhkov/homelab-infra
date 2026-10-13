@@ -1,0 +1,13 @@
+[Unit]
+Description=Owner-aware native VictoriaMetrics backup and peer copy
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/observability-vm-backup backup
+TimeoutStartSec=1h
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

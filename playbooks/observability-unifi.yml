@@ -1,0 +1,7 @@
+---
+- name: Deploy only the dedicated UniFi network metrics collector
+  hosts: observability_unifi_pollers
+  become: true
+  gather_facts: true
+  roles:
+    - observability_unifi

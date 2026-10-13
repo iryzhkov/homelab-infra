@@ -1,0 +1,128 @@
+---
+- name: Require declared physical drives and supported host architecture
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture == 'x86_64'
+      - smart_drives is defined
+      - smart_drives | length > 0
+      - observability_smartctl_exporter_listen_address == '127.0.0.1:9633'
+    fail_msg: "This role requires amd64, declared smart_drives and a loopback-only listener."
+
+- name: Inspect existing smartctl
+  ansible.builtin.stat:
+    path: "{{ observability_smartctl_exporter_smartctl_path }}"
+  register: observability_smartctl_binary
+
+- name: Require existing smartmontools without changing host package state
+  ansible.builtin.assert:
+    that:
+      - observability_smartctl_binary.stat.exists
+      - observability_smartctl_binary.stat.executable | default(false)
+
+- name: Resolve declared serials to physical drive IDs using read-only identification
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path ~ '/files/discover-smart-drives.py') }}"
+      - "{{ smart_drives | to_json }}"
+      - "{{ observability_smartctl_exporter_smartctl_path }}"
+  register: observability_smartctl_discovery
+  changed_when: false
+  check_mode: false
+
+- name: Retain confirmed stable drive identities
+  ansible.builtin.set_fact:
+    observability_smartctl_exporter_devices: "{{ observability_smartctl_discovery.stdout | from_json }}"
+
+- name: Create dedicated exporter installation and download directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ observability_smartctl_exporter_install_dir }}"
+    - "{{ observability_smartctl_exporter_cache_dir }}"
+
+- name: Download checksum-pinned official SMART exporter
+  ansible.builtin.get_url:
+    url: "{{ observability_smartctl_exporter_download_url }}"
+    dest: "{{ observability_smartctl_exporter_cache_dir }}/{{ observability_smartctl_exporter_archive }}.tar.gz"
+    checksum: "sha256:{{ observability_smartctl_exporter_archive_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+
+- name: Extract the pinned version without replacing another version
+  ansible.builtin.unarchive:
+    src: "{{ observability_smartctl_exporter_cache_dir }}/{{ observability_smartctl_exporter_archive }}.tar.gz"
+    dest: "{{ observability_smartctl_exporter_install_dir }}"
+    remote_src: true
+    owner: root
+    group: root
+    creates: "{{ observability_smartctl_exporter_install_dir }}/{{ observability_smartctl_exporter_archive }}/smartctl_exporter"
+  when: not ansible_check_mode
+  notify: Restart observability SMART exporter
+
+- name: Validate installed exporter supports its configured arguments
+  ansible.builtin.command:
+    argv:
+      - "{{ observability_smartctl_exporter_install_dir }}/{{ observability_smartctl_exporter_archive }}/smartctl_exporter"
+      - --help
+  register: observability_smartctl_exporter_help
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Confirm verified exporter CLI flags
+  ansible.builtin.assert:
+    that:
+      - "'--smartctl.device=' in observability_smartctl_exporter_help.stderr"
+      - "'--smartctl.interval=' in observability_smartctl_exporter_help.stderr"
+      - "'--smartctl.powermode-check=' in observability_smartctl_exporter_help.stderr"
+      - "'--web.listen-address=' in observability_smartctl_exporter_help.stderr"
+  when: not ansible_check_mode
+
+- name: Install bounded loopback SMART exporter service
+  ansible.builtin.template:
+    src: observability-smartctl-exporter.service.j2
+    dest: /etc/systemd/system/observability-smartctl-exporter.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart observability SMART exporter
+
+- name: Apply pending exporter service changes before readiness checks
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the isolated SMART exporter
+  ansible.builtin.systemd_service:
+    name: observability-smartctl-exporter.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Check local standard SMART metrics without drive tests
+  ansible.builtin.uri:
+    url: "http://{{ observability_smartctl_exporter_listen_address }}/metrics"
+    return_content: true
+    status_code: 200
+    timeout: 60
+  register: observability_smartctl_exporter_metrics
+  retries: 3
+  delay: 5
+  until: "'smartctl_device_smart_status' in observability_smartctl_exporter_metrics.content | default('')"
+  when: not ansible_check_mode
+
+- name: Confirm all declared drive identities appear in exporter metrics
+  ansible.builtin.assert:
+    that:
+      - ('serial_number="' ~ item.serial ~ '"') in observability_smartctl_exporter_metrics.content
+    fail_msg: "SMART exporter did not report declared drive {{ item.model }}."
+  loop: "{{ observability_smartctl_exporter_devices }}"
+  loop_control:
+    label: "{{ item.model }}"
+  when: not ansible_check_mode

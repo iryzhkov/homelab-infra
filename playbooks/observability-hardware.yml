@@ -1,0 +1,7 @@
+---
+- name: Expose physical hypervisor SMART telemetry privately
+  hosts: hypervisors
+  become: true
+  gather_facts: true
+  roles:
+    - observability_hardware

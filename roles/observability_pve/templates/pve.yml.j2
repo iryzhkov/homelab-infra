@@ -1,0 +1,8 @@
+# Dedicated query-only token from SOPS; never use root or an admin API token.
+default:
+  user: {{ observability_pve_secrets.PVE_USER | to_json }}
+  token_name: {{ observability_pve_secrets.PVE_TOKEN_NAME | to_json }}
+  token_value: {{ observability_pve_secrets.PVE_TOKEN_VALUE | to_json }}
+  verify_ssl: {{ (observability_pve_config_dir ~ '/pve-root-ca.pem') | to_json }}
+  port: 8006
+  timeout: 10
