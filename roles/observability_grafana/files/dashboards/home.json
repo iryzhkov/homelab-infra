@@ -423,7 +423,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### [Open Home Assistant](/d/homelab-observe-homeassistant)\n\nIntegration health, entity activity and automations.\n\n[Retained sensor history](/d/home-assistant-overview)"
+        "content": "### [Open Home Assistant](/d/homelab-observe-homeassistant)\n\nEquipment health, device power and comfort.\n\n[Retained sensor history](/d/home-assistant-overview)"
       }
     },
     {

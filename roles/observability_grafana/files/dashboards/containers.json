@@ -187,7 +187,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Docker and Swarm workloads\nChoose a host and container. Each graph shows the twelve largest current series within the selection. CPU is consumed cores; memory is working set. Task IDs change after rescheduling."
+        "content": "### Docker and Swarm workloads\nChoose a host and container. Each time step shows its twelve largest series within the selection; membership can change through history. CPU is consumed cores; memory is working set. Task IDs change after rescheduling."
       }
     },
     {
