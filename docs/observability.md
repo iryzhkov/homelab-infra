@@ -65,6 +65,7 @@ The focused plays in `playbooks/` are:
   on their original Promtail path until a separate complete file handoff.
 - `observability-gpu.yml`: existing GPU writer's parallel Prometheus output,
   after the root-owned `/var/lib/observability-textfile` directory exists.
+- `observability-unifi.yml`: the native read-only poller on the declared member.
 - `observability-grafana.yml`: only dedicated dashboard/data-source UIDs.
 - `observability-peer-backup.yml`: existing full-stack peer configuration.
 - `observability-backup.yml`: consistent native metric backups and timers.
@@ -92,9 +93,12 @@ tests pass. Its current portability is not claimed.
 Home Assistant's live configuration has `default_config` and `influxdb`, but
 no `prometheus` integration. Enabling its scrape requires a Home Assistant core
 restart, which is deferred under the overnight no-outage constraint.
-Home Assistant integration/embedding and UniFi unpoller are still pending
-dedicated least-privilege identities and their configured integrations.
-No existing administrator credential is reused for telemetry.
+Home Assistant integration/embedding remains pending its dedicated non-admin
+identity and configured integration. UniFi polling uses a dedicated local-only
+Network viewer with only read/view scopes, a pinned console certificate and
+SOPS-held credentials. No existing administrator credential is reused for
+telemetry. Move its single `observability_unifi_pollers` inventory membership,
+converge the new host and collector, then stop the old poller after validation.
 Agent read access must wait for the remaining unredacted legacy log paths to
 be retired; MCP/skill publication then follows the agent-tooling release process.
 

@@ -1,0 +1,13 @@
+---
+observability_unifi_version: "5.5.1"
+observability_unifi_archive_sha256: 7fe8849d0e3e22d514072bf720b26093cc18552d28b473a4b51a03358524ec9b
+observability_unifi_controller_address: 192.168.1.1
+observability_unifi_controller_url: "https://{{ observability_unifi_controller_address }}"
+observability_unifi_listen_address: "127.0.0.1:9130"
+observability_unifi_poll_interval: 60s
+observability_unifi_user: observability-unifi
+observability_unifi_config_dir: /etc/observability-unifi
+observability_unifi_install_dir: "/opt/observability-unifi/{{ observability_unifi_version }}"
+observability_unifi_cache_dir: /var/cache/observability-unifi
+observability_unifi_memory_max: 192M
+observability_unifi_memory_high: 128M

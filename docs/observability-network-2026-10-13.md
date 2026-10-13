@@ -49,5 +49,16 @@ service-owned 0600 on each node, used only against its local verified API.
 Rollback stops observability-pve, removes its token ACL and token, then its
 user ACL and user. Existing cluster identities are untouched.
 
+UniFi polling I1: current sole consumer homelab 192.168.70.223 reaches
+UDM Pro 192.168.1.1 TCP 443 through existing routing; no new firewall policy
+was needed. Owner/review as above. Local-only user unpoller
+b505b518-7167-4e9e-a055-67c954d8bdb0 has dedicated role
+c3843d3e-d716-4c0f-9712-b9080e944e35, only network.management readonly
+(view/read scopes, no Users/Protect/VPN/WiFi grants). SOPS holds its password;
+the native service uses a verified exact controller-certificate pin and
+loopback-only metrics. Rollback stops/disables observability-unifi and deletes
+only this new local user and its now-unused dedicated role. Existing identities
+and roles were verified unchanged. Certificate rotation requires pin review.
+
 OCI mesh -> edge:8443 was qualified read-only: 10.42.0.1 reaches edge
 10.42.0.3:8443 and gets 404 for an unmatched path. No new mesh rule needed.

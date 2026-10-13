@@ -1,0 +1,51 @@
+[poller]
+debug = false
+quiet = true
+plugins = []
+
+[prometheus]
+namespace = "unifi"
+disable = false
+http_listen = "{{ observability_unifi_listen_address }}"
+interval = "{{ observability_unifi_poll_interval }}"
+report_errors = true
+dead_ports = false
+
+[influxdb]
+disable = true
+
+[loki]
+disable = true
+
+[datadog]
+enable = false
+
+[webserver]
+enable = false
+
+[unifi]
+dynamic = false
+
+[unifi.defaults]
+url = "{{ observability_unifi_controller_url }}"
+user = "{{ observability_unifi_secrets.UNIFI_USERNAME }}"
+pass = "file://{{ observability_unifi_config_dir }}/password"
+sites = ["default"]
+timeout = "20s"
+save_sites = true
+hash_pii = true
+save_ids = false
+save_events = false
+save_syslog = false
+save_alarms = false
+save_anomalies = false
+save_protect_logs = false
+save_protect_devices = false
+disable_network = false
+save_dpi = false
+save_rogue = false
+save_speedtest = true
+# The console is self-signed with no LAN IP SAN. Upstream's native cert pin
+# validates the exact peer certificate before requests with credentials.
+verify_ssl = false
+ssl_cert_paths = ["{{ observability_unifi_config_dir }}/controller.crt"]
