@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bounded live redaction acceptance with dummy values; never reads credentials."""
-import argparse, json, subprocess, time, urllib.parse, urllib.request, uuid
+import argparse, json, shlex, subprocess, time, urllib.parse, urllib.request, uuid
 
 def main():
     p = argparse.ArgumentParser()
@@ -27,9 +27,15 @@ def main():
         cmd = ["ssh", "-o", "BatchMode=yes", a.ssh_host, "sudo -n tee -a /var/lib/alloy/redaction-test.log >/dev/null"]
     elif a.job == "journal":
         cmd = ["ssh", "-o", "BatchMode=yes", a.ssh_host, "logger -t observability-redaction"]
+    elif a.job == "docker":
+        name = "observability-redaction-" + uuid.uuid4().hex[:8]
+        script = "sleep 15" + chr(10) + "printf \'%s\' " + shlex.quote(body) + chr(10) + "sleep 40"
+        image = "nginx@sha256:8f84ed99befc3891b8f329c5c202785278a2cfb7c25107d57fb2a134a3117433"
+        command = "docker run --rm -d --name " + name + " --log-driver local " + image + " sh -c " + shlex.quote(script)
+        cmd = ["ssh", "-o", "BatchMode=yes", a.ssh_host, command]
     else:
         raise SystemExit("unsupported acceptance source")
-    subprocess.run(cmd, input=body, text=True, check=True, capture_output=True)
+    subprocess.run(cmd, input=body if a.job != "docker" else None, text=True, check=True, capture_output=True)
     query = '{host="' + a.host_label + '",job="' + a.job + '"} |= "' + nonce + '"'
     url = a.loki_url.rstrip("/") + "/loki/api/v1/query_range?" + urllib.parse.urlencode({
         "query": query, "start": str(time.time_ns() - 120_000_000_000), "limit": "100"})
@@ -37,7 +43,7 @@ def main():
     while True:
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.load(response)
-        lines = [v[1] for s in data.get("data", {}).get("result", []) for v in s["values"]]
+        lines = [v[1] for s in data.get("data", {}).get("result", []) for v in s["values"] if v[1].startswith(nonce + " case=")]
         if any(s in line for s in sentinels for line in lines):
             raise SystemExit("FAIL: a dummy secret reached Loki unredacted")
         if len(lines) >= len(rows):

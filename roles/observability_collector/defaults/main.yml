@@ -1,6 +1,6 @@
 ---
 observability_alloy_version: "1.20.1"
-observability_logs_enabled: false
+observability_logs_enabled: true
 observability_docker_enabled: "{{ inventory_hostname in groups['docker_hosts'] | default([]) }}"
 observability_cadvisor_enabled: false
 observability_intermittent: "{{ inventory_hostname in ['gaming-pc', 'laptop'] }}"

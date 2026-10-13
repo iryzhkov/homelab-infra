@@ -1,0 +1,8 @@
+---
+# Cloud traffic reaches the ingest edge over Nebula, with normal TLS names.
+observability_ingest_address: 10.42.0.3
+observability_alloy_memory_max: 192M
+observability_alloy_memory_high: 128M
+observability_extra_scrapes:
+  - name: gatus
+    address: 10.42.0.1:3002
