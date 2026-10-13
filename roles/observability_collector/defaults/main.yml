@@ -12,6 +12,7 @@ observability_ingest_fallback_address: ""
 observability_mesh_relay_port: 18443
 observability_ingest_client_port: "{{ observability_mesh_relay_port if observability_ingest_fallback_address | length > 0 else observability_ingest_port }}"
 observability_extra_scrapes: []
+observability_file_inputs: []
 observability_journal_max_use: 256M
 observability_alloy_zip_sha256:
   x86_64: 451fe650e8277d22d69cb8db50bba809f581fe78decba7fce4027ef185457be9

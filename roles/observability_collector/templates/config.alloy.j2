@@ -147,6 +147,17 @@ loki.source.file "redaction_validation" {
 }
 
 {% if observability_logs_enabled | bool %}
+{% if observability_file_inputs | length > 0 %}
+// Explicit file paths only, using the same redaction and persistent source state.
+loki.source.file "declared_files" {
+  targets = [
+{% for input in observability_file_inputs %}
+    { __path__ = {{ input.path | to_json }}, job = {{ input.job | to_json }}, host = "{{ inventory_hostname }}" },
+{% endfor %}
+  ]
+  forward_to = [loki.process.redact.receiver]
+}
+{% endif %}
 {% if observability_syslog_guest is defined %}
 // Source IP is restricted by the owning hypervisor firewall. Guest labels
 // are assigned here, never accepted from arbitrary log message contents.
