@@ -1,0 +1,32 @@
+# {{ ansible_managed }}. No default daemon includes, local outputs or socket takeover.
+global(workDirectory="/var/lib/observability-guest-logs")
+module(load="imjournal" StateFile="journal.cursor" PersistStateInterval="1" Ratelimit.Interval="0")
+module(load="imfile" PollingInterval="2")
+template(name="JournalToParent" type="string"
+         string="<%pri%>1 %timereported:::date-rfc3339% {{ inventory_hostname }} journal - - - %msg%\n")
+template(name="FileToParent" type="string"
+         string="<%pri%>1 %timereported:::date-rfc3339% {{ inventory_hostname }} %programname% - - - %msg%\n")
+{% for file in observability_guest_log_files %}
+input(type="imfile" File={{ file.path | to_json }} Tag={{ (file.tag ~ ':') | to_json }} Severity="info" Facility="local0" PersistStateInterval="1")
+{% endfor %}
+if $inputname == "imjournal" then {
+  set $.forward_format = "journal";
+} else {
+  set $.forward_format = "file";
+}
+# One action/queue per source class; each gets 32 MiB, total bounded to64 MiB.
+if $.forward_format == "journal" then {
+  action(type="omfwd" Target="{{ hostvars[observability_guest_log_parent].ansible_host }}"
+         Port="{{ observability_guest_log_port }}" Protocol="tcp" TCP_Framing="octet-counted"
+         Template="JournalToParent" KeepAlive="on" action.resumeRetryCount="-1"
+         queue.type="Disk" queue.filename="journal-to-parent" queue.maxDiskSpace="32m"
+         queue.maxFileSize="2m" queue.checkpointInterval="1" queue.syncQueueFiles="on"
+         queue.saveOnShutdown="on")
+} else {
+  action(type="omfwd" Target="{{ hostvars[observability_guest_log_parent].ansible_host }}"
+         Port="{{ observability_guest_log_port }}" Protocol="tcp" TCP_Framing="octet-counted"
+         Template="FileToParent" KeepAlive="on" action.resumeRetryCount="-1"
+         queue.type="Disk" queue.filename="files-to-parent" queue.maxDiskSpace="32m"
+         queue.maxFileSize="2m" queue.checkpointInterval="1" queue.syncQueueFiles="on"
+         queue.saveOnShutdown="on")
+}

@@ -139,6 +139,11 @@
     name: observability_syslog_parent
   when: observability_syslog_guest is defined
 
+- name: Restrict declared Debian peers before opening the TCP receiver
+  ansible.builtin.include_role:
+    name: observability_guest_log_parent
+  when: observability_tcp_syslog_guests | length > 0
+
 - name: Validate a prepared native configuration before changing collection
   ansible.builtin.template:
     src: config.alloy.j2
@@ -168,6 +173,11 @@
       [Unit]
       Requires=observability-syslog-firewall.service
       After=observability-syslog-firewall.service
+      {% endif %}
+      {% if observability_tcp_syslog_guests | length > 0 %}
+      [Unit]
+      Requires=observability-guest-log-firewall.service
+      After=observability-guest-log-firewall.service
       {% endif %}
       [Service]
       MemoryHigh={{ observability_alloy_memory_high }}

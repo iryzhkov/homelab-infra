@@ -1,0 +1,16 @@
+#!/bin/sh
+# {{ ansible_managed }}. Only IPv4 TCP1515; other ports and policies untouched.
+set -eu
+/usr/sbin/iptables-restore --noflush <<'RULES'
+*filter
+:OBS-GUEST-LOG - [0:0]
+-F OBS-GUEST-LOG
+{% for guest in observability_tcp_syslog_guests %}
+-A OBS-GUEST-LOG -s {{ guest.address }}/32 -d {{ ansible_host }}/32 -j ACCEPT
+{% endfor %}
+-A OBS-GUEST-LOG -j DROP
+COMMIT
+RULES
+if ! /usr/sbin/iptables -C INPUT -p tcp --dport 1515 -j OBS-GUEST-LOG 2>/dev/null; then
+    /usr/sbin/iptables -I INPUT 1 -p tcp --dport 1515 -j OBS-GUEST-LOG
+fi

@@ -1,0 +1,4 @@
+---
+observability_guest_log_parent: proxmox-a
+observability_guest_log_files:
+  - {path: /var/log/mosquitto/mosquitto.log, tag: mqtt-file}

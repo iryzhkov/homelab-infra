@@ -1,0 +1,95 @@
+---
+- name: Require an accepted PVE replacement and the exact declared active-file input
+  ansible.builtin.assert:
+    that:
+      - observability_promtail_retirement_verified | bool
+      - inventory_hostname in ['proxmox-a', 'proxmox-b']
+      - observability_file_inputs | length == 1
+      - observability_file_inputs[0].path == '/var/log/pve/tasks/active'
+      - observability_file_inputs[0].job == 'pve-tasks'
+    quiet: true
+    fail_msg: Retire only after the live exact-path and redaction acceptance gate.
+
+- name: Read the original private Promtail config for a guarded coverage comparison
+  ansible.builtin.slurp:
+    src: /etc/promtail/config.yml
+  register: observability_promtail_original
+  no_log: true
+
+- name: Parse only for the exact known legacy source guard
+  ansible.builtin.set_fact:
+    observability_promtail_config: "{{ observability_promtail_original.content | b64decode | from_yaml }}"
+  no_log: true
+
+- name: Refuse any additional legacy source or transform
+  ansible.builtin.assert:
+    that:
+      - observability_promtail_config.scrape_configs | length == 2
+      - (observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | list) | length == 1
+      - (observability_promtail_config.scrape_configs | selectattr('static_configs', 'defined') | list) | length == 1
+      - (observability_promtail_config.scrape_configs | selectattr('static_configs', 'defined') | first).static_configs | length == 1
+      - (observability_promtail_config.scrape_configs | selectattr('static_configs', 'defined') | first).static_configs[0].labels.__path__ == '/var/log/pve/tasks/active'
+      - (observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | first).journal.get('path', '') == ''
+      - (observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | first).journal.max_age == '12h'
+      - (observability_promtail_config.scrape_configs | selectattr('journal', 'defined') | first).relabel_configs == [{'source_labels': ['__journal__systemd_unit'], 'target_label': 'unit'}]
+      - (observability_promtail_config.scrape_configs | selectattr('pipeline_stages', 'defined') | list) | length == 0
+    quiet: true
+  no_log: true
+
+- name: Require native Alloy readiness before stopping the old shipper
+  ansible.builtin.uri:
+    url: http://127.0.0.1:12345/-/ready
+    status_code: 200
+  when: not ansible_check_mode
+
+- name: Create a private rollback evidence directory
+  ansible.builtin.file:
+    path: /var/lib/observability-promtail-retirement
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Preserve the original config and positions once without touching live sources
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/var/lib/observability-promtail-retirement/{{ item | basename }}"
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - /etc/promtail/config.yml
+    - /var/lib/promtail/positions.yaml
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Preserve a concrete rollback command with the unchanged installed binary
+  ansible.builtin.copy:
+    content: |
+      # Original config, positions, unit and /usr/local/bin/promtail are retained.
+      # Reenable the old shipper only if replacement collection needs rollback.
+      systemctl enable --now promtail.service
+    dest: /var/lib/observability-promtail-retirement/rollback.txt
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Stop and disable only the accepted legacy Promtail daemon
+  ansible.builtin.systemd_service:
+    name: promtail
+    enabled: false
+    state: stopped
+  when: not ansible_check_mode
+
+- name: Confirm the old shipper stopped while Alloy remains active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  loop: [promtail, alloy]
+  register: observability_promtail_retirement_state
+  changed_when: false
+  failed_when: >-
+    (item == 'promtail' and observability_promtail_retirement_state.rc != 3)
+    or (item == 'alloy' and observability_promtail_retirement_state.rc != 0)
+  when: not ansible_check_mode

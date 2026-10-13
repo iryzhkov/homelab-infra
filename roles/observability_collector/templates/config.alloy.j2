@@ -180,6 +180,53 @@ loki.source.syslog "alpine" {
   forward_to = [loki.process.redact.receiver]
 }
 {% endif %}
+{% if observability_tcp_syslog_guests | length > 0 %}
+// Trust identity only from the fixed connection source, never message hostname.
+loki.relabel "guest_logs" {
+  forward_to = []
+  rule {
+    source_labels = ["__syslog_connection_ip_address"]
+    regex = {{ (observability_tcp_syslog_guests | map(attribute='address') | map('regex_escape') | join('|')) | to_json }}
+    action = "keep"
+  }
+{% for guest in observability_tcp_syslog_guests %}
+  rule {
+    source_labels = ["__syslog_connection_ip_address"]
+    regex = {{ guest.address | regex_escape | to_json }}
+    target_label = "host"
+    replacement = {{ guest.name | to_json }}
+  }
+{% endfor %}
+  rule {
+    source_labels = ["__syslog_message_app_name"]
+    target_label = "source"
+  }
+  rule {
+    source_labels = ["__syslog_message_app_name"]
+    regex = "journal"
+    target_label = "job"
+    replacement = "journal"
+  }
+{% for tag, path in [('adguard-out', '/var/log/AdGuardHome.out'), ('adguard-err', '/var/log/AdGuardHome.err'), ('mqtt-file', '/var/log/mosquitto/mosquitto.log')] %}
+  rule {
+    source_labels = ["__syslog_message_app_name"]
+    regex = {{ tag | to_json }}
+    target_label = "filename"
+    replacement = {{ path | to_json }}
+  }
+{% endfor %}
+}
+loki.source.syslog "debian_guests" {
+  listener {
+    address = "{{ ansible_host }}:1515"
+    protocol = "tcp"
+    syslog_format = "rfc5424"
+    labels = { job = "guest-file" }
+  }
+  relabel_rules = loki.relabel.guest_logs.rules
+  forward_to = [loki.process.redact.receiver]
+}
+{% endif %}
 loki.relabel "journal" {
   forward_to = []
   rule {

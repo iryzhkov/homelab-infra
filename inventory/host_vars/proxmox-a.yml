@@ -14,6 +14,10 @@ smart_drives:
     serial: "2420E8AFBCE0"
 
 # Small guests retain Promtail; only the owning node can scrape these ports.
+observability_tcp_syslog_guests:
+  - {name: ct100, address: 192.168.20.154}
+  - {name: ct104, address: 192.168.70.241}
+  - {name: ct107, address: 192.168.20.106}
 observability_file_inputs:
   - {path: /var/log/pve/tasks/active, job: pve-tasks}
 observability_syslog_guest: {name: ct110, address: 192.168.70.250}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Allow only declared Debian guests to the parent TCP log listener
+After=network.target
+Before=alloy.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/observability-guest-log-firewall
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

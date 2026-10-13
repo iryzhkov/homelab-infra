@@ -1,0 +1,76 @@
+---
+- name: Require an explicitly declared small Debian guest and parent
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+      - inventory_hostname in ['ct100', 'ct104', 'ct107']
+      - observability_guest_log_parent in groups['hypervisors']
+      - observability_guest_log_port | int == 1515
+      - observability_guest_log_files | length > 0
+    quiet: true
+
+- name: Check space for a small package and bounded forwarding queue
+  ansible.builtin.command:
+    argv: [df, --output=avail, -BM, /]
+  register: observability_guest_logs_free
+  changed_when: false
+  check_mode: false
+
+- name: Preserve at least 192 MiB headroom above queue and package allocation
+  ansible.builtin.assert:
+    that:
+      - (observability_guest_logs_free.stdout_lines[-1] | trim | regex_replace('M$', '') | int) >= 256
+    quiet: true
+
+- name: Install the small native forwarder without starting the default daemon
+  ansible.builtin.apt:
+    name: rsyslog
+    state: present
+    policy_rc_d: 101
+
+- name: Create private forwarder configuration and persistent cursor directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /etc/observability-guest-logs
+    - /var/lib/observability-guest-logs
+
+- name: Validate and install only the dedicated forwarder configuration
+  ansible.builtin.template:
+    src: rsyslog.conf.j2
+    dest: /etc/observability-guest-logs/rsyslog.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/sbin/rsyslogd -N1 -f %s
+  notify: Restart the dedicated guest log forwarder
+
+- name: Install the bounded independent forwarder service
+  ansible.builtin.template:
+    src: observability-guest-logs.service.j2
+    dest: /etc/systemd/system/observability-guest-logs.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart the dedicated guest log forwarder
+
+- name: Apply only the dedicated collector changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Start the independent log forwarder
+  ansible.builtin.systemd_service:
+    name: observability-guest-logs
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: observability_guest_logs_start | bool and not ansible_check_mode
+
+- name: Confirm the dedicated forwarder is running
+  ansible.builtin.command:
+    argv: [systemctl, is-active, observability-guest-logs.service]
+  changed_when: false
+  when: observability_guest_logs_start | bool and not ansible_check_mode

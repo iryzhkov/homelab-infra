@@ -1,0 +1,8 @@
+---
+- name: Retire only accepted PVE journal and exact active-file shipping
+  hosts: hypervisors
+  serial: 1
+  gather_facts: false
+  become: true
+  roles:
+    - observability_promtail_retire
