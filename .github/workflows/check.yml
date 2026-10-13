@@ -5,12 +5,17 @@ on:
   pull_request:
 jobs:
   drift:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    container:
+      options: --memory=512m --cpus=1
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Install ShellCheck in the disposable CI container
+        run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck
       - run: python3 scripts/test-upkeeper-drift.py
       - run: python3 scripts/test-authentik-drift.py
       - run: python3 scripts/test-helper-backups.py
