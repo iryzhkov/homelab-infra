@@ -25,11 +25,19 @@
   },
   "links": [
     {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/homelab-observe-overview",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -37,7 +45,7 @@
       "type": "link",
       "url": "/d/homelab-observe-hosts",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -45,7 +53,7 @@
       "type": "link",
       "url": "/d/homelab-observe-disks",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -53,7 +61,7 @@
       "type": "link",
       "url": "/d/homelab-observe-capacity",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -61,7 +69,7 @@
       "type": "link",
       "url": "/d/homelab-observe-containers",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -69,7 +77,7 @@
       "type": "link",
       "url": "/d/homelab-observe-logs",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -77,7 +85,7 @@
       "type": "link",
       "url": "/d/homelab-observe-agents",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -85,7 +93,7 @@
       "type": "link",
       "url": "/d/homelab-observe-unifi",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -93,7 +101,7 @@
       "type": "link",
       "url": "/d/homelab-observe-homeassistant",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     }
   ],
@@ -116,36 +124,10 @@
         "sort": 1,
         "multi": false,
         "includeAll": false,
-        "allValue": ".*",
         "current": {
           "selected": true,
-          "text": "proxmox-a",
-          "value": "proxmox-a"
-        },
-        "options": []
-      },
-      {
-        "name": "guest",
-        "label": "Guest ID",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "homelab-metrics"
-        },
-        "query": {
-          "query": "label_values(pve_guest_info{job=\"pve\",template=\"0\",id=~\"(qemu|lxc)/.+\"}, id)",
-          "refId": "guest"
-        },
-        "definition": "label_values(pve_guest_info{job=\"pve\",template=\"0\",id=~\"(qemu|lxc)/.+\"}, id)",
-        "refresh": 1,
-        "sort": 1,
-        "multi": true,
-        "includeAll": true,
-        "allValue": "(qemu|lxc)/.+",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
+          "text": "homelab",
+          "value": "homelab"
         },
         "options": []
       }
@@ -179,7 +161,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "CPU/RAM apply to all hosts. Hardware readings require declared physical capabilities; virtual disk usage is not SMART. Logical CPU IDs are reported OS threads/vCPUs, not physical core or allocated-container capacity. Unavailable means unsupported or unreported."
+        "content": "Every resource panel follows the selected host. CPU/RAM prefer its mapped Proxmox guest accounting; thread IDs are reported OS logical CPUs, not physical cores or allocated LXC capacity. Physical sensors require declared capability; attached GPU ownership is explicit. Unavailable means unsupported/unreported."
       },
       "id": 1
     },
@@ -200,7 +182,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(100 * max by(guest_id)(label_replace(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - avg by(host) (max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval])))))",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - avg by(host) (max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=\"$host\"}[$__rate_interval])))))",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true
@@ -278,7 +260,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(100 * max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) / max by(guest_id)(label_replace(pve_memory_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - max by(host)(node_memory_MemAvailable_bytes{job=\"node\",host=~\"$host\"}) / max by(host)(node_memory_MemTotal_bytes{job=\"node\",host=~\"$host\"})))",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) / max by(guest_id)(label_replace(pve_memory_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - max by(host)(node_memory_MemAvailable_bytes{job=\"node\",host=\"$host\"}) / max by(host)(node_memory_MemTotal_bytes{job=\"node\",host=\"$host\"})))",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true
@@ -342,7 +324,7 @@
     {
       "type": "stat",
       "title": "Load / reported logical CPU",
-      "description": "Load 1 divided by reported logical CPU count: a ratio, not utilization.",
+      "description": "LXC per-thread /proc CPU counters belong to the parent and are intentionally excluded. Total guest CPU uses authoritative Proxmox accounting.",
       "gridPos": {
         "x": 12,
         "y": 3,
@@ -356,7 +338,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host) (node_load1{host=~\"$host\",job=\"node\"}) / count by(host) (max by(host,cpu) (node_cpu_seconds_total{host=~\"$host\",job=\"node\",mode=\"idle\"}))",
+          "expr": "max by(host) (node_load1{host=\"$host\",job=\"node\"}) / count by(host) (max by(host,cpu) (node_cpu_seconds_total{host=\"$host\",job=\"node\",mode=\"idle\"})) and on(host) max by(host)(node_monitoring_host_info{job=\"node\",host=\"$host\",kind!=\"lxc\"})",
           "legendFormat": "{{host}}",
           "range": false,
           "instant": true
@@ -429,7 +411,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\"})",
+          "expr": "max by(host,kind)(node_monitoring_host_info{job=\"node\",host=\"$host\"})",
           "legendFormat": "{{kind}}",
           "range": false,
           "instant": true
@@ -488,7 +470,7 @@
     {
       "type": "bargauge",
       "title": "Each reported logical CPU / SMT thread · hottest first",
-      "description": " Sorted by actual utilization descending; CPU labels are reported logical IDs.",
+      "description": "LXC per-thread /proc CPU counters belong to the parent and are intentionally excluded. Total guest CPU uses authoritative Proxmox accounting.",
       "gridPos": {
         "x": 0,
         "y": 9,
@@ -502,8 +484,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sort_desc(100 * (1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval]))))",
-          "legendFormat": "Logical CPU {{cpu}}",
+          "expr": "sort_desc(100 * (1 - max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=\"$host\"}[$__rate_interval])))) and on(host) max by(host)(node_monitoring_host_info{job=\"node\",host=\"$host\",kind!=\"lxc\"})",
+          "legendFormat": "CPU {{cpu}}",
           "range": false,
           "instant": true
         }
@@ -589,7 +571,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(100 * max by(guest_id)(label_replace(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - avg by(host) (max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval])))))",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - avg by(host) (max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=\"$host\"}[$__rate_interval])))))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
@@ -656,7 +638,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (max by(host) (node_memory_MemTotal_bytes{host=~\"$host\",job=\"node\"}) - max by(host) (node_memory_MemAvailable_bytes{host=~\"$host\",job=\"node\"}))",
+          "expr": "(max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"})) or on(host) (max by(host) (node_memory_MemTotal_bytes{host=\"$host\",job=\"node\"}) - max by(host) (node_memory_MemAvailable_bytes{host=\"$host\",job=\"node\"}))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
@@ -721,7 +703,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,mountpoint) (node_filesystem_avail_bytes{host=~\"$host\",job=\"node\",fstype=~\"ext[234]|xfs|btrfs|zfs|vfat|f2fs|ntfs|exfat\",mountpoint!~\"/(dev|proc|sys|run|var/lib/docker|var/lib/containers|var/lib/kubelet)(/.*)?\"})",
+          "expr": "max by(host,mountpoint) (node_filesystem_avail_bytes{host=\"$host\",job=\"node\",fstype=~\"ext[234]|xfs|btrfs|zfs|vfat|f2fs|ntfs|exfat\",mountpoint!~\"/(dev|proc|sys|run|var/lib/docker|var/lib/containers|var/lib/kubelet)(/.*)?\"})",
           "legendFormat": "{{host}} · {{mountpoint}}",
           "range": true,
           "instant": false
@@ -786,7 +768,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host,device) (max by(host,device) (rate(node_disk_read_bytes_total{host=~\"$host\",job=\"node\",device!~\"loop.*|ram.*\"}[$__rate_interval])) + max by(host,device) (rate(node_disk_written_bytes_total{host=~\"$host\",job=\"node\",device!~\"loop.*|ram.*\"}[$__rate_interval])))",
+          "expr": "sum by(host,device) (max by(host,device) (rate(node_disk_read_bytes_total{host=\"$host\",job=\"node\",device!~\"loop.*|ram.*\"}[$__rate_interval])) + max by(host,device) (rate(node_disk_written_bytes_total{host=\"$host\",job=\"node\",device!~\"loop.*|ram.*\"}[$__rate_interval])))",
           "legendFormat": "{{host}} · {{device}}",
           "range": true,
           "instant": false
@@ -851,7 +833,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device) (rate(node_network_receive_bytes_total{host=~\"$host\",job=\"node\",device!~\"lo|veth.*|docker.*|br-.*|fwbr.*|fwpr.*|fwln.*|tap.*\"}[$__rate_interval]))",
+          "expr": "max by(host,device) (rate(node_network_receive_bytes_total{host=\"$host\",job=\"node\",device!~\"lo|veth.*|docker.*|br-.*|fwbr.*|fwpr.*|fwln.*|tap.*\"}[$__rate_interval]))",
           "legendFormat": "{{host}} · {{device}}",
           "range": true,
           "instant": false
@@ -916,7 +898,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device) (rate(node_network_transmit_bytes_total{host=~\"$host\",job=\"node\",device!~\"lo|veth.*|docker.*|br-.*|fwbr.*|fwpr.*|fwln.*|tap.*\"}[$__rate_interval]))",
+          "expr": "max by(host,device) (rate(node_network_transmit_bytes_total{host=\"$host\",job=\"node\",device!~\"lo|veth.*|docker.*|br-.*|fwbr.*|fwpr.*|fwln.*|tap.*\"}[$__rate_interval]))",
           "legendFormat": "{{host}} · {{device}}",
           "range": true,
           "instant": false
@@ -965,7 +947,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Physical sensor hotspot / chip",
+      "title": "Physical temperature sensors",
       "description": "Maximum actual sensor reading within each explicitly physical chip; individual sensor identities are shown on CPU/GPU Capacity. Inherited LXC readings excluded.",
       "gridPos": {
         "x": 0,
@@ -980,8 +962,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,chip)(node_hwmon_temp_celsius{job=\"node\",host=~\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\",host=~\"$host\"})",
-          "legendFormat": "{{chip}}",
+          "expr": "max by(host,chip,sensor)(node_hwmon_temp_celsius{job=\"node\",host=\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"temperature\",mode=\"physical\",host=\"$host\"})",
+          "legendFormat": "{{chip}} / {{sensor}}",
           "range": true,
           "instant": false
         }
@@ -1046,7 +1028,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,device)(smartctl_device_smart_status{job=\"smartctl\",host=~\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
+          "expr": "max by(host,device)(smartctl_device_smart_status{job=\"smartctl\",host=\"$host\"}) * on(host) group_left() max by(host)(node_monitoring_capability_info{job=\"node\",capability=\"smart\",mode=\"physical\"})",
           "legendFormat": "{{device}}",
           "range": false,
           "instant": true
@@ -1135,7 +1117,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host) (node_zfs_arc_size{host=~\"$host\",job=\"node\",host!~\"ct[0-9]+\"})",
+          "expr": "max by(host) (node_zfs_arc_size{host=\"$host\",job=\"node\",host!~\"ct[0-9]+\"})",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
@@ -1186,7 +1168,7 @@
     {
       "id": 16,
       "type": "row",
-      "title": "Proxmox guests · Guest ID selector",
+      "title": "Selected host · mapped guest accounting",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -1214,7 +1196,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(id) (pve_up{job=\"pve\",id=~\"$guest\"}) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"$guest\"}))",
+          "expr": "(max by(id) (pve_up{job=\"pve\",id=~\"(qemu|lxc)/.+\"}) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"(qemu|lxc)/.+\"}))) * on(id) group_left(host) max by(id,host)(label_replace(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"},\"id\",\"$1\",\"guest_id\",\"(.*)\"))",
           "legendFormat": "{{name}} · {{id}}",
           "range": false,
           "instant": true
@@ -1297,7 +1279,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * max by(id) (pve_cpu_usage_ratio{job=\"pve\",id=~\"$guest\"}) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"$guest\"}))",
+          "expr": "(100 * max by(id) (pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"}) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"(qemu|lxc)/.+\"}))) * on(id) group_left(host) max by(id,host)(label_replace(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"},\"id\",\"$1\",\"guest_id\",\"(.*)\"))",
           "legendFormat": "{{name}} · {{id}}",
           "range": true,
           "instant": false
@@ -1365,7 +1347,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (max by(id) (pve_memory_usage_bytes{job=\"pve\",id=~\"$guest\"}) / max by(id) (pve_memory_size_bytes{job=\"pve\",id=~\"$guest\"})) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"$guest\"}))",
+          "expr": "(100 * (max by(id) (pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"}) / max by(id) (pve_memory_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"})) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"(qemu|lxc)/.+\"}))) * on(id) group_left(host) max by(id,host)(label_replace(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"},\"id\",\"$1\",\"guest_id\",\"(.*)\"))",
           "legendFormat": "{{name}} · {{id}}",
           "range": true,
           "instant": false
@@ -1433,7 +1415,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (max by(id) (pve_disk_usage_bytes{job=\"pve\",id=~\"$guest\",id=~\"lxc/.+\"}) / max by(id) (pve_disk_size_bytes{job=\"pve\",id=~\"$guest\",id=~\"lxc/.+\"})) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"$guest\"}))",
+          "expr": "(100 * (max by(id) (pve_disk_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\",id=~\"lxc/.+\"}) / max by(id) (pve_disk_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\",id=~\"lxc/.+\"})) * on(id) group_left(name,node,type) topk by(id) (1, max by(id,name,node,type) (pve_guest_info{job=\"pve\",template=\"0\",id=~\"(qemu|lxc)/.+\"}))) * on(id) group_left(host) max by(id,host)(label_replace(node_monitoring_host_info{job=\"node\",host=\"$host\",guest_id!=\"\"},\"id\",\"$1\",\"guest_id\",\"(.*)\"))",
           "legendFormat": "{{name}} · {{id}}",
           "range": true,
           "instant": false
@@ -1514,7 +1496,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,ups) (network_ups_tools_battery_charge{host=~\"$host\",job=\"nut\"})",
+          "expr": "max by(host,ups) (network_ups_tools_battery_charge{host=\"$host\",job=\"nut\"})",
           "legendFormat": "{{host}} · {{ups}}",
           "range": false,
           "instant": true
@@ -1585,7 +1567,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,ups) (network_ups_tools_battery_runtime{host=~\"$host\",job=\"nut\"})",
+          "expr": "max by(host,ups) (network_ups_tools_battery_runtime{host=\"$host\",job=\"nut\"})",
           "legendFormat": "{{host}} · {{ups}}",
           "range": false,
           "instant": true
@@ -1654,7 +1636,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,ups) (network_ups_tools_ups_load{host=~\"$host\",job=\"nut\"})",
+          "expr": "max by(host,ups) (network_ups_tools_ups_load{host=\"$host\",job=\"nut\"})",
           "legendFormat": "{{host}} · {{ups}}",
           "range": false,
           "instant": true
@@ -1725,7 +1707,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,ups) (network_ups_tools_ups_status{host=~\"$host\",job=\"nut\",flag=\"OL\"})",
+          "expr": "max by(host,ups) (network_ups_tools_ups_status{host=\"$host\",job=\"nut\",flag=\"OL\"})",
           "legendFormat": "{{host}} · {{ups}}",
           "range": false,
           "instant": true
@@ -1793,6 +1775,806 @@
           "valueSize": 44
         }
       }
+    },
+    {
+      "id": 39,
+      "type": "row",
+      "title": "Selected host · attached GPU telemetry (support varies)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 98,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "type": "bargauge",
+          "title": "Attached iGPU · Render / 3D",
+          "description": "",
+          "gridPos": {
+            "x": 0,
+            "y": 99,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(max by(host)(igpu_rcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\",host=\"$host\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+              "legendFormat": "{{host}} → {{physical_host}} · {{physical_device}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 80
+                  },
+                  {
+                    "color": "red",
+                    "value": 95
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0,
+              "max": 100
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "sizing": "manual",
+            "minVizHeight": 24,
+            "maxVizHeight": 48,
+            "namePlacement": "top",
+            "text": {
+              "titleSize": 14,
+              "valueSize": 20
+            }
+          },
+          "id": 53
+        },
+        {
+          "type": "bargauge",
+          "title": "Attached iGPU · Video 0",
+          "description": "",
+          "gridPos": {
+            "x": 12,
+            "y": 99,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(max by(host)(igpu_vcs0_busy_pct{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\",host=\"$host\"})) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+              "legendFormat": "{{host}} → {{physical_host}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 80
+                  },
+                  {
+                    "color": "red",
+                    "value": 95
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0,
+              "max": 100
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "sizing": "manual",
+            "minVizHeight": 24,
+            "maxVizHeight": 48,
+            "namePlacement": "top",
+            "text": {
+              "titleSize": 14,
+              "valueSize": 20
+            }
+          },
+          "id": 54
+        },
+        {
+          "type": "timeseries",
+          "title": "Attached iGPU actual clock",
+          "description": "",
+          "gridPos": {
+            "x": 0,
+            "y": 106,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(1e6 * (max by(host)(igpu_actual_freq_mhz{job=\"node\"}) * on(host) group_left(physical_host,physical_device) max by(host,physical_host,physical_device)(node_monitoring_gpu_owner_info{job=\"node\",gpu_kind=\"igpu\",mode=\"passthrough\",host=\"$host\"}))) and on(host) ((time() - max by(host)(igpu_last_success_timestamp_seconds{job=\"node\"})) < 180)",
+              "legendFormat": "{{host}}",
+              "range": true,
+              "instant": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "hertz",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "id": 55
+        },
+        {
+          "type": "bargauge",
+          "title": "Attached GPU busy",
+          "description": "Driver-reported busy ratio; no invented Apple or Intel whole-device busy percentage.",
+          "gridPos": {
+            "x": 12,
+            "y": 106,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(100 * max by(host,device)(gpu_utilization_ratio{job=\"node\",host=\"$host\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\",host=\"$host\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\",host=\"$host\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\",host=\"$host\"})) < 180)",
+              "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 80
+                  },
+                  {
+                    "color": "red",
+                    "value": 95
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0,
+              "max": 100
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "sizing": "manual",
+            "minVizHeight": 24,
+            "maxVizHeight": 48,
+            "namePlacement": "top",
+            "text": {
+              "titleSize": 14,
+              "valueSize": 20
+            }
+          },
+          "id": 65
+        },
+        {
+          "type": "bargauge",
+          "title": "Attached GPU temperature",
+          "description": "Only actual vendor temperature readings; absence stays unavailable.",
+          "gridPos": {
+            "x": 0,
+            "y": 113,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(max by(host,device)(gpu_temperature_celsius{job=\"node\",host=\"$host\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\",host=\"$host\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\",host=\"$host\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\",host=\"$host\"})) < 180)",
+              "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "celsius",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "sizing": "manual",
+            "minVizHeight": 24,
+            "maxVizHeight": 48,
+            "namePlacement": "top",
+            "text": {
+              "titleSize": 14,
+              "valueSize": 20
+            }
+          },
+          "id": 66
+        },
+        {
+          "type": "bargauge",
+          "title": "Attached GPU memory used",
+          "description": "Driver-reported visible GPU memory allocation, not total host RAM or a universal shared-memory limit.",
+          "gridPos": {
+            "x": 12,
+            "y": 113,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(100 * max by(host,device)(gpu_memory_used_bytes{job=\"node\",host=\"$host\"}) / (max by(host,device)(gpu_memory_total_bytes{job=\"node\",host=\"$host\"}) > 0) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\",host=\"$host\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\",host=\"$host\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\",host=\"$host\"})) < 180)",
+              "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 80
+                  },
+                  {
+                    "color": "red",
+                    "value": 95
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0,
+              "max": 100
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "sizing": "manual",
+            "minVizHeight": 24,
+            "maxVizHeight": 48,
+            "namePlacement": "top",
+            "text": {
+              "titleSize": 14,
+              "valueSize": 20
+            }
+          },
+          "id": 67
+        },
+        {
+          "type": "bargauge",
+          "title": "Attached GPU power",
+          "description": "Actual GPU power only; missing counters are unsupported, not idle zero.",
+          "gridPos": {
+            "x": 0,
+            "y": 120,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(max by(host,device)(gpu_power_watts{job=\"node\",host=\"$host\"}) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\",host=\"$host\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\",host=\"$host\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\",host=\"$host\"})) < 180)",
+              "legendFormat": "{{host}} · {{vendor}} · {{model_name}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "watt",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true,
+            "sizing": "manual",
+            "minVizHeight": 24,
+            "maxVizHeight": 48,
+            "namePlacement": "top",
+            "text": {
+              "titleSize": 14,
+              "valueSize": 20
+            }
+          },
+          "id": 68
+        },
+        {
+          "type": "stat",
+          "title": "Attached GPU telemetry age",
+          "description": "",
+          "gridPos": {
+            "x": 12,
+            "y": 120,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\",host=\"$host\"})) * on(host,device) group_left(physical_host,physical_device,vendor,model_name) label_replace(max by(host,physical_host,physical_device,vendor,model_name,telemetry)(node_monitoring_gpu_inventory_info{job=\"node\",host=\"$host\"}),\"device\",\"$1\",\"physical_device\",\"(.*)\")",
+              "legendFormat": "{{host}} · {{model_name}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
+          },
+          "id": 70
+        },
+        {
+          "type": "stat",
+          "title": "Attached GPU adapter result",
+          "description": "Explicit native adapter status; unsupported Apple has no adapter and no invented status.",
+          "gridPos": {
+            "x": 0,
+            "y": 127,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max by(host,device)(gpu_scrape_success{job=\"node\",host=\"$host\"})",
+              "legendFormat": "{{host}} · {{device}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "Reading failed",
+                      "color": "orange"
+                    },
+                    "1": {
+                      "text": "Reading OK",
+                      "color": "blue"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
+          },
+          "id": 71
+        },
+        {
+          "type": "stat",
+          "title": "Reported desktop GPU memory capacity",
+          "description": "Vendor-reported visible GPU memory only; does not aggregate unlike dedicated and shared memory pools.",
+          "gridPos": {
+            "x": 12,
+            "y": 127,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max by(host,device)(gpu_memory_total_bytes{job=\"node\",host=\"$host\"}) and on(host,device) (max by(host,device)(gpu_scrape_success{job=\"node\",host=\"$host\"}) == 1) and on(host,device) ((time() - max by(host,device)(gpu_last_success_timestamp_seconds{job=\"node\",host=\"$host\"})) < 180)",
+              "legendFormat": "{{host}} · {{device}}",
+              "range": false,
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "noValue": "Unavailable",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "displayMode": "gradient",
+            "showUnfilled": true,
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
+          },
+          "id": 72
+        }
+      ]
     }
   ]
 }

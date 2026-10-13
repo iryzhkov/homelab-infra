@@ -15,7 +15,16 @@
     "from": "now-6h",
     "to": "now"
   },
-  "links": [],
+  "links": [
+    {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    }
+  ],
   "templating": {
     "list": []
   },
@@ -444,7 +453,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### [Open Logs](/d/homelab-observe-logs)\n\nSearch host and container logs within a chosen time window."
+        "content": "### [Open Logs](/d/homelab-observe-logs)\n\nSearch host and container logs within a chosen time window.\n\n[Service log summary](/d/27360081-9791-40a0-9c22-5b01178551cc) · [Security history](/d/33b22e09-fa0c-468a-b507-f87d71700a25)"
       }
     },
     {

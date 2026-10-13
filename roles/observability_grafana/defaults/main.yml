@@ -4,7 +4,11 @@ observability_grafana_admin_user: admin
 observability_grafana_metrics_url: http://observability_victoriametrics:8428
 observability_grafana_folder_uid: homelab-observability
 observability_grafana_folder_title: Homelab Observability
+observability_grafana_home_dashboard_uid: homelab-observe-home
+# Stars apply to the authenticated provisioning administrator; home/navigation are organization-wide.
+observability_grafana_starred_dashboard_uids: [homelab-observe-home, homelab-observe-hosts, homelab-observe-disks, homelab-observe-capacity]
 observability_grafana_dashboard_files:
+  - home.json
   - overview.json
   - hosts.json
   - disks.json

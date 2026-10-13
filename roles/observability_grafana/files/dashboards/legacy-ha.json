@@ -8,7 +8,45 @@
       "fieldConfig": {
         "defaults": {
           "unit": "fahrenheit"
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "Indoor"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Indoor"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "Outdoor"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Outdoor"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "Setpoint"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Setpoint"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -43,7 +81,8 @@
         "defaults": {
           "max": 100,
           "min": 0,
-          "unit": "percent"
+          "unit": "percent",
+          "displayName": "${__field.labels.entity_id}"
         }
       },
       "gridPos": {
@@ -81,13 +120,20 @@
       },
       "targets": [
         {
-          "query": "from(bucket: \"homeassistant\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"domain\"] == \"person\" or r[\"entity_id\"] == \"occupancy\")\n  |> filter(fn: (r) => r[\"_field\"] == \"state\" or r[\"_field\"] == \"value\")\n  |> map(fn: (r) => ({r with _value: string(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\", \"entity_id\"])\n  |> group(columns: [\"entity_id\"])",
+          "query": "before = from(bucket: \"homeassistant\")\n  |> range(start: -364d, stop: v.timeRangeStart)\n  |> filter(fn: (r) => r[\"domain\"] == \"person\" or r[\"entity_id\"] == \"occupancy\")\n  |> filter(fn: (r) => r[\"_field\"] == \"state\" or r[\"_field\"] == \"value\")\n  |> last()\n  |> map(fn: (r) => ({r with _value: string(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\", \"entity_id\"])\n  |> group(columns: [\"entity_id\"])\n  |> sort(columns: [\"_time\"])\n  |> last()\n  |> map(fn: (r) => ({r with _time: v.timeRangeStart}))\n\nwithin = from(bucket: \"homeassistant\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"domain\"] == \"person\" or r[\"entity_id\"] == \"occupancy\")\n  |> filter(fn: (r) => r[\"_field\"] == \"state\" or r[\"_field\"] == \"value\")\n  |> map(fn: (r) => ({r with _value: string(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\", \"entity_id\"])\n\nunion(tables: [before, within])\n  |> group(columns: [\"entity_id\"])\n  |> sort(columns: [\"_time\"])",
           "refId": "A"
         }
       ],
       "title": "Presence — who's home",
       "type": "state-timeline",
-      "description": "Private Influx history, normalized to string timeline values so numeric and textual states do not collide."
+      "description": "Retained private event-driven history. Most recent actually observed state before the window is carried to its start, then recorded changes follow; this is observed-state continuity, not proof of current live presence.",
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "${__field.labels.entity_id}",
+          "noValue": "No observed state"
+        },
+        "overrides": []
+      }
     },
     {
       "datasource": {
@@ -107,13 +153,20 @@
       },
       "targets": [
         {
-          "query": "from(bucket: \"homeassistant\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"entity_id\"] == \"is_sleeping\" or r[\"entity_id\"] == \"master_bedroom_bed_occupied\" or r[\"entity_id\"] == \"bedroom_smart_switch_sensor_area1occupancy\")\n  |> filter(fn: (r) => r[\"_field\"] == \"state\" or r[\"_field\"] == \"value\")\n  |> map(fn: (r) => ({r with _value: string(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\", \"entity_id\"])\n  |> group(columns: [\"entity_id\"])",
+          "query": "before = from(bucket: \"homeassistant\")\n  |> range(start: -364d, stop: v.timeRangeStart)\n  |> filter(fn: (r) => r[\"entity_id\"] == \"is_sleeping\" or r[\"entity_id\"] == \"master_bedroom_bed_occupied\" or r[\"entity_id\"] == \"bedroom_smart_switch_sensor_area1occupancy\")\n  |> filter(fn: (r) => r[\"_field\"] == \"state\" or r[\"_field\"] == \"value\")\n  |> last()\n  |> map(fn: (r) => ({r with _value: string(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\", \"entity_id\"])\n  |> group(columns: [\"entity_id\"])\n  |> sort(columns: [\"_time\"])\n  |> last()\n  |> map(fn: (r) => ({r with _time: v.timeRangeStart}))\n\nwithin = from(bucket: \"homeassistant\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"entity_id\"] == \"is_sleeping\" or r[\"entity_id\"] == \"master_bedroom_bed_occupied\" or r[\"entity_id\"] == \"bedroom_smart_switch_sensor_area1occupancy\")\n  |> filter(fn: (r) => r[\"_field\"] == \"state\" or r[\"_field\"] == \"value\")\n  |> map(fn: (r) => ({r with _value: string(v: r._value)}))\n  |> keep(columns: [\"_time\", \"_value\", \"entity_id\"])\n\nunion(tables: [before, within])\n  |> group(columns: [\"entity_id\"])\n  |> sort(columns: [\"_time\"])",
           "refId": "A"
         }
       ],
       "title": "Sleep + Bed Occupancy",
       "type": "state-timeline",
-      "description": "Private Influx history, normalized to string timeline values so numeric and textual states do not collide."
+      "description": "Retained private event-driven history. Most recent actually observed state before the window is carried to its start, then recorded changes follow; this is observed-state continuity, not proof of current live presence.",
+      "fieldConfig": {
+        "defaults": {
+          "displayName": "${__field.labels.entity_id}",
+          "noValue": "No observed state"
+        },
+        "overrides": []
+      }
     },
     {
       "datasource": {
@@ -318,15 +371,23 @@
     "to": "now"
   },
   "timezone": "browser",
-  "title": "Home Assistant Overview",
+  "title": "Home Assistant · Retained History",
   "uid": "home-assistant-overview",
   "links": [
+    {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
     {
       "title": "Overview",
       "type": "link",
       "url": "/d/homelab-observe-overview",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -334,7 +395,7 @@
       "type": "link",
       "url": "/d/homelab-observe-hosts",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -342,7 +403,7 @@
       "type": "link",
       "url": "/d/homelab-observe-disks",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -350,7 +411,7 @@
       "type": "link",
       "url": "/d/homelab-observe-capacity",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -358,7 +419,7 @@
       "type": "link",
       "url": "/d/homelab-observe-containers",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -366,7 +427,7 @@
       "type": "link",
       "url": "/d/homelab-observe-logs",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -374,7 +435,7 @@
       "type": "link",
       "url": "/d/homelab-observe-agents",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -382,7 +443,7 @@
       "type": "link",
       "url": "/d/homelab-observe-unifi",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -390,7 +451,7 @@
       "type": "link",
       "url": "/d/homelab-observe-homeassistant",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     }
   ],

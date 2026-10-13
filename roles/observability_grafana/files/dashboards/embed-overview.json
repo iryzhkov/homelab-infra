@@ -65,7 +65,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "count(count by(host) (up{job=\"node\"}))",
+          "expr": "count(max by(host) (up{job=\"node\"}) == 1)",
           "legendFormat": "",
           "range": false,
           "instant": true

@@ -77,6 +77,8 @@ def main():
             dashboards=dict(type="list", elements="dict", required=True),
             external_shares=dict(type="list", elements="dict", default=[], no_log=True),
             legacy_dashboard_uids=dict(type="list", elements="str", default=[]),
+            home_dashboard_uid=dict(type="str", default=""),
+            starred_dashboard_uids=dict(type="list", elements="str", default=[]),
         ),
         supports_check_mode=True,
     )
@@ -212,6 +214,26 @@ def main():
                     })
                 else:
                     api("POST", path, desired_share)
+
+    home_uid = p["home_dashboard_uid"]
+    if home_uid:
+        if home_uid not in documents or home_uid.startswith("homelab-observe-embed-"):
+            module.fail_json(msg="Home dashboard must be a managed private document")
+        preferences = api("GET", "/api/org/preferences")
+        if preferences.get("homeDashboardUID") != home_uid:
+            changes.append("organization home dashboard")
+            if not module.check_mode:
+                payload = dict(preferences, homeDashboardUID=home_uid)
+                payload.pop("homeDashboardId", None)
+                api("PUT", "/api/org/preferences", payload)
+    for uid in p["starred_dashboard_uids"]:
+        if uid not in documents or uid.startswith("homelab-observe-embed-"):
+            module.fail_json(msg="Bookmarks must be managed private dashboards")
+        dashboard = api("GET", "/api/dashboards/uid/" + quote(uid, safe=""), missing_ok=True)
+        if not dashboard or not dashboard.get("meta", {}).get("isStarred", False):
+            changes.append("administrator bookmark " + uid)
+            if not module.check_mode:
+                api("POST", "/api/user/stars/dashboard/" + str(dashboard["dashboard"]["id"]))
 
     readiness = "pending datasource creation (check mode)"
 

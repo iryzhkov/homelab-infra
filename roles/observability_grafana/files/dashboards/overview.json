@@ -25,11 +25,19 @@
   },
   "links": [
     {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/homelab-observe-overview",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -37,7 +45,7 @@
       "type": "link",
       "url": "/d/homelab-observe-hosts",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -45,7 +53,7 @@
       "type": "link",
       "url": "/d/homelab-observe-disks",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -53,7 +61,7 @@
       "type": "link",
       "url": "/d/homelab-observe-capacity",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -61,7 +69,7 @@
       "type": "link",
       "url": "/d/homelab-observe-containers",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -69,7 +77,7 @@
       "type": "link",
       "url": "/d/homelab-observe-logs",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -77,7 +85,7 @@
       "type": "link",
       "url": "/d/homelab-observe-agents",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -85,7 +93,7 @@
       "type": "link",
       "url": "/d/homelab-observe-unifi",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -93,7 +101,7 @@
       "type": "link",
       "url": "/d/homelab-observe-homeassistant",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     }
   ],
@@ -175,7 +183,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "count(count by(host) (up{host=~\"$host\",job=\"node\"}))",
+          "expr": "count(max by(host)(up{job=\"node\",host=~\"$host\"}) == 1)",
           "legendFormat": "",
           "range": false,
           "instant": true
@@ -417,7 +425,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "CPU busy by host",
-      "description": "",
+      "description": "Proxmox guest accounting takes priority for mapped VMs/LXCs; node counters are the fallback.",
       "gridPos": {
         "x": 0,
         "y": 8,
@@ -431,7 +439,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (1 - avg by (host) (avg by (host,cpu) (rate(node_cpu_seconds_total{host=~\"$host\",job=\"node\",mode=\"idle\"}[$__rate_interval]))))",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_cpu_usage_ratio{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - avg by(host) (max by(host,cpu)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\",host=~\"$host\"}[$__rate_interval])))))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false
@@ -483,7 +491,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Memory used by host",
-      "description": "Used = total minus MemAvailable. Hypervisor ZFS ARC is included; see Hosts & hardware for ARC size. Container CPU/memory limits are shown by Proxmox guest panels.",
+      "description": "Proxmox guest accounting takes priority for mapped VMs/LXCs; node counters are the fallback.",
       "gridPos": {
         "x": 12,
         "y": 8,
@@ -497,7 +505,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * (1 - max by(host) (node_memory_MemAvailable_bytes{host=~\"$host\",job=\"node\"}) / max by(host) (node_memory_MemTotal_bytes{host=~\"$host\",job=\"node\"}))",
+          "expr": "(100 * max by(guest_id)(label_replace(pve_memory_usage_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) / max by(guest_id)(label_replace(pve_memory_size_bytes{job=\"pve\",id=~\"(qemu|lxc)/.+\"},\"guest_id\",\"$1\",\"id\",\"(.*)\")) * on(guest_id) group_right() max by(host,guest_id,kind)(node_monitoring_host_info{job=\"node\",host=~\"$host\",guest_id!=\"\"})) or on(host) (100 * (1 - max by(host)(node_memory_MemAvailable_bytes{job=\"node\",host=~\"$host\"}) / max by(host)(node_memory_MemTotal_bytes{job=\"node\",host=~\"$host\"})))",
           "legendFormat": "{{host}}",
           "range": true,
           "instant": false

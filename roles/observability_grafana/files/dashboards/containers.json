@@ -25,11 +25,19 @@
   },
   "links": [
     {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/homelab-observe-overview",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -37,7 +45,7 @@
       "type": "link",
       "url": "/d/homelab-observe-hosts",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -45,7 +53,7 @@
       "type": "link",
       "url": "/d/homelab-observe-disks",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -53,7 +61,7 @@
       "type": "link",
       "url": "/d/homelab-observe-capacity",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -61,7 +69,7 @@
       "type": "link",
       "url": "/d/homelab-observe-containers",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -69,7 +77,7 @@
       "type": "link",
       "url": "/d/homelab-observe-logs",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -77,7 +85,7 @@
       "type": "link",
       "url": "/d/homelab-observe-agents",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -85,7 +93,7 @@
       "type": "link",
       "url": "/d/homelab-observe-unifi",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -93,7 +101,7 @@
       "type": "link",
       "url": "/d/homelab-observe-homeassistant",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     }
   ],
@@ -115,6 +123,31 @@
         "refresh": 1,
         "sort": 1,
         "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": []
+      },
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "homelab-metrics"
+        },
+        "query": {
+          "query": "label_values(container_last_seen{job=\"cadvisor\",host=~\"$host\",name!=\"\"}, name)",
+          "refId": "container"
+        },
+        "definition": "label_values(container_last_seen{job=\"cadvisor\",host=~\"$host\",name!=\"\"}, name)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
         "includeAll": true,
         "allValue": ".*",
         "current": {
@@ -154,7 +187,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Docker and Swarm workloads\ncAdvisor supplies resource counters. Container names change on rescheduling; filter by host and use the series labels to identify the task. Memory is working set, CPU is consumed cores."
+        "content": "### Docker and Swarm workloads\nChoose a host and container. Each graph shows the twelve largest current series within the selection. CPU is consumed cores; memory is working set. Task IDs change after rescheduling."
       }
     },
     {
@@ -175,7 +208,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host, name) (rate(container_cpu_usage_seconds_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
+          "expr": "topk(12, sum by(host, name) (rate(container_cpu_usage_seconds_total{host=~\"$host\",job=\"cadvisor\",name!=\"\",name=~\"$container\"}[$__rate_interval])))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -239,7 +272,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by(host,name) (container_memory_working_set_bytes{host=~\"$host\",job=\"cadvisor\",name!=\"\"})",
+          "expr": "topk(12, max by(host,name) (container_memory_working_set_bytes{host=~\"$host\",job=\"cadvisor\",name!=\"\",name=~\"$container\"}))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -303,7 +336,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host,name) (rate(container_network_receive_bytes_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
+          "expr": "topk(12, sum by(host,name) (rate(container_network_receive_bytes_total{host=~\"$host\",job=\"cadvisor\",name!=\"\",name=~\"$container\"}[$__rate_interval])))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -367,7 +400,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host,name) (rate(container_network_transmit_bytes_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
+          "expr": "topk(12, sum by(host,name) (rate(container_network_transmit_bytes_total{host=~\"$host\",job=\"cadvisor\",name!=\"\",name=~\"$container\"}[$__rate_interval])))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -414,78 +447,14 @@
       }
     },
     {
-      "id": 6,
-      "type": "timeseries",
-      "title": "Filesystem usage (when available)",
-      "description": "",
-      "gridPos": {
-        "x": 0,
-        "y": 19,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "homelab-metrics"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "container_fs_usage_bytes{host=~\"$host\",job=\"cadvisor\",name!=\"\"}",
-          "legendFormat": "{{host}} · {{name}} · {{device}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 12,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
       "id": 7,
       "type": "timeseries",
       "title": "CPU throttled periods",
       "description": "",
       "gridPos": {
-        "x": 12,
+        "x": 0,
         "y": 19,
-        "w": 12,
+        "w": 24,
         "h": 8
       },
       "datasource": {
@@ -495,7 +464,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(host,name) (rate(container_cpu_cfs_throttled_periods_total{host=~\"$host\",job=\"cadvisor\",name!=\"\"}[$__rate_interval]))",
+          "expr": "topk(12, sum by(host,name) (rate(container_cpu_cfs_throttled_periods_total{host=~\"$host\",job=\"cadvisor\",name!=\"\",name=~\"$container\"}[$__rate_interval])))",
           "legendFormat": "{{host}} {{name}}",
           "range": true,
           "instant": false
@@ -540,6 +509,84 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Optional filesystem counters · exporter currently unavailable",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Filesystem usage (when available)",
+          "description": "",
+          "gridPos": {
+            "x": 0,
+            "y": 19,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "homelab-metrics"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "container_fs_usage_bytes{host=~\"$host\",job=\"cadvisor\",name!=\"\",name=~\"$container\"}",
+              "legendFormat": "{{host}} · {{name}} · {{device}}",
+              "range": true,
+              "instant": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 12,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        }
+      ]
     }
   ]
 }

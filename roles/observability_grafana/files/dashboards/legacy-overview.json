@@ -55,7 +55,7 @@
       "id": 2,
       "targets": [
         {
-          "expr": "sum by (container_name) (count_over_time({job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" |~ \"(?i)error|exception|fatal|panic\" [5m]))",
+          "expr": "sum by (container_name) (count_over_time({job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" |~ \"(?i)(^|[^a-zA-Z0-9_])(error|exception|fatal|panic)([^a-zA-Z0-9_]|$)\" [5m]))",
           "legendFormat": "{{container_name}}"
         }
       ],
@@ -76,17 +76,34 @@
       "id": 3,
       "options": {
         "orientation": "horizontal",
-        "xTickLabelRotation": 0
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "minVizHeight": 24
       },
       "targets": [
         {
-          "expr": "sum by (container_name) (count_over_time({job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\"[1h]))",
+          "expr": "topk(12, sum by (container_name) (count_over_time({job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\"[1h])))",
           "instant": true,
-          "legendFormat": "{{container_name}}"
+          "legendFormat": "{{container_name}}",
+          "queryType": "instant"
         }
       ],
-      "title": "Log Volume by Container",
-      "type": "barchart"
+      "title": "Top 12 containers · log lines in the last hour",
+      "type": "bargauge",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "displayName": "${__field.labels.container_name}"
+        },
+        "overrides": []
+      }
     },
     {
       "datasource": {
@@ -110,7 +127,7 @@
       },
       "targets": [
         {
-          "expr": "{job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" |~ \"(?i)error|exception|fatal|panic\""
+          "expr": "{job=\"docker\"} | label_format container_name=\"{{ if .container }}{{ .container }}{{ else }}{{ .container_name }}{{ end }}\" |~ \"(?i)(^|[^a-zA-Z0-9_])(error|exception|fatal|panic)([^a-zA-Z0-9_]|$)\""
         }
       ],
       "title": "Recent Errors",
@@ -136,10 +153,10 @@
       },
       "targets": [
         {
-          "expr": "{host=~\".+\"} |~ \"(?i)started|restarting|killed|oom|out of memory\""
+          "expr": "{host=~\".+\"} |~ \"(?i)restarting|restart counter|oom-kill|out of memory|killed process|starting docker|stopping docker\""
         }
       ],
-      "title": "Container Restart Events",
+      "title": "Restart / OOM lifecycle messages",
       "type": "logs"
     },
     {
@@ -180,15 +197,23 @@
     "to": "now"
   },
   "timezone": "browser",
-  "title": "Homelab Overview",
+  "title": "Homelab · Service Logs",
   "uid": "27360081-9791-40a0-9c22-5b01178551cc",
   "links": [
+    {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": false,
+      "includeVars": false,
+      "targetBlank": false
+    },
     {
       "title": "Overview",
       "type": "link",
       "url": "/d/homelab-observe-overview",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -196,7 +221,7 @@
       "type": "link",
       "url": "/d/homelab-observe-hosts",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -204,7 +229,7 @@
       "type": "link",
       "url": "/d/homelab-observe-disks",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -212,7 +237,7 @@
       "type": "link",
       "url": "/d/homelab-observe-capacity",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -220,7 +245,7 @@
       "type": "link",
       "url": "/d/homelab-observe-containers",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -228,7 +253,7 @@
       "type": "link",
       "url": "/d/homelab-observe-logs",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -236,7 +261,7 @@
       "type": "link",
       "url": "/d/homelab-observe-agents",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -244,7 +269,7 @@
       "type": "link",
       "url": "/d/homelab-observe-unifi",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     },
     {
@@ -252,7 +277,7 @@
       "type": "link",
       "url": "/d/homelab-observe-homeassistant",
       "keepTime": true,
-      "includeVars": true,
+      "includeVars": false,
       "targetBlank": false
     }
   ],
