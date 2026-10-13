@@ -7,4 +7,5 @@
   gather_facts: true
   become: true
   roles:
-    - observability_collector
+    - role: observability_collector
+      when: observability_alloy_enabled | default(true) | bool

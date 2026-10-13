@@ -1,5 +1,11 @@
 ---
 observability_extra_scrapes:
+  - name: nut
+    address: 127.0.0.1:9199
+    path: /ups_metrics
+    interval: 60s
+    params:
+      ups: ["ups-{{ inventory_hostname | regex_replace('^proxmox-', '') }}"]
   - name: smartctl
     address: 127.0.0.1:9633
   - name: pve

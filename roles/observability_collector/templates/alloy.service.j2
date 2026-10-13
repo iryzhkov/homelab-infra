@@ -6,7 +6,7 @@ Wants=network-online.target
 User=alloy
 Group=alloy
 SupplementaryGroups=systemd-journal
-Environment=GOMEMLIMIT=192MiB
+Environment=GOMEMLIMIT={{ observability_alloy_go_memory_limit }}
 ExecStart=/usr/local/bin/alloy run --storage.path=/var/lib/alloy --server.http.listen-addr=127.0.0.1:12345 --disable-reporting /etc/alloy/config.alloy
 Restart=on-failure
 RestartSec=5

@@ -13,6 +13,9 @@ RestartSec=30
 # Root for CAP_PERFMON, so perf_event_paranoid is left alone; nothing else.
 ProtectHome=true
 ProtectSystem=strict
+{% if observability_gpu_textfile | default('') | length > 0 %}
+ReadWritePaths={{ observability_gpu_textfile | dirname }}
+{% endif %}
 PrivateTmp=true
 NoNewPrivileges=true
 Nice=10

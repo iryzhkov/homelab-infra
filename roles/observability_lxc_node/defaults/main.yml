@@ -1,0 +1,18 @@
+---
+# Bind only the private container address; do not listen on all interfaces.
+observability_lxc_node_bind_address: "{{ ansible_default_ipv4.address }}"
+# With proxmox_pct_remote, ansible_host is the owning hypervisor's address.
+observability_lxc_node_collector_address: "{{ ansible_host }}"
+observability_lxc_node_port: 9911
+observability_lxc_node_memory_max: 96M
+observability_lxc_node_memory_high: 64M
+observability_lxc_node_min_free_mb: 96
+observability_lxc_node_collectors:
+  - cpu
+  - filesystem
+  - loadavg
+  - meminfo
+  - netdev
+  - stat
+  - time
+  - uname

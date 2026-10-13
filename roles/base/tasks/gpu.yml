@@ -27,6 +27,7 @@
   ansible.builtin.copy:
     content: |
       GPU_HOST={{ inventory_hostname }}
+      GPU_TEXTFILE={{ observability_gpu_textfile | default('') }}
       INFLUX_WRITE_URL={{ smart_influx_url }}/api/v2/write?org={{ smart_influx_org }}&bucket={{ smart_influx_bucket }}&precision=s
       INFLUX_TOKEN={{ metrics_secrets.INFLUX_TOKEN }}
     dest: /etc/homelab-gpu/env

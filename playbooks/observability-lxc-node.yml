@@ -1,0 +1,6 @@
+---
+- name: Add lightweight metrics on small Debian containers
+  hosts: ct100:ct104:ct107
+  gather_facts: true
+  roles:
+    - observability_lxc_node

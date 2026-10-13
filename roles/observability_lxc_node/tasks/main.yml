@@ -1,0 +1,155 @@
+---
+- name: Require supported small Debian guest and scoped scrape addresses
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+      - observability_lxc_node_bind_address is match('^(?:[0-9]{1,3}[.]){3}[0-9]{1,3}$')
+      - observability_lxc_node_collector_address is match('^(?:[0-9]{1,3}[.]){3}[0-9]{1,3}$')
+      - observability_lxc_node_bind_address != '0.0.0.0'
+      - observability_lxc_node_collector_address != '0.0.0.0'
+      - observability_lxc_node_port | int == 9911
+    fail_msg: "Provide the guest's private IPv4 address and owning Proxmox IPv4 address."
+
+- name: Remove only the oversized monitoring package on small guests
+  ansible.builtin.apt:
+    name: alloy
+    state: absent
+    purge: false
+    autoremove: false
+
+- name: Check filesystem headroom before adding small native packages
+  ansible.builtin.command:
+    argv: [df, --output=avail, -BM, /]
+  changed_when: false
+  check_mode: false
+  register: observability_lxc_node_disk
+
+- name: Preserve operating space for the existing application
+  ansible.builtin.assert:
+    that:
+      - (observability_lxc_node_disk.stdout_lines[-1] | trim | regex_replace('M$', '') | int) > observability_lxc_node_min_free_mb | int
+    fail_msg: "Native metrics installation would leave insufficient operating headroom."
+
+- name: Install only the small distribution exporter and scoped firewall tooling
+  ansible.builtin.apt:
+    name: [prometheus-node-exporter, iptables]
+    state: present
+    install_recommends: false
+    update_cache: false
+    policy_rc_d: 101
+  notify: Restart scoped LXC metrics exporter
+
+- name: Create the exporter override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/prometheus-node-exporter.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install atomic scoped exporter firewall helper
+  ansible.builtin.template:
+    src: node-exporter-firewall.sh.j2
+    dest: /usr/local/sbin/observability-lxc-node-firewall
+    owner: root
+    group: root
+    mode: "0755"
+    validate: /bin/sh -n %s
+  notify: Refresh LXC metrics firewall
+
+- name: Install persistent metrics firewall service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Scoped firewall for LXC metrics only
+      Before=prometheus-node-exporter.service
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      ExecStart=/usr/local/sbin/observability-lxc-node-firewall
+      User=root
+      NoNewPrivileges=true
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/observability-lxc-node-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Refresh LXC metrics firewall
+
+- name: Bind native metrics to the guest private address with minimal collectors
+  ansible.builtin.lineinfile:
+    path: /etc/default/prometheus-node-exporter
+    regexp: '^ARGS='
+    line: 'ARGS="--web.listen-address={{ observability_lxc_node_bind_address }}:{{ observability_lxc_node_port }} --collector.disable-defaults{% for collector in observability_lxc_node_collectors %} --collector.{{ collector }}{% endfor %}"'
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart scoped LXC metrics exporter
+
+- name: Bound native exporter resource consumption and require its firewall
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Requires=observability-lxc-node-firewall.service
+      After=observability-lxc-node-firewall.service
+
+      [Service]
+      MemoryHigh={{ observability_lxc_node_memory_high }}
+      MemoryMax={{ observability_lxc_node_memory_max }}
+      CPUQuota=10%
+      TasksMax=32
+      Environment=GOMEMLIMIT=48MiB
+      Environment=GOMAXPROCS=1
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      PrivateTmp=true
+    dest: /etc/systemd/system/prometheus-node-exporter.service.d/observability.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart scoped LXC metrics exporter
+
+- name: Refresh firewall before starting or restarting the exporter
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the scoped firewall
+  ansible.builtin.systemd_service:
+    name: observability-lxc-node-firewall.service
+    daemon_reload: true
+    state: started
+    enabled: true
+  when: not ansible_check_mode
+
+- name: Enable and start native guest metrics
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter.service
+    daemon_reload: true
+    state: started
+    enabled: true
+  when: not ansible_check_mode
+
+- name: Verify exporter serves real metrics locally
+  ansible.builtin.uri:
+    url: "http://{{ observability_lxc_node_bind_address }}:{{ observability_lxc_node_port }}/metrics"
+    return_content: true
+    use_proxy: false
+    timeout: 20
+    status_code: 200
+  register: observability_lxc_node_readiness
+  until: "'node_uname_info' in observability_lxc_node_readiness.content | default('')"
+  retries: 3
+  delay: 2
+  when: not ansible_check_mode
+
+- name: Require filesystem and memory samples in the native response
+  ansible.builtin.assert:
+    that:
+      - "'node_filesystem_avail_bytes' in observability_lxc_node_readiness.content"
+      - "'node_memory_MemTotal_bytes' in observability_lxc_node_readiness.content"
+  when: not ansible_check_mode

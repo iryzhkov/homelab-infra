@@ -80,7 +80,7 @@
     content: |
       [Journal]
       Storage=persistent
-      SystemMaxUse=256M
+      SystemMaxUse={{ observability_journal_max_use }}
       RuntimeMaxUse=64M
       MaxRetentionSec=30day
     dest: /etc/systemd/journald.conf.d/observability.conf
@@ -115,7 +115,7 @@
     alloy_user_groups: [systemd-journal]
     alloy_env_file_vars:
       CUSTOM_ARGS: --server.http.listen-addr=127.0.0.1:12345 --disable-reporting
-      GOMEMLIMIT: 192MiB
+      GOMEMLIMIT: "{{ observability_alloy_go_memory_limit }}"
     alloy_systemd_override: |
       [Service]
       MemoryHigh={{ observability_alloy_memory_high }}
