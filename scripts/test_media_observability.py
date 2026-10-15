@@ -32,6 +32,7 @@ class CollectorTests(unittest.TestCase):
             {"records": [{"added": None, "statusMessages": ["private title"]}], "totalRecords": 1}, 100)
         self.assertTrue(any("import_queue_age_unknown_items" in l and l.endswith(" 1") for l in lines))
         self.assertNotIn("private title", "\n".join(lines))
+        self.assertFalse(any("import_queue_oldest_seconds" in line for line in lines))
         with self.assertRaises(ValueError):
             collector.queue_metrics([], "sonarr", {"records": [], "totalRecords": 5}, 100)
 

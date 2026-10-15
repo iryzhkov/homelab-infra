@@ -95,7 +95,8 @@ def queue_metrics(lines, service, page, now):
     emit(lines, "import_queue_warning_items",
          sum(bool(r.get("statusMessages")) or r.get("trackedDownloadStatus") in ("warning", "error")
              for r in records), service=service)
-    emit(lines, "import_queue_oldest_seconds", max(ages, default=0), service=service)
+    if ages or not records:
+        emit(lines, "import_queue_oldest_seconds", max(ages, default=0), service=service)
     emit(lines, "import_queue_age_unknown_items", len(records) - len(ages), service=service)
 
 
