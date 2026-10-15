@@ -23,7 +23,7 @@ class API:
     def __init__(self, name, state_root):
         directory, port, version = SERVICES[name]
         config = ET.parse(Path(state_root) / directory / "config/config.xml").getroot()
-        self.key = config.findtext("ApiKey")
+        self.key = config.findtext("ApiKey") or ""
         if not self.key:
             raise RuntimeError("Missing API key for " + name)
         self.base = ("http://127.0.0.1:" + str(port)
