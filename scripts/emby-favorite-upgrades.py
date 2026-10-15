@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import time
 from typing import Any
 import urllib.error
 import urllib.parse
@@ -236,6 +237,30 @@ def run(apis, state_path, apply, limit):
     return summary
 
 
+def run_with_heartbeat(api_factory, state_path, limit):
+    """Record attempts and progress without changing the durable queue schema."""
+    heartbeat_path = state_path.parent / "heartbeat.json"
+    heartbeat = json.loads(heartbeat_path.read_text()) if heartbeat_path.exists() else {}
+    previous = json.loads(state_path.read_text()) if state_path.exists() else {"titles": {}}
+    phases_before = {key: value.get("phase") for key, value in previous["titles"].items()}
+    heartbeat.update(last_attempt_timestamp_seconds=time.time(), running=1)
+    save_state(heartbeat_path, heartbeat)
+    try:
+        result = run(api_factory(), state_path, True, limit)
+        current = json.loads(state_path.read_text())
+        phases_after = {key: value.get("phase") for key, value in current["titles"].items()}
+        heartbeat.update(last_success_timestamp_seconds=time.time(), last_result_success=1)
+        if phases_after != phases_before or result["processed"]:
+            heartbeat["last_progress_timestamp_seconds"] = time.time()
+        return result
+    except Exception:
+        heartbeat["last_result_success"] = 0
+        raise
+    finally:
+        heartbeat["running"] = 0
+        save_state(heartbeat_path, heartbeat)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
@@ -254,7 +279,7 @@ def main():
         with open(directory / "lock", "a") as lock:
             os.chmod(directory / "lock", 0o600)
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            result = run(clients(Path(args.state_root)), directory / "state.json", True, args.max_searches)
+            result = run_with_heartbeat(lambda: clients(Path(args.state_root)), directory / "state.json", args.max_searches)
     else:
         result = run(clients(Path(args.state_root)), directory / "state.json", False, args.max_searches)
     print(json.dumps(result, sort_keys=True))

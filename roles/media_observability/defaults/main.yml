@@ -1,0 +1,8 @@
+---
+media_observability_state_root: /srv/swarm
+media_observability_output: /var/lib/observability-textfile/media.prom
+media_observability_state: /var/lib/media-observability/state.json
+media_observability_favorite_state: /var/lib/emby-favorite-upgrades
+media_observability_floor_bytes: 21990232555520
+media_observability_minimum_seed_seconds: 864000
+media_observability_qbit_url: "http://{{ hostvars['blackpearl'].ansible_host }}:8080"

@@ -1,0 +1,815 @@
+{
+  "uid": "homelab-observe-media",
+  "title": "Homelab · Media operations",
+  "description": "Ansible-managed read-only media metrics and existing Loki logs. No alerting resources or outbound messages.",
+  "tags": [
+    "homelab",
+    "observability",
+    "ansible-managed",
+    "media"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Home",
+      "type": "link",
+      "url": "/d/homelab-observe-home",
+      "keepTime": true
+    },
+    {
+      "title": "Log explorer",
+      "type": "link",
+      "url": "/d/homelab-observe-logs",
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Media operations · dashboard and logs only",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Read-only API collection each minute through Alloy → VictoriaMetrics. No alerts, contact points, notifications or torrent actions. **Empty metrics mean unknown**, not healthy zero; check collector age and source freshness first. The SeedPool policy is a **20 TiB active-seeding floor and 10-day minimum**, not an automatic retirement deadline. Jellystat sync history is observable; its ActivityMonitor poll heartbeat is not exposed by the supported REST API and remains explicitly unknown."
+      }
+    },
+    {
+      "id": 2,
+      "title": "Collector age",
+      "type": "stat",
+      "description": "A stale value means collection stopped even when the last source status remains good.",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - media_collector_timestamp_seconds",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "API / state collection success",
+      "type": "stat",
+      "description": "1 means every required read for that source succeeded in the latest collector run; 0 means unavailable. Raw responses and errors are not logged.",
+      "gridPos": {
+        "x": 6,
+        "y": 4,
+        "w": 12,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_source_up",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Favorite worker running duration",
+      "type": "stat",
+      "description": "Worker has a 12-minute systemd deadline. Missing heartbeat is unknown until an instrumented run completes.",
+      "gridPos": {
+        "x": 18,
+        "y": 4,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_favorite_running * (time() - media_favorite_last_attempt_timestamp_seconds)",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Source time since successful collection",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - media_source_last_success_timestamp_seconds",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Health issues by application",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_health_issues",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Import queue oldest age",
+      "type": "timeseries",
+      "description": "Queue age is time since added, not download ETA. Inspect warning count and application logs to distinguish normal downloads from import failures.",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_import_queue_oldest_seconds",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Import warnings and indexer backoffs",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__name__=~\"media_import_queue_warning_items|media_indexer_backoffs\"}",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Favorite upgrade phases",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_favorite_items",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Favorite worker success / progress ages",
+      "type": "timeseries",
+      "description": "No progress can be normal when the queue is complete. Correlate pending phases with last successful run and active search duration.",
+      "gridPos": {
+        "x": 12,
+        "y": 23,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__name__=~\"media_favorite_last_success_timestamp_seconds|media_favorite_last_progress_timestamp_seconds\"} * -1 + time()",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "SeedPool active bytes / 20 TiB floor",
+      "type": "timeseries",
+      "description": "Only complete, fully selected, actively seeding SeedPool torrents count. NAS free space is a separate capacity metric.",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__name__=~\"media_seedpool_current_active_bytes|media_seedpool_floor_bytes\"}",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "SeedPool retirement headroom",
+      "type": "stat",
+      "description": "Read-only calculation. Zero means no retirement headroom; this dashboard performs no stops or deletion.",
+      "gridPos": {
+        "x": 12,
+        "y": 30,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_seedpool_headroom_bytes",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 13,
+      "title": "SeedPool unknown torrents",
+      "type": "stat",
+      "description": "Unknown metadata blocks confident retirement planning.",
+      "gridPos": {
+        "x": 18,
+        "y": 30,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_seedpool_unknown_count",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 14,
+      "title": "SeedPool under ten days",
+      "type": "timeseries",
+      "description": "Ten days = 864000 seconds of reported seeding time; reaching it does not authorize stopping.",
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_seedpool_below_minimum_count",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Jellystat last successful sync age",
+      "type": "stat",
+      "description": "Latest successful sync found in the API's last 50 task logs. Not the last playback timestamp; absence means history unavailable.",
+      "gridPos": {
+        "x": 12,
+        "y": 37,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - media_jellystat_sync_last_success_timestamp_seconds",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 16,
+      "title": "Jellystat ActivityMonitor freshness known",
+      "type": "stat",
+      "description": "0 = unknown. Supported REST endpoints expose scheduler configuration and sync results, not the live ActivityMonitor poll heartbeat.",
+      "gridPos": {
+        "x": 18,
+        "y": 37,
+        "w": 6,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_jellystat_activity_monitor_freshness_known",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 17,
+      "title": "Missing English subtitles",
+      "type": "timeseries",
+      "description": "Missing indexed English subtitle requirements. Existing embedded subtitles are recognized; provider results may not meet quality thresholds.",
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_subtitles_missing_items",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "title": "Subtitle provider failures",
+      "type": "timeseries",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 44,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "homelab-metrics"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "media_subtitle_provider_failures",
+          "legendFormat": "{{__name__}} {{service}} {{phase}} {{task}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "title": "Media application logs",
+      "type": "logs",
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "ffgg37ixfg4xsb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"docker\",service=~\"sonarr-tv_sonarr|radarr-movie_radarr|prowlarr_prowlarr|bazarr_bazarr|jellystat_jellystat|ombi_ombi\"}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      }
+    },
+    {
+      "id": 20,
+      "title": "Collector and favorite worker JSON events",
+      "type": "logs",
+      "gridPos": {
+        "x": 0,
+        "y": 61,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "ffgg37ixfg4xsb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"journal\",unit=~\"media-observability.service|emby-favorite-upgrades.service\"}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      }
+    }
+  ]
+}
