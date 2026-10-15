@@ -65,6 +65,12 @@ class SeedPolicyTests(unittest.TestCase):
         state = snapshot([None, torrent(1, TIB, tracker="http://[broken")])
         self.assertEqual(state["unknown_count"], 2)
 
+    def test_impossible_progress_and_fractional_bytes_fail_closed(self):
+        for changes in ({"progress": 2}, {"total_size": 1.5}, {"size": .5}, {"amount_left": .5}):
+            rows = [torrent(1, 20*TIB, **changes), torrent(2, TIB)]
+            self.assertEqual(snapshot(rows)["unknown_count"], 1)
+            self.assertFalse(retirement_plan(rows, [rows[1]["hash"]])["allowed"])
+
     def test_no_speculative_credit_and_input_unchanged(self):
         rows = [torrent(1, 22*TIB), torrent(2, 4*TIB, state="downloading", progress=.9)]
         before = copy.deepcopy(rows)

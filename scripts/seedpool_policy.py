@@ -33,6 +33,8 @@ def classify(torrent):
     required = ("total_size", "size", "progress", "amount_left", "seeding_time")
     if any(not number(torrent.get(key)) for key in required):
         return "unknown", 0
+    if torrent["progress"] > 1 or any(torrent[key] != int(torrent[key]) for key in ("total_size", "size", "amount_left")):
+        return "unknown", 0
     # A fully downloaded selected subset must not inflate the complete seed pool.
     complete = (torrent["progress"] >= 1 and torrent["amount_left"] == 0
                 and torrent["size"] == torrent["total_size"] and torrent["total_size"] > 0)
