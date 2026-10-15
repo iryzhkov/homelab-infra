@@ -20,7 +20,12 @@ subsequent scheduled searches can download subtitles.
 
 ## Providers and validation
 
-Live validation on 2026-10-14 used Bazarr v1.6.2:
+Live validation on 2026-10-14 used Bazarr v1.6.2. After profile assignment,
+Bazarr reports 38 of 614 movies and 445 of 6,007 episodes still missing English
+subtitles. It already indexes full embedded English subtitles for 572 movies
+and 5,521 episodes. No end-to-end subtitle download was performed.
+
+Validation details:
 
 - No provider credentials or providers existed before configuration.
 - YIFY Subtitles and Gestdown (Addic7ed proxy) require no account, and both
