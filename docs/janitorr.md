@@ -7,7 +7,8 @@ pinned by tag and registry manifest digest.
 The generated configuration sets `application.dry-run: true`,
 `clients.emby.delete: false`, `file-system.access: false` and
 `clients.emby.leaving-soon-type: NONE`. No NAS/library mount, published port,
-public route, Emby login, stats dependency or persistent log directory is added.
+public route, Emby login or persistent log directory is added. Jellystat supplies
+playback statistics from Emby.
 Tag schedules and individual episode deletion are disabled. Normal stack logging
 collects stdout. Janitorr runs cleanup passes with a one-hour delay between them.
 Upstream logs say `Deleting movie/show` even during dry-run; those lines describe
@@ -19,8 +20,12 @@ Emby favorites from all users and the arr tag `janitorr_keep` protect candidates
 Favorites apply to Movie/Series records; Emby Likes is a different field upstream.
 No import-exclusion records or other application settings are changed.
 
-This is not the full proposed retention policy. It has no playback statistics
-provider, so it does not enforce 90-day watch protection. It does not implement
+Jellystat now populates the latest qualifying playback date across all users.
+With whole-show mode, an episode play refreshes every season of the series.
+Janitorr ignores plays of 60 seconds or less. The current 180-day expiry uses
+both download and playback age; a separate 90-day watch window is not configured.
+
+This is not the full proposed retention policy. It does not implement
 the independent report's 60-day new-file grace, airing-show protection, streaming
 availability ranking or 20 TB budget. With filesystem access disabled, Janitorr
 cannot determine disk usage, validate seeding or create Leaving Soon libraries;
@@ -42,6 +47,8 @@ Preparation reads Sonarr/Radarr `config.xml` and the single Emby server API key
 already configured in Ombi's `OmbiSettings.db` on homelab. SQLite uses read-only
 mode and query-only protection. Missing or ambiguous records stop preparation.
 It does not create keys, modify those applications or store credentials in Git.
+Jellystat's bootstrap playbook provisions a named Janitorr API key in
+`/srv/swarm/jellystat/janitorr-api-key`; preparation requires that file.
 Discovery, rendered configuration and all credential facts have `no_log: true`.
 The generated config is mode 0400 owned by container UID 1000, inside a root-owned
 0700 directory, mounted read-only. Only homelab receives a copy. Rotated keys are
