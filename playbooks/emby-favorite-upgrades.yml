@@ -1,0 +1,89 @@
+---
+- name: Promote Emby favorites into bounded quality upgrades
+  hosts: homelab
+  become: true
+  gather_facts: false
+  vars:
+    media_favorite_upgrades_enabled: true
+  tasks:
+    - name: Validate favorite inventory and named quality profiles without writes
+      ansible.builtin.script:
+        cmd: ../scripts/emby-favorite-upgrades.py
+        executable: /usr/bin/python3
+      check_mode: false
+      changed_when: false
+      register: favorite_preflight
+      no_log: true
+
+    - name: Show credential-free favorite queue preview
+      ansible.builtin.debug:
+        msg: "{{ favorite_preflight.stdout | from_json }}"
+
+    - name: Create private favorite upgrade state
+      ansible.builtin.file:
+        path: /var/lib/emby-favorite-upgrades
+        owner: root
+        group: root
+        state: directory
+        mode: "0700"
+
+    - name: Install favorite upgrade worker
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../scripts/emby-favorite-upgrades.py"
+        dest: /usr/local/sbin/emby-favorite-upgrades
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install favorite upgrade service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/emby-favorite-upgrades.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Bounded quality upgrades for Emby favorites
+          After=network-online.target docker.service
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=root
+          UMask=0077
+          ExecStart=/usr/bin/python3 /usr/local/sbin/emby-favorite-upgrades --apply --max-searches 2
+          TimeoutStartSec=12min
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ReadWritePaths=/var/lib/emby-favorite-upgrades
+      register: favorite_service
+
+    - name: Install favorite upgrade timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/emby-favorite-upgrades.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Check Emby favorites every fifteen minutes
+
+          [Timer]
+          OnBootSec=5min
+          OnUnitInactiveSec=15min
+          RandomizedDelaySec=30s
+          Unit=emby-favorite-upgrades.service
+
+          [Install]
+          WantedBy=timers.target
+      register: favorite_timer
+
+    - name: Enable the bounded favorite upgrade timer
+      when: not ansible_check_mode
+      ansible.builtin.systemd_service:
+        name: emby-favorite-upgrades.timer
+        daemon_reload: "{{ favorite_service is changed or favorite_timer is changed }}"
+        enabled: "{{ media_favorite_upgrades_enabled | bool }}"
+        state: "{{ 'started' if media_favorite_upgrades_enabled | bool else 'stopped' }}"

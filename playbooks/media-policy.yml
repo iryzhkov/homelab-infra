@@ -1,0 +1,6 @@
+---
+# Profiles must exist before the favorites worker is installed.
+- ansible.builtin.import_playbook: media-quality-policy.yml
+- ansible.builtin.import_playbook: ombi-anime-settings.yml
+- ansible.builtin.import_playbook: media-subtitles.yml
+- ansible.builtin.import_playbook: emby-favorite-upgrades.yml
