@@ -112,9 +112,11 @@ def collect_arr(lines, service, root, now):
     for level in ("warning", "error"):
         emit(lines, "health_issues_by_level", sum(str(h.get("type", "")).lower() == level for h in health),
              service=service, level=level)
-    statuses = api.get("indexerstatus")
-    emit(lines, "indexer_backoffs",
-         sum((timestamp(s.get("disabledTill")) or 0) > now for s in statuses), service=service)
+    # Only Prowlarr exposes indexerstatus; *arr health/logs report downstream failures.
+    if service == "prowlarr":
+        statuses = api.get("indexerstatus")
+        emit(lines, "indexer_backoffs",
+             sum((timestamp(s.get("disabledTill")) or 0) > now for s in statuses), service=service)
     if service in ("sonarr", "radarr", "lidarr"):
         queue_metrics(lines, service, api.get("queue?page=1&pageSize=10000&includeUnknownSeriesItems=true"
                                             "&includeUnknownMovieItems=true&includeUnknownArtistItems=true"), now)
@@ -202,7 +204,8 @@ def collect_seedpool(lines, config):
         torrents = json.load(response)
     data = snapshot(torrents, config["floor_bytes"], config["minimum_seed_seconds"])
     for key in ("current_active_bytes", "headroom_bytes", "below_minimum_count",
-                "below_minimum_bytes", "classified_count", "active_count", "unknown_count"):
+                "below_minimum_bytes", "classified_count", "active_count", "inactive_count",
+                "unknown_count", "retirement_guard_healthy"):
         emit(lines, "seedpool_" + key, data[key])
 
 

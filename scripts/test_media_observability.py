@@ -35,6 +35,20 @@ class CollectorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             collector.queue_metrics([], "sonarr", {"records": [], "totalRecords": 5}, 100)
 
+    def test_arr_does_not_call_unsupported_indexerstatus(self):
+        class ArrAPI:
+            def get(self, endpoint):
+                if endpoint == "health":
+                    return []
+                if endpoint.startswith("queue?"):
+                    return {"records": [], "totalRecords": 0}
+                raise AssertionError("Unsupported endpoint called: " + endpoint)
+        with mock.patch.object(collector, "arr_api", return_value=ArrAPI()):
+            lines = []
+            collector.collect_arr(lines, "sonarr", "/unused", 100)
+        self.assertTrue(any("import_queue_items" in line for line in lines))
+        self.assertFalse(any("indexer_backoffs" in line for line in lines))
+
     def test_jellystat_history_and_activity_liveness_are_distinct(self):
         lines = []
         collector.jellystat_metrics(lines, {"PartialJellyfinSync": {"Interval": 60}},
