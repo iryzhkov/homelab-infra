@@ -130,6 +130,8 @@ def main():
             raise RuntimeError("Original language unsupported")
         if len([x for x in state["customformat"] if x["name"] == FORMAT]) > 1:
             raise RuntimeError("Ambiguous custom format")
+        if len([p for p in state["qualityprofile"] if p["name"] == FAVORITE]) > 1:
+            raise RuntimeError("Ambiguous favorite profile")
         states[app] = (api, state)
     if args.apply:
         directory = Path("/srv/swarm/media-policy/backups")
