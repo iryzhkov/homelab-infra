@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import time
+from typing import Any
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -28,7 +29,7 @@ class API:
         self.base = ("http://127.0.0.1:" + str(port)
                      + (config.findtext("UrlBase") or "").rstrip("/") + "/api/" + version)
 
-    def call(self, path, method="GET", body=None):
+    def call(self, path, method="GET", body=None) -> Any:
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(self.base + "/" + path, data=data,
                     method=method, headers={"X-Api-Key": self.key, "Content-Type": "application/json"})
