@@ -1,0 +1,4 @@
+---
+- import_playbook: media-connections.yml
+- import_playbook: media-anime-packs.yml
+- import_playbook: media-observability.yml
