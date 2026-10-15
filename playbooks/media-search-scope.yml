@@ -1,0 +1,18 @@
+---
+- name: Reconcile media search scope without changing media
+  hosts: homelab
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Plan or apply search scope using local protected API credentials
+      ansible.builtin.script:
+        cmd: "../scripts/media-search-scope.py {{ '--check' if ansible_check_mode else '--apply' }}"
+        executable: /usr/bin/python3
+      check_mode: false
+      no_log: true
+      register: media_search_scope
+      changed_when: (media_search_scope.stdout | from_json).changed | bool
+
+    - name: Show credential-free reconciliation summary
+      ansible.builtin.debug:
+        msg: "{{ media_search_scope.stdout | from_json }}"
