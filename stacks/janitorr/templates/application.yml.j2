@@ -55,7 +55,10 @@ clients:
   bazarr:
     enabled: false
   jellystat:
-    enabled: false
+    enabled: true
+    whole-tv-show: true
+    url: {{ janitorr_jellystat_url | to_json }}
+    api-key: {{ janitorr_jellystat_key.content | b64decode | trim | to_json }}
   streamystats:
     enabled: false
   janitorr-stats:
