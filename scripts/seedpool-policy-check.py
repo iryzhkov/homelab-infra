@@ -3,9 +3,9 @@
 import argparse
 import http.cookiejar
 import json
-import os
 from pathlib import Path
 import sys
+from typing import Any
 import urllib.parse
 import urllib.request
 from seedpool_policy import snapshot, retirement_plan
@@ -32,7 +32,7 @@ def main():
             raise RuntimeError("qBittorrent authentication failed")
     with opener.open(url + "/api/v2/torrents/info", timeout=30) as response:
         rows = json.load(response)
-    result = snapshot(rows)
+    result: dict[str, Any] = snapshot(rows)
     if args.retire_file:
         decision = retirement_plan(rows, json.loads(Path(args.retire_file).read_text()))
         result["retirement_plan"] = decision

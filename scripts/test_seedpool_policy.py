@@ -6,10 +6,10 @@ from seedpool_policy import snapshot, retirement_plan, FLOOR_BYTES, MINIMUM_SEED
 TIB = 1024**4
 
 
-def torrent(n, size, **changes):
+def torrent(n, total_bytes, **changes):
     result = {"hash": format(n, "040x"), "tracker": "https://tracker.seedpool.org/announce/PRIVATE",
               "state": "stalledUP", "progress": 1, "amount_left": 0,
-              "size": size, "total_size": size, "seeding_time": MINIMUM_SEED_SECONDS}
+              "size": total_bytes, "total_size": total_bytes, "seeding_time": MINIMUM_SEED_SECONDS}
     result.update(changes)
     return result
 
