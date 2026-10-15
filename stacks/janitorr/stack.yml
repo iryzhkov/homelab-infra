@@ -5,7 +5,7 @@ services:
     user: "1000:1000"
     environment:
       # Changing the rendered config replaces the task without exposing keys.
-      JANITORR_CONFIG_SHA256: ${JANITORR_CONFIG_SHA256:?set by swarm-prepare.yml}
+      JANITORR_CONFIG_SHA256: ${JANITORR_CONFIG_SHA256}
     volumes:
       - type: bind
         source: ${SWARM_STATE_ROOT}/janitorr/application.yml

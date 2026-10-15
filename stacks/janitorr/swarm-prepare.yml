@@ -52,6 +52,20 @@
     janitorr_discovered_keys: "{{ janitorr_key_discovery.stdout | from_json }}"
   no_log: true
 
+- name: Janitorr | read its provisioned Jellystat API key
+  ansible.builtin.slurp:
+    src: "{{ swarm_state_root }}/jellystat/janitorr-api-key"
+  delegate_to: "{{ janitorr_source_host }}"
+  become: true
+  register: janitorr_jellystat_key
+  no_log: true
+
+- name: Janitorr | require a provisioned Jellystat connection
+  ansible.builtin.assert:
+    that: (janitorr_jellystat_key.content | b64decode | trim | length) > 0
+    quiet: true
+  no_log: true
+
 - name: Janitorr | render observation configuration in memory
   ansible.builtin.set_fact:
     janitorr_rendered_config: "{{ lookup('ansible.builtin.template', swarm_stack_src ~ '/templates/application.yml.j2') }}"

@@ -1,0 +1,10 @@
+---
+# Reconcile Swarm snapshot declarations without legacy backup permissions/jobs.
+- name: Configure Swarm state snapshots
+  hosts: swarm_workers
+  gather_facts: true
+  tasks:
+    - name: Reconcile snapshot transport and inventory
+      ansible.builtin.include_role:
+        name: backup
+        tasks_from: swarm.yml

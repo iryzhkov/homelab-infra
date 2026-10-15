@@ -1,0 +1,51 @@
+---
+# Prepare only this stack's state. Follow an existing pin after a move.
+- name: Jellystat | find its pinned node
+  ansible.builtin.command:
+    argv: [docker, node, ls, -q, --filter, "node.label=pin.jellystat=true"]
+  register: jellystat_pinned
+  changed_when: false
+  check_mode: false
+
+- name: Jellystat | read the pinned inventory name
+  ansible.builtin.command:
+    argv: [docker, node, inspect, --format, "{{ jellystat_host_format }}", "{{ jellystat_pinned.stdout_lines[0] }}"]
+  vars:
+    jellystat_host_format: !unsafe '{{index .Spec.Labels "host"}}'
+  register: jellystat_pin_host
+  changed_when: false
+  check_mode: false
+  when: jellystat_pinned.stdout_lines | length == 1
+
+- name: Jellystat | remember where the state lives
+  ansible.builtin.set_fact:
+    jellystat_node: >-
+      {{ (jellystat_pin_host.stdout | trim)
+         if jellystat_pinned.stdout_lines | length == 1 else swarm_stack.pin }}
+
+- name: Jellystat | create its state directories
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/jellystat/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "", owner: root, group: root, mode: "0700" }
+    # Official Debian PostgreSQL 17 image uses postgres UID/GID 999.
+    - { path: postgres, owner: "999", group: "999", mode: "0700" }
+    - { path: backup-data, owner: root, group: root, mode: "0700" }
+  loop_control:
+    label: "{{ item.path | default('root', true) }}"
+  delegate_to: "{{ jellystat_node }}"
+  become: true
+
+- name: Jellystat | mark the owner for the snapshot job
+  ansible.builtin.copy:
+    content: "{{ jellystat_node }}\n"
+    dest: "{{ swarm_state_root }}/jellystat/.swarm-owner"
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: "{{ jellystat_node }}"
+  become: true

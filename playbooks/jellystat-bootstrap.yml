@@ -1,0 +1,25 @@
+---
+- name: Bootstrap Jellystat and prepare its Janitorr API key
+  hosts: homelab
+  become: true
+  gather_facts: false
+  vars:
+    jellystat_sync: false
+    jellystat_import_history: false
+  tasks:
+    - name: Bootstrap without exposing credentials
+      ansible.builtin.script:
+        cmd: >-
+          ../scripts/jellystat-bootstrap.py
+          {{ '--check' if ansible_check_mode else '--apply' }}
+          {{ '--sync' if jellystat_sync | bool and not ansible_check_mode else '' }}
+          {{ '--import-history' if jellystat_import_history | bool and not ansible_check_mode else '' }}
+        executable: python3
+      check_mode: false
+      register: jellystat_bootstrap
+      changed_when: (jellystat_bootstrap.stdout | trim | from_json).changed | default(false)
+      no_log: true
+
+    - name: Report sanitized bootstrap result
+      ansible.builtin.debug:
+        msg: "{{ jellystat_bootstrap.stdout | trim | from_json }}"
