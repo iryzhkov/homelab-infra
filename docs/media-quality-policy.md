@@ -1,5 +1,10 @@
 # Size limits and original audio
 
+For the complete household policy, run `ansible-playbook playbooks/media-policy.yml`
+(or add `--check` to preview). It applies profiles, Ombi anime routing, Bazarr
+English subtitles, and the favorites worker in dependency order. The first full
+reapply after deployment should report zero changes.
+
 Apply with `ansible-playbook playbooks/media-quality-policy.yml`; preview with
 `--check`. The script reads local protected API keys, saves private rollback
 snapshots under /srv/swarm/media-policy/backups, and reconciles settings through
