@@ -1,0 +1,145 @@
+---
+- name: Load existing qBittorrent credentials privately on the controller
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/blackpearl-torrent.sops.yaml"
+    name: media_observability_secrets
+  delegate_to: localhost
+  no_log: true
+
+- name: Create private media collector directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/media-observability, mode: "0700"}
+    - {path: /var/lib/media-observability, mode: "0700"}
+    - {path: /usr/local/lib/media-observability, mode: "0755"}
+    - {path: /var/lib/observability-textfile, group: alloy, mode: "0755"}
+
+- name: Install read-only collector
+  ansible.builtin.copy:
+    src: collector.py
+    dest: /usr/local/lib/media-observability/collector.py
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install shared conservative SeedPool calculation
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/{{ item }}"
+    dest: "/usr/local/lib/media-observability/{{ item }}"
+    owner: root
+    group: root
+    mode: "0700"
+  loop: [seedpool_policy.py, seedpool-policy-check.py]
+
+- name: Link the read-only SeedPool policy CLI
+  ansible.builtin.file:
+    src: /usr/local/lib/media-observability/seedpool-policy-check.py
+    dest: /usr/local/sbin/seedpool-policy-check
+    state: link
+  when: not ansible_check_mode
+
+- name: Install protected qBittorrent credentials for the collector and read-only CLI
+  ansible.builtin.copy:
+    dest: /etc/media-observability/qbit.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ media_observability_qbit_config | to_nice_json }}\n"
+  vars:
+    media_observability_qbit_config:
+      url: "{{ media_observability_qbit_url }}"
+      username: "{{ media_observability_secrets.QBITTORRENT_USER }}"
+      password: "{{ media_observability_secrets.QBITTORRENT_PASS }}"
+  no_log: true
+  diff: false
+
+- name: Check whether the favorite worker is already installed
+  ansible.builtin.stat:
+    path: /usr/local/sbin/emby-favorite-upgrades
+  register: media_observability_favorite_worker
+
+- name: Add heartbeat instrumentation to the existing favorite worker without restarting it
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/emby-favorite-upgrades.py"
+    dest: /usr/local/sbin/emby-favorite-upgrades
+    owner: root
+    group: root
+    mode: "0700"
+  when: media_observability_favorite_worker.stat.exists
+
+- name: Install protected collector configuration
+  ansible.builtin.copy:
+    dest: /etc/media-observability/config.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ media_observability_config | to_nice_json }}\n"
+  vars:
+    media_observability_config:
+      state_root: "{{ media_observability_state_root }}"
+      output_file: "{{ media_observability_output }}"
+      state_file: "{{ media_observability_state }}"
+      favorite_state_dir: "{{ media_observability_favorite_state }}"
+      floor_bytes: "{{ media_observability_floor_bytes | int }}"
+      minimum_seed_seconds: "{{ media_observability_minimum_seed_seconds | int }}"
+      qbit_credentials_file: /etc/media-observability/qbit.json
+  no_log: true
+  diff: false
+
+- name: Install media collector service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/media-observability.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Read-only media metrics for Alloy and JSON events for Loki
+      After=network-online.target docker.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      User=root
+      UMask=0077
+      ExecStart=/usr/bin/python3 /usr/local/lib/media-observability/collector.py
+      TimeoutStartSec=3min
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ReadWritePaths=/var/lib/media-observability /var/lib/observability-textfile
+  register: media_observability_service
+
+- name: Install media collector timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/media-observability.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Collect media operations metrics each minute
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitInactiveSec=60s
+      RandomizedDelaySec=5s
+      Unit=media-observability.service
+
+      [Install]
+      WantedBy=timers.target
+  register: media_observability_timer
+
+- name: Enable bounded read-only collection
+  ansible.builtin.systemd_service:
+    name: media-observability.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ media_observability_service is changed or media_observability_timer is changed }}"
+  when: not ansible_check_mode

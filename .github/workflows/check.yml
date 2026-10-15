@@ -23,6 +23,10 @@ jobs:
       - run: python3 scripts/test-swarm-snapshot.py
       - run: python3 scripts/test-observability-backup.py
       - run: python3 scripts/test-observability-textfile.py
+      - run: python3 scripts/test_media_anime_packs.py
+      - run: python3 scripts/test-media-connections.py
+      - run: python3 scripts/test_media_observability.py
+      - run: python3 -m unittest discover -s scripts -p test_seedpool_policy.py
       - name: Install the deployment templating version for guarded role tests
         run: pip install --disable-pip-version-check ansible-core==2.19.13
       - name: Test cold-transition, inventory and activation guards
