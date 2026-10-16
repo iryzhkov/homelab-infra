@@ -13,14 +13,14 @@
 # 10.42.0.3, so a phone on Nebula off-LAN reaches Traefik over the mesh.
 #
 # Backends use each machine's LAN address rather than its Nebula address
-# (changed 2026-09-05). Traefik and all four servers sit on the same physical
+# (changed 2026-09-05). Traefik and the servers sit on the same physical
 # network, so the mesh hop was encrypting and re-routing traffic that never
-# needed to leave it. The servers now bind 0.0.0.0 and each host's ufw admits
-# port 7391 from 192.168.20.0/24 only; homelab runs no host firewall, matching
-# how its other services are exposed. The UDM policies that permit this are
-# "public-api -> homelab (Traefik backends)", "public-api -> normandy",
-# "public-api -> gaming-pc" and "public-api -> laptop (t3code)", the first
-# three through port groups that now include 7391.
+# needed to leave it. The servers bind 0.0.0.0 and each host's ufw admits
+# port 7391 from 192.168.20.0/24 only. The UDM policies that permit this are
+# "public-api -> gaming-pc" and "public-api -> laptop (t3code)".
+#
+# homelab and normandy ran T3 servers here until 2026-10-16, when all agent
+# software was removed from both; their routes went with it.
 #
 # The laptop is the exception, because it is the one machine that leaves the
 # LAN. Its service is a failover pair: the LAN address while it is home, the
@@ -38,25 +38,11 @@ http:
       service: t3-laptop-service
 {% include 'router-tls.j2' %}
 
-    t3-homelab-router:
-      entryPoints:
-        - websecure
-      rule: "Host(`t3-homelab.ryzhkov.dev`)"
-      service: t3-homelab-service
-{% include 'router-tls.j2' %}
-
     t3-gaming-pc-router:
       entryPoints:
         - websecure
       rule: "Host(`t3-gaming-pc.ryzhkov.dev`)"
       service: t3-gaming-pc-service
-{% include 'router-tls.j2' %}
-
-    t3-normandy-router:
-      entryPoints:
-        - websecure
-      rule: "Host(`t3-normandy.ryzhkov.dev`)"
-      service: t3-normandy-service
 {% include 'router-tls.j2' %}
 {# The agent VMs (agent_workers, VLAN 130), added by hand on the edges on
    2026-10-06 and adopted here on 2026-10-12. Their addresses come from the
@@ -97,20 +83,10 @@ http:
         servers:
           - url: "http://10.42.0.5:7391"
 
-    t3-homelab-service:
-      loadBalancer:
-        servers:
-          - url: "http://192.168.70.223:7391"
-
     t3-gaming-pc-service:
       loadBalancer:
         servers:
           - url: "http://192.168.90.212:7391"
-
-    t3-normandy-service:
-      loadBalancer:
-        servers:
-          - url: "http://192.168.70.234:7391"
 {% for agent in groups['agent_workers'] | default([]) | sort %}
 
     t3-{{ agent }}-service:

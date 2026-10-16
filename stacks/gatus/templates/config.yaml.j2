@@ -127,26 +127,6 @@ endpoints:
       - "[STATUS] >= 200"
       - "[STATUS] < 400"
 {% endfor %}
-  - name: Steward coordinator
-{% if inventory_hostname == 'normandy' %}
-    <<: *alerted
-{% endif %}
-    group: Steward via {{ inventory_hostname }}
-    url: "http://{{ hostvars['normandy'].ansible_host }}:3003/health/coordinator"
-    interval: 1m
-    conditions:
-      - "[STATUS] == 200"
-{% for worker_id in gatus_steward_worker_ids %}
-  - name: Steward worker {{ worker_id }}
-{% if inventory_hostname == 'normandy' %}
-    <<: *alerted
-{% endif %}
-    group: Steward via {{ inventory_hostname }}
-    url: "http://{{ hostvars['normandy'].ansible_host }}:3003/health/worker/{{ worker_id }}"
-    interval: 1m
-    conditions:
-      - "[STATUS] == 200"
-{% endfor %}
   - name: MQTT host ping
 {% if inventory_hostname == 'normandy' %}
     <<: *alerted
