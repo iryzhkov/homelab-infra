@@ -1,3 +1,13 @@
+# NATS server configuration for the nats Swarm stack. Rendered by
+# stacks/nats/swarm-prepare.yml into ${SWARM_STATE_ROOT}/nats/config/nats.conf
+# on every deploy; its hash is in the service's environment
+# (NATS_CONFIG_SHA256, inventory/group_vars/swarm/stacks-nats.yml), so a
+# change here redeploys the broker.
+#
+# This file holds no secret. Every identity authenticates with an NKey, and
+# only the public keys (inventory/group_vars/swarm/nats.yml) appear here; each
+# seed stays on the one machine that identity belongs to. Accounts, subjects
+# and limits are explained in docs/chaldea-infra-foundation.md.
 server_name: homelab-nats-1
 listen: "0.0.0.0:4222"
 http: "0.0.0.0:8222"
@@ -5,16 +15,104 @@ max_connections: 64
 max_payload: 1MB
 max_pending: 4MB
 write_deadline: 5s
+
 jetstream {
   store_dir: /data/jetstream
   max_mem_store: 128MB
   max_file_store: 4GB
 }
-authorization {
-  users: [
-    {user: bootstrap-admin, password: "{{ stack_secrets.NATS_ADMIN_PASSWORD_HASH }}"}
-  ]
+
+system_account: SYS
+
+accounts {
+  SYS {
+    users: [
+      # sys-admin: server monitoring through $SYS requests. Operator only.
+      {nkey: "{{ nats_nkeys['sys-admin'] }}"}
+    ]
+  }
+
+  CHALDEA {
+    # Every stream must declare max_bytes, and no stream may exceed 1GB, so
+    # nothing in this account can grow without a bound even if a stream is
+    # created by hand. The streams themselves are in stacks/nats/jetstream/.
+    jetstream {
+      max_mem: 16MB
+      max_file: 2GB
+      max_streams: 8
+      max_consumers: 64
+      max_bytes_required: true
+      store_max_stream_bytes: 1GB
+    }
+    users: [
+      # chaldea-admin: creates and edits streams and consumers
+      # (scripts/nats-jetstream-apply.sh). Operator only; no client uses it.
+      {
+        nkey: "{{ nats_nkeys['chaldea-admin'] }}"
+        permissions: {publish: ">", subscribe: ">"}
+      }
+
+      # akasha: the Akasha service. Consumes AKASHA_EVENTS through its own
+      # durable consumer, reads single events for replay, and publishes only
+      # under its own source names (itself, and the feed and toolfeedback
+      # bridges during the dual-write migration).
+      {
+        nkey: "{{ nats_nkeys['akasha'] }}"
+        permissions: {
+          publish: {
+            allow: [
+              "akasha.akasha.>", "akasha.feed.>", "akasha.toolfeedback.>",
+              "$JS.API.INFO",
+              "$JS.API.STREAM.INFO.AKASHA_EVENTS",
+              "$JS.API.CONSUMER.INFO.AKASHA_EVENTS.akasha-ingest",
+              "$JS.API.CONSUMER.MSG.NEXT.AKASHA_EVENTS.akasha-ingest",
+              "$JS.ACK.AKASHA_EVENTS.akasha-ingest.>",
+              "$JS.API.DIRECT.GET.AKASHA_EVENTS", "$JS.API.DIRECT.GET.AKASHA_EVENTS.>",
+              "$JS.API.STREAM.MSG.GET.AKASHA_EVENTS"
+            ]
+          }
+          subscribe: {allow: ["_INBOX_akasha.>"]}
+        }
+      }
+{% for host in nats_chaldea_hosts %}
+
+      # {{ host }}: that host's Chaldea client. Submits work to the fleet queue
+      # or to any host's queue, pulls from the fleet queue and from its own
+      # queue only, reads every quota key but writes only its own, and
+      # publishes Akasha events only under its own name. Replies arrive on its
+      # own inbox prefix (the client sets inboxPrefix "_INBOX_{{ host }}").
+      {
+        nkey: "{{ nats_nkeys[host] }}"
+        permissions: {
+          publish: {
+            allow: [
+              "chaldea.work.fleet.>", "chaldea.work.host.*.>",
+              "akasha.{{ host }}.>",
+              "$KV.CHALDEA_QUOTA.{{ host }}.>",
+              "$JS.API.INFO",
+              "$JS.API.STREAM.INFO.CHALDEA_WORK",
+              "$JS.API.CONSUMER.INFO.CHALDEA_WORK.fleet",
+              "$JS.API.CONSUMER.INFO.CHALDEA_WORK.host-{{ host }}",
+              "$JS.API.CONSUMER.MSG.NEXT.CHALDEA_WORK.fleet",
+              "$JS.API.CONSUMER.MSG.NEXT.CHALDEA_WORK.host-{{ host }}",
+              "$JS.ACK.CHALDEA_WORK.fleet.>",
+              "$JS.ACK.CHALDEA_WORK.host-{{ host }}.>",
+              "$JS.API.STREAM.INFO.KV_CHALDEA_QUOTA",
+              "$JS.API.DIRECT.GET.KV_CHALDEA_QUOTA", "$JS.API.DIRECT.GET.KV_CHALDEA_QUOTA.>",
+              "$JS.API.STREAM.MSG.GET.KV_CHALDEA_QUOTA",
+              "$JS.API.CONSUMER.CREATE.KV_CHALDEA_QUOTA", "$JS.API.CONSUMER.CREATE.KV_CHALDEA_QUOTA.>",
+              "$JS.API.CONSUMER.DELETE.KV_CHALDEA_QUOTA.>",
+              "$JS.FC.KV_CHALDEA_QUOTA.>"
+            ]
+          }
+          subscribe: {allow: ["_INBOX_{{ host }}.>"]}
+        }
+      }
+{% endfor %}
+    ]
+  }
 }
+
 websocket {
   listen: "0.0.0.0:9222"
   no_tls: true
