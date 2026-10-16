@@ -80,9 +80,9 @@ host_maintenance_routes:
 # that matter (every route through the VIP) are made by the playbook itself.
 host_maintenance_gatus_expected:
   proxmox-a: >-
-    ^internal-on-homelab-|^internal-on-blackpearl-|_adguard-ct10[07]$|_edge-public-api-tcp$|_home-ryzhkov-dev$|_zigbee-ryzhkov-dev$|_mqtt-host-ping$|_logs-ryzhkov-dev$|_steward-worker-homelab$|_gatus-homelab$|^smart_proxmox-a-
+    ^internal-on-homelab-|^internal-on-blackpearl-|_adguard-ct10[07]$|_edge-public-api-tcp$|_home-ryzhkov-dev$|_zigbee-ryzhkov-dev$|_mqtt-host-ping$|_logs-ryzhkov-dev$|_gatus-homelab$|^smart_proxmox-a-
   proxmox-b: >-
-    ^internal-on-normandy-|_adguard-ct201$|_edge-public-api-b-tcp$|_cctv-ryzhkov-dev$|_steward-worker-normandy$|_gatus-normandy$|^smart_proxmox-b-
+    ^internal-on-normandy-|_adguard-ct201$|_edge-public-api-b-tcp$|_cctv-ryzhkov-dev$|_gatus-normandy$|^smart_proxmox-b-
 
 host_maintenance:
   proxmox-a:

@@ -1,0 +1,94 @@
+# Jellystat 1.1.12: Emby mode; credentials are versioned Docker secrets.
+# PostgreSQL stays on the stack overlay; only the statistics UI is published.
+services:
+  db:
+    image: postgres:17.11@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: jfstat
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/jellystat/postgres
+        target: /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "jfstat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.jellystat == true
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 64M
+
+  jellystat:
+    image: cyfershepard/jellystat:1.1.12@sha256:e61c759ec706da378bc8374e797da1dfd298ab30f804cefd82d192c301a888c7
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: jfstat
+      POSTGRES_IP: db
+      POSTGRES_PORT: "5432"
+      FILE__POSTGRES_PASSWORD: /run/secrets/postgres_password
+      FILE__JWT_SECRET: /run/secrets/jwt_secret
+      FILE__JS_PASSWORD: /run/secrets/js_password
+      JS_USER: igor
+      IS_EMBY_API: "true"
+      TZ: America/Los_Angeles
+    secrets:
+      - postgres_password
+      - jwt_secret
+      - js_password
+    ports:
+      - "3012:3000"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/jellystat/backup-data
+        target: /app/backend/backup-data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/auth/isConfigured"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.pin.jellystat == true
+      update_config:
+        order: stop-first
+      # Swarm has no depends_on; restart while PostgreSQL initializes.
+      restart_policy:
+        condition: any
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 128M
+
+secrets:
+  postgres_password:
+    name: jellystat_postgres_password_${SECRET_HASH_POSTGRES_PASSWORD}
+    file: ./secrets/POSTGRES_PASSWORD
+  jwt_secret:
+    name: jellystat_jwt_secret_${SECRET_HASH_JWT_SECRET}
+    file: ./secrets/JWT_SECRET
+  js_password:
+    name: jellystat_js_password_${SECRET_HASH_JS_PASSWORD}
+    file: ./secrets/JS_PASSWORD
