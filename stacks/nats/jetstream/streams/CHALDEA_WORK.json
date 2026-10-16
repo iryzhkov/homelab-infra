@@ -1,0 +1,22 @@
+{
+  "name": "CHALDEA_WORK",
+  "description": "Chaldea work queue: chaldea.work.fleet.<role> for any host, chaldea.work.host.<host>.<kind> for one host. Each message is delivered to one consumer and removed when acknowledged.",
+  "subjects": ["chaldea.work.fleet.>", "chaldea.work.host.*.>"],
+  "retention": "workqueue",
+  "storage": "file",
+  "num_replicas": 1,
+  "discard": "new",
+  "max_consumers": 16,
+  "max_msgs": 10000,
+  "max_bytes": 268435456,
+  "max_age": 604800000000000,
+  "max_msg_size": 262144,
+  "max_msgs_per_subject": -1,
+  "duplicate_window": 900000000000,
+  "allow_direct": false,
+  "allow_rollup_hdrs": false,
+  "deny_delete": false,
+  "deny_purge": false,
+  "compression": "none",
+  "metadata": {}
+}
