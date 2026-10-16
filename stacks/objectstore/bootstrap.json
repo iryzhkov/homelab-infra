@@ -1,0 +1,49 @@
+{
+  "_comment": "Garage cluster state for the objectstore stack, converged by playbooks/garage-bootstrap.yml (scripts/garage-bootstrap.py). Sizes in bytes. Every bucket must have max_size, max_objects, expire_days and abort_multipart_days; scripts/test-chaldea-retention.py checks that. Keys are created without their secrets ever leaving Garage; see docs/chaldea-infra-foundation.md.",
+  "layout": {
+    "zone": "homelab",
+    "capacity": 100000000000
+  },
+  "buckets": [
+    {
+      "name": "chaldea-results",
+      "max_size": 10737418240,
+      "max_objects": 200000,
+      "expire_days": 90,
+      "abort_multipart_days": 1
+    },
+    {
+      "name": "chaldea-artifacts",
+      "max_size": 53687091200,
+      "max_objects": 100000,
+      "expire_days": 14,
+      "abort_multipart_days": 1
+    }
+  ],
+  "keys": [
+    {
+      "name": "chaldea-ops",
+      "buckets": {
+        "chaldea-results": ["read", "write", "owner"],
+        "chaldea-artifacts": ["read", "write", "owner"]
+      }
+    },
+    {
+      "name": "chaldea-agent-a",
+      "buckets": {"chaldea-results": ["read", "write"], "chaldea-artifacts": ["read", "write"]}
+    },
+    {
+      "name": "chaldea-agent-b",
+      "buckets": {"chaldea-results": ["read", "write"], "chaldea-artifacts": ["read", "write"]}
+    },
+    {
+      "name": "chaldea-omarchy-pc",
+      "buckets": {"chaldea-results": ["read", "write"], "chaldea-artifacts": ["read", "write"]}
+    },
+    {
+      "name": "chaldea-laptop",
+      "buckets": {"chaldea-results": ["read", "write"], "chaldea-artifacts": ["read", "write"]}
+    }
+  ],
+  "lifecycle_key": "chaldea-ops"
+}

@@ -1,0 +1,21 @@
+---
+# Garage, the S3-compatible object store for Chaldea results and artifacts
+# (docs/chaldea-infra-foundation.md). Deploy with
+#   ansible-playbook playbooks/swarm.yml --tags stacks --limit homelab -e only=objectstore
+# then create its buckets, quotas, lifecycle rules and keys with
+#   ansible-playbook playbooks/garage-bootstrap.yml
+#
+# secrets/objectstore.sops.yaml holds GARAGE_RPC_SECRET only. No snapshot
+# key: the buckets hold bounded, reproducible results and artifacts and are
+# deliberately not backed up.
+swarm_stacks_objectstore:
+  - name: objectstore
+    pin: homelab
+    secrets: objectstore
+    prepare_tasks: swarm-prepare.yml
+    env_extra:
+      GARAGE_CONFIG_SHA256: "{{ lookup('file', '../stacks/objectstore/files/garage.toml') | hash('sha256') }}"
+    routes:
+      - host: s3.ryzhkov.dev
+        port: 3900
+        health_check: false
