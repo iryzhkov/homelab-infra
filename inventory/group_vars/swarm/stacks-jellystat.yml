@@ -1,0 +1,18 @@
+---
+# Emby playback statistics for Janitorr's observation-only retention report.
+swarm_stacks_jellystat:
+  - name: jellystat
+    pin: homelab
+    secrets: jellystat
+    prepare_tasks: swarm-prepare.yml
+    routes:
+      - host: jellystat.ryzhkov.dev
+        port: 3012
+        health_check:
+          path: /auth/isConfigured
+    snapshot:
+      class: postgres
+      postgres:
+        - { service: jellystat_db, database: jfstat, user: postgres, keep: 48 }
+      files:
+        - /srv/swarm/jellystat/backup-data
