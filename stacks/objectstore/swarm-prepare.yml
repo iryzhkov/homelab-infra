@@ -1,0 +1,51 @@
+---
+# Prepare the objectstore stack's state on homelab (docs/chaldea-infra-
+# foundation.md). Included by roles/swarm/tasks/stack.yml before the render;
+# it only creates the stack's own directories under /srv/swarm/objectstore
+# and installs garage.toml, as the prepare contract allows.
+- name: Preserve maintenance guard before objectstore deployment
+  ansible.builtin.include_role:
+    name: maintenance_guard
+
+- name: Verify the pinned storage mount
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, "TARGET,FSTYPE", --target, "{{ swarm_state_root }}"]
+  register: objectstore_fs
+  changed_when: false
+  check_mode: false
+  failed_when: objectstore_fs.stdout.split() != ['/mnt/docker-data', 'ext4']
+
+- name: Refuse any other storage host
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'homelab'
+      - swarm_stack.pin == 'homelab'
+    quiet: true
+
+- name: Create the Garage state directories
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/objectstore/{{ item }}"
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: "0700"
+  loop: [meta, data]
+  become: true
+
+- name: Create the Garage configuration directory
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/objectstore/config"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install Garage's configuration
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/files/garage.toml"
+    dest: "{{ swarm_state_root }}/objectstore/config/garage.toml"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true

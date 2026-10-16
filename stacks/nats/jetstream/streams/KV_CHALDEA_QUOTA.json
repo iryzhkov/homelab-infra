@@ -1,0 +1,22 @@
+{
+  "name": "KV_CHALDEA_QUOTA",
+  "description": "Key-value bucket CHALDEA_QUOTA: quota observations keyed <host>.<provider>[.<detail>]. Five revisions per key, a key not written for 7 days expires, 64 MiB in total.",
+  "subjects": ["$KV.CHALDEA_QUOTA.>"],
+  "retention": "limits",
+  "storage": "file",
+  "num_replicas": 1,
+  "discard": "new",
+  "max_consumers": -1,
+  "max_msgs": -1,
+  "max_bytes": 67108864,
+  "max_age": 604800000000000,
+  "max_msg_size": 65536,
+  "max_msgs_per_subject": 5,
+  "duplicate_window": 120000000000,
+  "allow_direct": true,
+  "allow_rollup_hdrs": true,
+  "deny_delete": true,
+  "deny_purge": false,
+  "compression": "none",
+  "metadata": {}
+}

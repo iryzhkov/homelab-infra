@@ -1,0 +1,43 @@
+---
+# Converge Garage's cluster state (layout, buckets, quotas, keys, lifecycle
+# rules) to stacks/objectstore/bootstrap.json. Run after the objectstore stack
+# is deployed, and again after any change to bootstrap.json:
+#
+#   ansible-playbook playbooks/garage-bootstrap.yml --check   # report only
+#   ansible-playbook playbooks/garage-bootstrap.yml
+#
+# Idempotent: a converged cluster reports no change. Nothing is deleted.
+# Key secrets never leave Garage; see docs/chaldea-infra-foundation.md for
+# how a client's key is delivered.
+- name: Converge Garage's buckets, quotas, keys and lifecycle rules
+  hosts: homelab
+  become: true
+  gather_facts: false
+  vars:
+    garage_bootstrap_spec: "{{ lookup('file', '../stacks/objectstore/bootstrap.json') | from_json }}"
+  tasks:
+    - name: Converge without exposing key secrets
+      ansible.builtin.script:
+        cmd: >-
+          ../scripts/garage-bootstrap.py
+          {{ '--check' if ansible_check_mode else '--apply' }}
+          --spec-json {{ garage_bootstrap_spec | to_json | quote }}
+          --s3-endpoint http://{{ ansible_host }}:3900
+        executable: python3
+      check_mode: false
+      register: garage_bootstrap
+      changed_when: (garage_bootstrap.stdout | trim | from_json).changed | default(false)
+      # no_log would also hide why it failed; the script prints only a
+      # sanitized summary, which the next two tasks show and judge.
+      failed_when: false
+      no_log: true
+
+    - name: Report the sanitized result
+      ansible.builtin.debug:
+        msg: "{{ garage_bootstrap.stdout | trim | from_json }}"
+
+    - name: Fail if the bootstrap failed
+      ansible.builtin.assert:
+        that: garage_bootstrap.rc == 0
+        fail_msg: "{{ (garage_bootstrap.stdout | trim | from_json).msg | default('garage-bootstrap.py exited ' ~ garage_bootstrap.rc) }}"
+        quiet: true

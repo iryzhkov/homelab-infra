@@ -1,0 +1,39 @@
+# Garage, one node, for the objectstore Swarm stack (docs/chaldea-infra-
+# foundation.md). Installed into ${SWARM_STATE_ROOT}/objectstore/config/ by
+# stacks/objectstore/swarm-prepare.yml on every deploy; its hash is in the
+# service's environment (GARAGE_CONFIG_SHA256, inventory/group_vars/swarm/
+# stacks-objectstore.yml), so a change here redeploys Garage.
+#
+# No secret here: the RPC secret is a Docker secret file. Buckets, quotas,
+# lifecycle rules and keys are not configuration but cluster state, created
+# by playbooks/garage-bootstrap.yml from stacks/objectstore/bootstrap.json.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+# The metadata is the index of every object; the data blocks of results and
+# artifacts can be lost to a power cut without harm to the rest.
+metadata_fsync = true
+data_fsync = false
+
+# One node, one copy. Garage cannot add redundancy to a single disk; the
+# buckets hold results and artifacts that are bounded in age and size and
+# are not backed up (see the documentation).
+replication_factor = 1
+consistency_mode = "consistent"
+compression_level = 1
+
+# RPC only on the container's own loopback: there is no second node, and the
+# CLI (health check, bootstrap) runs inside the container.
+rpc_bind_addr = "127.0.0.1:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret_file = "/run/secrets/garage_rpc_secret"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "0.0.0.0:3900"
+
+# /health and /metrics on loopback only. Without an admin token the admin
+# endpoints proper stay disabled; administration goes through the CLI.
+[admin]
+api_bind_addr = "127.0.0.1:3903"

@@ -1,0 +1,15 @@
+{
+  "durable_name": "host-agent-a",
+  "name": "host-agent-a",
+  "description": "Work addressed to agent-a only.",
+  "filter_subject": "chaldea.work.host.agent-a.>",
+  "deliver_policy": "all",
+  "ack_policy": "explicit",
+  "ack_wait": 300000000000,
+  "max_deliver": 5,
+  "max_ack_pending": 4,
+  "max_waiting": 8,
+  "max_batch": 4,
+  "replay_policy": "instant",
+  "metadata": {}
+}

@@ -1,0 +1,15 @@
+{
+  "durable_name": "akasha-ingest",
+  "name": "akasha-ingest",
+  "description": "Akasha's ingest: every event, once, into the Akasha store. An event that fails 10 deliveries stays in the stream for replay by sequence until the stream's limits drop it.",
+  "filter_subject": "akasha.>",
+  "deliver_policy": "all",
+  "ack_policy": "explicit",
+  "ack_wait": 60000000000,
+  "max_deliver": 10,
+  "max_ack_pending": 1000,
+  "max_waiting": 8,
+  "max_batch": 500,
+  "replay_policy": "instant",
+  "metadata": {}
+}

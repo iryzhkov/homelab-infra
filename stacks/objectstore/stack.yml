@@ -1,0 +1,75 @@
+# Garage, the S3-compatible object store for Chaldea results and artifacts
+# (docs/chaldea-infra-foundation.md). Deployed by playbooks/swarm.yml from
+# inventory/group_vars/swarm/stacks-objectstore.yml; buckets, quotas,
+# lifecycle rules and keys afterwards by playbooks/garage-bootstrap.yml.
+#
+# Named objectstore, not garage: garage.ryzhkov.dev is LubeLogger.
+#
+# State in ${SWARM_STATE_ROOT}/objectstore on the node labelled
+# pin.objectstore: meta/ (the LMDB index), data/ (the blocks) and
+# config/garage.toml (stacks/objectstore/files, installed by
+# swarm-prepare.yml). Every bucket has a size quota and an expiry rule, so
+# data/ is bounded by the sum of the quotas in bootstrap.json.
+#
+# S3 on 3900 through the routing mesh, behind s3.ryzhkov.dev. Requests are
+# signed; an unsigned GET answers 403, which Traefik would count as down, so
+# the route has no HTTP health check and Gatus probes the port.
+services:
+  garage:
+    image: dxflrs/garage:v2.4.1@sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020
+    user: "1000:1000"
+    read_only: true
+    ports:
+      - "3900:3900"
+    volumes:
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/objectstore/meta
+        target: /var/lib/garage/meta
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/objectstore/data
+        target: /var/lib/garage/data
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/objectstore/config/garage.toml
+        target: /etc/garage.toml
+        read_only: true
+    environment:
+      GARAGE_CONFIG_SHA256: ${GARAGE_CONFIG_SHA256:?set by env_extra}
+    secrets:
+      - source: garage_rpc_secret
+        target: garage_rpc_secret
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    # `garage status` succeeds as soon as the node answers RPC. Not `garage
+    # health`: that fails until the bootstrap has assigned the layout, and
+    # Swarm would replace the task before anyone could.
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == homelab
+          - node.labels.pin.objectstore == true
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          memory: 128M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+secrets:
+  garage_rpc_secret:
+    name: objectstore_garage_rpc_secret_${SECRET_HASH_GARAGE_RPC_SECRET}
+    file: ./secrets/GARAGE_RPC_SECRET

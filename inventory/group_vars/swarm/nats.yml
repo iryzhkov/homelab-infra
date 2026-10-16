@@ -1,0 +1,32 @@
+---
+# NATS identities, rendered into stacks/nats/templates/nats.conf.j2. See
+# docs/chaldea-infra-foundation.md, "NATS accounts and users".
+#
+# Public NKeys only. A public user key (U followed by 55 base32 characters) is
+# not a secret and belongs here; the matching seed (S...) is generated on the
+# one machine the identity belongs to and never leaves it:
+#
+#   nats auth nkey gen user --output ~/.config/nats/<name>.nk   # mode 0600
+#   nats auth nkey show ~/.config/nats/<name>.nk                # public key
+#
+# stacks/nats/swarm-prepare.yml refuses to deploy while any key below is
+# empty or malformed. Revoking an identity is replacing its key (or removing
+# a host from nats_chaldea_hosts) and redeploying the stack.
+
+# One CHALDEA user, durable work consumer (stacks/nats/jetstream/consumers/
+# CHALDEA_WORK/host-<name>.json) and Akasha source name per host that runs a
+# Chaldea client. omarchy-pc is the inventory's gaming-pc.
+nats_chaldea_hosts: [agent-a, agent-b, omarchy-pc, laptop]
+
+nats_nkeys:
+  # SYS account: server monitoring. Seed on omarchy-pc (operator).
+  sys-admin: ""
+  # CHALDEA account, stream administration. Seed on omarchy-pc (operator).
+  chaldea-admin: ""
+  # CHALDEA account, the Akasha service. Seed with the Akasha deployment.
+  akasha: ""
+  # CHALDEA account, one per Chaldea client host. Seed on that host.
+  agent-a: ""
+  agent-b: ""
+  omarchy-pc: ""
+  laptop: ""
