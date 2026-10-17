@@ -10,6 +10,15 @@
     - "{{ chaldea_publisher_config_root }}"
     - "{{ chaldea_publisher_unit_dir }}"
     - "{{ chaldea_publisher_program }}"
+    - "{{ chaldea_publisher_reissue_program }}"
+
+- name: Validate the operator-reviewed recovery sequence floor
+  ansible.builtin.assert:
+    that:
+      - chaldea_publisher_sequence_floor is integer
+      - chaldea_publisher_sequence_floor >= 0
+      - chaldea_publisher_sequence_floor < 9007199254740991
+    quiet: true
 
 - name: Create dedicated publisher group
   ansible.builtin.group:
@@ -77,6 +86,14 @@
     group: root
     mode: "0755"
 
+- name: Install operator-only anchor re-issue helper
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../scripts/chaldea-anchor-reissue"
+    dest: "{{ chaldea_publisher_reissue_program }}"
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Install independently pinned GitHub host key
   ansible.builtin.copy:
     content: "{{ chaldea_publisher_known_hosts }}\n"
@@ -102,6 +119,7 @@
     mode: "0644"
   loop:
     - chaldea-publisher.service
+    - chaldea-publisher-emergency.service
     - chaldea-publisher.timer
     - chaldea-publisher-age.service
     - chaldea-publisher-age.timer
@@ -109,7 +127,7 @@
 - name: Validate the new public pin before timer activation
   ansible.builtin.assert:
     that:
-      - chaldea_deployment_anchor_kid == 'deployment-2026-10b'
+      - chaldea_deployment_anchor_kid is match('^deployment-[0-9]{4}-(0[1-9]|1[0-2])[a-z]{1,8}$')
       - chaldea_deployment_anchor_public_jwk.kty == 'OKP'
       - chaldea_deployment_anchor_public_jwk.crv == 'Ed25519'
       - chaldea_deployment_anchor_public_jwk.x is match('^[A-Za-z0-9_-]{43}$')

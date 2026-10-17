@@ -10,7 +10,7 @@ agent workload. The orchestrator runs every command here and creates every key.
 The locked system UID chaldea-publisher has no login, extra groups or sudo.
 Its home, keys and state directories are 0700 under /var/lib/chaldea-publisher.
 Root installs the program and independent public pin and GitHub known_hosts in /etc/chaldea-publisher.
-Private keys never leave Normandy. The fleet deploy key is writable only for
+Private keys never leave Normandy and have no backup anywhere. The fleet deploy key is writable only for
 iryzhkov/chaldea-fleet-config. A write deploy key can technically write other
 paths in that repository; the program's path guard constrains normal operation,
 not an attacker who has stolen that credential.
@@ -47,7 +47,7 @@ Do not enable verifiers until renewal and the alert route have been checked.
 
 Run from the existing protected Ansible environment on the controller. Normandy
 must already have Python3, git, OpenSSH, openssl, acl, systemd/busctl and timesyncd.
-Verify its SSH host identity independently first. No command targets the old VM.
+Verify its SSH host identity independently first. The signer alias scopes this play.
 Freeze reviewed merged INFRA_COMMIT and FLEET_COMMIT, with successful CI.
 The current matching runtime is host-v0.2.0 with the exact digest in both inventories.
 
@@ -135,7 +135,7 @@ and resolve the policy explicitly; do not bypass the guard or use an operator ke
    service used by the timer. Existing files cause initialization to fail.
    Never delete/reinitialize state or use sequence 1 to recover. Confirm no
    verifier has been provisioned before this first enrollment. A retired-kid
-   envelope is unauthenticated under the new pin; this new epoch starts at 1.
+   envelope is unauthenticated under the new pin; only this first enrollment may start at 1.
 
 ```sh
 CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
@@ -184,7 +184,7 @@ the persisted flag deliberately stops timers. Normandy's own outage requires
 external host/journal monitoring, since no local timer can alert while it is off.
 There are no active verifiers yet, so replacing the old pin is safe. Continue
 Akasha rollout step 4 only after new publication and pin checks succeed.
-For later anchor rotations with verifiers, use an explicit overlap procedure.
+For later loss or compromise, follow Re-issue the deployment anchor below; do not restart at 1.
 
 6. After the new anchor is live, stop any old omarchy-pc renewal automation.
    On **omarchy-pc**, verify the retired key's public fingerprint and delete its
@@ -200,3 +200,159 @@ rm -- "$RETIRED_SIGNING_KEY"
 
 Retain old public records/history for audit. Do not restore the retired anchor.
 The new key and deploy key stay solely in Normandy's protected publisher home.
+
+## Re-issue the deployment anchor
+
+The new private key has **no backup anywhere**. Loss means generating a new kid,
+not restoring the old key. Compromise means the old kid is hostile, with no
+overlap period. These are operator actions over independently verified SSH.
+For compromise, rebuild or resecure Normandy before generating another key,
+and revoke its old GitHub write deploy key, then repeat deploy-key enrollment
+above with a new Normandy-only key. A replacement on a still-compromised host
+does not restore trust. A rebuilt Normandy also needs a new SSH deploy key;
+revoke its old GitHub entry and repeat the initial deploy-key enrollment before
+resuming publication, for loss as well as compromise.
+
+The runtime has no automatic anchor epoch reset. Its SQLite `trust.sequence`
+is global across kids. New anchor signatures with a lower/equal sequence are
+rejected. Preserve every updater/Akasha verifier DB, clock history and issuer
+tombstone. Never reset those databases to make a new anchor work. The publisher
+supports a reviewed `chaldea_publisher_sequence_floor`: every publication is
+greater than that floor, its durable local sequence and authenticated remote
+sequence. A new publisher DB can therefore recover without rolling consumers
+back. If any retained sequence reaches 9007199254740991, park the cohort and
+obtain a separately reviewed verifier-state migration. This runtime cannot
+advance past that limit, and this helper will refuse it.
+
+1. Freeze reviewed source, set a NEVER-used next kid, and stop renewal first.
+   For both loss and compromise, park every enrolled verifier and updater before
+   measuring state. No host may keep accepting the old anchor during compromise.
+   The current cohort is homelab's root updater and Akasha; include any later
+   enrolled fleet verifier/issuer before continuing. An unreachable member stays
+   parked until its state is measured and its new pin is installed over SSH.
+
+```sh
+cd "$INFRA"
+NEW_KID=deployment-2026-10c
+# Existing Normandy only: skip these two stops if a rebuilt host has no units yet.
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl disable --now chaldea-publisher.timer chaldea-publisher-age.timer'
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl stop chaldea-publisher.service chaldea-publisher-age.service'
+# If a prior recovery installed the emergency unit, stop it before measuring too.
+ansible omarchy-normandy -b -m ansible.builtin.shell -a 'if systemctl cat chaldea-publisher-emergency.service >/dev/null 2>&1; then systemctl stop chaldea-publisher-emergency.service; fi'
+ansible homelab -b -m ansible.builtin.command -a 'systemctl disable --now akasha.service chaldea-access-trust.timer'
+ansible homelab -b -m ansible.builtin.command -a 'systemctl stop chaldea-access-trust.service'
+# On a rebuilt Normandy, stage the locked UID/runtime/helper first with timers OFF.
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false --check --diff
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false
+ansible homelab -b -m ansible.builtin.copy -a "src=$INFRA/scripts/chaldea-anchor-reissue dest=/usr/local/libexec/chaldea-anchor-reissue owner=root group=root mode=0755"
+ansible homelab -b -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anchor-reissue high-water --state-file /var/lib/chaldea-access-trust/updater.sqlite'
+ansible homelab -b --become-user akasha -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anchor-reissue high-water --state-file /var/lib/akasha/access-state.db'
+```
+
+   If Normandy state remains usable and trustworthy, also read both receipts:
+
+```sh
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anchor-reissue high-water --state-file /var/lib/chaldea-publisher/state/publisher.sqlite'
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anchor-reissue high-water --state-file /var/lib/chaldea-publisher/state/verify.sqlite'
+```
+
+   Record the maximum of ALL trusted receipts as FLOOR. Do not derive FLOOR from a remote old-kid envelope during compromise.
+   Keep the cohort stopped so that old-anchor high water cannot race this
+   measurement. A missing consumer DB needs diagnosis, not initialization.
+
+2. Generate the next key on Normandy as the locked UID. The helper refuses an
+   existing destination or symlink and refuses the currently configured kid.
+   Never reuse ANY retired kid, even when its key file is gone. The helper
+   only knows the currently configured kid and existing files; checking Git's
+   public history for every older kid remains an operator requirement.
+   A failed genpkey may leave an incomplete file. Do not overwrite it; diagnose
+   it as the publisher UID and use another never-used suffix.
+   It prints only the three public pin variables. No key is transferred,
+   backed up, placed in a password manager or printed.
+
+```sh
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a "/usr/local/libexec/chaldea-anchor-reissue generate --kid $NEW_KID"
+```
+
+3. Through reviewed PRs, update kid, public JWK and SPKI SHA-256 identically in
+   fleet `inventory/group_vars/all.yml` and infra `vars/chaldea-runtime.yml`.
+   Update any test expectation of the previous concrete kid in those pin PRs.
+   In infra's publisher-only host vars, persist integer
+   `chaldea_publisher_sequence_floor: FLOOR` and keep
+   `chaldea_publisher_enabled: false` during recovery. Neither variable changes
+   consumer state. Merge the pin PRs, confirm CI and check out those exact
+   commits on the controller before applying. Compromise removes the old anchor
+   entirely from every deployed anchor list, including Akasha's config.
+
+```sh
+python3 "$INFRA/scripts/check-trust-pins.py" "$FLEET" "$INFRA"
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false --check --diff
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false
+```
+
+   Keep usable publisher.sqlite and verify.sqlite. Only if a file is missing,
+   corrupt or untrustworthy after compromise, quarantine that unusable file on
+   Normandy while services are stopped, then run the initial procedure's
+   `initialize-state` command for that file once as chaldea-publisher. Never
+   overwrite or initialize a healthy existing file. No private-key backup is
+   involved. The measured, deployed FLOOR is required even with new empty state.
+
+4. Publish once while timers and consumers remain stopped. Loss uses normal
+   grants. Compromise MUST publish the emergency empty-grants envelope first.
+   The helper checks the requested kid and measured floor against deployed
+   config; it does not replace the operator's merged-PR/CI check.
+   Use only one of these commands, with FLOOR set to the measured integer:
+
+```sh
+: "${FLOOR:?set maximum trusted retained high-water receipt}"
+# Loss:
+ansible omarchy-normandy -b -m ansible.builtin.command -a "/usr/local/libexec/chaldea-anchor-reissue resume --kid $NEW_KID --sequence-floor $FLOOR"
+# Compromise instead:
+ansible omarchy-normandy -b -m ansible.builtin.command -a "/usr/local/libexec/chaldea-anchor-reissue resume --kid $NEW_KID --sequence-floor $FLOOR --emergency-empty"
+```
+
+   If replacement enrollment takes over 24h, the emergency envelope expires and
+   consumers refuse everything. Re-run the same emergency resume command to
+   renew the empty envelope at a higher sequence while keeping normal timers
+   off. This never reactivates old issuers.
+
+   Emergency mode uses the same flock, fresh clock, independent verification and
+   single-path push guard, with keys=[] and 24h lifetime. Normal renewal still
+   rejects empty grants. Keep timers off. Empty publication permanently
+   tombstones every old issuer in preserved consumer state. Before later normal
+   renewal, review/merge replacement issuer kids AND public key material in
+   fleet main's grants; never reintroduce the old issuer identities or material.
+
+5. Install the new pin out of band on every parked consumer. On homelab, apply
+   the trust role first, fetch the new publication, then update/restart Akasha.
+   Reuse the previously accepted activation flags only after their original
+   runtime/backup prerequisites still hold. No database is initialized here.
+
+```sh
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true --check --diff
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true
+ansible homelab -b -m ansible.builtin.command -a 'systemctl start chaldea-clock-health.service'
+ansible homelab -b -m ansible.builtin.command -a 'systemctl start chaldea-access-trust.service'
+ansible-playbook playbooks/akasha.yml --limit homelab -e chaldea_access_trust_enabled=true -e akasha_activate=true -e akasha_interfaces_verified=true -e akasha_backup_packaging_verified=true --check --diff
+ansible-playbook playbooks/akasha.yml --limit homelab -e chaldea_access_trust_enabled=true -e akasha_activate=true -e akasha_interfaces_verified=true -e akasha_backup_packaging_verified=true
+ansible homelab -b -m ansible.builtin.command -a 'systemctl restart akasha.service'
+ansible homelab -b -m ansible.builtin.command -a 'journalctl --no-pager -u chaldea-access-trust.service -u akasha.service -n 60'
+```
+
+   Require the new header kid, sequence > FLOOR, expires_at-published_at=86400,
+   successful updater receipt, and Akasha health after restart. Read high-water
+   again from BOTH homelab DBs and every other cohort member; require each to
+   match the new publication. Restart reloads Akasha's configured anchors, which
+   its 120s bundle poll alone does not do. Test an old-anchor envelope in
+   disposable state to confirm rejection. On compromise, confirm all old
+   issuer bearers are refused before introducing replacement issuers.
+
+   The homelab helper copy is temporary and used only for these read-only
+   receipts. After every consumer receipt is recorded, remove that one-off copy
+   with Ansible file state=absent; keep Normandy's role-managed helper installed.
+
+   Only after all receipts and, for compromise, replacement issuer enrollment,
+   persist publisher enabled=true through a reviewed PR and reapply the signer
+   play. Run a second renewal and verify increasing sequence, expiry, timers
+   and the alert route as in the initial procedure. Delete the retired key file
+   on Normandy if it still exists. Never retain or restore it as a backup.

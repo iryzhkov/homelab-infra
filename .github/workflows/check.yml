@@ -100,6 +100,7 @@ jobs:
           mkdir -p "$HOME"
           python3 scripts/test-trust-rollout.py -v
           python3 scripts/test-chaldea-publisher.py -v
+          python3 scripts/test-anchor-reissue.py -v
           ansible-playbook playbooks/chaldea-signer.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --list-hosts

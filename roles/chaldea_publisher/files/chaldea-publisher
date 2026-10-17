@@ -38,7 +38,7 @@ def sequence(value):
     return value
 
 
-def next_sequence(state_file, remote_sequence):
+def next_sequence(state_file, remote_sequence, floor=0):
     # Never create or repair state. The runtime owns its schema and all writes.
     with closing(sqlite3.connect(state_file.as_uri() + "?mode=ro", uri=True)) as db:
         require(db.execute("SELECT value FROM access_meta WHERE name='format'").fetchone()
@@ -46,7 +46,8 @@ def next_sequence(state_file, remote_sequence):
         row = db.execute("SELECT value FROM access_meta WHERE name='trust'").fetchone()
     old = sequence(json.loads(row[0])["sequence"]) if row else 0
     require(type(remote_sequence) is int and remote_sequence >= 0, "invalid remote sequence")
-    result = max(old, remote_sequence) + 1
+    require(type(floor) is int and 0 <= floor < MAX_SEQUENCE, "invalid recovery sequence floor")
+    result = max(old, remote_sequence, floor) + 1
     sequence(result)
     return result
 
@@ -175,13 +176,13 @@ class Publisher:
         require(changed == BUNDLE.encode() + b"\0", "refusing commit touching another path")
         self.read_blob(commit, BUNDLE)
 
-    def publish(self, base):
+    def publish(self, base, emergency_empty=False):
         remote = self.remote_bundle(base)
         previous = sequence(remote["sequence"]) if remote else 0
-        number = next_sequence(self.state / "publisher.sqlite", previous)
+        number = next_sequence(self.state / "publisher.sqlite", previous, self.config.get("sequence_floor", 0))
         require(number > previous, "sequence must increase")
-        grants = self.read_blob(base, GRANTS)
-        require(isinstance(json.loads(grants), list) and json.loads(grants),
+        grants = b"[]\n" if emergency_empty else self.read_blob(base, GRANTS)
+        require(isinstance(json.loads(grants), list) and (json.loads(grants) or emergency_empty),
                 "empty grants require explicit operator revocation, not automatic renewal")
         (self.state / "grants.json").write_bytes(grants)
         # Force timesyncd. The runtime must not silently fall back to chrony here.
@@ -254,8 +255,10 @@ class Publisher:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="/etc/chaldea-publisher/config.json")
-    parser.add_argument("--check-age", action="store_true")
-    parser.add_argument("--test-alert", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check-age", action="store_true")
+    mode.add_argument("--test-alert", action="store_true")
+    mode.add_argument("--emergency-empty", action="store_true")
     args = parser.parse_args()
     publisher = Publisher({"root": "/var/lib/chaldea-publisher"})
     try:
@@ -272,7 +275,7 @@ def main():
             if args.check_age:
                 publisher.age_alert(base)
             else:
-                publisher.publish(base)
+                publisher.publish(base, emergency_empty=args.emergency_empty)
         return 0
     except Exception as error:
         detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__

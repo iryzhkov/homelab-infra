@@ -1,0 +1,114 @@
+#!/usr/bin/python3
+"""Operator-only local anchor re-issue. Private bytes never reach stdout/stderr."""
+import argparse
+import base64
+from contextlib import closing
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import sqlite3
+import subprocess
+import sys
+
+KID = r"deployment-[0-9]{4}-(?:0[1-9]|1[0-2])[a-z]{1,8}"
+SPKI = bytes.fromhex("302a300506032b6570032100")
+MAX = 9007199254740991
+
+
+def require(ok, reason):
+    if not ok:
+        raise RuntimeError(reason)
+
+
+def high_water(path):
+    with closing(sqlite3.connect(Path(path).absolute().as_uri() + "?mode=ro", uri=True)) as db:
+        require(db.execute("SELECT value FROM access_meta WHERE name='format'").fetchone()
+                == ("chaldea-access-state-v1",), "invalid state format")
+        row = db.execute("SELECT value FROM access_meta WHERE name='trust'").fetchone()
+    number = json.loads(row[0])["sequence"] if row else 0
+    require(type(number) is int and 0 <= number < MAX, "sequence exhausted or invalid; park verifiers")
+    return number
+
+
+def generate(root, kid, current_kid):
+    require(pwd.getpwuid(os.geteuid()).pw_name == "chaldea-publisher", "run generate as chaldea-publisher")
+    require(re.fullmatch(KID, kid) and kid != current_kid, "use a new deployment-YYYY-MMx kid")
+    for path in (root, root / "keys", root / "state"):
+        s = path.lstat()
+        require(path.is_dir() and not path.is_symlink() and s.st_uid == os.geteuid()
+                and s.st_mode & 0o777 == 0o700, "unsafe publisher directory")
+    os.umask(0o077)
+    with (root / "state/publisher.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        path = root / "keys" / (kid + ".pem")
+        # Exclusive creation refuses even a dangling symlink. Leave incomplete files for diagnosis.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            subprocess.run(["/usr/bin/openssl", "genpkey", "-algorithm", "ED25519"],
+                           stdout=fd, stderr=subprocess.DEVNULL, check=True, timeout=30)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        directory = os.open(root / "keys", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        der = subprocess.run(["/usr/bin/openssl", "pkey", "-in", str(path), "-pubout", "-outform", "DER"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30).stdout
+        require(len(der) == len(SPKI) + 32 and der.startswith(SPKI), "unexpected public SPKI")
+        return {"chaldea_deployment_anchor_kid": kid,
+                "chaldea_deployment_anchor_public_jwk": {
+                    "kty": "OKP", "crv": "Ed25519", "x": base64.urlsafe_b64encode(der[-32:]).decode().rstrip("=")},
+                "chaldea_deployment_anchor_spki_sha256": hashlib.sha256(der).hexdigest()}
+
+
+def resume(config, kid, floor, emergency):
+    require(os.geteuid() == 0, "run resume as the operator with sudo")
+    require(re.fullmatch(KID, kid) and config["kid"] == kid, "deployed pin does not match requested kid")
+    deployed_floor = config.get("sequence_floor", 0)
+    require(type(deployed_floor) is int and 0 <= floor <= deployed_floor < MAX,
+            "merge and deploy the measured sequence floor first")
+    unit = "chaldea-publisher-emergency.service" if emergency else "chaldea-publisher.service"
+    command = ["/usr/bin/systemctl", "restart", unit]
+    # Unit/bootstrap still authenticate the private key against the deployed public pin.
+    # No timer is enabled here; verify every consumer before resuming unattended work.
+    subprocess.run(command, check=True, timeout=360)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default="/etc/chaldea-publisher/config.json")
+    sub = parser.add_subparsers(dest="action", required=True)
+    gen = sub.add_parser("generate")
+    gen.add_argument("--kid", required=True)
+    water = sub.add_parser("high-water")
+    water.add_argument("--state-file", required=True)
+    start = sub.add_parser("resume")
+    start.add_argument("--kid", required=True)
+    start.add_argument("--sequence-floor", required=True, type=int)
+    start.add_argument("--emergency-empty", action="store_true")
+    args = parser.parse_args()
+    try:
+        if args.action == "high-water":
+            print(high_water(args.state_file))
+            return 0
+        config = json.loads(Path(args.config).read_text())
+        if args.action == "generate":
+            print(json.dumps(generate(Path(config["root"]), args.kid, config["kid"]), sort_keys=True))
+        else:
+            # Resume uses only the installed default config and root-owned unit, never a caller-selected command.
+            require(args.config == "/etc/chaldea-publisher/config.json", "resume requires installed config")
+            resume(config, args.kid, args.sequence_floor, args.emergency_empty)
+        return 0
+    except Exception:
+        print("anchor re-issue refused; check identity, new kid, pins, state and existing files", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -24,7 +24,7 @@ def check(fleet, infra):
     if f["chaldea_access_trust_enabled"] is not False:
         raise ValueError("fleet enrollment must remain disabled")
     key = f["chaldea_deployment_anchor_public_jwk"]
-    if f["chaldea_deployment_anchor_kid"] != "deployment-2026-10b":
+    if not re.fullmatch(r"deployment-[0-9]{4}-(?:0[1-9]|1[0-2])[a-z]{1,8}", f["chaldea_deployment_anchor_kid"]):
         raise ValueError("unexpected deployment kid")
     x = key["x"]
     if key["kty"] != "OKP" or key["crv"] != "Ed25519" or not re.fullmatch(r"[A-Za-z0-9_-]{43}", x):
