@@ -10,19 +10,28 @@ agent workload. The orchestrator runs every command here and creates every key.
 The locked system UID chaldea-publisher has no login, extra groups or sudo.
 Its home, keys and state directories are 0700 under /var/lib/chaldea-publisher.
 Root installs the program and independent public pin and GitHub known_hosts in /etc/chaldea-publisher.
-Private keys never leave Normandy and have no backup anywhere. The fleet deploy key is writable only for
-iryzhkov/chaldea-fleet-config. A write deploy key can technically write other
-paths in that repository; the program's path guard constrains normal operation,
-not an attacker who has stolen that credential.
+Private keys never leave Normandy and have no backup anywhere.
+The write deploy key at keys/trust-deploy-key is registered ONLY on the private
+data-only repository iryzhkov/chaldea-trust. Its main branch holds README.md and
+the root bundle.jws. A separate keys/fleet-read-key is registered read-only on
+iryzhkov/chaldea-fleet-config to fetch access-trust/issuer-grants.json.
 
-Every six hours the oneshot serializes under state/publisher.lock, fetches main
-into a bare Git repository, reads public grants as bytes, samples timesyncd and
+Fleet main is executed as root by ansible-pull and cannot be branch-protected on
+the current GitHub plan. Giving Normandy write access there would turn a publisher
+compromise into root code execution across the fleet. GitHub cannot restrict a
+deploy key to one path. The local single-path guard protects normal publication;
+the repository boundary limits a stolen write credential to signed data. Nothing
+installs or executes code, workflows or configuration from chaldea-trust.
+
+Every six hours the oneshot serializes under state/publisher.lock, fetches trust
+main into trust.git and fleet main into a separate read-only fleet.git bare cache,
+reads fleet public grants as bytes, samples timesyncd and
 signs the next sequence. It authenticates fetched bundle high water against the
 independent anchor, takes the maximum with durable signer state, then adds one.
 Malformed, nonregular or unauthenticated remote envelopes cannot advance state
 or suppress age alerts, and a new valid publication replaces them. A separate durable verifier authenticates the
 new envelope against the root-installed anchor. Git plumbing constructs exactly
-one child commit from fetched main, with only access-trust/bundle.jws changed.
+one child commit from fetched trust main, with only bundle.jws changed.
 The path/parent guard runs immediately before an ordinary fast-forward SSH push.
 No repository checkout, hook, filter or fetched program runs. A concurrent main
 update fails the push; the next timer fetches again and uses a higher sequence.
@@ -110,16 +119,23 @@ ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy --check -
 ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy
 ```
 
-The comparison checks runtime, paths, public JWK, kid, fingerprint and anchor
+The comparison checks runtime, local paths, data-only repository/path, public JWK, kid, fingerprint and anchor
 mapping, and refuses placeholders. Fleet trust enrollment stays false.
 
-3. Generate the unique write deploy key on Normandy and register ONLY its public
-   half with this one GitHub repository. Do not reuse an operator SSH identity.
+3. Generate two unique SSH deploy keys on Normandy. Register the write key ONLY
+   on chaldea-trust and the grants key read-only on fleet-config. The earlier
+   fleet-config write key was deleted unused; never recreate that grant.
+   Do not reuse an operator SSH identity. If either file exists, retain it and
+   verify its public registration instead of regenerating or overwriting it.
 
 ```sh
-ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a 'ssh-keygen -t ed25519 -N "" -C normandy-chaldea-publisher -f /var/lib/chaldea-publisher/keys/fleet-deploy-key creates=/var/lib/chaldea-publisher/keys/fleet-deploy-key'
-ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.fetch -a "src=/var/lib/chaldea-publisher/keys/fleet-deploy-key.pub dest=$TMPDIR/normandy-fleet-deploy.pub flat=true"
-gh repo deploy-key add "$TMPDIR/normandy-fleet-deploy.pub" -R iryzhkov/chaldea-fleet-config --allow-write --title normandy-chaldea-publisher
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a 'ssh-keygen -t ed25519 -N "" -C normandy-chaldea-publisher -f /var/lib/chaldea-publisher/keys/trust-deploy-key creates=/var/lib/chaldea-publisher/keys/trust-deploy-key'
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.fetch -a "src=/var/lib/chaldea-publisher/keys/trust-deploy-key.pub dest=$TMPDIR/normandy-trust-deploy.pub flat=true"
+gh repo deploy-key add "$TMPDIR/normandy-trust-deploy.pub" -R iryzhkov/chaldea-trust --allow-write --title normandy-chaldea-publisher
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a 'ssh-keygen -t ed25519 -N "" -C normandy-fleet-grants-read -f /var/lib/chaldea-publisher/keys/fleet-read-key creates=/var/lib/chaldea-publisher/keys/fleet-read-key'
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.fetch -a "src=/var/lib/chaldea-publisher/keys/fleet-read-key.pub dest=$TMPDIR/normandy-fleet-read.pub flat=true"
+gh repo deploy-key add "$TMPDIR/normandy-fleet-read.pub" -R iryzhkov/chaldea-fleet-config --title normandy-fleet-grants-read
+gh repo deploy-key list -R iryzhkov/chaldea-trust
 gh repo deploy-key list -R iryzhkov/chaldea-fleet-config
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'ssh-keygen -lf /etc/chaldea-publisher/known_hosts -E sha256'
 ```
@@ -145,11 +161,11 @@ ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.c
 ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a "$CHALDEA_ACCESS_NODE $CHALDEA_ACCESS_RUNTIME initialize-state --state-file /var/lib/chaldea-publisher/state/verify.sqlite"
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl start chaldea-publisher.service'
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'journalctl --no-pager -u chaldea-publisher.service -n 40'
-gh api repos/iryzhkov/chaldea-fleet-config/commits/main --jq '.sha, (.files[].filename)'
-ansible omarchy-normandy -b -m ansible.builtin.command -a 'stat -c %U:%G:%a /var/lib/chaldea-publisher /var/lib/chaldea-publisher/keys /var/lib/chaldea-publisher/state /var/lib/chaldea-publisher/keys/deployment-2026-10b.pem /var/lib/chaldea-publisher/keys/fleet-deploy-key /var/lib/chaldea-publisher/state/publisher.sqlite /var/lib/chaldea-publisher/state/verify.sqlite'
+gh api repos/iryzhkov/chaldea-trust/commits/main --jq '.sha, (.files[].filename)'
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'stat -c %U:%G:%a /var/lib/chaldea-publisher /var/lib/chaldea-publisher/keys /var/lib/chaldea-publisher/state /var/lib/chaldea-publisher/keys/deployment-2026-10b.pem /var/lib/chaldea-publisher/keys/trust-deploy-key /var/lib/chaldea-publisher/keys/fleet-read-key /var/lib/chaldea-publisher/state/publisher.sqlite /var/lib/chaldea-publisher/state/verify.sqlite'
 ```
 
-Require a successful push with only access-trust/bundle.jws changed, header kid
+Require a successful push with only bundle.jws changed, header kid
 deployment-2026-10b, increased sequence and a 24h lifetime. The program has already
 authenticated the exact bytes using install-bundle and the independent pin.
 Inspect the public bundle via GitHub, with no private file in the transcript.
@@ -200,6 +216,79 @@ rm -- "$RETIRED_SIGNING_KEY"
 
 Retain old public records/history for audit. Do not restore the retired anchor.
 The new key and deploy key stay solely in Normandy's protected publisher home.
+
+## Move an already-staged transport to chaldea-trust
+
+Use this path instead of repeating initialization when bootstrap/state already
+exist. No bundle has been deployed from the abandoned fleet-config writer. The
+earlier fleet write key was deleted unused. Preserve every existing SQLite file,
+deployment signing key, independent anchor pin and public bundle expiry.
+
+1. Freeze reviewed merged infra and fleet revisions as above. Stop both publisher
+   timers and any in-flight services on Normandy. Stop homelab's updater timer and
+   in-flight fetch while moving its repository registration. Akasha can retain its
+   authenticated cached bundle until signed expiry; if it expires, access parks.
+
+```sh
+cd "$INFRA"
+python3 scripts/check-trust-pins.py "$FLEET" "$INFRA"
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl disable --now chaldea-publisher.timer chaldea-publisher-age.timer'
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl stop chaldea-publisher.service chaldea-publisher-age.service'
+ansible homelab -b -m ansible.builtin.command -a 'systemctl stop chaldea-access-trust.timer chaldea-access-trust.service'
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false --check --diff
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false
+```
+
+2. Follow initial step 3 to create/register the two publisher transport keys.
+   Confirm ONLY chaldea-trust grants Normandy write access. Do not reset signer
+   or verifier state. trust.git is a new cache; fleet.git remains grants-only.
+   The next bundle exceeds the durable high water even when trust main is README-only.
+
+3. Move homelab's existing read-only deploy key 166781554 off fleet-config and
+   onto chaldea-trust. GitHub keys are unique per repository, so delete the old
+   registration before adding the identical public key. Keep the private file
+   on homelab and compare both public copies before deletion.
+
+```sh
+gh api repos/iryzhkov/chaldea-fleet-config/keys/166781554 --jq .key > "$TMPDIR/homelab-trust-github.pub"
+ansible homelab -b -m ansible.builtin.fetch -a "src=/etc/chaldea-access-trust/deploy-key.pub dest=$TMPDIR/homelab-trust-deploy.pub flat=true"
+test "$(ssh-keygen -lf "$TMPDIR/homelab-trust-github.pub" -E sha256 | awk '{print $2}')" = "$(ssh-keygen -lf "$TMPDIR/homelab-trust-deploy.pub" -E sha256 | awk '{print $2}')"
+gh api --method DELETE repos/iryzhkov/chaldea-fleet-config/keys/166781554
+gh repo deploy-key add "$TMPDIR/homelab-trust-deploy.pub" -R iryzhkov/chaldea-trust --title homelab-chaldea-access-trust
+gh repo deploy-key list -R iryzhkov/chaldea-trust
+gh repo deploy-key list -R iryzhkov/chaldea-fleet-config
+```
+
+   Omit --allow-write for homelab. If registration fails after deletion, keep the
+   updater stopped and complete read-only registration on chaldea-trust. Do not
+   restore fleet access or change the private key. If already moved, verify its
+   new read-only registration and skip delete/add.
+
+4. Publish first, then reapply the consumer role with the reviewed role-owned
+   downloader and new transport pins. The host-v0.2.0 runtime stays pinned; its
+   bundled downloader has the old URL and is deliberately superseded by the
+   role-owned copy. Fetching only data never executes either repository's content.
+
+```sh
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl start chaldea-publisher.service'
+gh api repos/iryzhkov/chaldea-trust/commits/main --jq '.sha, (.files[].filename)'
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true --check --diff
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true
+ansible homelab -b -m ansible.builtin.command -a 'systemctl start chaldea-clock-health.service'
+ansible homelab -b -m ansible.builtin.command -a 'systemctl start chaldea-access-trust.service'
+ansible homelab -b -m ansible.builtin.command -a 'journalctl --no-pager -u chaldea-access-trust.service -u akasha.service -n 60'
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=true --check --diff
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=true
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl start chaldea-publisher.service chaldea-publisher-age.service'
+```
+
+   Require only bundle.jws changed in trust main, the pinned kid, increasing
+   sequence, 24h lifetime, updater receipt and Akasha health/reload as in the
+   reissue receipts below. Anchor pins did not change for a transport-only move.
+   Confirm both timers and the actual feed/journal alert route as in initial
+   steps 4-5, then persist publisher enabled=true through review. If homelab
+   has never initialized its consumer state, use Akasha's initial rollout
+   steps 4-9 instead; never initialize over an existing file.
 
 ## Re-issue the deployment anchor
 

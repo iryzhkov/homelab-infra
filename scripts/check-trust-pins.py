@@ -13,10 +13,14 @@ def check(fleet, infra):
     f = yaml.safe_load((Path(fleet) / "inventory/group_vars/all.yml").read_text())
     h = yaml.safe_load((Path(infra) / "vars/chaldea-runtime.yml").read_text())
     for key in ("chaldea_host_version", "chaldea_host_sha256", "chaldea_node_version", "chaldea_access_paths",
+                "chaldea_access_trust_repository", "chaldea_access_trust_bundle_path",
                 "chaldea_access_trust_anchors", "chaldea_deployment_anchor_kid",
                 "chaldea_deployment_anchor_public_jwk", "chaldea_deployment_anchor_spki_sha256"):
         if f[key] != h[key]:
             raise ValueError("fleet/infra pin mismatch: " + key)
+    if (f["chaldea_access_trust_repository"] != "ssh://git@github.com/iryzhkov/chaldea-trust.git"
+            or f["chaldea_access_trust_bundle_path"] != "bundle.jws"):
+        raise ValueError("trust must use data-only chaldea-trust main:bundle.jws")
     expected = [{"kid": "{{ chaldea_deployment_anchor_kid }}",
                  "public_key": "{{ chaldea_deployment_anchor_public_jwk }}"}]
     if f["chaldea_access_trust_anchors"] != expected:

@@ -98,6 +98,7 @@ jobs:
           export ROLLOUT_TEST_HOME="$HOME"
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME"
+          python3 scripts/test-trust-fetcher.py -v
           python3 scripts/test-trust-rollout.py -v
           python3 scripts/test-chaldea-publisher.py -v
           python3 scripts/test-anchor-reissue.py -v

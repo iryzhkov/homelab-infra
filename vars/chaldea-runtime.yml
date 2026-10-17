@@ -5,6 +5,9 @@ chaldea_host_version: host-v0.2.0
 chaldea_host_sha256: 2e9a8d3cfd859516539aff8b494d66a397e6581a350ef9ecda80fd272ef9b4c6
 chaldea_node_version: "26.10.0"
 chaldea_node_sha256: ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022
+# Signed data lives apart from root-executed fleet configuration.
+chaldea_access_trust_repository: ssh://git@github.com/iryzhkov/chaldea-trust.git
+chaldea_access_trust_bundle_path: bundle.jws
 chaldea_access_paths:
   root: /etc/chaldea-access-trust
   state: /var/lib/chaldea-access-trust

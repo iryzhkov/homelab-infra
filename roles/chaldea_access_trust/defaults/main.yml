@@ -10,6 +10,7 @@ chaldea_access_trust_run: "{{ chaldea_access_paths.run }}"
 chaldea_access_trust_unit_dir: /etc/systemd/system
 chaldea_access_trust_fetcher: /usr/local/libexec/chaldea-access-trust-fetch
 chaldea_access_trust_anchors: []
-# Separately provision a root-owned 0600, read-only deploy key and pinned known_hosts.
+# Dedicated read-only chaldea-trust key, never a fleet-config credential.
+# Separately provision a root-owned 0600 deploy key and pinned known_hosts.
 chaldea_access_trust_ssh_key: "{{ chaldea_access_trust_root }}/deploy-key"
 chaldea_access_trust_known_hosts: "{{ chaldea_access_trust_root }}/known_hosts"
