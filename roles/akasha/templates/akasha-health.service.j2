@@ -1,0 +1,16 @@
+[Unit]
+Description=Check Akasha readiness, disk bounds and snapshot age
+After=akasha.service
+
+[Service]
+Type=oneshot
+User=akasha
+Group=akasha
+UMask=0077
+Environment=TMPDIR=/var/lib/akasha/tmp
+ExecStart=/usr/local/libexec/akasha-maintenance health
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+TimeoutStartSec=15

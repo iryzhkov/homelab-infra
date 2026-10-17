@@ -27,6 +27,13 @@
     mode: "0700"
   become: true
 
+- name: Refuse unknown or duplicate optional identities
+  ansible.builtin.assert:
+    that:
+      - nats_chaldea_hosts | difference(nats_optional_hosts) | length == 0
+      - nats_chaldea_hosts | unique | length == nats_chaldea_hosts | length
+    quiet: true
+
 # Every identity the configuration names must have a well-formed public key
 # (inventory/group_vars/swarm/nats.yml). An empty key would render a user
 # the server rejects, and a seed pasted by mistake would publish a secret.

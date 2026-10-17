@@ -1,0 +1,11 @@
+---
+# Definitions only by default. Activation needs the separately reviewed C/F
+# artifacts and adapters; this role never installs or changes credentials.
+akasha_activate: false
+akasha_exec_start: ""
+akasha_environment_file: /etc/akasha/runtime.env
+akasha_trust_bundle: /etc/akasha/trust/bundle.json
+akasha_clock_health: /run/chaldea/clock-health.json
+akasha_interfaces_verified: false
+akasha_backup_packaging_verified: false
+akasha_state_root: /var/lib/akasha

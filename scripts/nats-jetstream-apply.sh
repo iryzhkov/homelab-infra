@@ -19,18 +19,31 @@
 # changes nothing. Streams go before consumers. Nothing is ever deleted: a
 # file removed here leaves its stream or consumer on the server, to be removed
 # by hand once nothing uses it. NATS_BIN names the nats CLI when it is not on
-# PATH.
+# PATH. Default selection is AKASHA_EVENTS plus akasha-ingest only;
+# --stream NAME chooses another stream and its consumers; --all opts into
+# the parked work/quota definitions. Selection is validated before any RPC.
 #
 # The files carry "metadata": {} and a consumer's "name" equal to its
 # durable_name because that is how the server reports them back; without
 # those the CLI reports a difference on every run.
 set -euo pipefail
 
+# Safe default: gateway-only v1. --all is an explicit future rollout.
 mode=apply
-case "${1:-}" in
-  --check) mode=check ;;
-  "") ;;
-  *) echo "usage: $0 [--check]" >&2; exit 2 ;;
+selection=AKASHA_EVENTS
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --check) mode=check; shift ;;
+    --stream)
+      [ "$#" -ge 2 ] || { echo "--stream needs a name" >&2; exit 2; }
+      selection=$2; shift 2 ;;
+    --all) selection=all; shift ;;
+    *) echo "usage: $0 [--check] [--stream NAME | --all]" >&2; exit 2 ;;
+  esac
+done
+case "$selection" in
+  AKASHA_EVENTS|CHALDEA_WORK|KV_CHALDEA_QUOTA|all) ;;
+  *) echo "unknown stream: $selection" >&2; exit 2 ;;
 esac
 
 nats_bin=${NATS_BIN:-nats}
@@ -88,6 +101,7 @@ streams=$("$nats_bin" stream ls --names)
 
 for file in "$root"/streams/*.json; do
   name=$(json_field "$file" name)
+  [ "$selection" = all ] || [ "$selection" = "$name" ] || continue
   if ! listed "$name" "$streams"; then
     if [ "$mode" = check ]; then
       echo "stream $name: missing, a real run creates it"
@@ -106,6 +120,7 @@ done
 
 for file in "$root"/consumers/*/*.json; do
   stream=$(basename "$(dirname "$file")")
+  [ "$selection" = all ] || [ "$selection" = "$stream" ] || continue
   name=$(json_field "$file" durable_name)
   if [ "$mode" = check ] && ! listed "$stream" "$streams"; then
     echo "consumer $stream/$name: stream missing, a real run creates both"

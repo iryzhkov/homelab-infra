@@ -9,14 +9,15 @@
 #   nats auth nkey gen user --output ~/.config/nats/<name>.nk   # mode 0600
 #   nats auth nkey show ~/.config/nats/<name>.nk                # public key
 #
-# stacks/nats/swarm-prepare.yml refuses to deploy while any key below is
-# empty or malformed. Revoking an identity is replacing its key (or removing
+# stacks/nats/swarm-prepare.yml validates the three required keys and only
+# the explicitly enabled optional hosts. Revoking an identity is replacing its key (or removing
 # a host from nats_chaldea_hosts) and redeploying the stack.
 
-# One CHALDEA user, durable work consumer (stacks/nats/jetstream/consumers/
-# CHALDEA_WORK/host-<name>.json) and Akasha source name per host that runs a
-# Chaldea client. omarchy-pc is the inventory's gaming-pc.
-nats_chaldea_hosts: [agent-a, agent-b, omarchy-pc, laptop]
+# Optional future work/quota users, disabled for gateway-only Akasha v1.
+# Enabling one requires its public key; it never grants Akasha publication.
+# Parked work consumer definitions remain in source regardless of this list.
+nats_chaldea_hosts: []
+nats_optional_hosts: [agent-a, agent-b, omarchy-pc, laptop]
 
 nats_nkeys:
   # SYS account: server monitoring. Seed on omarchy-pc (operator).

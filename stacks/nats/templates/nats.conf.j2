@@ -53,15 +53,15 @@ accounts {
       }
 
       # akasha: the Akasha service. Consumes AKASHA_EVENTS through its own
-      # durable consumer, reads single events for replay, and publishes only
-      # under its own source names (itself, and the feed and toolfeedback
-      # bridges during the dual-write migration).
+      # durable consumer and reads single events for replay. The trusted
+      # gateway authorizes JWT source bindings before publishing; broker
+      # permission is deliberately broader than any individual producer.
       {
         nkey: "{{ nats_nkeys['akasha'] }}"
         permissions: {
           publish: {
             allow: [
-              "akasha.akasha.>", "akasha.feed.>", "akasha.toolfeedback.>",
+              "akasha.>",
               "$JS.API.INFO",
               "$JS.API.STREAM.INFO.AKASHA_EVENTS",
               "$JS.API.CONSUMER.INFO.AKASHA_EVENTS.akasha-ingest",
@@ -78,8 +78,8 @@ accounts {
 
       # {{ host }}: that host's Chaldea client. Submits work to the fleet queue
       # or to any host's queue, pulls from the fleet queue and from its own
-      # queue only, reads every quota key but writes only its own, and
-      # publishes Akasha events only under its own name. Replies arrive on its
+      # queue only, reads every quota key but writes only its own. No direct
+      # Akasha publication: all producers use authenticated ingress. Replies arrive on its
       # own inbox prefix (the client sets inboxPrefix "_INBOX_{{ host }}").
       {
         nkey: "{{ nats_nkeys[host] }}"
@@ -87,7 +87,6 @@ accounts {
           publish: {
             allow: [
               "chaldea.work.fleet.>", "chaldea.work.host.*.>",
-              "akasha.{{ host }}.>",
               "$KV.CHALDEA_QUOTA.{{ host }}.>",
               "$JS.API.INFO",
               "$JS.API.STREAM.INFO.CHALDEA_WORK",

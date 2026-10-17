@@ -26,7 +26,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 JETSTREAM = ROOT / "stacks/nats/jetstream"
 NATS_VARS = yaml.safe_load((ROOT / "inventory/group_vars/swarm/nats.yml").read_text())
-HOSTS = NATS_VARS["nats_chaldea_hosts"]
+HOSTS = NATS_VARS["nats_optional_hosts"]
 SIZE = {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}
 
 
@@ -115,7 +115,7 @@ class ConsumerTest(unittest.TestCase):
         conf = render_nats_conf()
         for host in HOSTS:
             with self.subTest(host=host):
-                self.assertIn('"akasha.%s.>"' % host, conf)
+                self.assertNotIn('"akasha.%s.>"' % host, conf)
                 self.assertIn('"$KV.CHALDEA_QUOTA.%s.>"' % host, conf)
                 self.assertIn('"$JS.API.CONSUMER.MSG.NEXT.CHALDEA_WORK.host-%s"' % host, conf)
                 self.assertIn('subscribe: {allow: ["_INBOX_%s.>"]}' % host, conf)

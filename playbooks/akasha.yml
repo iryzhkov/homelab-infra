@@ -1,0 +1,8 @@
+---
+# Narrow service deployment only. No site, agent-tools, trust or edge roles.
+- name: Akasha host service definitions
+  hosts: homelab
+  gather_facts: false
+  become: true
+  roles:
+    - akasha
