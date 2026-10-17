@@ -187,6 +187,11 @@ class PublisherTests(unittest.TestCase):
         (fleet / "inventory/group_vars").mkdir(parents=True)
         values = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         values["chaldea_access_trust_enabled"] = False
+        # Start from placeholders whatever the repository currently pins, so the
+        # refusal is tested independently of the live anchor values.
+        values["chaldea_deployment_anchor_public_jwk"] = {
+            "kty": "OKP", "crv": "Ed25519", "x": "REPLACE_WITH_NORMANDY_PUBLIC_JWK_X"}
+        values["chaldea_deployment_anchor_spki_sha256"] = "REPLACE_WITH_NORMANDY_SPKI_SHA256"
         def save(other=None):
             (infra / "vars/chaldea-runtime.yml").write_text(yaml.safe_dump(values))
             (fleet / "inventory/group_vars/all.yml").write_text(yaml.safe_dump(other or values))
