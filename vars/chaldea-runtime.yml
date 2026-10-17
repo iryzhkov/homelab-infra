@@ -1,8 +1,8 @@
 ---
-# Imported from fleet-config inventory at 439c908; update both pins together only
-# after the orchestrator tags the merged timesyncd/Akasha code from Chaldea main.
-chaldea_host_version: host-v0.2.0
-chaldea_host_sha256: 2e9a8d3cfd859516539aff8b494d66a397e6581a350ef9ecda80fd272ef9b4c6
+# Published from Chaldea main fcf3651; SHA-256 verified from the release asset.
+# Keep this version and digest identical in fleet-config and homelab-infra.
+chaldea_host_version: host-v0.2.1
+chaldea_host_sha256: "914918aa6931203d49be8d8e7874b2e24f28b9cdabdd5ad49101de9ab2e6e1c9"
 chaldea_node_version: "26.10.0"
 chaldea_node_sha256: ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022
 # Signed data lives apart from root-executed fleet configuration.
