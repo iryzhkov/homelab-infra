@@ -7,6 +7,8 @@
 - name: Validate explicit trust enrollment
   ansible.builtin.assert:
     that:
+      - chaldea_access_trust_repository == 'ssh://git@github.com/iryzhkov/chaldea-trust.git'
+      - chaldea_access_trust_bundle_path == 'bundle.jws'
       - chaldea_access_trust_anchors | length > 0
       - chaldea_access_trust_anchors | length <= 8
       - chaldea_access_trust_node is match('^/[A-Za-z0-9/_.-]+$')
@@ -57,13 +59,11 @@
 - name: Install byte-only Git downloader
   become: true
   ansible.builtin.copy:
-    src: "{{ chaldea_host_artifact_root }}/chaldea-access-trust-fetch"
-    remote_src: true
+    src: chaldea-access-trust-fetch
     dest: "{{ chaldea_access_trust_fetcher }}"
     owner: root
     group: root
     mode: "0755"
-  when: chaldea_host_artifact_ready | bool
 
 - name: Install updater configuration
   become: true

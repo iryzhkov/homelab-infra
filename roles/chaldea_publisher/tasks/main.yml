@@ -144,7 +144,8 @@
     get_checksum: false
   loop:
     - "keys/{{ chaldea_deployment_anchor_kid }}.pem"
-    - keys/fleet-deploy-key
+    - keys/trust-deploy-key
+    - keys/fleet-read-key
     - state/publisher.sqlite
     - state/verify.sqlite
   register: chaldea_publisher_bootstrap

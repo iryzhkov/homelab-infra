@@ -55,8 +55,10 @@ class PublisherTests(unittest.TestCase):
                                      "runtime": "/synthetic/runtime", "kid": "deployment-2026-10b"})
         self.publisher.run(["/usr/bin/git", "init", "--bare", str(self.publisher.repo)])
         state_file(self.root / "state/publisher.sqlite")
-        self.base = self.commit(None, {"access-trust/issuer-grants.json": b'[{"fixture":true}]',
-                                       p.BUNDLE: envelope().encode()})
+        self.base = self.commit(None, {"README.md": b"data only\n", p.BUNDLE: envelope().encode()})
+        self.publisher.run(["/usr/bin/git", "init", "--bare", str(self.publisher.grants_repo)])
+        self.grants_base = self.commit(None, {p.GRANTS: b'[{"fixture":true}]'}, grants=True)
+        self.publisher.git("update-ref", "refs/publisher/grants", self.grants_base, grants=True)
         self.publisher.git("update-ref", "refs/publisher/main", self.base)
         # Git fixtures are intentionally unsigned. Production authentication is
         # separately exercised with forged envelopes and the real Node verifier.
@@ -84,7 +86,24 @@ class PublisherTests(unittest.TestCase):
                     self.assertEqual(opts["--anchor-file"], str(self.root / "state/anchors.json"))
                     output.write_bytes(Path(opts["--bundle-file"]).read_bytes())
                 return b""
+            if "fetch" in args:
+                assert env is not None
+                if p.FLEET_REMOTE in args:
+                    self.assertIn("--git-dir=" + str(self.publisher.grants_repo), args)
+                    self.assertIn("keys/fleet-read-key", env["GIT_SSH_COMMAND"])
+                    self.assertNotIn("trust-deploy-key", env["GIT_SSH_COMMAND"])
+                else:
+                    self.assertIn(p.REMOTE, args)
+                    self.assertIn("--git-dir=" + str(self.publisher.repo), args)
+                    self.assertIn("keys/trust-deploy-key", env["GIT_SSH_COMMAND"])
+                    self.assertNotIn("fleet-read-key", env["GIT_SSH_COMMAND"])
+                return b""
             if "push" in args:
+                assert env is not None
+                self.assertIn(p.REMOTE, args)
+                self.assertNotIn(p.FLEET_REMOTE, args)
+                self.assertIn("keys/trust-deploy-key", env["GIT_SSH_COMMAND"])
+                self.assertNotIn("fleet-read-key", env["GIT_SSH_COMMAND"])
                 self.calls.append("push")
                 if self.fail_push:
                     raise subprocess.CalledProcessError(1, args)
@@ -92,8 +111,9 @@ class PublisherTests(unittest.TestCase):
             return original(args, data, env)
         self.publisher.run = run
 
-    def commit(self, parent, paths):
-        git = self.publisher.git
+    def commit(self, parent, paths, grants=False):
+        def git(*args, **kwargs):
+            return self.publisher.git(*args, grants=grants, **kwargs)
         git("read-tree", parent or "--empty", index=True)
         for path, data in paths.items():
             blob = git("hash-object", "-w", "--stdin", data=data).decode().strip()
@@ -208,6 +228,15 @@ class PublisherTests(unittest.TestCase):
         save(values | {"chaldea_deployment_anchor_kid": "mismatch"})
         with self.assertRaisesRegex(ValueError, "mismatch"):
             checker.check(fleet, infra)
+        save(values | {"chaldea_access_trust_repository": "ssh://git@github.com/iryzhkov/chaldea-fleet-config.git"})
+        with self.assertRaisesRegex(ValueError, "mismatch"):
+            checker.check(fleet, infra)
+        saved_repository = values["chaldea_access_trust_repository"]
+        values["chaldea_access_trust_repository"] = "ssh://git@github.com/iryzhkov/chaldea-fleet-config.git"
+        save()
+        with self.assertRaisesRegex(ValueError, "data-only"):
+            checker.check(fleet, infra)
+        values["chaldea_access_trust_repository"] = saved_repository
         values["chaldea_access_trust_anchors"] = [{"kid": "stale", "public_key": public}]
         save()
         with self.assertRaisesRegex(ValueError, "mapping"):
@@ -247,6 +276,31 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual((self.root / "state/grants.json").read_text().strip(), "[]")
         self.assertEqual(p.payload((self.root / "state/published.jws").read_text())["sequence"], 93)
         self.assertEqual(self.calls, ["timesyncd", "clock-health", "sign-bundle", "install-bundle", "push"])
+
+    def test_trust_fetch_uses_only_the_data_repository_credential(self):
+        self.assertEqual(self.publisher.fetch(), self.base)
+
+    def test_bootstraps_readme_only_trust_main_from_separate_read_only_grants(self):
+        readme_only = self.commit(None, {"README.md": b"data only\n"})
+        self.publisher.publish(readme_only)
+        self.assertEqual((self.root / "state/grants.json").read_bytes(), b'[{"fixture":true}]')
+        self.assertEqual(p.payload((self.root / "state/published.jws").read_text())["sequence"], 1)
+        self.assertIn("push", self.calls)
+
+    def test_fleet_fetch_failure_preserves_bundle_and_never_pushes(self):
+        saved = self.root / "state/published.jws"
+        saved.write_text("previous")
+        def fail():
+            raise RuntimeError("fleet unavailable")
+        self.publisher.fetch_grants = fail
+        with self.assertRaisesRegex(RuntimeError, "fleet unavailable"):
+            self.publisher.publish(self.base)
+        self.assertEqual(saved.read_text(), "previous")
+        self.assertNotIn("sign-bundle", self.calls)
+        self.assertNotIn("push", self.calls)
+        # Emergency revocation does not depend on reachable/nonempty fleet grants.
+        self.publisher.publish(self.base, emergency_empty=True)
+        self.assertIn("push", self.calls)
 
     def test_verified_envelope_precedes_guarded_push(self):
         self.publisher.publish(self.base)
@@ -328,7 +382,7 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(stat["become_user"], "chaldea-publisher")
         guard = next(t for t in tasks if t["name"] == "Require private initialized bootstrap before timer activation")
         (self.root / "keys").mkdir(mode=0o700)
-        for name in ("keys/deployment-2026-10b.pem", "keys/fleet-deploy-key", "state/verify.sqlite"):
+        for name in ("keys/deployment-2026-10b.pem", "keys/trust-deploy-key", "keys/fleet-read-key", "state/verify.sqlite"):
             fixture = self.root / name
             fixture.write_text("metadata fixture, never a private key")
             fixture.chmod(0o600)

@@ -12,11 +12,11 @@ and quota streams/consumers/identities are excluded. PR #10 remains parked.
 ## Hosts and prerequisites
 
 Controller: **omarchy-pc**. Signing/publishing host: **omarchy-normandy**, the
-always-on Arch machine, distinct from the Debian VM named normandy in inventory.
+always-on Arch machine, also named normandy in inventory, at 192.168.70.234.
 Managed service host: **homelab**, owned
 by homelab-infra, never fleet-config. **agent-a** is the sole issuer and initial
 producer; its issuer identity/key and token helper are separately provisioned.
-No changes to agent-b, laptop, the Debian normandy VM, NAS or either HTTPS edge are implied.
+No changes to agent-b, laptop, Normandy's other roles, NAS or either HTTPS edge are implied.
 All participating hosts retain systemd-timesyncd. Chrony remains supported;
 there is no time-service migration.
 
@@ -51,6 +51,16 @@ profiles/projects/source names and permitted event kinds. The proposed 30-day
 issuance window is 2026-10-17T00:00:00Z <= iat < 2026-11-16T00:00:00Z;
 verify_until is 2026-11-16T00:13:30Z. Do not extend an existing kid's deadlines.
 
+The signed bundle lives at the root of private iryzhkov/chaldea-trust. Fleet main
+is root-executed by ansible-pull and cannot be branch-protected on this GitHub
+plan. Normandy therefore has write access only to the data repository, plus a
+different read-only fleet-config credential for grants. The publisher's guard
+allows only bundle.jws to change. Neither consumers nor publisher execute data
+repository content. Both inventories pin chaldea_access_trust_repository and
+chaldea_access_trust_bundle_path; check-trust-pins.py compares and validates them.
+The trust role installs its reviewed downloader over host-v0.2.0's old transport
+program, leaving the cryptographic runtime release pin unchanged.
+
 ## Exact ordered orchestrator commands
 
 Run each numbered block only after its preceding checks succeed. Keep the same
@@ -65,7 +75,7 @@ key; never regenerate it. No private key moves between hosts.
    envelopes, enable six-hour renewal plus hourly 12-hour age alerts, and retire
    the old omarchy-pc key. All commands are operator-only.
 
-2. Require successful publication at fleet main, kid deployment-2026-10b,
+2. Require successful publication at chaldea-trust main:bundle.jws, kid deployment-2026-10b,
    increasing sequence and 86400-second lifetime. Record feed availability under
    the publisher UID. Alerts use the existing feed CLI if usable; otherwise
    journal only. Verify journal monitoring before proceeding in that case.
@@ -87,6 +97,11 @@ python3 "$INFRA/scripts/check-trust-pins.py" "$FLEET" "$INFRA"
    use the installed reviewed command. The runtime tag does not enable trust
    timers or Akasha. Then create homelab's unique root-owned transport key.
    These are operator actions; the playbooks never generate credentials.
+   For existing key 166781554, first use the Normandy runbook's
+   [transport move](normandy-publisher.md#move-an-already-staged-transport-to-chaldea-trust)
+   to delete its fleet-config registration and add its public half read-only to
+   chaldea-trust. Skip key generation/registration below when already provisioned.
+   Preserve all initialized state; skip initialization in steps 5 and 8 if files exist.
 
 ```sh
 cd "$INFRA"
@@ -97,11 +112,12 @@ ansible homelab -b -m ansible.builtin.command -a 'ssh-keygen -t ed25519 -N "" -C
 ansible homelab -b -m ansible.builtin.file -a 'path=/etc/chaldea-access-trust/deploy-key owner=root group=root mode=0600'
 # Fetch ONLY the public half to controller scratch; never fetch the private key.
 ansible homelab -b -m ansible.builtin.fetch -a "src=/etc/chaldea-access-trust/deploy-key.pub dest=$TMPDIR/homelab-trust-deploy.pub flat=true"
-gh repo deploy-key add "$TMPDIR/homelab-trust-deploy.pub" -R iryzhkov/chaldea-fleet-config --title homelab-chaldea-access-trust
+gh repo deploy-key add "$TMPDIR/homelab-trust-deploy.pub" -R iryzhkov/chaldea-trust --title homelab-chaldea-access-trust
 ```
 
    Omit --allow-write: GitHub deploy keys are read-only by default. Confirm only
-   that repository is granted. Do not use the operator's SSH identity.
+   chaldea-trust alone is granted. Do not use the operator's SSH identity.
+   Homelab needs no fleet-config access for trust.
 
 5. Pin GitHub's published Ed25519 host key and verify its fingerprint, then
    provision known_hosts and explicitly initialize root updater state on homelab:
