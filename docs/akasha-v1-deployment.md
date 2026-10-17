@@ -34,10 +34,11 @@ The archive is verified before extraction into root-owned /opt/chaldea/node.
 Host code lives in /opt/chaldea-host/releases/VERSION/host and includes production
 dependencies. No npm or source compilation runs on homelab.
 
-The current host pin is not yet the timesyncd/Akasha rollout release. After the
-Chaldea PR merges, the orchestrator tags from main, waits for release CI, then
-updates both inventories to that release's exact version and SHA-256. Do not use
-an old release, a floating ref, an unpublished candidate or an invented checksum.
+The current matching host-v0.2.0 pin is the published timesyncd/Akasha release.
+For later changes, the orchestrator tags reviewed main, waits for release CI,
+then updates both inventories to that exact version and SHA-256. The publisher
+procedure checks the installed Akasha capability before key creation. Never use
+a floating ref, unpublished candidate or invented checksum.
 
 The new deployment anchor is kid deployment-2026-10b. Its public JWK and SPKI
 SHA-256 placeholders must be replaced identically in fleet inventory and
@@ -69,7 +70,7 @@ key; never regenerate it. No private key moves between hosts.
    the publisher UID. Alerts use the existing feed CLI if usable; otherwise
    journal only. Verify journal monitoring before proceeding in that case.
 
-3. In the controller shell retain INFRA, FLEET, CHALDEA, TMPDIR,
+3. In the controller shell retain INFRA, FLEET, TMPDIR,
    CHALDEA_ACCESS_NODE and CHALDEA_ACCESS_RUNTIME from the publisher procedure.
    Freeze the reviewed Chaldea main commit as before and check out CHALDEA.
    Re-run the public-pin guard before any verifier staging:
@@ -133,7 +134,7 @@ ansible homelab -b -m ansible.builtin.command -a 'stat -c %U:%G:%a /var/lib/chal
 ansible-playbook playbooks/akasha.yml --limit homelab -e chaldea_access_trust_enabled=true --check --diff
 ```
 
-   Require healthy fresh <=30s clock evidence, first installed sequence 1 and
+   Require healthy fresh <=30s clock evidence, the expected published sequence and
    expected signed expiry, root:root 0600 updater DB and root:root 0644 public
    files. The second check must report changed=0. Dry runs render/predict files
    and check bootstrap metadata but defer systemd reload/start until real apply. Unit ExecStartPre rejects

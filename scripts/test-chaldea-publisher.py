@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import subprocess
 import tempfile
 import sys
@@ -57,6 +58,9 @@ class PublisherTests(unittest.TestCase):
         self.base = self.commit(None, {"access-trust/issuer-grants.json": b'[{"fixture":true}]',
                                        p.BUNDLE: envelope().encode()})
         self.publisher.git("update-ref", "refs/publisher/main", self.base)
+        # Git fixtures are intentionally unsigned. Production authentication is
+        # separately exercised with forged envelopes and the real Node verifier.
+        self.publisher.authenticate_remote = lambda raw: p.payload(raw.decode())
         self.calls = []
         self.unhealthy = False
         self.fail_push = False
@@ -96,6 +100,113 @@ class PublisherTests(unittest.TestCase):
             git("update-index", "--add", "--cacheinfo", "100644," + blob + "," + path, index=True)
         tree = git("write-tree", index=True).decode().strip()
         return git("commit-tree", tree, *(["-p", parent] if parent else []), data=b"fixture\n").decode().strip()
+
+    def test_forged_remote_high_water_and_timestamp_cannot_advance_or_hide_age(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        verifier = p.Publisher(self.publisher.config | {"node": node, "anchors": [{
+            "kid": "deployment-2026-10b",
+            "public_key": {"kty": "OKP", "crv": "Ed25519", "x": "A" * 43}}]})
+        header = base64.urlsafe_b64encode(json.dumps({
+            "alg": "EdDSA", "typ": "chaldea-trust+jws", "kid": "deployment-2026-10b"}).encode()).decode().rstrip("=")
+        forged = header + "." + envelope(p.MAX_SEQUENCE, -86400).split(".")[1] + "." + "A" * 86
+        bad = self.commit(self.base, {p.BUNDLE: forged.encode()})
+        self.publisher.authenticate_remote = verifier.authenticate_remote
+        self.assertIsNone(self.publisher.remote_bundle(bad))
+        self.assertEqual(p.next_sequence(self.root / "state/publisher.sqlite", 0), 1)
+        notices = []
+        self.publisher.notify = lambda *args: notices.append(args)
+        self.publisher.age_alert(bad)
+        self.assertEqual(len(notices), 1)
+        # Malformed main can be repaired from durable local high water.
+        self.publisher.publish(bad)
+        self.assertEqual(p.payload((self.root / "state/published.jws").read_text())["sequence"], 1)
+
+    def test_malformed_remote_does_not_block_republication(self):
+        self.publisher.authenticate_remote = lambda raw: p.payload(raw.decode())
+        bad = self.commit(self.base, {p.BUNDLE: b"garbage"})
+        self.publisher.publish(bad)
+        self.assertIn("push", self.calls)
+
+    def test_path_mode_and_symlink_are_refused_by_commit_guard(self):
+        self.publisher.git("read-tree", self.base, index=True)
+        blob = self.publisher.git("hash-object", "-w", "--stdin", data=b"fixture").decode().strip()
+        for mode in ("100755", "120000"):
+            self.publisher.git("update-index", "--cacheinfo", mode + "," + blob + "," + p.BUNDLE, index=True)
+            tree = self.publisher.git("write-tree", index=True).decode().strip()
+            commit = self.publisher.git("commit-tree", tree, "-p", self.base, data=b"mode fixture").decode().strip()
+            with self.assertRaisesRegex(RuntimeError, "nonregular"):
+                self.publisher.guard_commit(self.base, commit)
+
+    def test_bootstrap_private_file_rejects_modes_symlinks_and_multiple_links(self):
+        path = self.root / "fixture"
+        path.write_text("metadata only")
+        path.chmod(0o600)
+        p.private_file(path)
+        path.chmod(0o640)
+        with self.assertRaises(RuntimeError):
+            p.private_file(path)
+        path.chmod(0o600)
+        link = self.root / "link"
+        link.symlink_to(path)
+        with self.assertRaises(RuntimeError):
+            p.private_file(link)
+        link.unlink()
+        os.link(path, link)
+        with self.assertRaises(RuntimeError):
+            p.private_file(path)
+
+    def test_root_provisioning_stays_outside_publisher_descendants(self):
+        tasks = yaml.safe_load((ROOT / "roles/chaldea_publisher/tasks/main.yml").read_text())
+        directories = next(t for t in tasks if t["name"] == "Create publisher subdirectories as the locked identity")
+        self.assertEqual(directories["become_user"], "chaldea-publisher")
+        self.assertFalse(directories["ansible.builtin.file"]["follow"])
+        known = next(t for t in tasks if t["name"] == "Install independently pinned GitHub host key")
+        self.assertEqual(known["ansible.builtin.copy"]["dest"], "{{ chaldea_publisher_config_root }}/known_hosts")
+
+    def test_feed_failure_falls_back_without_retry(self):
+        calls = []
+        def fail(args, *other):
+            calls.append(args)
+            raise subprocess.CalledProcessError(1, args)
+        self.publisher.run = fail
+        with mock.patch.object(p.shutil, "which", return_value="/usr/local/bin/feed"):
+            with mock.patch("sys.stderr") as journal:
+                self.publisher.notify("fixture failure")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("alert route=journal", "".join(str(c) for c in journal.write.call_args_list))
+
+    def test_pin_checker_rejects_placeholders_mapping_drift_and_mismatched_keys(self):
+        checker_loader = importlib.machinery.SourceFileLoader("pins", str(ROOT / "scripts/check-trust-pins.py"))
+        checker_spec = importlib.util.spec_from_loader(checker_loader.name, checker_loader)
+        assert checker_spec is not None
+        checker = importlib.util.module_from_spec(checker_spec)
+        checker_loader.exec_module(checker)
+        infra, fleet = self.root / "infra", self.root / "fleet"
+        (infra / "vars").mkdir(parents=True)
+        (fleet / "inventory/group_vars").mkdir(parents=True)
+        values = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
+        values["chaldea_access_trust_enabled"] = False
+        def save(other=None):
+            (infra / "vars/chaldea-runtime.yml").write_text(yaml.safe_dump(values))
+            (fleet / "inventory/group_vars/all.yml").write_text(yaml.safe_dump(other or values))
+        save()
+        with self.assertRaisesRegex(ValueError, "placeholder"):
+            checker.check(fleet, infra)
+        public = {"kty": "OKP", "crv": "Ed25519", "x": "A" * 43}
+        values["chaldea_deployment_anchor_public_jwk"] = public
+        import hashlib
+        values["chaldea_deployment_anchor_spki_sha256"] = hashlib.sha256(
+            bytes.fromhex("302a300506032b6570032100") + bytes(32)).hexdigest()
+        save()
+        checker.check(fleet, infra)
+        save(values | {"chaldea_deployment_anchor_kid": "mismatch"})
+        with self.assertRaisesRegex(ValueError, "mismatch"):
+            checker.check(fleet, infra)
+        values["chaldea_access_trust_anchors"] = [{"kid": "stale", "public_key": public}]
+        save()
+        with self.assertRaisesRegex(ValueError, "mapping"):
+            checker.check(fleet, infra)
 
     def test_push_guard_refuses_other_paths_and_merge_parent(self):
         good = self.commit(self.base, {p.BUNDLE: envelope(2).encode()})

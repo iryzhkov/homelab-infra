@@ -27,6 +27,10 @@ class RolloutTest(unittest.TestCase):
         v = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         v.update(yaml.safe_load((ROOT / "vars/akasha-registry.yml").read_text()))
         v.update(akasha_state_root="/var/lib/akasha", akasha_nats_seed_file="/etc/akasha/nats.seed")
+        # Model Ansible's recursive variable resolution for this plain Jinja renderer.
+        v["chaldea_access_trust_anchors"] = [{
+            "kid": v["chaldea_deployment_anchor_kid"],
+            "public_key": v["chaldea_deployment_anchor_public_jwk"]}]
         env = Environment(undefined=StrictUndefined)
         env.filters["to_nice_json"] = json.dumps
         c = json.loads(env.from_string((ROOT / "roles/akasha/templates/config.json.j2").read_text()).render(v))
@@ -34,7 +38,9 @@ class RolloutTest(unittest.TestCase):
         self.assertEqual(c["bundle_file"], "/var/lib/chaldea-access-trust-public/bundle.jws")
         self.assertEqual(c["clock_health_file"], "/run/chaldea-access-trust/clock-health.json")
         self.assertEqual(v["chaldea_deployment_anchor_kid"], "deployment-2026-10b")
-        self.assertEqual(c["anchors"], v["chaldea_access_trust_anchors"])
+        self.assertEqual(c["anchors"], [{
+            "kid": "deployment-2026-10b",
+            "public_key": v["chaldea_deployment_anchor_public_jwk"]}])
         self.assertEqual(v["chaldea_deployment_anchor_public_jwk"]["crv"], "Ed25519")
         self.assertEqual([(r["source"],r["profile"],r["project"],r["kinds"]) for r in c["registry"]], [
             ("chaldea.daily-health.agent-a","daily-health","homelab",["report"]),

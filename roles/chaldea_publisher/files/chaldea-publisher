@@ -19,6 +19,7 @@ REMOTE = "git@github.com:iryzhkov/chaldea-fleet-config.git"
 BUNDLE = "access-trust/bundle.jws"
 GRANTS = "access-trust/issuer-grants.json"
 MAX_SEQUENCE = 9007199254740991
+REMOTE_VERIFY = "import {createPublicKey, verify} from \"node:crypto\";\nlet input=\"\"; for await (const part of process.stdin) input+=part;\nconst {envelope,anchor}=JSON.parse(input);\nconst parts=envelope.trim().split(\".\");\nif(parts.length!==3) process.exit(1);\nconst header=JSON.parse(Buffer.from(parts[0],\"base64url\"));\nif(header.alg!==\"EdDSA\" || header.typ!==\"chaldea-trust+jws\" || header.kid!==anchor.kid) process.exit(1);\nconst raw=Buffer.from(anchor.public_key.x,\"base64url\");\nif(raw.length!==32) process.exit(1);\nconst key=createPublicKey({key:Buffer.concat([Buffer.from(\"302a300506032b6570032100\",\"hex\"),raw]),format:\"der\",type:\"spki\"});\nif(!verify(null,Buffer.from(parts[0]+\".\"+parts[1]),key,Buffer.from(parts[2],\"base64url\"))) process.exit(1);\nprocess.stdout.write(Buffer.from(parts[1],\"base64url\"));\n"
 
 
 def require(ok, message):
@@ -68,6 +69,7 @@ def private_file(path):
 class Publisher:
     def __init__(self, config):
         self.config = config
+        self.stage = "bootstrap"
         self.root = Path(config["root"])
         self.state = self.root / "state"
         self.repo = self.root / "fleet.git"
@@ -78,7 +80,7 @@ class Publisher:
             "GIT_TERMINAL_PROMPT": "0", "GIT_ATTR_NOSYSTEM": "1",
             "GIT_SSH_COMMAND": "/usr/bin/ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes "
                 "-o IdentityAgent=none -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null "
-                "-o UserKnownHostsFile=" + str(self.root / "keys/known_hosts")
+                "-o UserKnownHostsFile=" + config.get("known_hosts_file", "/etc/chaldea-publisher/known_hosts")
                 + " -i " + str(self.root / "keys/fleet-deploy-key"),
             "GIT_AUTHOR_NAME": "Chaldea publisher", "GIT_AUTHOR_EMAIL": "noreply@openai.com",
             "GIT_COMMITTER_NAME": "Chaldea publisher", "GIT_COMMITTER_EMAIL": "noreply@openai.com",
@@ -117,9 +119,10 @@ class Publisher:
             private_file(self.root / "keys" / name)
         for name in ("publisher.sqlite", "verify.sqlite"):
             private_file(self.state / name)
-        known = self.root / "keys/known_hosts"
+        known = Path(self.config["known_hosts_file"])
         require(known.read_text() == self.config["known_hosts"] + "\n"
-                and not known.is_symlink(), "GitHub host key pin mismatch")
+                and not known.is_symlink() and known.stat().st_uid == 0
+                and known.stat().st_mode & 0o022 == 0, "GitHub host key pin mismatch")
         anchors = self.config["anchors"]
         require(len(anchors) == 1 and anchors[0]["kid"] == self.config["kid"], "invalid anchor")
         key = anchors[0]["public_key"]
@@ -131,6 +134,7 @@ class Publisher:
         (self.state / "anchors.json").write_text(json.dumps(anchors) + "\n")
 
     def fetch(self):
+        self.stage = "fetch"
         if not self.repo.exists():
             self.run(["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "init", "--bare", str(self.repo)])
         self.git("fetch", "--no-tags", "--depth=1", REMOTE, "+refs/heads/main:refs/publisher/main")
@@ -140,14 +144,29 @@ class Publisher:
         entry = self.git("ls-tree", base, "--", path).decode()
         require(entry.startswith("100644 blob ") and entry.rstrip().endswith("\t" + path),
                 "missing or nonregular public input")
+        require(int(self.git("cat-file", "-s", base + ":" + path)) <= 262144, "public input too large")
         data = self.git("show", base + ":" + path)
         require(len(data) <= 262144, "public input too large")
         return data
 
+    def authenticate_remote(self, envelope):
+        data = json.dumps({"envelope": envelope.decode(), "anchor": self.config["anchors"][0]}).encode()
+        raw = self.run([self.config["node"], "--input-type=module", "-e", REMOTE_VERIFY], data)
+        bundle = json.loads(raw)
+        sequence(bundle["sequence"])
+        require(type(bundle["published_at"]) is int and type(bundle["expires_at"]) is int
+                and bundle["published_at"] > 0
+                and bundle["expires_at"] - bundle["published_at"] == 86400
+                and bundle["published_at"] <= time.time() + 30, "invalid signed remote publication")
+        return bundle
+
     def remote_bundle(self, base):
-        if not self.git("ls-tree", base, "--", BUNDLE).strip():
+        try:
+            # Remote data cannot advance high water or suppress age alerts without a signature.
+            # Expired but authentic bytes still carry an authoritative sequence.
+            return self.authenticate_remote(self.read_blob(base, BUNDLE))
+        except (RuntimeError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
             return None
-        return payload(self.read_blob(base, BUNDLE).decode())
 
     def guard_commit(self, base, commit):
         parents = self.git("rev-list", "--parents", "-n", "1", commit).decode().split()
@@ -169,17 +188,20 @@ class Publisher:
         require(self.run(["/usr/bin/systemctl", "show", "systemd-timesyncd.service",
                           "--property=ActiveState", "--value"]).strip() == b"active",
                 "timesyncd is not active")
+        self.stage = "clock-health"
         health = self.state / "clock-health.json"
         self.maintenance("clock-health", "--output", health)
         clock_ok(health, int(time.time()))
         candidate = self.state / "candidate.jws"
         common = ["--clock-health-file", health]
+        self.stage = "sign-bundle"
         self.maintenance("sign-bundle", "--state-file", self.state / "publisher.sqlite", *common,
                          "--key-file", self.root / "keys" / (self.config["kid"] + ".pem"),
                          "--kid", self.config["kid"], "--grants-file", self.state / "grants.json",
                          "--sequence", number, "--lifetime", "86400", "--output", candidate)
         # A separate durable verifier authenticates the bytes against the root-installed pin.
         verified = self.state / "verified.jws"
+        self.stage = "verify-bundle"
         self.maintenance("install-bundle", "--state-file", self.state / "verify.sqlite", *common,
                          "--anchor-file", self.state / "anchors.json",
                          "--bundle-file", candidate, "--output", verified)
@@ -189,6 +211,7 @@ class Publisher:
         now = int(time.time())
         require(bundle["expires_at"] - bundle["published_at"] == 86400
                 and 0 <= now - bundle["published_at"] <= 30, "invalid publication lifetime")
+        self.stage = "commit"
         self.git("read-tree", base, index=True)
         blob = self.git("hash-object", "-w", "--stdin", data=envelope).decode().strip()
         self.git("update-index", "--add", "--cacheinfo", "100644," + blob + "," + BUNDLE, index=True)
@@ -198,6 +221,7 @@ class Publisher:
             "\n\nCo-Authored-By: GPT-6.1-Sol <noreply@openai.com>\n").encode()).decode().strip()
         self.guard_commit(base, commit)
         # No force push or retry/rebase. A concurrent main update fails safely.
+        self.stage = "push"
         self.git("push", "--porcelain", REMOTE, commit + ":refs/heads/main")
         os.replace(verified, self.state / "published.jws")
         (self.state / "age-alert").unlink(missing_ok=True)
@@ -249,7 +273,13 @@ def main():
             else:
                 publisher.publish(base)
         return 0
-    except Exception:
+    except Exception as error:
+        detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+        if isinstance(error, subprocess.CalledProcessError):
+            detail = "command exit " + str(error.returncode)
+            detail += ": " + (error.stderr or b"").decode(errors="replace")[:256]
+        detail = detail.replace(str(publisher.root), "[publisher]")
+        print("chaldea-publisher: phase=" + publisher.stage + " cause=" + detail, file=sys.stderr)
         # Exactly one failure record per invocation; do not leak command output or key paths.
         publisher.notify("Trust publisher failed; inspect the journal and published main")
         return 1

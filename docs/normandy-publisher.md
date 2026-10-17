@@ -8,7 +8,7 @@ agent workload. The orchestrator runs every command here and creates every key.
 
 The locked system UID chaldea-publisher has no login, extra groups or sudo.
 Its home, keys and state directories are 0700 under /var/lib/chaldea-publisher.
-Root installs the program and independent public pin in /etc/chaldea-publisher.
+Root installs the program and independent public pin and GitHub known_hosts in /etc/chaldea-publisher.
 Private keys never leave Normandy. The fleet deploy key is writable only for
 iryzhkov/chaldea-fleet-config. A write deploy key can technically write other
 paths in that repository; the program's path guard constrains normal operation,
@@ -16,8 +16,10 @@ not an attacker who has stolen that credential.
 
 Every six hours the oneshot serializes under state/publisher.lock, fetches main
 into a bare Git repository, reads public grants as bytes, samples timesyncd and
-signs the next sequence. It takes the maximum of durable signer and fetched
-bundle high water, then adds one. A separate durable verifier authenticates the
+signs the next sequence. It authenticates fetched bundle high water against the
+independent anchor, takes the maximum with durable signer state, then adds one.
+Malformed, nonregular or unauthenticated remote envelopes cannot advance state
+or suppress age alerts, and a new valid publication replaces them. A separate durable verifier authenticates the
 new envelope against the root-installed anchor. Git plumbing constructs exactly
 one child commit from fetched main, with only access-trust/bundle.jws changed.
 The path/parent guard runs immediately before an ordinary fast-forward SSH push.
@@ -69,6 +71,11 @@ ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'id chaldea-publisher'
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'passwd -S chaldea-publisher'
 ansible omarchy-normandy -m ansible.builtin.command -a 'systemctl is-active systemd-timesyncd'
+CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
+CHALDEA_ACCESS_NODE=/opt/chaldea/node/bin/node
+CHALDEA_ACCESS_RUNTIME=/opt/chaldea-host/releases/$CHALDEA_HOST_VERSION/host/access-maintenance.mjs
+ansible omarchy-normandy -m ansible.builtin.command -a "$CHALDEA_ACCESS_NODE --version"
+ansible omarchy-normandy -m ansible.builtin.command -a "$CHALDEA_ACCESS_NODE /opt/chaldea-host/releases/$CHALDEA_HOST_VERSION/host/akasha-service.mjs --help"
 ```
 
 2. Create a NEW deployment key as the publisher UID on Normandy, with umask 077
@@ -110,11 +117,10 @@ mapping, and refuses placeholders. Fleet trust enrollment stays false.
 
 ```sh
 ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a 'ssh-keygen -t ed25519 -N "" -C normandy-chaldea-publisher -f /var/lib/chaldea-publisher/keys/fleet-deploy-key creates=/var/lib/chaldea-publisher/keys/fleet-deploy-key'
-ansible omarchy-normandy -b -m ansible.builtin.file -a 'path=/var/lib/chaldea-publisher/keys/fleet-deploy-key owner=chaldea-publisher group=chaldea-publisher mode=0600'
-ansible omarchy-normandy -b -m ansible.builtin.fetch -a "src=/var/lib/chaldea-publisher/keys/fleet-deploy-key.pub dest=$TMPDIR/normandy-fleet-deploy.pub flat=true"
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.fetch -a "src=/var/lib/chaldea-publisher/keys/fleet-deploy-key.pub dest=$TMPDIR/normandy-fleet-deploy.pub flat=true"
 gh repo deploy-key add "$TMPDIR/normandy-fleet-deploy.pub" -R iryzhkov/chaldea-fleet-config --allow-write --title normandy-chaldea-publisher
 gh repo deploy-key list -R iryzhkov/chaldea-fleet-config
-ansible omarchy-normandy -b -m ansible.builtin.command -a 'ssh-keygen -lf /var/lib/chaldea-publisher/keys/known_hosts -E sha256'
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'ssh-keygen -lf /etc/chaldea-publisher/known_hosts -E sha256'
 ```
 
 Require GitHub fingerprint
@@ -167,9 +173,12 @@ ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl list-timers
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'journalctl --no-pager -u chaldea-publisher.service -u chaldea-publisher-age.service -n 60'
 ```
 
-Persist chaldea_publisher_enabled=true in a reviewed publisher-only inventory
-variable when the orchestrator approves unattended operation. Until then pass
-the explicit override on each convergence; a staging apply stops timers.
+Before ending rollout, persist chaldea_publisher_enabled=true in reviewed
+inventory/host_vars/omarchy-normandy.yml through Huyang, merge and confirm CI,
+then check out that reviewed source and repeat the play without -e. This keeps
+later routine runtime updates from stopping both timers. A staging apply without
+the persisted flag deliberately stops timers. Normandy's own outage requires
+external host/journal monitoring, since no local timer can alert while it is off.
 There are no active verifiers yet, so replacing the old pin is safe. Continue
 Akasha rollout step 4 only after new publication and pin checks succeed.
 For later anchor rotations with verifiers, use an explicit overlap procedure.

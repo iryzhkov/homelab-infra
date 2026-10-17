@@ -35,10 +35,20 @@
     owner: "{{ omit if ansible_check_mode else 'chaldea-publisher' }}"
     group: "{{ omit if ansible_check_mode else 'chaldea-publisher' }}"
     mode: "0700"
+    follow: false
   loop:
     - "{{ chaldea_publisher_root }}"
-    - "{{ chaldea_publisher_root }}/keys"
-    - "{{ chaldea_publisher_root }}/state"
+
+# Never let a root file operation follow publisher-controlled descendants.
+- name: Create publisher subdirectories as the locked identity
+  become: "{{ not ansible_check_mode }}"
+  become_user: chaldea-publisher
+  ansible.builtin.file:
+    path: "{{ chaldea_publisher_root }}/{{ item }}"
+    state: directory
+    mode: "0700"
+    follow: false
+  loop: [keys, state]
 
 - name: Create root-owned publisher configuration and program directories
   ansible.builtin.file:
@@ -62,7 +72,7 @@
 - name: Install independently pinned GitHub host key
   ansible.builtin.copy:
     content: "{{ chaldea_publisher_known_hosts }}\n"
-    dest: "{{ chaldea_publisher_root }}/keys/known_hosts"
+    dest: "{{ chaldea_publisher_config_root }}/known_hosts"
     owner: root
     group: root
     mode: "0644"
@@ -100,6 +110,8 @@
   when: chaldea_publisher_enabled | bool
 
 - name: Inspect publisher bootstrap files before activation
+  become: "{{ not ansible_check_mode }}"
+  become_user: chaldea-publisher
   ansible.builtin.stat:
     path: "{{ chaldea_publisher_root }}/{{ item }}"
     follow: false
