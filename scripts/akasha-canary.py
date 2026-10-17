@@ -8,15 +8,19 @@ import time
 import urllib.error
 import urllib.request
 
-def run(token, key):
-    url = "http://127.0.0.1:1935"
+def run(token, key, port=1935):
+    url = "http://127.0.0.1:%d" % port
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     def request(path, payload=None, bearer=token):
         headers = {"Authorization": "Bearer " + bearer, "Idempotency-Key": key}
         data = None if payload is None else json.dumps(payload, sort_keys=True).encode()
         if data is not None:
             headers["Content-Type"] = "application/json"
         try:
-            with urllib.request.urlopen(urllib.request.Request(url + path, data=data, headers=headers), timeout=10) as r:
+            with opener.open(urllib.request.Request(url + path, data=data, headers=headers), timeout=10) as r:
                 return r.status, json.loads(r.read(8193))
         except urllib.error.HTTPError as e:
             # Do not log request headers, tokens or arbitrary server error prose.

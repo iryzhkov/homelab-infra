@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Rollout contracts and a fresh synthetic --check; no host connections or keys."""
+import copy
+import http.server
+import importlib.util
 import json
+import threading
+from unittest import mock
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +18,11 @@ from jinja2 import Environment, StrictUndefined
 ROOT = Path(__file__).resolve().parents[1]
 
 class RolloutTest(unittest.TestCase):
+    def setUp(self):
+        home = Path(os.environ["HOME"]).resolve()
+        self.assertIn(".scratch", str(home))
+        self.assertEqual(home, Path(os.environ["ROLLOUT_TEST_HOME"]).resolve())
+
     def test_registry_and_config_expose_only_the_first_sources(self):
         v = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         v.update(yaml.safe_load((ROOT / "vars/akasha-registry.yml").read_text()))
@@ -50,7 +60,69 @@ class RolloutTest(unittest.TestCase):
                       "ProtectSystem=strict", "PrivateDevices=true", "CapabilityBoundingSet="]:
             self.assertIn(value, updater)
 
+    def test_activation_rejects_readable_seed_and_wrong_service_ownership(self):
+        tasks = yaml.safe_load((ROOT / "roles/akasha/tasks/main.yml").read_text())
+        task = next(t for t in tasks if t.get("name") == "Require private service-owned seed and verifier state")
+        good = {"isreg": True, "islnk": False, "nlink": 1, "uid": 999, "gid": 998, "mode": "0600"}
+        variants = [{}, {"mode":"0644"}, {"mode":"0640"}, {"uid":0}, {"gid":1000},
+                    {"islnk":True}, {"nlink":2}]
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as d:
+            play = Path(d) / "guard.yml"
+            play.write_text(yaml.safe_dump([{"hosts":"localhost","gather_facts":False,"tasks":[task]}]))
+            for index in (3,4):
+                for variant in variants:
+                    results = [{}, {}, {}, {"item":"verifier-state","stat":good}, {"item":"nats-seed","stat":good}]
+                    results = copy.deepcopy(results)
+                    results[index]["stat"].update(variant)
+                    v = {"akasha_activate":True, "akasha_inputs":{"results":results}, "ansible_facts":{
+                        "getent_passwd":{"akasha":["x","999","998"]}, "getent_group":{"akasha":["x","998"]}}}
+                    proc = subprocess.run(["ansible-playbook","-i","localhost,","-c","local","--check",
+                        str(play),"-e",json.dumps(v)],capture_output=True,text=True,
+                        env={**os.environ,"ANSIBLE_LOCAL_TEMP":str(Path(d)/"ansible")})
+                    self.assertEqual(proc.returncode, 2 if variant else 0, proc.stdout+proc.stderr)
+
+    def test_canary_never_uses_environment_proxy_or_follows_a_redirect(self):
+        spec = importlib.util.spec_from_file_location("akasha_canary", ROOT / "scripts/akasha-canary.py")
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        hits = {"target":0, "other":0}
+        class Other(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits["other"] += 1
+                self.send_response(500)
+                self.end_headers()
+            do_POST = do_GET
+            def log_message(self, *args):
+                pass
+        other = http.server.ThreadingHTTPServer(("127.0.0.1",0), Other)
+        class Target(Other):
+            def do_POST(self):
+                hits["target"] += 1
+                self.send_response(302)
+                self.send_header("Location","http://127.0.0.1:%d/leak" % other.server_port)
+                self.end_headers()
+        target = http.server.ThreadingHTTPServer(("127.0.0.1",0), Target)
+        for server in (other,target):
+            threading.Thread(target=server.serve_forever,daemon=True).start()
+        try:
+            with mock.patch.dict(os.environ, {"http_proxy":"http://127.0.0.1:%d" % other.server_port,
+                                             "no_proxy":""}):
+                with self.assertRaises(RuntimeError):
+                    helper.run("synthetic.test.bearer","canary",target.server_port)
+            self.assertEqual(hits,{"target":1,"other":0})
+        finally:
+            for server in (target,other):
+                server.shutdown()
+                server.server_close()
+
     def test_fresh_full_check_is_local_and_leaves_managed_paths_absent(self):
+        # Chaldea's minimal namespace may intentionally omit passwd/group NSS.
+        # CI's disposable root container exercises this complete check fixture.
+        import pwd
+        try:
+            pwd.getpwnam("root")
+        except KeyError:
+            self.skipTest("root NSS absent in job namespace; full check runs in CI")
         # The actual check-mode play runs with a scratch inventory that has no
         # addresses or SSH users. Empty service facts model a cold host in a
         # namespace without init. The mocked local filesystem
@@ -71,14 +143,36 @@ class RolloutTest(unittest.TestCase):
             before = {p: Path(p).exists() for p in [
                 "/opt/chaldea/node", "/opt/chaldea-host", "/etc/akasha",
                 "/etc/chaldea-access-trust", "/var/lib/akasha"]}
-            result = subprocess.run(["ansible-playbook", "-i", str(inventory),
+            # Inert metadata fixtures only; no private key or live SQLite state.
+            config, state, public, units = [d / n for n in ("config","state","public","units")]
+            for directory in (config,state,public,units):
+                directory.mkdir(mode=0o700)
+            for path, mode in [(config/"deploy-key",0o600),(config/"known_hosts",0o644),(state/"updater.sqlite",0o600)]:
+                path.write_text("synthetic metadata fixture\\n")
+                path.chmod(mode)
+            enrolled = {
+                "ansible_facts": {"services": {}},
+                "chaldea_access_trust_enabled": True,
+                "chaldea_access_trust_root": str(config),
+                "chaldea_access_trust_state": str(state),
+                "chaldea_access_trust_public": str(public),
+                "chaldea_access_trust_unit_dir": str(units),
+                "chaldea_access_paths": {
+                    "root": str(config), "state": str(state), "public": str(public),
+                    "run": "/run/chaldea-access-trust",
+                    "bundle": str(public/"bundle.jws"), "updater_state": str(state/"updater.sqlite"),
+                    "clock_health": "/run/chaldea-access-trust/clock-health.json",
+                    "verifier_state": "/var/lib/akasha/access-state.db"},
+            }
+            for variables in ({"ansible_facts": {"services": {}}}, enrolled):
+                result = subprocess.run(["ansible-playbook", "-i", str(inventory),
                 str(ROOT / "playbooks/akasha.yml"), "--check", "--diff",
-                "-e", json.dumps({"ansible_facts": {"services": {}}})],
-                env={**os.environ, "PATH": str(bindir) + ":" + os.environ["PATH"],
+                    "-e", json.dumps(variables)],
+                    env={**os.environ, "PATH": str(bindir) + ":" + os.environ["PATH"],
                      "ANSIBLE_LOCAL_TEMP": str(d / "local"), "ANSIBLE_REMOTE_TEMP": str(d / "remote")},
-                capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("failed=0", result.stdout)
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("failed=0", result.stdout)
             self.assertEqual(before, {p: Path(p).exists() for p in before})
 
 if __name__ == "__main__":

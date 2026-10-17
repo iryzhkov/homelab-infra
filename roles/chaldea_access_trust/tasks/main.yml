@@ -125,3 +125,4 @@
   loop:
     - chaldea-clock-health.timer
     - chaldea-access-trust.timer
+  when: not ansible_check_mode

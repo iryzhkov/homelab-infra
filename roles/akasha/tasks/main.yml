@@ -47,6 +47,7 @@
     path: "{{ item }}"
     get_checksum: false
     get_mime: false
+    follow: false
   loop:
     - "{{ akasha_environment_file }}"
     - "{{ akasha_trust_bundle }}"
@@ -74,6 +75,33 @@
       - akasha_inputs.results[0].stat.mode == '0600'
       - akasha_inputs.results[0].stat.uid == 0
     quiet: true
+  when: akasha_activate | bool
+
+- name: Resolve the existing service user for private activation inputs
+  ansible.builtin.getent:
+    database: passwd
+    key: akasha
+  when: akasha_activate | bool
+
+- name: Resolve the service group for private activation inputs
+  ansible.builtin.getent:
+    database: group
+    key: akasha
+  when: akasha_activate | bool
+
+- name: Require private service-owned seed and verifier state
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+      - item.stat.nlink | default(0) == 1
+      - item.stat.uid == ansible_facts.getent_passwd.akasha[1] | int
+      - item.stat.gid == ansible_facts.getent_group.akasha[1] | int
+      - item.stat.mode == '0600'
+    quiet: true
+  loop: "{{ [akasha_inputs.results[3], akasha_inputs.results[4]] }}"
+  loop_control:
+    label: "{{ item.item }}"
   when: akasha_activate | bool
 
 - name: Create service identity
@@ -146,7 +174,7 @@
 - name: Reload definitions
   ansible.builtin.systemd_service:
     daemon_reload: true
-  when: akasha_units is changed
+  when: akasha_units is changed and not ansible_check_mode
 
 # Staging definitions must not stop an existing service or enable a new one.
 - name: Start only the explicitly approved runtime

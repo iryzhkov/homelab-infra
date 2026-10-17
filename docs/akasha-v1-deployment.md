@@ -90,6 +90,8 @@ gh release view "$CHALDEA_HOST_VERSION" -R iryzhkov/chaldea
 mkdir -p "$TMPDIR/release"
 gh release download "$CHALDEA_HOST_VERSION" -R iryzhkov/chaldea -p chaldea-host.tar.gz -D "$TMPDIR/release" --clobber
 printf '%s  %s\n' "$CHALDEA_HOST_SHA" "$TMPDIR/release/chaldea-host.tar.gz" | sha256sum -c -
+# Check the required capability before any root installation on omarchy-pc.
+tar -tzf "$TMPDIR/release/chaldea-host.tar.gz" | rg -x 'host/akasha-service.mjs'
 cd "$INFRA"
 ansible-playbook -i localhost, playbooks/chaldea-signer.yml --check --diff
 ansible-playbook -i localhost, playbooks/chaldea-signer.yml
@@ -123,7 +125,14 @@ sudo "$CHALDEA_ACCESS_NODE" "$CHALDEA_ACCESS_RUNTIME" clock-health --output /run
 
 ```sh
 git -C "$FLEET" switch -c publish-trust-sequence-1
-install -m 0644 "$PUBLISHER/bundle.jws" "$FLEET/access-trust/bundle.jws"
+```
+
+   Call Huyang workspace_open for FLEET, then edit_apply with the returned
+   workspace_id and operation
+   {"kind":"copy_file","from":"/home/igor/.local/share/chaldea-access-publisher/bundle.jws","to":"access-trust/bundle.jws"}.
+   A pre-existing destination is a stop for investigation, never an overwrite.
+
+```sh
 git -C "$FLEET" add access-trust/bundle.jws
 git -C "$FLEET" diff --cached --stat
 git -C "$FLEET" commit -m 'Publish trust bundle sequence 1' -m 'Co-Authored-By: GPT-6.1-Sol <noreply@openai.com>'
@@ -192,7 +201,8 @@ ansible-playbook playbooks/akasha.yml --limit homelab -e chaldea_access_trust_en
 
    Require healthy fresh <=30s clock evidence, first installed sequence 1 and
    expected signed expiry, root:root 0600 updater DB and root:root 0644 public
-   files. The second check must report changed=0. Unit ExecStartPre rejects
+   files. The second check must report changed=0. Dry runs render/predict files
+   and check bootstrap metadata but defer systemd reload/start until real apply. Unit ExecStartPre rejects
    unsafe runtime ownership, symlinks or writable ancestors. Clock supports
    timesyncd D-Bus; -/run/chrony is optional for hosts without chrony.
 
@@ -265,10 +275,18 @@ ansible homelab -m ansible.builtin.uri -a 'url=http://127.0.0.1:1935/api/v1/even
 ```sh
 # The orchestrator provisions a fresh report bearer at this service-private path.
 # Use one stable key for both invocations and a new key for a different canary run.
-ansible homelab -b --become-user akasha -m ansible.builtin.script -a 'scripts/akasha-canary.py --token-file /var/lib/akasha/canary-token --key rollout-2026-10-17-1'
-ansible homelab -b -m ansible.builtin.command -a 'systemctl restart akasha.service'
-ansible homelab -b --become-user akasha -m ansible.builtin.script -a 'scripts/akasha-canary.py --token-file /var/lib/akasha/canary-token --key rollout-2026-10-17-1'
-ansible homelab -b -m ansible.builtin.file -a 'path=/var/lib/akasha/canary-token state=absent'
+(
+  cleanup_canary() {
+    ansible homelab -b -m ansible.builtin.file -a 'path=/var/lib/akasha/canary-token state=absent'
+    ansible homelab -b -m ansible.builtin.file -a 'path=/usr/local/libexec/akasha-canary state=absent'
+  }
+  trap cleanup_canary EXIT HUP INT TERM
+  # Copy as root, then use pipelined command; no unprivileged script/ACL dependency.
+  ansible homelab -b -m ansible.builtin.copy -a 'src=scripts/akasha-canary.py dest=/usr/local/libexec/akasha-canary owner=root group=root mode=0755'
+  ansible homelab -b --become-user akasha -m ansible.builtin.command -a '/usr/local/libexec/akasha-canary --token-file /var/lib/akasha/canary-token --key rollout-2026-10-17-1'
+  ansible homelab -b -m ansible.builtin.command -a 'systemctl restart akasha.service'
+  ansible homelab -b --become-user akasha -m ansible.builtin.command -a '/usr/local/libexec/akasha-canary --token-file /var/lib/akasha/canary-token --key rollout-2026-10-17-1'
+)
 ```
 
     The existing issuer must bind the exact reviewed profile/project/source;
