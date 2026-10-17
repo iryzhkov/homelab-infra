@@ -1,0 +1,128 @@
+---
+- name: Install the pinned host runtime artifact
+  ansible.builtin.include_role:
+    name: chaldea_host_artifact
+    public: true
+
+- name: Validate explicit trust enrollment
+  ansible.builtin.assert:
+    that:
+      - chaldea_access_trust_anchors | length > 0
+      - chaldea_access_trust_anchors | length <= 8
+      - chaldea_access_trust_node is match('^/[A-Za-z0-9/_.-]+$')
+      - chaldea_access_trust_runtime is match('^/[A-Za-z0-9/_.-]+$')
+      - chaldea_access_trust_root is match('^/[A-Za-z0-9/_.-]+$')
+      - chaldea_access_trust_state is match('^/[A-Za-z0-9/_.-]+$')
+      - chaldea_access_trust_public is match('^/[A-Za-z0-9/_.-]+$')
+      - chaldea_access_trust_run == '/run/chaldea-access-trust'
+      - chaldea_access_paths.updater_state == chaldea_access_trust_state ~ '/updater.sqlite'
+      - chaldea_access_paths.bundle == chaldea_access_trust_public ~ '/bundle.jws'
+      - chaldea_access_paths.clock_health == chaldea_access_trust_run ~ '/clock-health.json'
+    quiet: true
+
+- name: Validate each independently provisioned public anchor
+  ansible.builtin.assert:
+    that:
+      - item.kid is match('^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+      - item.public_key.kty == 'OKP'
+      - item.public_key.crv == 'Ed25519'
+      - item.public_key.x is match('^[A-Za-z0-9_-]{43}$')
+    quiet: true
+  loop: "{{ chaldea_access_trust_anchors }}"
+
+- name: Create protected trust directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ chaldea_access_trust_root }}", mode: "0755"}
+    - {path: "{{ chaldea_access_trust_state }}", mode: "0700"}
+    - {path: "{{ chaldea_access_trust_public }}", mode: "0755"}
+    - {path: "{{ chaldea_access_trust_run }}", mode: "0755"}
+    - {path: "{{ chaldea_access_trust_fetcher | dirname }}", mode: "0755"}
+
+- name: Install independently pinned public anchors
+  become: true
+  ansible.builtin.copy:
+    content: "{{ chaldea_access_trust_anchors | to_nice_json }}\n"
+    dest: "{{ chaldea_access_trust_root }}/anchors.json"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install byte-only Git downloader
+  become: true
+  ansible.builtin.copy:
+    src: "{{ chaldea_host_artifact_root }}/chaldea-access-trust-fetch"
+    remote_src: true
+    dest: "{{ chaldea_access_trust_fetcher }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: chaldea_host_artifact_ready | bool
+
+- name: Install updater configuration
+  become: true
+  ansible.builtin.template:
+    src: updater.json.j2
+    dest: "{{ chaldea_access_trust_root }}/updater.json"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install trust units
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ chaldea_access_trust_unit_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - chaldea-access-trust.service
+    - chaldea-access-trust.timer
+    - chaldea-clock-health.service
+    - chaldea-clock-health.timer
+  notify: Reload access trust units
+
+- name: Inspect required operator bootstrap files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    follow: false
+    get_checksum: false
+  loop:
+    - {path: "{{ chaldea_access_trust_ssh_key }}", mode: "0600"}
+    - {path: "{{ chaldea_access_trust_known_hosts }}", mode: "0644"}
+    - {path: "{{ chaldea_access_paths.updater_state }}", mode: "0600"}
+  register: chaldea_access_trust_bootstrap
+
+- name: Require safe bootstrap before enabling timers
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg | default(false)
+      - item.stat.uid | default(-1) == 0
+      - item.stat.mode | default('') == item.item.mode
+    fail_msg: Provision the root-owned transport files and initialize durable state explicitly before enrollment.
+    quiet: true
+  loop: "{{ chaldea_access_trust_bootstrap.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+# Neither initialization nor key generation is implicit in convergence.
+- name: Enable trust timers only after operator bootstrap
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - chaldea-clock-health.timer
+    - chaldea-access-trust.timer
+  when: not ansible_check_mode

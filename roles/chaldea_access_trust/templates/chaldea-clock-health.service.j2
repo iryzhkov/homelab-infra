@@ -1,0 +1,19 @@
+[Unit]
+Description=Chaldea fail-closed time synchronization health adapter
+After=chronyd.service chrony.service systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0022
+RuntimeDirectory=chaldea-access-trust
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ExecStartPre=/usr/bin/python3 {{ chaldea_access_trust_fetcher }} --check-runtime {{ chaldea_access_trust_node }} {{ chaldea_access_trust_runtime }}
+ExecStart={{ chaldea_access_trust_node }} {{ chaldea_access_trust_runtime }} clock-health --output {{ chaldea_access_paths.clock_health }}
+TimeoutStartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# chronyc binds its private reply socket alongside chronyd's server socket.
+ReadWritePaths={{ chaldea_access_trust_run }} -/run/chrony

@@ -1,0 +1,20 @@
+[Unit]
+Description=Consistent bounded Akasha SQLite snapshot
+After=akasha.service
+ConditionPathExists=/var/lib/akasha/events.db
+
+[Service]
+Type=oneshot
+User=akasha
+Group=akasha
+UMask=0077
+Environment=TMPDIR=/var/lib/akasha/tmp
+ExecStart=/usr/local/libexec/akasha-maintenance backup
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/akasha
+PrivateTmp=true
+TimeoutStartSec=6min
+Nice=10
+IOSchedulingClass=idle

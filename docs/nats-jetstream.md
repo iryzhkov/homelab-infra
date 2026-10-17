@@ -1,4 +1,11 @@
 # Standalone JetStream: Ansible-managed Swarm
+
+Superseded in part by [chaldea-infra-foundation.md](chaldea-infra-foundation.md):
+the single `bootstrap-admin` password and the Docker-secret configuration
+described under "Credentials and configuration" are replaced by NKey users in
+the SYS and CHALDEA accounts and a configuration rendered from the inventory,
+while the historical encrypted `secrets/nats.sops.yaml` remains retained but is no longer mounted by the NATS stack. Placement, storage, network, firewall,
+edge routes and the install verification below still hold.
 Owning repo base6b3d8b7c2bb2793f61c5ed12801f8b95f8486257. No Steward integration/config changes.
 ## Verified deployment (2026-10-13)
 Root applied the approved scoped Ansible firewall and Swarm stack from this isolated tree; both exit0. Both edge dynamic routes applied via trusted laptop controller using its existing authorized keys and verified hostkeys. Laptop snapshot /tmp/nats-routes-check-20261013 came from staged tree d2bd530da61ddb7062d035092dc3f622aa4ab7ae; source base remains6b3d8b7c2bb2793f61c5ed12801f8b95f8486257 pending publication.

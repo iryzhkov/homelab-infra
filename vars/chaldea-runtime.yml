@@ -1,0 +1,21 @@
+---
+# Imported from fleet-config inventory at 439c908; update both pins together only
+# after the orchestrator tags the merged timesyncd/Akasha code from Chaldea main.
+chaldea_host_version: host-v0.2.0
+chaldea_host_sha256: 2e9a8d3cfd859516539aff8b494d66a397e6581a350ef9ecda80fd272ef9b4c6
+chaldea_node_version: "26.10.0"
+chaldea_node_sha256: ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022
+chaldea_access_paths:
+  root: /etc/chaldea-access-trust
+  state: /var/lib/chaldea-access-trust
+  public: /var/lib/chaldea-access-trust-public
+  run: /run/chaldea-access-trust
+  bundle: /var/lib/chaldea-access-trust-public/bundle.jws
+  clock_health: /run/chaldea-access-trust/clock-health.json
+  updater_state: /var/lib/chaldea-access-trust/updater.sqlite
+  verifier_state: /var/lib/akasha/access-state.db
+# Independently compared deployment key, SPKI SHA-256:
+# 222450438cdcae5bda6c498f5e39baee5e2479923389c28e518ccf9138aee296
+chaldea_access_trust_anchors:
+  - kid: deployment-2026-10
+    public_key: {kty: OKP, crv: Ed25519, x: re7EPlrspBhs_OHsN7z1VqDZ8HkVib4glgZCczaKjRc}

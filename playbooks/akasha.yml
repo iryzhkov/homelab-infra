@@ -1,0 +1,16 @@
+---
+# Homelab only, controlled from omarchy-pc. No site, fleet, keys or edge rollout.
+- name: Akasha host service definitions
+  hosts: homelab
+  gather_facts: false
+  become: true
+  vars_files:
+    - ../vars/chaldea-runtime.yml
+    - ../vars/akasha-registry.yml
+  roles:
+    - {role: chaldea_node, tags: [runtime]}
+    - {role: chaldea_host_artifact, tags: [runtime]}
+    - role: chaldea_access_trust
+      when: chaldea_access_trust_enabled | bool
+      tags: [trust]
+    - akasha

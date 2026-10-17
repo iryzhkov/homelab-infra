@@ -1,0 +1,12 @@
+---
+# Definitions only by default. Activation needs the separately reviewed C/F
+# artifacts and adapters; this role never installs or changes credentials.
+akasha_activate: false
+akasha_exec_start: "/opt/chaldea/node/bin/node {{ chaldea_host_artifact_root }}/akasha-service.mjs serve --config /etc/akasha/config.json"
+akasha_environment_file: /etc/akasha/runtime.env
+akasha_trust_bundle: "{{ chaldea_access_paths.bundle }}"
+akasha_clock_health: "{{ chaldea_access_paths.clock_health }}"
+akasha_nats_seed_file: /etc/akasha/nats.seed
+akasha_interfaces_verified: false
+akasha_backup_packaging_verified: false
+akasha_state_root: /var/lib/akasha

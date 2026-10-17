@@ -1,0 +1,13 @@
+---
+# Versions and checksums are inventory pins; no implicit latest release.
+chaldea_host_artifact_release_root: /opt/chaldea-host/releases
+chaldea_host_artifact_release_dir: "{{ chaldea_host_artifact_release_root }}/{{ chaldea_host_version }}"
+chaldea_host_artifact_root: "{{ chaldea_host_artifact_release_dir }}/host"
+chaldea_host_artifact_cache: /var/cache/chaldea-host
+chaldea_host_artifact_release_url: "https://github.com/iryzhkov/chaldea/releases/download/{{ chaldea_host_version }}"
+# Optional controller-local release inputs for isolated installation tests.
+chaldea_host_artifact_archive_source: ""
+chaldea_host_artifact_manifest_source: ""
+chaldea_host_artifact_become: true
+chaldea_host_artifact_owner: root
+chaldea_host_artifact_group: root

@@ -1,0 +1,41 @@
+[Unit]
+Description=Akasha event gateway and query store
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=akasha
+Group=akasha
+WorkingDirectory=/var/lib/akasha
+UMask=0077
+EnvironmentFile={{ akasha_environment_file }}
+Environment=TMPDIR=/var/lib/akasha/tmp
+# Bundled reviewed Chaldea service; no source checkout or npm on homelab.
+ExecStart={{ akasha_exec_start | default('', true) or '/usr/bin/false' }}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/akasha
+# ProtectSystem=strict covers adapters; missing boot-time paths must not
+# cause a namespace failure. The application rejects missing/stale evidence.
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=4096
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

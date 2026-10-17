@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Chaldea clock sample within 30 seconds
+
+[Timer]
+OnBootSec=1s
+OnUnitActiveSec=10s
+AccuracySec=1s
+RandomizedDelaySec=0
+Unit=chaldea-clock-health.service
+
+[Install]
+WantedBy=timers.target

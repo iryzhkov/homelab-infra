@@ -1,0 +1,230 @@
+---
+- name: Validate immutable host release pins and destinations
+  ansible.builtin.assert:
+    that:
+      - chaldea_host_version is match('^host-v[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.-]+)?$')
+      - chaldea_host_sha256 is match('^[a-f0-9]{64}$')
+      - chaldea_host_artifact_release_root is match('^/[A-Za-z0-9/_.-]+$')
+      - "'..' not in chaldea_host_artifact_release_root.split('/')"
+      - chaldea_host_artifact_cache is match('^/[A-Za-z0-9/_.-]+$')
+      - "'..' not in chaldea_host_artifact_cache.split('/')"
+    fail_msg: Set reviewed chaldea_host_version and chaldea_host_sha256 inventory pins.
+    quiet: true
+
+- name: Create root-owned host release cache and directory
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ chaldea_host_artifact_owner }}"
+    group: "{{ chaldea_host_artifact_group }}"
+    mode: "0755"
+  loop:
+    - "{{ chaldea_host_artifact_cache }}"
+    - "{{ chaldea_host_artifact_release_root }}"
+    - "{{ chaldea_host_artifact_release_dir }}"
+
+- name: Download checksum-pinned host archive
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.get_url:
+    url: "{{ chaldea_host_artifact_release_url }}/chaldea-host.tar.gz"
+    dest: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.tar.gz"
+    checksum: "sha256:{{ chaldea_host_sha256 }}"
+    owner: "{{ chaldea_host_artifact_owner }}"
+    group: "{{ chaldea_host_artifact_group }}"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - chaldea_host_artifact_archive_source | length == 0
+
+- name: Stage a controller-local host archive
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.copy:
+    src: "{{ chaldea_host_artifact_archive_source }}"
+    dest: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.tar.gz"
+    owner: "{{ chaldea_host_artifact_owner }}"
+    group: "{{ chaldea_host_artifact_group }}"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - chaldea_host_artifact_archive_source | length > 0
+
+- name: Download the host release manifest
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.get_url:
+    url: "{{ chaldea_host_artifact_release_url }}/manifest.json"
+    dest: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.json"
+    owner: "{{ chaldea_host_artifact_owner }}"
+    group: "{{ chaldea_host_artifact_group }}"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - chaldea_host_artifact_manifest_source | length == 0
+
+- name: Stage a controller-local host manifest
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.copy:
+    src: "{{ chaldea_host_artifact_manifest_source }}"
+    dest: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.json"
+    owner: "{{ chaldea_host_artifact_owner }}"
+    group: "{{ chaldea_host_artifact_group }}"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - chaldea_host_artifact_manifest_source | length > 0
+
+- name: Inspect the cached release archive
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.stat:
+    path: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.tar.gz"
+    checksum_algorithm: sha256
+    follow: false
+  register: chaldea_host_artifact_cached_archive
+
+- name: Inspect the cached release manifest
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.stat:
+    path: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.json"
+    follow: false
+  register: chaldea_host_artifact_cached_manifest
+
+- name: Explain deferred host artifact installation on a fresh check run
+  ansible.builtin.debug:
+    msg: Host release is not cached; apply will verify the pinned archive and manifest before installing programs.
+  when: ansible_check_mode and not (chaldea_host_artifact_cached_archive.stat.exists and chaldea_host_artifact_cached_manifest.stat.exists)
+
+- name: Verify and unpack the cached host release
+  when: chaldea_host_artifact_cached_archive.stat.exists and chaldea_host_artifact_cached_manifest.stat.exists
+  block:
+    - name: Require the exact archive checksum before extraction
+      ansible.builtin.assert:
+        that:
+          - chaldea_host_artifact_cached_archive.stat.isreg | default(false)
+          - not (chaldea_host_artifact_cached_archive.stat.islnk | default(false))
+          - chaldea_host_artifact_cached_archive.stat.checksum == chaldea_host_sha256
+          - chaldea_host_artifact_cached_manifest.stat.isreg | default(false)
+          - not (chaldea_host_artifact_cached_manifest.stat.islnk | default(false))
+        quiet: true
+
+    - name: Read the host manifest
+      become: "{{ chaldea_host_artifact_become }}"
+      ansible.builtin.slurp:
+        src: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.json"
+      register: chaldea_host_artifact_manifest_bytes
+
+    - name: Require matching manifest version and tar checksum
+      ansible.builtin.assert:
+        that:
+          - (chaldea_host_artifact_manifest_bytes.content | b64decode | from_json).version == chaldea_host_version
+          - (chaldea_host_artifact_manifest_bytes.content | b64decode | from_json).sha256 == chaldea_host_sha256
+        quiet: true
+
+    - name: Extract the verified root-owned host release
+      become: "{{ chaldea_host_artifact_become }}"
+      ansible.builtin.unarchive:
+        src: "{{ chaldea_host_artifact_cache }}/{{ chaldea_host_version }}.tar.gz"
+        dest: "{{ chaldea_host_artifact_release_dir }}"
+        remote_src: true
+        extra_opts: [--preserve-permissions]
+        owner: "{{ chaldea_host_artifact_owner }}"
+        group: "{{ chaldea_host_artifact_group }}"
+      when: not ansible_check_mode
+
+- name: Secure the extracted host payload directory explicitly
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.file:
+    path: "{{ chaldea_host_artifact_root }}"
+    state: directory
+    owner: "{{ chaldea_host_artifact_owner }}"
+    group: "{{ chaldea_host_artifact_group }}"
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: Inspect the installed host payload
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.stat:
+    path: "{{ chaldea_host_artifact_root }}/{{ item }}"
+    follow: false
+  loop:
+    - chaldea-job-server
+    - chaldea-job-image
+    - chaldea-job-toolchains
+    - chaldea-retention
+    - chaldea-timer-report
+    - chaldea_outcome.py
+    - chaldea-access-trust-fetch
+    - exec-protocol.json
+    - access-maintenance.mjs
+    - akasha-collector.mjs
+  register: chaldea_host_artifact_payload
+
+- name: Require all installed host programs
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+    quiet: true
+  loop: "{{ chaldea_host_artifact_payload.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not ansible_check_mode
+
+- name: Expose host payload availability for fresh check runs
+  ansible.builtin.set_fact:
+    chaldea_host_artifact_ready: "{{ chaldea_host_artifact_payload.results | selectattr('stat.exists') | list | length == 10 }}"
+
+- name: Find installed host releases without following links
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.find:
+    paths: "{{ chaldea_host_artifact_release_root }}"
+    file_type: directory
+    recurse: false
+    follow: false
+    use_regex: true
+    patterns: ['^host-v[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.-]+)?$']
+  register: chaldea_host_artifact_releases
+  when: not ansible_check_mode
+
+- name: Keep the configured release and the most recently installed prior release
+  ansible.builtin.set_fact:
+    chaldea_host_artifact_prior_releases: "{{ chaldea_host_artifact_releases.files | rejectattr('path', 'equalto', chaldea_host_artifact_release_dir) | sort(attribute='mtime', reverse=true) | list }}"
+  when: not ansible_check_mode
+
+- name: Remove releases older than the retained prior release
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ (chaldea_host_artifact_prior_releases | default([]))[1:] }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: not ansible_check_mode
+
+- name: Find managed archive and manifest cache files
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.find:
+    paths: "{{ chaldea_host_artifact_cache }}"
+    file_type: file
+    recurse: false
+    follow: false
+    use_regex: true
+    patterns: ['^host-v[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.-]+)?[.](tar[.]gz|json)$']
+  register: chaldea_host_artifact_cache_files
+  when: not ansible_check_mode
+
+- name: Derive the two retained releases' cache filenames
+  ansible.builtin.set_fact:
+    chaldea_host_artifact_retained_versions: "{{ [chaldea_host_version] + (chaldea_host_artifact_prior_releases[:1] | map(attribute='path') | map('basename') | list) }}"
+  when: not ansible_check_mode
+
+- name: Remove archives and manifests for unretained releases
+  become: "{{ chaldea_host_artifact_become }}"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ chaldea_host_artifact_cache_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - not ansible_check_mode
+    - (item.path | basename | regex_replace('[.](tar[.]gz|json)$', '')) not in chaldea_host_artifact_retained_versions

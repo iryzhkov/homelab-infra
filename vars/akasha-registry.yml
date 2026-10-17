@@ -1,0 +1,42 @@
+# First sources; reviewed together with fleet-config issuer-grants.json.
+# The timer and collector source names come from Chaldea src/events/collector.ts.
+{
+  "akasha_registry": [
+    {
+      "issuer": "chaldea:agent-a",
+      "source": "chaldea.daily-health.agent-a",
+      "host": "agent-a",
+      "source_id": "agent-a-daily-health",
+      "profile": "daily-health",
+      "project": "homelab",
+      "mode": "report",
+      "kinds": [
+        "report"
+      ]
+    },
+    {
+      "issuer": "chaldea:agent-a",
+      "source": "agent-a.fleet",
+      "host": "agent-a",
+      "source_id": "agent-a-fleet",
+      "profile": "fleet-timers",
+      "project": "chaldea",
+      "mode": "service",
+      "kinds": [
+        "job_finished"
+      ]
+    },
+    {
+      "issuer": "chaldea:agent-a",
+      "source": "agent-a.toolfeedback",
+      "host": "agent-a",
+      "source_id": "agent-a-toolfeedback",
+      "profile": "toolfeedback",
+      "project": "chaldea",
+      "mode": "service",
+      "kinds": [
+        "tool_call"
+      ]
+    }
+  ]
+}

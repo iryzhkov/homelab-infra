@@ -1,0 +1,65 @@
+---
+- name: Require the reviewed x86-64 Node runtime pin
+  ansible.builtin.assert:
+    that:
+      - chaldea_node_version == '26.10.0'
+      - chaldea_node_sha256 == 'ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022'
+    quiet: true
+
+- name: Verify x86-64 runtime architecture
+  ansible.builtin.command: uname -m
+  register: chaldea_node_arch
+  changed_when: false
+  check_mode: false
+  failed_when: chaldea_node_arch.stdout | trim != 'x86_64'
+
+- name: Create protected Node install paths
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [/opt/chaldea, /opt/chaldea/node, /var/cache/chaldea-node]
+
+- name: Fetch the official checksum-pinned Node tarball
+  ansible.builtin.get_url:
+    url: "https://nodejs.org/dist/v{{ chaldea_node_version }}/node-v{{ chaldea_node_version }}-linux-x64.tar.xz"
+    dest: "/var/cache/chaldea-node/node-v{{ chaldea_node_version }}-linux-x64.tar.xz"
+    checksum: "sha256:{{ chaldea_node_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+
+- name: Inspect the cached Node tarball
+  ansible.builtin.stat:
+    path: "/var/cache/chaldea-node/node-v{{ chaldea_node_version }}-linux-x64.tar.xz"
+    checksum_algorithm: sha256
+    follow: false
+  register: chaldea_node_archive
+
+- name: Verify the Node archive before extraction
+  ansible.builtin.assert:
+    that:
+      - chaldea_node_archive.stat.isreg | default(false)
+      - chaldea_node_archive.stat.checksum == chaldea_node_sha256
+    quiet: true
+  when: chaldea_node_archive.stat.exists
+
+- name: Install root-owned Node without a home-directory runtime
+  ansible.builtin.unarchive:
+    src: "/var/cache/chaldea-node/node-v{{ chaldea_node_version }}-linux-x64.tar.xz"
+    dest: /opt/chaldea/node
+    remote_src: true
+    extra_opts: [--strip-components=1, --no-same-permissions]
+    owner: root
+    group: root
+  when: not ansible_check_mode
+
+- name: Check the installed Node version
+  ansible.builtin.command: /opt/chaldea/node/bin/node --version
+  register: chaldea_node_installed
+  changed_when: false
+  failed_when: chaldea_node_installed.stdout | trim != 'v' ~ chaldea_node_version
+  when: not ansible_check_mode
