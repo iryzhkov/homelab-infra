@@ -1,0 +1,6 @@
+---
+# The trust publisher has renewed from Normandy since 2026-10-17 (first
+# publication sequence 1, second renewal sequence 2). Keep both timers on, so
+# a routine signer-play run never stops renewal. Recovery sets this to false
+# explicitly; see docs/normandy-publisher.md.
+chaldea_publisher_enabled: true
