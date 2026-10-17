@@ -2,7 +2,8 @@
 
 Source only. Igor's 2026-10-17 decision moves publishing from the gaming PC to
 the always-on Arch x86_64 machine **omarchy-normandy**, user igor, timesyncd active.
-The inventory's existing **normandy** is a different Debian application VM.
+It is the same machine as the inventory's existing **normandy** host (VM 202,
+192.168.70.234); the separate inventory name only scopes the signer play.
 The signer play targets only chaldea_publishers/omarchy-normandy and installs no
 agent workload. The orchestrator runs every command here and creates every key.
 
