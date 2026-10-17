@@ -19,7 +19,8 @@ the lock inode while either can run. Only the completed
 seeds and independent verifier state never enter this package.
 
 Packaging runs at 00:25 and 12:25 with up to five minutes jitter: nominal
-disaster loss is <=13h plus transfer time, within the proposed <=24h RPO.
+disaster loss is <=12h05m + snapshot age (accepted <=2h) + transfer time,
+within the proposed <=24h RPO.
 Before upload, the job queries B2 using the existing key, requiring an
 `allPrivate` bucket and default `SSE-B2/AES256`. Missing
 `readBucketEncryption` permission or absent encryption fails closed. Stop
@@ -50,6 +51,9 @@ Gatus's existing private environment, and read from files on homelab.
 delivery failure never changes unit status. The reporter disables redirects
 and environment proxies and never logs exception text, tokens or records.
 Homelab/Gatus/Discord outages can prevent delivery, as with the publisher.
+A near-timeout 65min transfer can exceed the 13h silence window after a fast
+previous run and cause an early alert; real success resolves it. This alerts
+conservatively before the 24h RPO rather than hiding a missed shipment.
 
 ## Ordered orchestrator commands
 
@@ -134,7 +138,13 @@ ansible homelab -b -m ansible.builtin.command -a 'stat -c %U:%G:%a /var/lib/akas
    Run backup/offsite canaries now. Health cannot pass before the HTTP service
    is active; run the same health canary immediately after first activation in
    step 6, once the expected pre-activation health silence has resolved.
-   Keep the same controller shell so the function remains defined.
+   Igor runs the canary interactively in **Bash**, in the same controller shell
+   so the function remains defined; an agent hands these receipt prompts to him.
+   For health's short 3m interval, an open-ended operator pause can itself cause
+   silence. Refresh real success after the first prompt, force failure within
+   2m, and accept only a Discord message timestamp after the override and within
+   that 2m window. If any silence alert appears, discard the evidence and restart
+   the canary from its real-success step; never count silence as unit failure.
 
 ```sh
 printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=/usr/bin/false' > "$TMPDIR/akasha-rollout-canary.conf"
@@ -155,13 +165,24 @@ akasha_alert_canary() (
   ansible homelab -b -m ansible.builtin.command -a "systemctl stop $TIMER"
   ansible homelab -b -m ansible.builtin.command -a "systemctl start $UNIT"
   ansible homelab -m ansible.builtin.uri -a 'url=http://{{ ansible_host }}:3002/api/v1/endpoints/statuses return_content=true'
-  read -r -p "Confirm this endpoint is healthy in Gatus and resolved in Discord; press Enter: " RECEIPT
+  read -r -p "Confirm healthy in Gatus (and resolved in Discord if previously alerted); press Enter: " RECEIPT
+  # Refresh after the unbounded human pause; the following section has no prompts.
+  ansible homelab -b -m ansible.builtin.command -a "systemctl start $UNIT"
+  CANARY_SUCCESS_AT=$(date +%s)
   ansible homelab -b -m ansible.builtin.file -a "path=/run/systemd/system/$UNIT.d state=directory owner=root group=root mode=0755"
   ansible homelab -b -m ansible.builtin.copy -a "src=$TMPDIR/akasha-rollout-canary.conf dest=$CANARY owner=root group=root mode=0644"
   ansible homelab -b -m ansible.builtin.command -a 'systemctl daemon-reload'
+  CANARY_OVERRIDE_AT=$(date +%s)
+  test "$((CANARY_OVERRIDE_AT - CANARY_SUCCESS_AT))" -lt 90
   if ansible homelab -b -m ansible.builtin.command -a "systemctl start $UNIT"; then exit 1; fi
+  test "$(($(date +%s) - CANARY_SUCCESS_AT))" -lt 120
   ansible homelab -m ansible.builtin.uri -a 'url=http://{{ ansible_host }}:3002/api/v1/endpoints/statuses return_content=true'
-  read -r -p "Confirm a NEW unit failure arrived in Discord; press Enter: " RECEIPT
+  printf 'Accept only a NEW Discord unit-failure message after %s and before %s (UTC).\n' \
+    "$(date -u -d "@$CANARY_OVERRIDE_AT" +%FT%TZ)" "$(date -u -d "@$((CANARY_SUCCESS_AT + 120))" +%FT%TZ)"
+  read -r -p "Paste that Discord message UTC timestamp (YYYY-MM-DDTHH:MM:SSZ): " RECEIPT
+  RECEIPT_AT=$(date -u -d "$RECEIPT" +%s)
+  test "$RECEIPT_AT" -ge "$CANARY_OVERRIDE_AT"
+  test "$RECEIPT_AT" -lt "$((CANARY_SUCCESS_AT + 120))"
   cleanup
   trap - EXIT HUP INT TERM
   ansible homelab -b -m ansible.builtin.command -a "systemctl start $UNIT"
