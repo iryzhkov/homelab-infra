@@ -9,6 +9,8 @@ Group=akasha
 UMask=0077
 Environment=TMPDIR=/var/lib/akasha/tmp
 ExecStart=/usr/local/libexec/akasha-maintenance health
+ExecStopPost=-/usr/local/libexec/akasha-heartbeat --url http://{{ ansible_host }}:3002/api/v1/endpoints/chaldea_akasha-health/external --token-file /etc/akasha/heartbeat-health
+TimeoutStopSec=10s
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

@@ -192,9 +192,22 @@ This is the one tier that reports success. A monthly line in the feed saying
 the offsite copies were fetched and restored is the evidence that the backups
 work; silence cannot say that.
 
+## Akasha event-store package
+
+`playbooks/akasha-backup.yml` installs only `roles/backup/tasks/akasha.yml` on
+homelab. It reuses the existing backup owner and private rclone/B2 config,
+packages the completed hourly SQLite snapshot under its shared exclusion lock,
+and uploads/readbacks it every twelve hours. It never snapshots live Akasha
+state itself. Private bucket/default encryption and <24h snapshot age are
+required. Gatus reports failures and silence to Discord. See the
+[ordered deployment, remote verification and isolated restore commands](akasha-backup-alerts.md).
+No NAS mount or broad backup-role run is needed. Unlike the other tiers,
+Akasha reports through Gatus/Discord directly, outside `homelab-backup-run`,
+and is verified on every shipment rather than by the monthly restore job.
+
 ## Failure reporting
 
-Every tier runs through `homelab-backup-run`, which is quiet on success and,
+The other tiers run through `homelab-backup-run`, which is quiet on success and,
 when a tier or its upload does not work, posts to the fleet feed as a `fail`
 **and pushes to the phone** through notify-relay. Configuration drift does the
 same at a lower priority.

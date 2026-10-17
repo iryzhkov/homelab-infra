@@ -1,0 +1,25 @@
+[Unit]
+Description=Package and read back the Akasha snapshot through homelab B2 backups
+After=network-online.target akasha-backup.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=TMPDIR=/var/lib/akasha-offsite
+ExecStart=/usr/local/sbin/homelab-akasha-offsite
+ExecStopPost=-/usr/local/libexec/akasha-heartbeat --url http://{{ ansible_host }}:3002/api/v1/endpoints/chaldea_akasha-offsite/external --token-file /etc/akasha/heartbeat-offsite
+TimeoutStartSec=65min
+TimeoutStopSec=10s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/akasha-offsite
+ReadOnlyPaths=-/var/lib/akasha/backup
+# Opening the shared lock needs write access, without access to the live DB.
+ReadWritePaths=-/var/lib/akasha/backup.lock
+InaccessiblePaths=-/var/lib/akasha/events.db -/var/lib/akasha/events.db-wal -/var/lib/akasha/events.db-shm -/var/lib/akasha/access-state.db -/var/lib/akasha/access-state.db-wal -/var/lib/akasha/access-state.db-shm
+Nice=10
+IOSchedulingClass=idle

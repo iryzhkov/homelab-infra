@@ -1,0 +1,11 @@
+---
+# Narrow backup-role entry point. No NAS mounts, other backup tiers or hosts.
+- name: Stage Akasha offsite packaging using homelab's existing B2 configuration
+  hosts: homelab
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Install only the Akasha packaging integration
+      ansible.builtin.include_role:
+        name: backup
+        tasks_from: akasha
