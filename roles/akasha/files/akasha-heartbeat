@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Best-effort Gatus result reporting. Never print credentials or exceptions."""
+import argparse
+import os
+from pathlib import Path
+import re
+import urllib.request
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def push(url, token_file, success):
+    token = Path(token_file).read_text().strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", token):
+        raise ValueError("invalid token")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    request = urllib.request.Request(
+        url + "?success=" + str(success).lower(),
+        headers={"Authorization": "Bearer " + token}, method="POST")
+    with opener.open(request, timeout=5) as response:
+        if response.status != 200:
+            raise ValueError("heartbeat rejected")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--token-file", required=True)
+    args = parser.parse_args()
+    try:
+        push(args.url, args.token_file, os.environ.get("SERVICE_RESULT") == "success")
+    except Exception:
+        print("akasha heartbeat: delivery failed", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

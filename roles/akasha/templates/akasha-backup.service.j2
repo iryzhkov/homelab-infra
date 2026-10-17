@@ -10,6 +10,8 @@ Group=akasha
 UMask=0077
 Environment=TMPDIR=/var/lib/akasha/tmp
 ExecStart=/usr/local/libexec/akasha-maintenance backup
+ExecStopPost=-/usr/local/libexec/akasha-heartbeat --url http://{{ ansible_host }}:3002/api/v1/endpoints/chaldea_akasha-backup/external --token-file /etc/akasha/heartbeat-backup
+TimeoutStopSec=10s
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

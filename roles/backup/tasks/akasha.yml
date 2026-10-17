@@ -1,0 +1,63 @@
+---
+# Explicit tasks_from entry point: never include the broad backup main.
+- name: Require homelab and its existing backup owner
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'homelab'
+      - ansible_user == 'iryzhkov'
+      - backup_root == '/home/iryzhkov/app/backups'
+    quiet: true
+
+- name: Inspect existing private rclone configuration
+  ansible.builtin.stat:
+    path: /home/iryzhkov/.config/rclone/rclone.conf
+    follow: false
+    get_checksum: false
+    get_mime: false
+  register: akasha_rclone
+
+- name: Require the existing backup credentials without reading them
+  ansible.builtin.assert:
+    that:
+      - akasha_rclone.stat.isreg | default(false)
+      - not (akasha_rclone.stat.islnk | default(false))
+      - akasha_rclone.stat.mode == '0600'
+    quiet: true
+
+- name: Create private packaging state
+  ansible.builtin.file:
+    path: /var/lib/akasha-offsite
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install Akasha packaging helper owned by the backup role
+  ansible.builtin.copy:
+    src: homelab-akasha-offsite
+    dest: /usr/local/sbin/homelab-akasha-offsite
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install only Akasha offsite units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [akasha-offsite.service, akasha-offsite.timer]
+  register: akasha_offsite_units
+
+- name: Reload only changed unit definitions
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: akasha_offsite_units is changed and not ansible_check_mode
+
+- name: Enable shipping only after first verified remote copy and alerts
+  ansible.builtin.systemd_service:
+    name: akasha-offsite.timer
+    enabled: true
+    state: started
+  when: akasha_offsite_enable | default(false) | bool

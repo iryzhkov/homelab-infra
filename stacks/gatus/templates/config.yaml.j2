@@ -182,7 +182,9 @@ endpoints:
 {% endif %}
 {# A routine converge before token provisioning must keep Gatus usable. #}
 {% set publisher_heartbeat_enabled = inventory_hostname == 'homelab' and ((stack_secrets | default({})).CHALDEA_PUBLISHER_HEARTBEAT_TOKEN | default('', true) | trim | length > 0) %}
-{% if publisher_heartbeat_enabled or inventory_hostname == smart_gatus_host %}
+{% set akasha_tokens = stack_secrets | default({}) %}
+{% set akasha_heartbeat_enabled = inventory_hostname == 'homelab' and (akasha_tokens.AKASHA_BACKUP_HEARTBEAT_TOKEN | default('', true) | trim | length > 0 or akasha_tokens.AKASHA_OFFSITE_HEARTBEAT_TOKEN | default('', true) | trim | length > 0 or akasha_tokens.AKASHA_HEALTH_HEARTBEAT_TOKEN | default('', true) | trim | length > 0) %}
+{% if publisher_heartbeat_enabled or akasha_heartbeat_enabled or inventory_hostname == smart_gatus_host %}
 
 external-endpoints:
 {% if publisher_heartbeat_enabled %}
@@ -197,6 +199,23 @@ external-endpoints:
         failure-threshold: 1
         success-threshold: 1
         send-on-resolved: true
+{% endif %}
+{% if akasha_heartbeat_enabled %}
+{% for name, interval in [('backup', '2h'), ('offsite', '26h'), ('health', '3m')] %}
+{% set token_key = 'AKASHA_' ~ (name | upper) ~ '_HEARTBEAT_TOKEN' %}
+{% if akasha_tokens[token_key] | default('', true) | trim | length > 0 %}
+  - name: akasha-{{ name }}
+    group: chaldea
+    token: "{{ '${' ~ token_key ~ '}' }}"
+    heartbeat:
+      interval: {{ interval }}
+    alerts:
+      - type: discord
+        failure-threshold: 1
+        success-threshold: 1
+        send-on-resolved: true
+{% endif %}
+{% endfor %}
 {% endif %}
 {% if inventory_hostname == smart_gatus_host %}
 # SMART health of the hypervisors' physical drives, pushed every 15 minutes by

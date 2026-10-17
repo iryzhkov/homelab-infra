@@ -93,11 +93,13 @@ jobs:
           echo "$TMPDIR/bin" >> "$GITHUB_PATH"
       - name: Test actual NATS ACLs, selected convergence and SQLite restore
         run: |
-          python3 scripts/test-akasha-infra.py -v
           export HOME="$TMPDIR/.scratch-home"
           export ROLLOUT_TEST_HOME="$HOME"
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME"
+          export AKASHA_TEST_HOME="$HOME"
+          python3 scripts/test-akasha-infra.py -v
+          python3 scripts/test-akasha-backup.py -v
           python3 scripts/test-trust-fetcher.py -v
           python3 scripts/test-trust-rollout.py -v
           python3 scripts/test-chaldea-publisher.py -v
@@ -106,5 +108,7 @@ jobs:
           # This job only needs SOPS for the heartbeat provisioning syntax check.
           ansible-galaxy collection install community.sops
           ansible-playbook playbooks/chaldea-publisher-heartbeat.yml --syntax-check
+          ansible-playbook playbooks/akasha-heartbeat.yml --syntax-check
+          ansible-playbook playbooks/akasha-backup.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --list-hosts

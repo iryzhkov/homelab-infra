@@ -1,0 +1,10 @@
+[Unit]
+Description=Ship Akasha snapshots to B2 every twelve hours
+
+[Timer]
+OnCalendar=*-*-* 00,12:25:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

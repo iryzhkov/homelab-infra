@@ -124,6 +124,17 @@
     - /var/lib/akasha/backup
     - /var/lib/akasha/tmp
 
+# Never truncate/replace the lock inode: running backup/packaging uses flock.
+- name: Create shared snapshot exclusion lock without replacing it
+  ansible.builtin.file:
+    path: /var/lib/akasha/backup.lock
+    state: touch
+    owner: akasha
+    group: akasha
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+
 - name: Create the maintenance executable directory
   ansible.builtin.file:
     path: /usr/local/libexec
@@ -134,11 +145,12 @@
 
 - name: Install bounded maintenance helper
   ansible.builtin.copy:
-    src: akasha-maintenance
-    dest: /usr/local/libexec/akasha-maintenance
+    src: "{{ item }}"
+    dest: "/usr/local/libexec/{{ item }}"
     owner: root
     group: root
     mode: "0755"
+  loop: [akasha-maintenance, akasha-heartbeat]
 
 - name: Create public runtime configuration directory
   ansible.builtin.file:

@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Package ONLY Akasha's completed snapshot using homelab's existing B2 job."""
+import argparse
+import base64
+import configparser
+from contextlib import closing
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import sqlite3
+import stat
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+REMOTE = "b2:igor-offsite-backup/apps/homelab/backups/akasha"
+RCLONE_CONFIG = "/home/iryzhkov/.config/rclone/rclone.conf"
+STATE = Path("/var/lib/akasha-offsite")
+SOURCE = Path("/var/lib/akasha/backup/events.db")
+LOCK = Path("/var/lib/akasha/backup.lock")
+DB_LIMIT = 4 * 1024 ** 3
+
+
+def private_regular(path):
+    return private_info(path.lstat())
+
+
+def private_info(info):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError("unsafe backup file")
+    return info
+
+
+def digest(path):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def verify_database(path):
+    private_regular(path)
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
+        if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+            raise ValueError("backup integrity failed")
+
+
+def fresh(timestamp, limit):
+    age = time.time() - timestamp
+    if age < 0 or age >= limit:
+        raise ValueError("backup is stale or from the future")
+    return age
+
+
+def require_encryption():
+    # Same native read-only API pattern as homelab-b2-guard. Fail closed if
+    # the existing key cannot prove private bucket + default SSE-B2.
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(RCLONE_CONFIG)
+    credentials = (config["b2"]["account"] + ":" + config["b2"]["key"]).encode()
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    def request(url, authorization):
+        with opener.open(urllib.request.Request(
+                url, headers={"Authorization": authorization}), timeout=30) as response:
+            return json.load(response)
+    account = request("https://api.backblazeb2.com/b2api/v3/b2_authorize_account",
+                      "Basic " + base64.b64encode(credentials).decode())
+    api = account["apiInfo"]["storageApi"]["apiUrl"]
+    parsed = urllib.parse.urlparse(api)
+    if parsed.scheme != "https" or not parsed.hostname.endswith(".backblazeb2.com"):
+        raise ValueError("unsafe B2 API")
+    buckets = request(api + "/b2api/v3/b2_list_buckets?" + urllib.parse.urlencode(
+        {"accountId": account["accountId"], "bucketName": "igor-offsite-backup"}),
+        account["authorizationToken"])["buckets"]
+    bucket = buckets[0]
+    encryption = bucket["defaultServerSideEncryption"]["value"]
+    if (bucket["bucketName"] != "igor-offsite-backup" or bucket["bucketType"] != "allPrivate"
+            or encryption != {"mode": "SSE-B2", "algorithm": "AES256"}):
+        raise ValueError("private encrypted B2 bucket required")
+
+
+def rclone(*args):
+    # Existing B2 credentials; TLS and the checked bucket encryption default.
+    # Suppress subprocess text: a transport error must never disclose config.
+    subprocess.run(["/usr/bin/rclone", *map(str, args), "--config", RCLONE_CONFIG],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=900)
+
+
+def download(remote_name, destination):
+    # Precreate privately so downloaded bytes are never world-readable.
+    destination.touch(mode=0o600)
+    rclone("copyto", REMOTE + "/" + remote_name, destination)
+    os.chmod(destination, 0o600)
+
+
+def verify_remote(directory):
+    manifest_file = directory / "remote-manifest.json"
+    restored = directory / "restored.db"
+    download("manifest.json", manifest_file)
+    if manifest_file.stat().st_size > 16384:
+        raise ValueError("oversized manifest")
+    manifest = json.loads(manifest_file.read_text())
+    fresh(manifest["snapshot_time"], 24 * 3600)
+    if not 0 < manifest["size"] <= DB_LIMIT or shutil.disk_usage(directory).free < manifest["size"] + 128 * 1024 ** 2:
+        raise ValueError("insufficient restore reserve or oversized backup")
+    download("events.db", restored)
+    if restored.stat().st_size != manifest["size"] or digest(restored) != manifest["sha256"]:
+        raise ValueError("remote backup differs from manifest")
+    verify_database(restored)
+    return manifest, fresh(manifest["snapshot_time"], 24 * 3600)
+
+
+def package(directory):
+    copied = directory / "events.db"
+    # Same persistent inode as akasha-maintenance.snapshot. The hourly timer
+    # stays running; no replacement/deletion can occur until copy + check end.
+    fd = os.open(LOCK, os.O_RDWR | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb+") as lock:
+        private_regular(LOCK)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # Pin the directory and leaf descriptors: neither a symlinked backup
+        # directory nor a swapped leaf may redirect a root copy to live state.
+        directory_fd = os.open(SOURCE.parent, os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            source_fd = os.open(SOURCE.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+        with os.fdopen(source_fd, "rb") as source:
+            info = private_info(os.fstat(source.fileno()))
+            fresh(info.st_mtime, 2 * 3600)
+            if info.st_size > DB_LIMIT or shutil.disk_usage(directory).free < 2 * info.st_size + 128 * 1024 ** 2:
+                raise ValueError("insufficient packaging reserve or oversized snapshot")
+            with copied.open("wb") as destination:
+                os.chmod(copied, 0o600)
+                shutil.copyfileobj(source, destination)
+            source.seek(0)
+            if hashlib.file_digest(source, "sha256").hexdigest() != digest(copied):
+                raise ValueError("snapshot copy differs")
+        verify_database(copied)
+        manifest = {"snapshot_time": info.st_mtime, "size": copied.stat().st_size,
+                    "sha256": digest(copied), "packaged_time": time.time()}
+        with copied.open("rb") as handle:
+            os.fsync(handle.fileno())
+    manifest_file = directory / "manifest.json"
+    manifest_file.write_text(json.dumps(manifest) + "\n")
+    os.chmod(manifest_file, 0o600)
+    # Only these explicit files go off-host. No directory sync, live DB,
+    # WAL/SHM, lock or partial can enter the package.
+    rclone("copyto", copied, REMOTE + "/events.db")
+    rclone("copyto", manifest_file, REMOTE + "/manifest.json")
+    received, age = verify_remote(directory)
+    if received != manifest:
+        raise ValueError("remote manifest differs")
+    return received, age
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verify", action="store_true",
+                        help="fetch remote DB + manifest and prove integrity and age <24h")
+    args = parser.parse_args()
+    os.umask(0o077)
+    # A fixed root-owned directory and systemd serialization; verification is
+    # also flocked, so an operator check cannot race the packaging job.
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    lock_fd = os.open(STATE / "job.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, "rb+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        work = STATE / "work"
+        try:
+            if work.exists():
+                shutil.rmtree(work)
+            work.mkdir(mode=0o700)
+            require_encryption()
+            manifest, age = verify_remote(work) if args.verify else package(work)
+            print("akasha offsite: verified snapshot_time=" +
+                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(manifest["snapshot_time"])) +
+                  " age_seconds=" + str(int(age)) + " sha256=" + manifest["sha256"])
+            return 0
+        except Exception:
+            print("akasha offsite: FAILED; inspect snapshot/transport/age", file=sys.stderr)
+            return 1
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
