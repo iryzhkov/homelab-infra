@@ -68,8 +68,8 @@ list/approval. No broad site convergence, agent-tools build or fleet rollout.
 
 ## Runtime handoff and enablement blockers
 
-C owns the accepted Akasha artifact and exact invocation. F owns the trust
-updater and clock-health adapters. This role deliberately does not guess
+C owns the accepted Akasha artifact and exact invocation. C owns the host trust updater, clock-health adapter and signing CLI in its versioned
+host artifact. F installs the pinned version and SHA-256 and renders configuration. This role deliberately does not guess
 their CLI/config schema or edit their trust/sandbox roles. Before activation:
 
 1. Freeze reviewed C/access/artifact commits, install the immutable artifact
@@ -88,7 +88,8 @@ their CLI/config schema or edit their trust/sandbox roles. Before activation:
    `akasha_clock_health`; ensure the service can traverse/read them and
    that updater replacements remain visible. Missing, stale or rollback
    trust/clock evidence must fail closed. Verify restart high-water state,
-   freshness (120s fetch, 600s maximum age), healthy offset <=30s and scoped
+   freshness (120s fetch, 24h maximum signed-bundle age), clock evidence refreshed
+   within 30s with healthy offset <=30s, and scoped
    token vectors with F/C. Never restore older trust/revocation high-water
    state. Set `akasha_interfaces_verified=true` only after this evidence.
 5. Verify local filesystem, free disk and existing host-wide Chaldea
@@ -105,6 +106,21 @@ their CLI/config schema or edit their trust/sandbox roles. Before activation:
 6. Complete backup packaging and alert routing below; only then set
    `akasha_backup_packaging_verified=true`. These flags record operator
    verification, not automatic proof of deployment readiness.
+
+The path contract comes from `chaldea_access_paths` in
+[chaldea-fleet-config inventory](https://github.com/iryzhkov/chaldea-fleet-config/blob/main/inventory/group_vars/all.yml).
+Render the Akasha runtime JSON and adapter settings from that same mapping:
+`bundle_file` / `akasha_trust_bundle` use `bundle`;
+`clock_health_file` / `akasha_clock_health` use `clock_health`;
+`access_state` uses `verifier_state`. Do not invent Akasha-specific bundle
+extensions or clock paths. The updater's private high-water database uses
+`updater_state`; a verifier owns its own database in a separate service-owned private directory,
+using `verifier_state`. Never share one SQLite database between updater and verifier,
+change its ownership in place, or restore old high-water state.
+
+Import the reviewed mapping when activating this role; homelab activation remains
+blocked until that configuration and service-user access have been verified. This
+runbook change does not enroll homelab or apply any fleet role.
 
 ## Narrow rollout, after approval
 
