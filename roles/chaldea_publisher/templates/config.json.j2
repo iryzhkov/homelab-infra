@@ -3,6 +3,8 @@
   'bundle_path': chaldea_access_trust_bundle_path,
   'root': chaldea_publisher_root,
   'sequence_floor': chaldea_publisher_sequence_floor,
+  'heartbeat_token_file': chaldea_publisher_config_root + '/heartbeat-token',
+  'heartbeat_url': 'http://' + hostvars['homelab'].ansible_host + ':3002/api/v1/endpoints/chaldea_trust-publisher/external',
   'node': '/opt/chaldea/node/bin/node',
   'runtime': '/opt/chaldea-host/releases/' + chaldea_host_version + '/host/access-maintenance.mjs',
   'kid': chaldea_deployment_anchor_kid,

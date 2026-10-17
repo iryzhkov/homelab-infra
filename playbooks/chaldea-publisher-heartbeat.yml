@@ -1,0 +1,33 @@
+---
+# Explicit token provisioning, separate from signer staging and key bootstrap.
+- name: Provision the publisher heartbeat token on Normandy
+  hosts: chaldea_publishers
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Load the existing Gatus alerting secret on the controller
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/gatus-alerting.sops.yaml"
+        name: publisher_heartbeat_secrets
+      delegate_to: localhost
+      no_log: true
+
+    - name: Require a dedicated randomly generated endpoint token
+      ansible.builtin.assert:
+        that:
+          - publisher_heartbeat_secrets.CHALDEA_PUBLISHER_HEARTBEAT_TOKEN is match('^[0-9a-f]{64}$')
+        quiet: true
+      no_log: true
+
+    # Stage the signer role first. Root never writes into publisher-owned paths.
+    - name: Install the root-controlled heartbeat token
+      ansible.builtin.copy:
+        content: "{{ publisher_heartbeat_secrets.CHALDEA_PUBLISHER_HEARTBEAT_TOKEN }}\n"
+        dest: /etc/chaldea-publisher/heartbeat-token
+        owner: root
+        group: chaldea-publisher
+        mode: "0640"
+        follow: false
+        backup: false
+      no_log: true
+      diff: false

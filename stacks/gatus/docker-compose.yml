@@ -9,6 +9,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     environment:
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      CHALDEA_PUBLISHER_HEARTBEAT_TOKEN: ${CHALDEA_PUBLISHER_HEARTBEAT_TOKEN:-}
     ports:
       - "${HOST_IP}:3002:8080"
     volumes:

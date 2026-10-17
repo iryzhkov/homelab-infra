@@ -44,13 +44,112 @@ local published.jws. Never reset either SQLite file after a failure. A push
 transport timeout is ambiguous, so inspect fetched main before diagnosing it as
 unpublished; the next run advances above either high water.
 
-Alerts invoke the existing `feed post` CLI if it is available and usable by the
-publisher UID through /usr/local/bin:/usr/bin:/bin. Every alert also goes to the
-unit journal. If the CLI is absent or fails, the route is journal only and logs
-`alert route=journal`. No feed credentials or igor home access are provisioned.
-The implementation has not inspected Normandy. The operator must record the
-actual route at deployment, and arrange journal monitoring if feed is unavailable.
-Do not enable verifiers until renewal and the alert route have been checked.
+The notification route is homelab's internal Gatus, which sends Discord alerts.
+After successful publication the renewal service POSTs `success=true` to
+`http://192.168.70.223:3002/api/v1/endpoints/chaldea_trust-publisher/external`.
+A failed renewal POSTs `success=false`. The age and test-alert modes never push.
+One failure alerts immediately; one success resolves it. After 13 hours without
+a push, Gatus alerts independently of Normandy, covering a stopped timer or a
+Normandy outage. That interval allows two missed 6-hour renewals plus one hour.
+The pinned [Gatus v5.37.0 documentation](https://github.com/TwiN/gatus/blob/v5.37.0/README.md#external-endpoints)
+supports external-endpoint heartbeats and bearer-authenticated POSTs.
+
+This is the LAN-only Gatus Compose port, bound by HOST_IP to homelab's
+192.168.70.223. It does not use the public uptime dashboard or Traefik.
+The endpoint exists only on homelab, so it survives Normandy going down.
+Homelab/Gatus or Discord outages can still prevent delivery.
+
+A dedicated random 256-bit token is stored encrypted alongside the existing
+Discord webhook in `secrets/gatus-alerting.sops.yaml`, under
+`CHALDEA_PUBLISHER_HEARTBEAT_TOKEN`. The Compose role decrypts it on the
+controller and writes the existing 0600 .env; Gatus expands the forwarded
+environment variable in its configuration. The separate token provisioning play
+uses the same SOPS source and installs `/etc/chaldea-publisher/heartbeat-token`
+as root:chaldea-publisher 0640. Root owns its parent, so the locked UID can read
+the token without being able to replace it. Root never writes into the
+publisher-owned state tree. Secret tasks suppress logs and diffs.
+
+Python reads that file and sends the bearer in an HTTP header, without a
+subprocess or secret in argv. It ignores environment proxies, rejects redirects,
+and uses a 10-second timeout. Push errors log `heartbeat=error` with only the
+exception class and never change publication or its exit status. An absent token
+logs `heartbeat=disabled` once per publication run. Deploy and verify the token
+before treating renewal as monitored.
+
+The existing notifier still records failure and age details in the journal.
+It tries `feed post`, then logs `alert route=journal` if unavailable or unusable.
+The locked publisher UID has no feed credentials, and journal monitoring is not
+the notification route. `--test-alert` tests only that local notifier.
+Do not enable verifiers until renewal and the Gatus receipt have been checked.
+
+## Provision and verify the heartbeat
+
+For an existing publisher, use these steps without repeating key or state
+initialization. For a first enrollment, run steps 1-3 below after staging the
+signer role, then verify the receipt after the first publication. All live
+commands belong to the orchestrator.
+
+1. In the protected controller environment, add the token to the existing SOPS
+   file. This editor generates it in memory without displaying it or putting it
+   in argv. SOPS uses private temporary files under TMPDIR and saves ciphertext
+   to the repository. Keep shell tracing off. Existing tokens are preserved.
+   Use the same SOPS age identity as the Gatus stack.
+
+```sh
+set -eu
+set +x
+export TMPDIR=/home/igor/.cache/chaldea-scratch/heartbeat
+mkdir -p "$TMPDIR"
+chmod 700 "$TMPDIR"
+cd "$INFRA"
+SOPS_EDITOR="python3 -c 'import pathlib,secrets,sys,yaml; p=pathlib.Path(sys.argv[1]); d=yaml.safe_load(p.read_text()); d.setdefault(\"CHALDEA_PUBLISHER_HEARTBEAT_TOKEN\", secrets.token_hex(32)); p.write_text(yaml.safe_dump(d))'" sops secrets/gatus-alerting.sops.yaml
+```
+
+   Commit only the encrypted SOPS file through Huyang, review it, open the secret
+   PR, merge it and confirm CI. Check out the reviewed merged implementation and
+   encrypted secret before continuing. Never print decrypted secrets or use
+   `sops --set` with the token in argv. No signing or SSH key is copied.
+
+2. Install the Gatus endpoint on homelab. The existing Discord webhook stays in
+   gatus-alerting. This deploy touches only homelab's Gatus stack.
+
+```sh
+ansible-playbook playbooks/site.yml --limit homelab -e only=gatus --check --diff
+ansible-playbook playbooks/site.yml --limit homelab -e only=gatus
+```
+
+3. Provision Normandy's token, then update the publisher program and configuration.
+   The signer role must already have created its UID and /etc directory.
+   Preserve the existing enabled state; the commands below assume an active
+   publisher. For first enrollment, omit enabled=true until initial step 5.
+
+```sh
+ansible-playbook playbooks/chaldea-publisher-heartbeat.yml --limit omarchy-normandy --check --diff
+ansible-playbook playbooks/chaldea-publisher-heartbeat.yml --limit omarchy-normandy
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=true --check --diff
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=true
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'stat -c %U:%G:%a /etc/chaldea-publisher/heartbeat-token'
+```
+
+   Require root:chaldea-publisher:640. The provisioning play has no_log and
+   diff=false for the token, including check mode. It never starts publication.
+
+4. Record the UTC time, run one real renewal, and inspect its journal and Gatus's
+   read-only status API. No fabricated success heartbeat is sent.
+
+```sh
+date -u +%FT%TZ
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl start chaldea-publisher.service'
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'journalctl --no-pager -u chaldea-publisher.service -n 40'
+ansible homelab -m ansible.builtin.uri -a 'url=http://192.168.70.223:3002/api/v1/endpoints/chaldea_trust-publisher/statuses return_content=true'
+```
+
+   Require a successful publication, `heartbeat=sent success=true`, and a fresh
+   successful result after the recorded UTC time in Gatus's chaldea /
+   trust-publisher endpoint. Check Discord delivery configuration in the
+   existing Gatus stack. A deliberate 13-hour stale test is not required.
+   If the heartbeat errors, leave publication intact and diagnose the LAN
+   route, token provisioning and Gatus configuration from their journals.
 
 ## Ordered orchestrator commands
 
@@ -169,16 +268,16 @@ Require a successful push with only bundle.jws changed, header kid
 deployment-2026-10b, increased sequence and a 24h lifetime. The program has already
 authenticated the exact bytes using install-bundle and the independent pin.
 Inspect the public bundle via GitHub, with no private file in the transcript.
-Record Normandy's actual alert route as the locked UID:
+Verify the fresh Gatus receipt using heartbeat provisioning step 4 above. The
+local notifier can also be inspected as the locked UID:
 
 ```sh
 ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a '/usr/local/libexec/chaldea-publisher --test-alert'
 ```
 
-Require alert route=feed and the test record in the feed, or alert route=journal
-and verified monitoring of chaldea-publisher unit journals before activation.
-The interactive test prints stderr through Ansible; service failures and age
-alerts use the same notifier inside their journal-connected units.
+Expect alert route=journal if feed is unavailable. This command sends no Gatus
+heartbeat. Require the successful real publication's Gatus receipt before
+activation; the local notifier alone does not establish remote monitoring.
 
 5. Enable both timers, run an immediate second renewal and the age check, then
    verify increasing published sequence, next timer deadlines and journals.
@@ -196,8 +295,8 @@ Before ending rollout, persist chaldea_publisher_enabled=true in reviewed
 inventory/host_vars/omarchy-normandy.yml through Huyang, merge and confirm CI,
 then check out that reviewed source and repeat the play without -e. This keeps
 later routine runtime updates from stopping both timers. A staging apply without
-the persisted flag deliberately stops timers. Normandy's own outage requires
-external host/journal monitoring, since no local timer can alert while it is off.
+the persisted flag deliberately stops timers. Homelab's independent 13-hour
+heartbeat detects Normandy outages once the token and receipt are verified.
 There are no active verifiers yet, so replacing the old pin is safe. Continue
 Akasha rollout step 4 only after new publication and pin checks succeed.
 For later loss or compromise, follow Re-issue the deployment anchor below; do not restart at 1.
