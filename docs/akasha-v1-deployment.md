@@ -118,8 +118,13 @@ extensions or clock paths. The updater's private high-water database uses
 using `verifier_state`. Never share one SQLite database between updater and verifier,
 change its ownership in place, or restore old high-water state.
 
-Import the reviewed mapping when activating this role; homelab activation remains
-blocked until that configuration and service-user access have been verified. This
+Import the mapping from the reviewed, pinned F commit when activating this role;
+the main-branch link above locates its owner, rather than choosing an activation
+revision. Override this role's legacy placeholder adapter defaults from that
+mapping. The verifier database is within Akasha's service-owned 0700 state
+directory, already allowed by the unit's ReadWritePaths; verify that the rendered
+verifier_state remains writable under ProtectSystem=strict. Homelab activation
+remains blocked until that configuration and service-user access have been verified. This
 runbook change does not enroll homelab or apply any fleet role.
 
 ## Narrow rollout, after approval
