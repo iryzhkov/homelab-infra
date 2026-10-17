@@ -23,8 +23,8 @@ chaldea_deployment_anchor_kid: deployment-2026-10b
 chaldea_deployment_anchor_public_jwk:
   kty: OKP
   crv: Ed25519
-  x: REPLACE_WITH_NORMANDY_PUBLIC_JWK_X
-chaldea_deployment_anchor_spki_sha256: REPLACE_WITH_NORMANDY_SPKI_SHA256
+  x: LdKCbSgPcgsIzAoeo-ArvcdLSPItYhUVp71qjjTRkis
+chaldea_deployment_anchor_spki_sha256: 951ded14daf520a7cc5b4717069e2133f505f3f993f7e7f2c83fc57d3bc5302d
 chaldea_access_trust_anchors:
   - kid: "{{ chaldea_deployment_anchor_kid }}"
     public_key: "{{ chaldea_deployment_anchor_public_jwk }}"
