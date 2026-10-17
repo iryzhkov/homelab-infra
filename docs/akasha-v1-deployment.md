@@ -11,11 +11,13 @@ and quota streams/consumers/identities are excluded. PR #10 remains parked.
 
 ## Hosts and prerequisites
 
-Controller/signing host: **omarchy-pc**. Managed service host: **homelab**, owned
+Controller: **omarchy-pc**. Signing/publishing host: **omarchy-normandy**, the
+always-on Arch machine, distinct from the Debian VM named normandy in inventory.
+Managed service host: **homelab**, owned
 by homelab-infra, never fleet-config. **agent-a** is the sole issuer and initial
 producer; its issuer identity/key and token helper are separately provisioned.
-No changes to agent-b, laptop, normandy, NAS or either HTTPS edge are implied.
-All three participating hosts retain systemd-timesyncd. Chrony remains supported;
+No changes to agent-b, laptop, the Debian normandy VM, NAS or either HTTPS edge are implied.
+All participating hosts retain systemd-timesyncd. Chrony remains supported;
 there is no time-service migration.
 
 Use the repository's existing private Ansible environment and verified SSH host
@@ -32,15 +34,17 @@ The archive is verified before extraction into root-owned /opt/chaldea/node.
 Host code lives in /opt/chaldea-host/releases/VERSION/host and includes production
 dependencies. No npm or source compilation runs on homelab.
 
-The current host pin is not yet the timesyncd/Akasha rollout release. After the
-Chaldea PR merges, the orchestrator tags from main, waits for release CI, then
-updates both inventories to that release's exact version and SHA-256. Do not use
-an old release, a floating ref, an unpublished candidate or an invented checksum.
+The current matching host-v0.2.0 pin is the published timesyncd/Akasha release.
+For later changes, the orchestrator tags reviewed main, waits for release CI,
+then updates both inventories to that exact version and SHA-256. The publisher
+procedure checks the installed Akasha capability before key creation. Never use
+a floating ref, unpublished candidate or invented checksum.
 
-The deployment anchor is kid deployment-2026-10, JWK
-{"kty":"OKP","crv":"Ed25519","x":"re7EPlrspBhs_OHsN7z1VqDZ8HkVib4glgZCczaKjRc"},
-SPKI SHA-256 222450438cdcae5bda6c498f5e39baee5e2479923389c28e518ccf9138aee296.
-It is pinned independently in fleet inventory and Akasha's rendered config.
+The new deployment anchor is kid deployment-2026-10b. Its public JWK and SPKI
+SHA-256 placeholders must be replaced identically in fleet inventory and
+vars/chaldea-runtime.yml after generation on Normandy. Akasha config and the
+publisher consume chaldea_access_trust_anchors. The mandatory check-trust-pins.py
+guard compares the two inventories and rejects placeholders before activation.
 The agent-a-2026-10 public issuer and three append-only ceilings are in fleet
 access-trust/issuer-grants.json; vars/akasha-registry.yml fixes the corresponding
 profiles/projects/source names and permitted event kinds. The proposed 30-day
@@ -50,103 +54,34 @@ verify_until is 2026-11-16T00:13:30Z. Do not extend an existing kid's deadlines.
 ## Exact ordered orchestrator commands
 
 Run each numbered block only after its preceding checks succeed. Keep the same
-shell on omarchy-pc. Replace only the reviewed commit IDs and existing protected
-deployment-key path below. These are source/runbook parameters, never secrets.
-Do not recreate the existing deployment or issuer key.
+shell on omarchy-pc for controller commands. The linked publisher procedure
+creates a new deployment key only on Normandy. Keep the existing agent-a issuer
+key; never regenerate it. No private key moves between hosts.
 
-1. Freeze merged, reviewed source commits and successful CI. Confirm the new
-   immutable host release exists and both inventory pins match, then install
-   signing Node and the host artifact on **omarchy-pc**:
+1. Complete [Normandy publisher steps 1–6](normandy-publisher.md#ordered-orchestrator-commands)
+   in order. They stage the locked publisher on **omarchy-normandy**, generate a
+   new anchor there, compare fleet/infra public pins, provision its unique write
+   deploy key, initialize durable state once, publish and verify the first two
+   envelopes, enable six-hour renewal plus hourly 12-hour age alerts, and retire
+   the old omarchy-pc key. All commands are operator-only.
+
+2. Require successful publication at fleet main, kid deployment-2026-10b,
+   increasing sequence and 86400-second lifetime. Record feed availability under
+   the publisher UID. Alerts use the existing feed CLI if usable; otherwise
+   journal only. Verify journal monitoring before proceeding in that case.
+
+3. In the controller shell retain INFRA, FLEET, TMPDIR,
+   CHALDEA_ACCESS_NODE and CHALDEA_ACCESS_RUNTIME from the publisher procedure.
+   Freeze the reviewed Chaldea main commit as before and check out CHALDEA.
+   Re-run the public-pin guard before any verifier staging:
 
 ```sh
-set -eu
-export TMPDIR=/home/igor/.cache/chaldea-scratch/rollout
-mkdir -p "$TMPDIR"
-INFRA=/home/igor/Work/homelab-infra-rollout
-FLEET=/home/igor/Work/chaldea/fleet-config-rollout
-CHALDEA=/home/igor/Work/chaldea/chaldea-rollout
-# Set these to the accepted commits after merge; no unreviewed dirty trees.
-: "${INFRA_COMMIT:?set reviewed merged infra commit}"
-: "${FLEET_COMMIT:?set reviewed merged fleet commit}"
+: "${CHALDEA:?set reviewed Chaldea checkout}"
 : "${CHALDEA_COMMIT:?set reviewed merged Chaldea commit}"
-test -z "$(git -C "$INFRA" status --porcelain)"
-test -z "$(git -C "$FLEET" status --porcelain)"
 test -z "$(git -C "$CHALDEA" status --porcelain)"
-git -C "$INFRA" checkout --detach "$INFRA_COMMIT"
-git -C "$FLEET" checkout --detach "$FLEET_COMMIT"
 git -C "$CHALDEA" checkout --detach "$CHALDEA_COMMIT"
-python3 - "$FLEET" "$INFRA" <<'PY'
-import sys, yaml
-from pathlib import Path
-f = yaml.safe_load((Path(sys.argv[1])/"inventory/group_vars/all.yml").read_text())
-h = yaml.safe_load((Path(sys.argv[2])/"vars/chaldea-runtime.yml").read_text())
-for k in ("chaldea_host_version","chaldea_host_sha256","chaldea_access_paths","chaldea_access_trust_anchors"):
-    assert f[k] == h[k], k
-assert f["chaldea_access_trust_enabled"] is False
-PY
-CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
-CHALDEA_HOST_SHA=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_sha256"])' "$INFRA/vars/chaldea-runtime.yml")
-gh release view "$CHALDEA_HOST_VERSION" -R iryzhkov/chaldea
-mkdir -p "$TMPDIR/release"
-gh release download "$CHALDEA_HOST_VERSION" -R iryzhkov/chaldea -p chaldea-host.tar.gz -D "$TMPDIR/release" --clobber
-printf '%s  %s\n' "$CHALDEA_HOST_SHA" "$TMPDIR/release/chaldea-host.tar.gz" | sha256sum -c -
-# Check the required capability before any root installation on omarchy-pc.
-tar -tzf "$TMPDIR/release/chaldea-host.tar.gz" | rg -x 'host/akasha-service.mjs'
-cd "$INFRA"
-ansible-playbook -i localhost, playbooks/chaldea-signer.yml --check --diff
-ansible-playbook -i localhost, playbooks/chaldea-signer.yml
-CHALDEA_ACCESS_NODE=/opt/chaldea/node/bin/node
-CHALDEA_ACCESS_RUNTIME=/opt/chaldea-host/releases/$CHALDEA_HOST_VERSION/host/access-maintenance.mjs
-test "$("$CHALDEA_ACCESS_NODE" --version)" = v26.10.0
-"$CHALDEA_ACCESS_NODE" "/opt/chaldea-host/releases/$CHALDEA_HOST_VERSION/host/akasha-service.mjs" --help
+python3 "$INFRA/scripts/check-trust-pins.py" "$FLEET" "$INFRA"
 ```
-
-2. Verify the existing anchor, initialize publisher state once, sample time and
-   sign **sequence 1** on omarchy-pc. Initialization is exclusive: if the state
-   already exists, stop and use its recorded next sequence rather than deleting
-   it or forcing sequence 1. The private key remains on omarchy-pc, outside
-   sandboxes. Confirm restricted compute UIDs cannot read it or use sudo before
-   provisioning it; interactive igor/root operator agents remain trusted.
-
-```sh
-: "${SIGNING_KEY:?set existing protected deployment-2026-10 PKCS8 path}"
-test "$(openssl pkey -in "$SIGNING_KEY" -pubout -outform DER | sha256sum | cut -d' ' -f1)" = 222450438cdcae5bda6c498f5e39baee5e2479923389c28e518ccf9138aee296
-PUBLISHER=/home/igor/.local/share/chaldea-access-publisher
-umask 077
-install -d -m 0700 "$PUBLISHER" "$PUBLISHER/state"
-"$CHALDEA_ACCESS_NODE" "$CHALDEA_ACCESS_RUNTIME" initialize-state --state-file "$PUBLISHER/state/publisher.sqlite"
-sudo install -d -o root -g root -m 0755 /run/chaldea-access-trust
-sudo "$CHALDEA_ACCESS_NODE" "$CHALDEA_ACCESS_RUNTIME" clock-health --output /run/chaldea-access-trust/clock-health.json
-"$CHALDEA_ACCESS_NODE" "$CHALDEA_ACCESS_RUNTIME" sign-bundle --state-file "$PUBLISHER/state/publisher.sqlite" --clock-health-file /run/chaldea-access-trust/clock-health.json --key-file "$SIGNING_KEY" --kid deployment-2026-10 --grants-file "$FLEET/access-trust/issuer-grants.json" --sequence 1 --output "$PUBLISHER/bundle.jws"
-```
-
-3. Commit/review/merge **only the signed public envelope** into fleet-config main.
-   The updater fetches main, so it cannot use an unmerged bundle PR.
-
-```sh
-git -C "$FLEET" switch -c publish-trust-sequence-1
-```
-
-   Call Huyang workspace_open for FLEET, then edit_apply with the returned
-   workspace_id and operation
-   {"kind":"copy_file","from":"/home/igor/.local/share/chaldea-access-publisher/bundle.jws","to":"access-trust/bundle.jws"}.
-   A pre-existing destination is a stop for investigation, never an overwrite.
-
-```sh
-git -C "$FLEET" add access-trust/bundle.jws
-git -C "$FLEET" diff --cached --stat
-git -C "$FLEET" commit -m 'Publish trust bundle sequence 1' -m 'Co-Authored-By: GPT-6.1-Sol <noreply@openai.com>'
-git -C "$FLEET" push -u origin publish-trust-sequence-1
-gh pr create -R iryzhkov/chaldea-fleet-config --base main --head publish-trust-sequence-1 --title 'Publish trust bundle sequence 1' --body 'Operator-signed public trust envelope; deployment anchor and issuer grants were independently reviewed.'
-```
-
-   Register that PR with the orchestrator's T3 thread, review it and wait for CI
-   and merge before continuing. Establish Igor-owned serialized renewal every
-   6h (fresh clock sample, same durable publisher state, increasing sequence,
-   signed-bundle commit to main), with alerts before expiry, before activation.
-   Publisher/Git loss preserves only the remaining signed lease, at most 24h
-   from publication. Whole-issuer disconnected revocation can take that long;
-   13-minute bearers plus skew retain the <15-minute cancellation bound.
 
 4. Stage Node/host runtime on **homelab** first, so explicit initialization can
    use the installed reviewed command. The runtime tag does not enable trust
@@ -199,7 +134,7 @@ ansible homelab -b -m ansible.builtin.command -a 'stat -c %U:%G:%a /var/lib/chal
 ansible-playbook playbooks/akasha.yml --limit homelab -e chaldea_access_trust_enabled=true --check --diff
 ```
 
-   Require healthy fresh <=30s clock evidence, first installed sequence 1 and
+   Require healthy fresh <=30s clock evidence, the expected published sequence and
    expected signed expiry, root:root 0600 updater DB and root:root 0644 public
    files. The second check must report changed=0. Dry runs render/predict files
    and check bootstrap metadata but defer systemd reload/start until real apply. Unit ExecStartPre rejects

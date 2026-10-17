@@ -27,15 +27,21 @@ class RolloutTest(unittest.TestCase):
         v = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         v.update(yaml.safe_load((ROOT / "vars/akasha-registry.yml").read_text()))
         v.update(akasha_state_root="/var/lib/akasha", akasha_nats_seed_file="/etc/akasha/nats.seed")
+        # Model Ansible's recursive variable resolution for this plain Jinja renderer.
+        v["chaldea_access_trust_anchors"] = [{
+            "kid": v["chaldea_deployment_anchor_kid"],
+            "public_key": v["chaldea_deployment_anchor_public_jwk"]}]
         env = Environment(undefined=StrictUndefined)
         env.filters["to_nice_json"] = json.dumps
         c = json.loads(env.from_string((ROOT / "roles/akasha/templates/config.json.j2").read_text()).render(v))
         self.assertEqual(c["access_state"], "/var/lib/akasha/access-state.db")
         self.assertEqual(c["bundle_file"], "/var/lib/chaldea-access-trust-public/bundle.jws")
         self.assertEqual(c["clock_health_file"], "/run/chaldea-access-trust/clock-health.json")
+        self.assertEqual(v["chaldea_deployment_anchor_kid"], "deployment-2026-10b")
         self.assertEqual(c["anchors"], [{
-            "kid": "deployment-2026-10",
-            "public_key": {"kty": "OKP", "crv": "Ed25519", "x": "re7EPlrspBhs_OHsN7z1VqDZ8HkVib4glgZCczaKjRc"}}])
+            "kid": "deployment-2026-10b",
+            "public_key": v["chaldea_deployment_anchor_public_jwk"]}])
+        self.assertEqual(v["chaldea_deployment_anchor_public_jwk"]["crv"], "Ed25519")
         self.assertEqual([(r["source"],r["profile"],r["project"],r["kinds"]) for r in c["registry"]], [
             ("chaldea.daily-health.agent-a","daily-health","homelab",["report"]),
             ("agent-a.fleet","fleet-timers","chaldea",["job_finished"]),
@@ -153,6 +159,9 @@ class RolloutTest(unittest.TestCase):
             enrolled = {
                 "ansible_facts": {"services": {}},
                 "chaldea_access_trust_enabled": True,
+                # Public-only synthetic JWK. Production placeholders must remain invalid.
+                "chaldea_deployment_anchor_public_jwk": {
+                    "kty": "OKP", "crv": "Ed25519", "x": "A" * 43},
                 "chaldea_access_trust_root": str(config),
                 "chaldea_access_trust_state": str(state),
                 "chaldea_access_trust_public": str(public),

@@ -53,12 +53,13 @@ jobs:
       options: --memory=512m --cpus=1
       image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     env:
-      TMPDIR: /home/igor/.cache/chaldea-scratch/akasha-i
+      TMPDIR: /home/igor/.cache/chaldea-scratch/publisher
     steps:
       - uses: actions/checkout@v4
       - name: Prepare isolated scratch and test dependencies
         run: |
           mkdir -p "$TMPDIR/bin"
+          apt-get update -qq && apt-get install -y --no-install-recommends git
           pip install --disable-pip-version-check ansible-core==2.19.13 'nats-py[nkeys]==2.16.0'
       - name: Install checksum-pinned disposable broker and CLI
         run: |
@@ -66,6 +67,9 @@ jobs:
           import hashlib, io, os, pathlib, tarfile, urllib.request, zipfile
           out = pathlib.Path(os.environ["TMPDIR"]) / "bin"
           assets = [
+              ("https://nodejs.org/dist/v26.10.0/node-v26.10.0-linux-x64.tar.xz",
+               "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022",
+               "node-v26.10.0-linux-x64/bin/node", "node"),
               ("https://github.com/nats-io/nats-server/releases/download/v2.15.1/nats-server-v2.15.1-linux-amd64.tar.gz",
                "bf5edc7b1ce98e885c368cb43a886eb148dc5d0551d99f3cf6141fb5e1954c70",
                "nats-server-v2.15.1-linux-amd64/nats-server", "nats-server"),
@@ -76,7 +80,7 @@ jobs:
           for url, digest, member, name in assets:
               raw = urllib.request.urlopen(url, timeout=60).read()
               assert hashlib.sha256(raw).hexdigest() == digest, name
-              if name == "nats-server":
+              if name in ("nats-server", "node"):
                   with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
                       data = archive.extractfile(member).read()
               else:
@@ -95,5 +99,7 @@ jobs:
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME"
           python3 scripts/test-trust-rollout.py -v
+          python3 scripts/test-chaldea-publisher.py -v
+          ansible-playbook playbooks/chaldea-signer.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --list-hosts
