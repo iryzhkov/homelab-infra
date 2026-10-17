@@ -231,6 +231,18 @@ class PublisherTests(unittest.TestCase):
             p.next_sequence(path, 1)
         self.assertFalse(path.exists())
 
+    def test_reissue_floor_preserves_global_high_water_and_emergency_empty_uses_guarded_push(self):
+        path = self.root / "state/publisher.sqlite"
+        self.assertEqual(p.next_sequence(path, 8, 92), 93)
+        for floor in (-1, True, p.MAX_SEQUENCE):
+            with self.assertRaises(RuntimeError):
+                p.next_sequence(path, 8, floor)
+        self.publisher.config["sequence_floor"] = 92
+        self.publisher.publish(self.base, emergency_empty=True)
+        self.assertEqual((self.root / "state/grants.json").read_text().strip(), "[]")
+        self.assertEqual(p.payload((self.root / "state/published.jws").read_text())["sequence"], 93)
+        self.assertEqual(self.calls, ["timesyncd", "clock-health", "sign-bundle", "install-bundle", "push"])
+
     def test_verified_envelope_precedes_guarded_push(self):
         self.publisher.publish(self.base)
         self.assertEqual(self.calls, ["timesyncd", "clock-health", "sign-bundle", "install-bundle", "push"])

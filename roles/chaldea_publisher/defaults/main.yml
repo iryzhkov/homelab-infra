@@ -1,6 +1,8 @@
 ---
 # Stage only until the operator has created keys, initialized state and pinned the anchor.
 chaldea_publisher_enabled: false
+# Operator-reviewed maximum of ALL retained verifier/publisher high-water receipts.
+chaldea_publisher_sequence_floor: 0
 chaldea_publisher_root: /var/lib/chaldea-publisher
 chaldea_publisher_config_root: /etc/chaldea-publisher
 chaldea_publisher_unit_dir: /etc/systemd/system
