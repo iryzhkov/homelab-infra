@@ -39,9 +39,17 @@
   loop:
     - "{{ chaldea_publisher_root }}"
 
+# The user module predicts a fresh identity in check mode but cannot create it.
+- name: Inspect whether the publisher identity already exists
+  ansible.builtin.command: /usr/bin/id -u chaldea-publisher
+  register: chaldea_publisher_identity
+  changed_when: false
+  failed_when: chaldea_publisher_identity.rc not in [0, 1]
+  check_mode: false
+
 # Never let a root file operation follow publisher-controlled descendants.
 - name: Create publisher subdirectories as the locked identity
-  become: "{{ not ansible_check_mode }}"
+  become: "{{ not ansible_check_mode or chaldea_publisher_identity.rc == 0 }}"
   become_user: chaldea-publisher
   ansible.builtin.file:
     path: "{{ chaldea_publisher_root }}/{{ item }}"
@@ -110,7 +118,7 @@
   when: chaldea_publisher_enabled | bool
 
 - name: Inspect publisher bootstrap files before activation
-  become: "{{ not ansible_check_mode }}"
+  become: true
   become_user: chaldea-publisher
   ansible.builtin.stat:
     path: "{{ chaldea_publisher_root }}/{{ item }}"

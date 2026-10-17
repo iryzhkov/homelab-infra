@@ -299,6 +299,35 @@ class PublisherTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 p.clock_ok(path, 100)
 
+    def test_enabled_bootstrap_check_retains_the_service_identity(self):
+        import pwd
+        try:
+            test_user = pwd.getpwuid(os.geteuid()).pw_name
+        except KeyError:
+            self.skipTest("UID NSS absent in job namespace; complete check runs in CI")
+        tasks = yaml.safe_load((ROOT / "roles/chaldea_publisher/tasks/main.yml").read_text())
+        stat = next(t for t in tasks if t["name"] == "Inspect publisher bootstrap files before activation")
+        self.assertIs(stat["become"], True)
+        self.assertEqual(stat["become_user"], "chaldea-publisher")
+        guard = next(t for t in tasks if t["name"] == "Require private initialized bootstrap before timer activation")
+        (self.root / "keys").mkdir(mode=0o700)
+        for name in ("keys/deployment-2026-10b.pem", "keys/fleet-deploy-key", "state/verify.sqlite"):
+            fixture = self.root / name
+            fixture.write_text("metadata fixture, never a private key")
+            fixture.chmod(0o600)
+        variables = {"chaldea_publisher_enabled": True, "chaldea_publisher_root": str(self.root),
+                     "chaldea_deployment_anchor_kid": "deployment-2026-10b",
+                     "ansible_become_user": test_user,
+                     "ansible_facts": {"getent_passwd": {"chaldea-publisher": ["x", str(os.geteuid())]}}}
+        play = self.root / "enabled-check.yml"
+        play.write_text(yaml.safe_dump([{"hosts": "localhost", "gather_facts": False,
+                                        "vars": variables, "tasks": [stat, guard]}]))
+        result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local",
+                                 str(play), "--check", "--diff"], capture_output=True, text=True,
+                                env={**os.environ, "ANSIBLE_LOCAL_TEMP": str(self.root / "local"),
+                                     "ANSIBLE_REMOTE_TEMP": str(self.root / "remote")})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_target_is_separate_and_check_mode_is_local(self):
         inventory = yaml.safe_load((ROOT / "inventory/hosts.yml").read_text())
         groups = inventory["all"]["children"]

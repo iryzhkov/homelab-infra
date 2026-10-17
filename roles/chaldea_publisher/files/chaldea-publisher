@@ -257,9 +257,10 @@ def main():
     parser.add_argument("--check-age", action="store_true")
     parser.add_argument("--test-alert", action="store_true")
     args = parser.parse_args()
-    config = json.loads(Path(args.config).read_text())
-    publisher = Publisher(config)
+    publisher = Publisher({"root": "/var/lib/chaldea-publisher"})
     try:
+        config = json.loads(Path(args.config).read_text())
+        publisher = Publisher(config)
         os.umask(0o077)
         with (publisher.state / "publisher.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)

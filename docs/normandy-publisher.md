@@ -45,7 +45,7 @@ Do not enable verifiers until renewal and the alert route have been checked.
 ## Ordered orchestrator commands
 
 Run from the existing protected Ansible environment on the controller. Normandy
-must already have Python3, git, OpenSSH, openssl, systemd/busctl and timesyncd.
+must already have Python3, git, OpenSSH, openssl, acl, systemd/busctl and timesyncd.
 Verify its SSH host identity independently first. No command targets the old VM.
 Freeze reviewed merged INFRA_COMMIT and FLEET_COMMIT, with successful CI.
 The current matching runtime is host-v0.2.0 with the exact digest in both inventories.
@@ -132,7 +132,9 @@ and resolve the policy explicitly; do not bypass the guard or use an operator ke
 
 4. Initialize both durable state files ONCE, then manually start the same locked
    service used by the timer. Existing files cause initialization to fail.
-   Never delete/reinitialize state or use sequence 1 to recover.
+   Never delete/reinitialize state or use sequence 1 to recover. Confirm no
+   verifier has been provisioned before this first enrollment. A retired-kid
+   envelope is unauthenticated under the new pin; this new epoch starts at 1.
 
 ```sh
 CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
