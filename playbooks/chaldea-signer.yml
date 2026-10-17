@@ -1,5 +1,5 @@
 ---
-# Target only the Arch machine omarchy-normandy, never the Debian VM "normandy".
+# The signer alias omarchy-normandy targets the same VM as inventory normandy.
 # Key generation and durable-state initialization are explicit operator actions.
 - name: Install pinned signing runtime and publisher on Normandy
   hosts: chaldea_publishers

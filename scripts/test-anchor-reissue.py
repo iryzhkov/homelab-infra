@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """No real key generation, SSH or service actions; OpenSSL and systemctl are stubbed."""
 import base64
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -108,13 +108,15 @@ class ReissueTests(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             r.high_water(path)
         self.assertFalse(path.exists())
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db:
             db.execute("CREATE TABLE access_meta (name TEXT PRIMARY KEY, value TEXT)")
             db.execute("INSERT INTO access_meta VALUES ('format', 'chaldea-access-state-v1')")
             db.execute("INSERT INTO access_meta VALUES ('trust', ?)", (json.dumps({"sequence": 92}),))
+            db.commit()
         self.assertEqual(r.high_water(path), 92)
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db:
             db.execute("UPDATE access_meta SET value=? WHERE name='trust'", (json.dumps({"sequence": r.MAX}),))
+            db.commit()
         with self.assertRaises(RuntimeError):
             r.high_water(path)
 

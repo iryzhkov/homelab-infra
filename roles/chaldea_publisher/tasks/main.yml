@@ -10,6 +10,7 @@
     - "{{ chaldea_publisher_config_root }}"
     - "{{ chaldea_publisher_unit_dir }}"
     - "{{ chaldea_publisher_program }}"
+    - "{{ chaldea_publisher_reissue_program }}"
 
 - name: Validate the operator-reviewed recovery sequence floor
   ansible.builtin.assert:
@@ -87,8 +88,8 @@
 
 - name: Install operator-only anchor re-issue helper
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/chaldea-anchor-reissue"
-    dest: /usr/local/libexec/chaldea-anchor-reissue
+    src: "{{ role_path }}/../../scripts/chaldea-anchor-reissue"
+    dest: "{{ chaldea_publisher_reissue_program }}"
     owner: root
     group: root
     mode: "0755"

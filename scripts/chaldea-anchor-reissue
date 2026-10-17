@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Operator-only local anchor re-issue. Private bytes never reach stdout/stderr."""
 import argparse
+import base64
 from contextlib import closing
 import fcntl
 import hashlib
@@ -60,7 +61,6 @@ def generate(root, kid, current_kid):
         der = subprocess.run(["/usr/bin/openssl", "pkey", "-in", str(path), "-pubout", "-outform", "DER"],
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30).stdout
         require(len(der) == len(SPKI) + 32 and der.startswith(SPKI), "unexpected public SPKI")
-        import base64
         return {"chaldea_deployment_anchor_kid": kid,
                 "chaldea_deployment_anchor_public_jwk": {
                     "kty": "OKP", "crv": "Ed25519", "x": base64.urlsafe_b64encode(der[-32:]).decode().rstrip("=")},

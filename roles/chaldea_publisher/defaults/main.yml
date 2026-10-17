@@ -7,4 +7,5 @@ chaldea_publisher_root: /var/lib/chaldea-publisher
 chaldea_publisher_config_root: /etc/chaldea-publisher
 chaldea_publisher_unit_dir: /etc/systemd/system
 chaldea_publisher_program: /usr/local/libexec/chaldea-publisher
+chaldea_publisher_reissue_program: "{{ chaldea_publisher_program | dirname }}/chaldea-anchor-reissue"
 chaldea_publisher_known_hosts: github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl

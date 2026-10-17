@@ -135,7 +135,7 @@ and resolve the policy explicitly; do not bypass the guard or use an operator ke
    service used by the timer. Existing files cause initialization to fail.
    Never delete/reinitialize state or use sequence 1 to recover. Confirm no
    verifier has been provisioned before this first enrollment. A retired-kid
-   envelope is unauthenticated under the new pin; this new epoch starts at 1.
+   envelope is unauthenticated under the new pin; only this first enrollment may start at 1.
 
 ```sh
 CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
@@ -184,7 +184,7 @@ the persisted flag deliberately stops timers. Normandy's own outage requires
 external host/journal monitoring, since no local timer can alert while it is off.
 There are no active verifiers yet, so replacing the old pin is safe. Continue
 Akasha rollout step 4 only after new publication and pin checks succeed.
-For later anchor rotations with verifiers, use an explicit overlap procedure.
+For later loss or compromise, follow Re-issue the deployment anchor below; do not restart at 1.
 
 6. After the new anchor is live, stop any old omarchy-pc renewal automation.
    On **omarchy-pc**, verify the retired key's public fingerprint and delete its
@@ -209,7 +209,9 @@ overlap period. These are operator actions over independently verified SSH.
 For compromise, rebuild or resecure Normandy before generating another key,
 and revoke its old GitHub write deploy key, then repeat deploy-key enrollment
 above with a new Normandy-only key. A replacement on a still-compromised host
-does not restore trust.
+does not restore trust. A rebuilt Normandy also needs a new SSH deploy key;
+revoke its old GitHub entry and repeat the initial deploy-key enrollment before
+resuming publication, for loss as well as compromise.
 
 The runtime has no automatic anchor epoch reset. Its SQLite `trust.sequence`
 is global across kids. New anchor signatures with a lower/equal sequence are
@@ -232,9 +234,13 @@ advance past that limit, and this helper will refuse it.
 ```sh
 cd "$INFRA"
 NEW_KID=deployment-2026-10c
+# Existing Normandy only: skip these two stops if a rebuilt host has no units yet.
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl disable --now chaldea-publisher.timer chaldea-publisher-age.timer'
-ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl stop chaldea-publisher.service chaldea-publisher-age.service chaldea-publisher-emergency.service'
-ansible homelab -b -m ansible.builtin.command -a 'systemctl stop akasha.service chaldea-access-trust.timer chaldea-access-trust.service'
+ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl stop chaldea-publisher.service chaldea-publisher-age.service'
+# If a prior recovery installed the emergency unit, stop it before measuring too.
+ansible omarchy-normandy -b -m ansible.builtin.shell -a 'if systemctl cat chaldea-publisher-emergency.service >/dev/null 2>&1; then systemctl stop chaldea-publisher-emergency.service; fi'
+ansible homelab -b -m ansible.builtin.command -a 'systemctl disable --now akasha.service chaldea-access-trust.timer'
+ansible homelab -b -m ansible.builtin.command -a 'systemctl stop chaldea-access-trust.service'
 # On a rebuilt Normandy, stage the locked UID/runtime/helper first with timers OFF.
 ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false --check --diff
 ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy -e chaldea_publisher_enabled=false
@@ -243,15 +249,24 @@ ansible homelab -b -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anc
 ansible homelab -b --become-user akasha -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anchor-reissue high-water --state-file /var/lib/akasha/access-state.db'
 ```
 
-   Also read both Normandy state files with `high-water` as chaldea-publisher if
-   they remain usable and trustworthy. Record the maximum of ALL receipts as
-   FLOOR. Do not derive FLOOR from a remote old-kid envelope during compromise.
+   If Normandy state remains usable and trustworthy, also read both receipts:
+
+```sh
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anchor-reissue high-water --state-file /var/lib/chaldea-publisher/state/publisher.sqlite'
+ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a '/usr/local/libexec/chaldea-anchor-reissue high-water --state-file /var/lib/chaldea-publisher/state/verify.sqlite'
+```
+
+   Record the maximum of ALL trusted receipts as FLOOR. Do not derive FLOOR from a remote old-kid envelope during compromise.
    Keep the cohort stopped so that old-anchor high water cannot race this
    measurement. A missing consumer DB needs diagnosis, not initialization.
 
 2. Generate the next key on Normandy as the locked UID. The helper refuses an
    existing destination or symlink and refuses the currently configured kid.
-   Independently check Git's public history to avoid ANY historical kid reuse.
+   Never reuse ANY retired kid, even when its key file is gone. The helper
+   only knows the currently configured kid and existing files; checking Git's
+   public history for every older kid remains an operator requirement.
+   A failed genpkey may leave an incomplete file. Do not overwrite it; diagnose
+   it as the publisher UID and use another never-used suffix.
    It prints only the three public pin variables. No key is transferred,
    backed up, placed in a password manager or printed.
 
@@ -296,6 +311,11 @@ ansible omarchy-normandy -b -m ansible.builtin.command -a "/usr/local/libexec/ch
 ansible omarchy-normandy -b -m ansible.builtin.command -a "/usr/local/libexec/chaldea-anchor-reissue resume --kid $NEW_KID --sequence-floor $FLOOR --emergency-empty"
 ```
 
+   If replacement enrollment takes over 24h, the emergency envelope expires and
+   consumers refuse everything. Re-run the same emergency resume command to
+   renew the empty envelope at a higher sequence while keeping normal timers
+   off. This never reactivates old issuers.
+
    Emergency mode uses the same flock, fresh clock, independent verification and
    single-path push guard, with keys=[] and 24h lifetime. Normal renewal still
    rejects empty grants. Keep timers off. Empty publication permanently
@@ -309,8 +329,8 @@ ansible omarchy-normandy -b -m ansible.builtin.command -a "/usr/local/libexec/ch
    runtime/backup prerequisites still hold. No database is initialized here.
 
 ```sh
-ansible-playbook playbooks/akasha.yml --limit homelab --tags trust -e chaldea_access_trust_enabled=true --check --diff
-ansible-playbook playbooks/akasha.yml --limit homelab --tags trust -e chaldea_access_trust_enabled=true
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true --check --diff
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true
 ansible homelab -b -m ansible.builtin.command -a 'systemctl start chaldea-clock-health.service'
 ansible homelab -b -m ansible.builtin.command -a 'systemctl start chaldea-access-trust.service'
 ansible-playbook playbooks/akasha.yml --limit homelab -e chaldea_access_trust_enabled=true -e akasha_activate=true -e akasha_interfaces_verified=true -e akasha_backup_packaging_verified=true --check --diff
@@ -326,6 +346,10 @@ ansible homelab -b -m ansible.builtin.command -a 'journalctl --no-pager -u chald
    its 120s bundle poll alone does not do. Test an old-anchor envelope in
    disposable state to confirm rejection. On compromise, confirm all old
    issuer bearers are refused before introducing replacement issuers.
+
+   The homelab helper copy is temporary and used only for these read-only
+   receipts. After every consumer receipt is recorded, remove that one-off copy
+   with Ansible file state=absent; keep Normandy's role-managed helper installed.
 
    Only after all receipts and, for compromise, replacement issuer enrollment,
    persist publisher enabled=true through a reviewed PR and reapply the signer

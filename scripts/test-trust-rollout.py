@@ -173,10 +173,11 @@ class RolloutTest(unittest.TestCase):
                     "clock_health": "/run/chaldea-access-trust/clock-health.json",
                     "verifier_state": "/var/lib/akasha/access-state.db"},
             }
-            for variables in ({"ansible_facts": {"services": {}}}, enrolled):
+            for variables, tags in (({"ansible_facts": {"services": {}}}, []),
+                                    (enrolled, []), (enrolled, ["--tags", "runtime,trust"])):
                 result = subprocess.run(["ansible-playbook", "-i", str(inventory),
                 str(ROOT / "playbooks/akasha.yml"), "--check", "--diff",
-                    "-e", json.dumps(variables)],
+                    "-e", json.dumps(variables), *tags],
                     env={**os.environ, "PATH": str(bindir) + ":" + os.environ["PATH"],
                      "ANSIBLE_LOCAL_TEMP": str(d / "local"), "ANSIBLE_REMOTE_TEMP": str(d / "remote")},
                     capture_output=True, text=True)
