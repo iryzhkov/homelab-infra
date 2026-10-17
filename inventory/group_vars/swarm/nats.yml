@@ -23,8 +23,8 @@ nats_optional_hosts: []
 
 nats_nkeys:
   # SYS account: server monitoring. Seed on omarchy-pc (operator).
-  sys-admin: ""
+  sys-admin: UCXIVLDXTUCTS4L27OVV7OEFJXATRC2GQGFAD24NAQHUEDXI3A7R4AUY
   # CHALDEA account, stream administration. Seed on omarchy-pc (operator).
-  chaldea-admin: ""
-  # CHALDEA account, the Akasha service. Seed with the Akasha deployment.
-  akasha: ""
+  chaldea-admin: UB7WFCZT3BGJ4HKAOWU2TXW6JMXPQHFC366UYAISPIPNNMXRQ7MVKJH2
+  # CHALDEA account, the Akasha service. Seed at /etc/akasha/nats.seed on homelab.
+  akasha: UDALCYZMOEUP5TELN2V57AVAON6544MABFC3D3JV6IWJBL6NVXTB4SMQ
