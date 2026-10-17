@@ -17,9 +17,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/akasha-offsite
-ReadOnlyPaths=/var/lib/akasha/backup
+ReadOnlyPaths=-/var/lib/akasha/backup
 # Opening the shared lock needs write access, without access to the live DB.
-ReadWritePaths=/var/lib/akasha/backup.lock
-InaccessiblePaths=/var/lib/akasha/events.db /var/lib/akasha/access-state.db
+ReadWritePaths=-/var/lib/akasha/backup.lock
+InaccessiblePaths=-/var/lib/akasha/events.db -/var/lib/akasha/events.db-wal -/var/lib/akasha/events.db-shm -/var/lib/akasha/access-state.db -/var/lib/akasha/access-state.db-wal -/var/lib/akasha/access-state.db-shm
 Nice=10
 IOSchedulingClass=idle

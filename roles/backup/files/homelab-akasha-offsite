@@ -129,11 +129,12 @@ def package(directory):
         # directory nor a swapped leaf may redirect a root copy to live state.
         directory_fd = os.open(SOURCE.parent, os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            source_fd = os.open(SOURCE.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            source_fd = os.open(SOURCE.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
         finally:
             os.close(directory_fd)
         with os.fdopen(source_fd, "rb") as source:
             info = private_info(os.fstat(source.fileno()))
+            os.set_blocking(source.fileno(), True)
             fresh(info.st_mtime, 2 * 3600)
             if info.st_size > DB_LIMIT or shutil.disk_usage(directory).free < 2 * info.st_size + 128 * 1024 ** 2:
                 raise ValueError("insufficient packaging reserve or oversized snapshot")
@@ -143,11 +144,13 @@ def package(directory):
             source.seek(0)
             if hashlib.file_digest(source, "sha256").hexdigest() != digest(copied):
                 raise ValueError("snapshot copy differs")
-        verify_database(copied)
         manifest = {"snapshot_time": info.st_mtime, "size": copied.stat().st_size,
                     "sha256": digest(copied), "packaged_time": time.time()}
         with copied.open("rb") as handle:
             os.fsync(handle.fileno())
+    # The private copy is stable now; integrity checking must not delay the
+    # next hourly snapshot while it holds a six-minute unit deadline.
+    verify_database(copied)
     manifest_file = directory / "manifest.json"
     manifest_file.write_text(json.dumps(manifest) + "\n")
     os.chmod(manifest_file, 0o600)

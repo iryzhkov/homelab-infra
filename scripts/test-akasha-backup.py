@@ -78,17 +78,23 @@ class PackagingTest(unittest.TestCase):
             shutil.copyfile(source, self.remote / str(destination)[len(remote_prefix):])
 
     def test_package_fetches_and_restores_receipts_cursors_under_shared_lock(self):
-        original = offsite.verify_database
-        def checked(path):
-            if path == self.work / "events.db":
-                with (self.state / "backup.lock").open("rb+") as lock:
-                    with self.assertRaises(BlockingIOError):
-                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            original(path)
+        original_copy = offsite.shutil.copyfileobj
+        original_verify = offsite.verify_database
+        def checked_copy(source, destination):
+            with (self.state / "backup.lock").open("rb+") as lock:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            original_copy(source, destination)
+        def checked_verify(path):
+            # The verified private copy no longer holds up hourly replacement.
+            with (self.state / "backup.lock").open("rb+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            original_verify(path)
         # These must never enter the remote, even when present.
         for name in ("events.db-wal", "events.db-shm", "events.db.partial"):
             (self.state / "backup" / name).write_text("do not package")
-        with mock.patch.object(offsite, "verify_database", side_effect=checked):
+        with mock.patch.object(offsite.shutil, "copyfileobj", side_effect=checked_copy), \
+                mock.patch.object(offsite, "verify_database", side_effect=checked_verify):
             manifest, age = offsite.package(self.work)
         self.assertLess(age, 3600)
         self.assertEqual(set(p.name for p in self.remote.iterdir()), {"events.db", "manifest.json"})
@@ -136,6 +142,15 @@ class PackagingTest(unittest.TestCase):
                 with self.assertRaises((ValueError, OSError, sqlite3.Error)):
                     offsite.package(self.work)
                 self.assertEqual(self.calls, [])
+
+    def test_fifo_source_fails_without_waiting_for_timeout(self):
+        offsite.SOURCE.unlink()
+        os.mkfifo(offsite.SOURCE, 0o600)
+        started = time.monotonic()
+        with self.assertRaises(ValueError):
+            offsite.package(self.work)
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(self.calls, [])
 
     def test_remote_failure_corruption_and_stale_manifest_are_rejected(self):
         offsite.package(self.work)
@@ -241,7 +256,7 @@ class HeartbeatTest(unittest.TestCase):
                 for endpoint in endpoints:
                     name = endpoint["name"].removeprefix("akasha-")
                     self.assertEqual(endpoint["heartbeat"]["interval"],
-                                     {"backup": "2h", "offsite": "26h", "health": "3m"}[name])
+                                     {"backup": "2h", "offsite": "13h", "health": "3m"}[name])
                     self.assertEqual(endpoint["alerts"], [{"type": "discord", "failure-threshold": 1,
                         "success-threshold": 1, "send-on-resolved": True}])
         play = yaml.safe_load((ROOT / "playbooks/akasha-heartbeat.yml").read_text())[0]
@@ -249,6 +264,12 @@ class HeartbeatTest(unittest.TestCase):
         for task in play["tasks"]:
             self.assertIs(task["no_log"], True)
         self.assertIs(play["tasks"][-1]["diff"], False)
+        copy = play["tasks"][-1]["ansible.builtin.copy"]
+        for item, expected_group, expected_mode in (
+                ("offsite", "root", "0600"), ("backup", "akasha", "0640"), ("health", "akasha", "0640")):
+            self.assertEqual(copy["owner"], "root")
+            self.assertEqual(jinja2.Template(copy["group"]).render(item=item), expected_group)
+            self.assertEqual(jinja2.Template(copy["mode"]).render(item=item), expected_mode)
         narrow = yaml.safe_load((ROOT / "playbooks/akasha-backup.yml").read_text())[0]
         self.assertEqual(narrow["tasks"][0]["ansible.builtin.include_role"]["tasks_from"], "akasha")
 

@@ -25,8 +25,8 @@
         content: "{{ akasha_heartbeat_secrets['AKASHA_' ~ (item | upper) ~ '_HEARTBEAT_TOKEN'] }}\n"
         dest: "/etc/akasha/heartbeat-{{ item }}"
         owner: root
-        group: akasha
-        mode: "0640"
+        group: "{{ 'root' if item == 'offsite' else 'akasha' }}"
+        mode: "{{ '0600' if item == 'offsite' else '0640' }}"
         follow: false
         backup: false
       loop: [backup, offsite, health]

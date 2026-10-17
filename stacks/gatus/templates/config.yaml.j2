@@ -201,7 +201,7 @@ external-endpoints:
         send-on-resolved: true
 {% endif %}
 {% if akasha_heartbeat_enabled %}
-{% for name, interval in [('backup', '2h'), ('offsite', '26h'), ('health', '3m')] %}
+{% for name, interval in [('backup', '2h'), ('offsite', '13h'), ('health', '3m')] %}
 {% set token_key = 'AKASHA_' ~ (name | upper) ~ '_HEARTBEAT_TOKEN' %}
 {% if akasha_tokens[token_key] | default('', true) | trim | length > 0 %}
   - name: akasha-{{ name }}

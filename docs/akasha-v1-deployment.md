@@ -281,7 +281,7 @@ job, provision endpoint tokens and prove a fetched off-host copy is <24h old.
 Local staging is root:root 0700/0600, TLS protects upload, and the job requires
 a private bucket with default B2 AES256 server-side encryption. No NAS mount or broad backup role is used.
 The persistent `/var/lib/akasha/backup.lock` is held by both the hourly
-snapshot and packaging through copy and integrity verification; it must never
+snapshot and packaging through copy and hash verification; it must never
 be removed/replaced while either job can run. The hourly timer stays active. The backup package
 must acquire a stable snapshot between hourly runs (stop the timer and wait
 for the oneshot, or use an equivalent exclusion lock), copy/verify it and
