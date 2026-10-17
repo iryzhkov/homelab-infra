@@ -180,10 +180,12 @@ endpoints:
     conditions:
       - "[STATUS] == 200"
 {% endif %}
-{% if inventory_hostname == 'homelab' or inventory_hostname == smart_gatus_host %}
+{# A routine converge before token provisioning must keep Gatus usable. #}
+{% set publisher_heartbeat_enabled = inventory_hostname == 'homelab' and ((stack_secrets | default({})).CHALDEA_PUBLISHER_HEARTBEAT_TOKEN | default('', true) | trim | length > 0) %}
+{% if publisher_heartbeat_enabled or inventory_hostname == smart_gatus_host %}
 
 external-endpoints:
-{% if inventory_hostname == 'homelab' %}
+{% if publisher_heartbeat_enabled %}
   # One failed publication or 13h of silence, including a Normandy outage.
   - name: trust-publisher
     group: chaldea

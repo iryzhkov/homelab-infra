@@ -63,7 +63,10 @@ A dedicated random 256-bit token is stored encrypted alongside the existing
 Discord webhook in `secrets/gatus-alerting.sops.yaml`, under
 `CHALDEA_PUBLISHER_HEARTBEAT_TOKEN`. The Compose role decrypts it on the
 controller and writes the existing 0600 .env; Gatus expands the forwarded
-environment variable in its configuration. The separate token provisioning play
+environment variable in its configuration. Until that secret contains a nonempty
+heartbeat token, the Gatus template omits this endpoint so routine converges keep
+existing checks running. Monitoring starts only after provisioning and a verified
+publication receipt. The separate token provisioning play
 uses the same SOPS source and installs `/etc/chaldea-publisher/heartbeat-token`
 as root:chaldea-publisher 0640. Root owns its parent, so the locked UID can read
 the token without being able to replace it. Root never writes into the
@@ -73,7 +76,9 @@ Python reads that file and sends the bearer in an HTTP header, without a
 subprocess or secret in argv. It ignores environment proxies, rejects redirects,
 and uses a 10-second timeout. Push errors log `heartbeat=error` with only the
 exception class and never change publication or its exit status. An absent token
-logs `heartbeat=disabled` once per publication run. Deploy and verify the token
+logs `heartbeat=disabled` once per publication run, as does a missing heartbeat
+URL in an unreadable or older config. The URL is derived only from inventory.
+Deploy and verify the token
 before treating renewal as monitored.
 
 The existing notifier still records failure and age details in the journal.

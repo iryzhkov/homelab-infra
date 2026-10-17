@@ -103,6 +103,7 @@ jobs:
           python3 scripts/test-chaldea-publisher.py -v
           python3 scripts/test-anchor-reissue.py -v
           ansible-playbook playbooks/chaldea-signer.yml --syntax-check
+          # This job only needs SOPS for the heartbeat provisioning syntax check.
           ansible-galaxy collection install community.sops
           ansible-playbook playbooks/chaldea-publisher-heartbeat.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --syntax-check

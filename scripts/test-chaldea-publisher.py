@@ -4,6 +4,7 @@ import base64
 from contextlib import closing
 import importlib.machinery
 import importlib.util
+import itertools
 import json
 import os
 from pathlib import Path
@@ -190,7 +191,17 @@ class PublisherTests(unittest.TestCase):
                 if not failure:
                     self.assertTrue((self.publisher.state / "published.jws").exists())
 
+    def test_missing_url_disables_heartbeat_without_guessing_an_address(self):
+        self.heartbeat_fixture()
+        del self.publisher.config["heartbeat_url"]
+        with mock.patch.object(p.urllib.request, "build_opener") as opener:
+            result, logs = self.run_main()
+        self.assertEqual(result, 0)
+        self.assertEqual(logs.count("heartbeat=disabled"), 1)
+        opener.assert_not_called()
+
     def test_missing_token_disables_heartbeat_once_per_publication_run(self):
+        self.heartbeat_fixture()
         self.publisher.config["heartbeat_token_file"] = str(self.root / "absent-token")
         with mock.patch.object(p.urllib.request, "build_opener") as opener:
             result, logs = self.run_main()
@@ -241,10 +252,15 @@ class PublisherTests(unittest.TestCase):
         env.filters["swarm_stacks"] = lambda hosts, groups: []
         env.filters["stack_hosts"] = lambda hosts, groups, name: []
         template = env.from_string((ROOT / "stacks/gatus/templates/config.yaml.j2").read_text())
-        for host, smart_host in (("homelab", "normandy"), ("normandy", "normandy"),
-                                 ("oci", "normandy"), ("homelab", "homelab")):
-            with self.subTest(host=host, smart_host=smart_host):
-                rendered = template.render(inventory_hostname=host, smart_gatus_host=smart_host,
+        token_contexts = [{}, {"stack_secrets": {}}]
+        token_contexts += [{"stack_secrets": {"CHALDEA_PUBLISHER_HEARTBEAT_TOKEN": token}}
+                           for token in ("", None, "   ", "a" * 64)]
+        for (host, smart_host), token_context in itertools.product(
+                (("homelab", "normandy"), ("normandy", "normandy"),
+                 ("oci", "normandy"), ("homelab", "homelab")), token_contexts):
+            with self.subTest(host=host, smart_host=smart_host, token_context=token_context):
+                rendered = template.render(**token_context,
+                    inventory_hostname=host, smart_gatus_host=smart_host,
                     hostvars={"homelab": {"ansible_host": "192.0.2.1"},
                               "normandy": {"ansible_host": "192.0.2.2"},
                               "oci": {"mesh_host": "192.0.2.3"},
@@ -256,7 +272,10 @@ class PublisherTests(unittest.TestCase):
                 self.assertLessEqual(rendered.count("external-endpoints:"), 1)
                 endpoints = yaml.safe_load(rendered).get("external-endpoints", [])
                 publisher = [e for e in endpoints if e["name"] == "trust-publisher"]
-                self.assertEqual(len(publisher), int(host == "homelab"))
+                token = token_context.get("stack_secrets", {}).get("CHALDEA_PUBLISHER_HEARTBEAT_TOKEN")
+                self.assertEqual(len(publisher), int(host == "homelab" and bool(token and token.strip())))
+                self.assertEqual(len([e for e in endpoints if e["group"] == "SMART"]),
+                                 int(host == smart_host))
                 if publisher:
                     self.assertEqual(publisher[0]["heartbeat"]["interval"], "13h")
                     self.assertEqual(publisher[0]["group"], "chaldea")
