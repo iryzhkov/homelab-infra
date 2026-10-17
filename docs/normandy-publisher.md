@@ -20,7 +20,7 @@ Fleet main is executed as root by ansible-pull and cannot be branch-protected on
 the current GitHub plan. Giving Normandy write access there would turn a publisher
 compromise into root code execution across the fleet. GitHub cannot restrict a
 deploy key to one path. The local single-path guard protects normal publication;
-the repository boundary limits a stolen write credential to signed data. Nothing
+the repository boundary limits a stolen write credential to the data repository. Nothing
 installs or executes code, workflows or configuration from chaldea-trust.
 
 Every six hours the oneshot serializes under state/publisher.lock, fetches trust
@@ -296,10 +296,11 @@ The new private key has **no backup anywhere**. Loss means generating a new kid,
 not restoring the old key. Compromise means the old kid is hostile, with no
 overlap period. These are operator actions over independently verified SSH.
 For compromise, rebuild or resecure Normandy before generating another key,
-and revoke its old GitHub write deploy key, then repeat deploy-key enrollment
-above with a new Normandy-only key. A replacement on a still-compromised host
-does not restore trust. A rebuilt Normandy also needs a new SSH deploy key;
-revoke its old GitHub entry and repeat the initial deploy-key enrollment before
+and revoke BOTH GitHub registrations: keys/trust-deploy-key on chaldea-trust
+and keys/fleet-read-key on fleet-config. Repeat initial step 3 with two new
+Normandy-only transport keys. A replacement on a still-compromised host
+does not restore trust. A rebuilt Normandy also needs both new SSH deploy keys;
+revoke both old GitHub entries and repeat initial step 3 before
 resuming publication, for loss as well as compromise.
 
 The runtime has no automatic anchor epoch reset. Its SQLite `trust.sequence`
