@@ -59,11 +59,13 @@
 - name: Install byte-only Git downloader
   become: true
   ansible.builtin.copy:
-    src: chaldea-access-trust-fetch
+    src: "{{ chaldea_host_artifact_root }}/chaldea-access-trust-fetch"
+    remote_src: true
     dest: "{{ chaldea_access_trust_fetcher }}"
     owner: root
     group: root
     mode: "0755"
+  when: chaldea_host_artifact_ready | bool
 
 - name: Install updater configuration
   become: true

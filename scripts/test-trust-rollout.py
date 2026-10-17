@@ -177,7 +177,8 @@ class RolloutTest(unittest.TestCase):
                                     (enrolled, []), (enrolled, ["--tags", "runtime,trust"])):
                 result = subprocess.run(["ansible-playbook", "-i", str(inventory),
                 str(ROOT / "playbooks/akasha.yml"), "--check", "--diff",
-                    "-e", json.dumps(variables), *tags],
+                    "-e", json.dumps({**variables, "chaldea_host_version": "host-v0.0.0-test",
+                                      "chaldea_host_sha256": "a" * 64}), *tags],
                     env={**os.environ, "PATH": str(bindir) + ":" + os.environ["PATH"],
                      "ANSIBLE_LOCAL_TEMP": str(d / "local"), "ANSIBLE_REMOTE_TEMP": str(d / "remote")},
                     capture_output=True, text=True)

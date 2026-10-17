@@ -34,9 +34,10 @@ The archive is verified before extraction into root-owned /opt/chaldea/node.
 Host code lives in /opt/chaldea-host/releases/VERSION/host and includes production
 dependencies. No npm or source compilation runs on homelab.
 
-The current matching host-v0.2.0 pin is the published timesyncd/Akasha release.
-For later changes, the orchestrator tags reviewed main, waits for release CI,
-then updates both inventories to that exact version and SHA-256. The publisher
+The matching host-v0.2.1 pin includes the data-only trust fetcher.
+Before merging the pin update, the orchestrator tags reviewed main, waits for
+release CI and fills both SHA-256 TODOs from the published chaldea-host.tar.gz
+asset. The TODO value is deliberately invalid for installation. The publisher
 procedure checks the installed Akasha capability before key creation. Never use
 a floating ref, unpublished candidate or invented checksum.
 
@@ -58,8 +59,32 @@ different read-only fleet-config credential for grants. The publisher's guard
 allows only bundle.jws to change. Neither consumers nor publisher execute data
 repository content. Both inventories pin chaldea_access_trust_repository and
 chaldea_access_trust_bundle_path; check-trust-pins.py compares and validates them.
-The trust role installs its reviewed downloader over host-v0.2.0's old transport
-program, leaving the cryptographic runtime release pin unchanged.
+The trust role installs the downloader from the pinned host artifact with
+remote_src. Chaldea host/ owns the fetcher and its behaviour tests; the roles own
+installation only. Both updater templates supply the required repository and
+bundle_path keys. Older configs without those keys fail closed.
+
+## Fetcher artifact update
+
+After the orchestrator publishes host-v0.2.1, fill both inventory SHA-256 TODOs
+from that release asset, run scripts/check-trust-pins.py against the matching
+fleet and infra checkouts, and merge both reviewed consumer PRs. The installer
+rejects the TODO checksum. Do not deploy a candidate archive.
+
+From the existing protected Ansible environment on the controller, with INFRA
+and FLEET set to those merged checkouts:
+
+```sh
+cd "$INFRA"
+python3 scripts/check-trust-pins.py "$FLEET" "$INFRA"
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true --check --diff
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true
+ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime,trust -e chaldea_access_trust_enabled=true --check --diff
+```
+
+Require failed=0 throughout and changed=0 on the second check. This update
+preserves the bootstrap transport key, public anchor and existing updater.sqlite;
+it does not initialize state or activate Akasha.
 
 ## Exact ordered orchestrator commands
 

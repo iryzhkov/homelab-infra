@@ -162,7 +162,8 @@ Run from the existing protected Ansible environment on the controller. Normandy
 must already have Python3, git, OpenSSH, openssl, acl, systemd/busctl and timesyncd.
 Verify its SSH host identity independently first. The signer alias scopes this play.
 Freeze reviewed merged INFRA_COMMIT and FLEET_COMMIT, with successful CI.
-The current matching runtime is host-v0.2.0 with the exact digest in both inventories.
+The matching runtime pin is host-v0.2.1. Before merging or converging, replace
+both SHA-256 TODOs with the published release asset's exact digest.
 
 1. Stage the runtime, locked UID, directories, program and inactive timers.
    The first apply accepts public placeholders because it cannot start renewal.
@@ -368,10 +369,10 @@ gh repo deploy-key list -R iryzhkov/chaldea-fleet-config
    restore fleet access or change the private key. If already moved, verify its
    new read-only registration and skip delete/add.
 
-4. Publish first, then reapply the consumer role with the reviewed role-owned
-   downloader and new transport pins. The host-v0.2.0 runtime stays pinned; its
-   bundled downloader has the old URL and is deliberately superseded by the
-   role-owned copy. Fetching only data never executes either repository's content.
+4. Publish first, then reapply the consumer role with host-v0.2.1 and matching
+   release-asset checksums in both inventories. The role installs the downloader
+   from that artifact; Chaldea host/ is its only source. Fetching only data never
+   executes either repository's content.
 
 ```sh
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'systemctl start chaldea-publisher.service'
