@@ -33,9 +33,9 @@ class RolloutTest(unittest.TestCase):
         self.assertEqual(c["access_state"], "/var/lib/akasha/access-state.db")
         self.assertEqual(c["bundle_file"], "/var/lib/chaldea-access-trust-public/bundle.jws")
         self.assertEqual(c["clock_health_file"], "/run/chaldea-access-trust/clock-health.json")
-        self.assertEqual(c["anchors"], [{
-            "kid": "deployment-2026-10",
-            "public_key": {"kty": "OKP", "crv": "Ed25519", "x": "re7EPlrspBhs_OHsN7z1VqDZ8HkVib4glgZCczaKjRc"}}])
+        self.assertEqual(v["chaldea_deployment_anchor_kid"], "deployment-2026-10b")
+        self.assertEqual(c["anchors"], v["chaldea_access_trust_anchors"])
+        self.assertEqual(v["chaldea_deployment_anchor_public_jwk"]["crv"], "Ed25519")
         self.assertEqual([(r["source"],r["profile"],r["project"],r["kinds"]) for r in c["registry"]], [
             ("chaldea.daily-health.agent-a","daily-health","homelab",["report"]),
             ("agent-a.fleet","fleet-timers","chaldea",["job_finished"]),

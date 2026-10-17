@@ -14,8 +14,14 @@ chaldea_access_paths:
   clock_health: /run/chaldea-access-trust/clock-health.json
   updater_state: /var/lib/chaldea-access-trust/updater.sqlite
   verifier_state: /var/lib/akasha/access-state.db
-# Independently compared deployment key, SPKI SHA-256:
-# 222450438cdcae5bda6c498f5e39baee5e2479923389c28e518ccf9138aee296
+# New Normandy anchor. The orchestrator replaces both public placeholders in
+# this file and homelab-infra vars/chaldea-runtime.yml before activation.
+chaldea_deployment_anchor_kid: deployment-2026-10b
+chaldea_deployment_anchor_public_jwk:
+  kty: OKP
+  crv: Ed25519
+  x: REPLACE_WITH_NORMANDY_PUBLIC_JWK_X
+chaldea_deployment_anchor_spki_sha256: REPLACE_WITH_NORMANDY_SPKI_SHA256
 chaldea_access_trust_anchors:
-  - kid: deployment-2026-10
-    public_key: {kty: OKP, crv: Ed25519, x: re7EPlrspBhs_OHsN7z1VqDZ8HkVib4glgZCczaKjRc}
+  - kid: "{{ chaldea_deployment_anchor_kid }}"
+    public_key: "{{ chaldea_deployment_anchor_public_jwk }}"

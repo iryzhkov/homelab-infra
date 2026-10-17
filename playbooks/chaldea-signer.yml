@@ -1,11 +1,12 @@
 ---
-# Operator-only signer runtime installation on the controller; no key operations.
-- name: Install pinned signing runtime on omarchy-pc
-  hosts: localhost
-  connection: local
+# Target only the Arch machine omarchy-normandy, never the Debian VM "normandy".
+# Key generation and durable-state initialization are explicit operator actions.
+- name: Install pinned signing runtime and publisher on Normandy
+  hosts: chaldea_publishers
   gather_facts: false
   become: true
   vars_files: [../vars/chaldea-runtime.yml]
   roles:
     - chaldea_node
     - chaldea_host_artifact
+    - chaldea_publisher

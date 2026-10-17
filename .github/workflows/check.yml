@@ -95,5 +95,7 @@ jobs:
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME"
           python3 scripts/test-trust-rollout.py -v
+          python3 scripts/test-chaldea-publisher.py -v
+          ansible-playbook playbooks/chaldea-signer.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --list-hosts

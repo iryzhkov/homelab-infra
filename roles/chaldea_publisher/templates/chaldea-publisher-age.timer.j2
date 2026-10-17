@@ -1,0 +1,11 @@
+[Unit]
+Description=Check published trust age hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+Unit=chaldea-publisher-age.service
+
+[Install]
+WantedBy=timers.target

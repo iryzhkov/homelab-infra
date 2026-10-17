@@ -1,0 +1,11 @@
+[Unit]
+Description=Renew trust every six hours, leaving 18 hours of outage tolerance
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=chaldea-publisher.service
+
+[Install]
+WantedBy=timers.target

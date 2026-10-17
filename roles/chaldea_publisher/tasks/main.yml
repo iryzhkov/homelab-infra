@@ -1,0 +1,146 @@
+---
+- name: Require safe publisher paths
+  ansible.builtin.assert:
+    that:
+      - item is match('^/[A-Za-z0-9/_.-]+$')
+      - "'..' not in item.split('/')"
+    quiet: true
+  loop:
+    - "{{ chaldea_publisher_root }}"
+    - "{{ chaldea_publisher_config_root }}"
+    - "{{ chaldea_publisher_unit_dir }}"
+    - "{{ chaldea_publisher_program }}"
+
+- name: Create dedicated publisher group
+  ansible.builtin.group:
+    name: chaldea-publisher
+    system: true
+
+- name: Create locked publisher identity without login or extra groups
+  ansible.builtin.user:
+    name: chaldea-publisher
+    group: chaldea-publisher
+    groups: ""
+    append: false
+    system: true
+    home: "{{ chaldea_publisher_root }}"
+    create_home: false
+    shell: /usr/bin/nologin
+    password_lock: true
+
+- name: Create private publisher directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ omit if ansible_check_mode else 'chaldea-publisher' }}"
+    group: "{{ omit if ansible_check_mode else 'chaldea-publisher' }}"
+    mode: "0700"
+  loop:
+    - "{{ chaldea_publisher_root }}"
+    - "{{ chaldea_publisher_root }}/keys"
+    - "{{ chaldea_publisher_root }}/state"
+
+- name: Create root-owned publisher configuration and program directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ chaldea_publisher_config_root }}"
+    - "{{ chaldea_publisher_program | dirname }}"
+
+- name: Install byte-only publisher
+  ansible.builtin.copy:
+    src: chaldea-publisher
+    dest: "{{ chaldea_publisher_program }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install independently pinned GitHub host key
+  ansible.builtin.copy:
+    content: "{{ chaldea_publisher_known_hosts }}\n"
+    dest: "{{ chaldea_publisher_root }}/keys/known_hosts"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install independent publisher anchor and runtime configuration
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ chaldea_publisher_config_root }}/config.json"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install publisher and age alert units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ chaldea_publisher_unit_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - chaldea-publisher.service
+    - chaldea-publisher.timer
+    - chaldea-publisher-age.service
+    - chaldea-publisher-age.timer
+
+- name: Validate the new public pin before timer activation
+  ansible.builtin.assert:
+    that:
+      - chaldea_deployment_anchor_kid == 'deployment-2026-10b'
+      - chaldea_deployment_anchor_public_jwk.kty == 'OKP'
+      - chaldea_deployment_anchor_public_jwk.crv == 'Ed25519'
+      - chaldea_deployment_anchor_public_jwk.x is match('^[A-Za-z0-9_-]{43}$')
+      - chaldea_deployment_anchor_spki_sha256 is match('^[a-f0-9]{64}$')
+    quiet: true
+  when: chaldea_publisher_enabled | bool
+
+- name: Inspect publisher bootstrap files before activation
+  ansible.builtin.stat:
+    path: "{{ chaldea_publisher_root }}/{{ item }}"
+    follow: false
+    get_checksum: false
+  loop:
+    - "keys/{{ chaldea_deployment_anchor_kid }}.pem"
+    - keys/fleet-deploy-key
+    - state/publisher.sqlite
+    - state/verify.sqlite
+  register: chaldea_publisher_bootstrap
+  when: chaldea_publisher_enabled | bool
+
+- name: Read the dedicated publisher identity
+  ansible.builtin.getent:
+    database: passwd
+    key: chaldea-publisher
+  when: chaldea_publisher_enabled | bool
+
+- name: Require private initialized bootstrap before timer activation
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+      - item.stat.nlink | default(0) == 1
+      - item.stat.uid | default(-1) == ansible_facts.getent_passwd['chaldea-publisher'][1] | int
+      - item.stat.mode | default('') == '0600'
+      - item.stat.size | default(0) > 0
+    quiet: true
+    fail_msg: Create private keys and initialize both durable states explicitly before activation.
+  loop: "{{ chaldea_publisher_bootstrap.results }}"
+  when: chaldea_publisher_enabled | bool
+
+# Bootstrap is explicit. No key generation, database creation or Git push in Ansible.
+- name: Enable or stop publisher timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: "{{ chaldea_publisher_enabled | bool }}"
+    state: "{{ 'started' if chaldea_publisher_enabled | bool else 'stopped' }}"
+    daemon_reload: true
+  loop:
+    - chaldea-publisher.timer
+    - chaldea-publisher-age.timer
+  when: not ansible_check_mode
