@@ -1,0 +1,30 @@
+---
+# NATS identities, rendered into stacks/nats/templates/nats.conf.j2. See
+# docs/chaldea-infra-foundation.md, "NATS accounts and users".
+#
+# Public NKeys only. A public user key (U followed by 55 base32 characters) is
+# not a secret and belongs here; the matching seed (S...) is generated on the
+# one machine the identity belongs to and never leaves it:
+#
+#   nats auth nkey gen user --output ~/.config/nats/<name>.nk   # mode 0600
+#   nats auth nkey show ~/.config/nats/<name>.nk                # public key
+#
+# stacks/nats/swarm-prepare.yml validates the three required keys and only
+# the explicitly enabled optional hosts. Revoking an identity is replacing its key (or removing
+# a host from nats_chaldea_hosts) and redeploying the stack.
+
+# Optional future work/quota identities, parked for gateway-only Akasha v1.
+# Deployment REFUSES a nonempty list: host JetStream API reply subjects can
+# bypass publish ACLs inside the shared account. Enabling hosts needs account
+# isolation and a new review; public keys alone are not sufficient.
+# Work/quota definitions remain only in parked PR #10, outside this branch.
+nats_chaldea_hosts: []
+nats_optional_hosts: []
+
+nats_nkeys:
+  # SYS account: server monitoring. Seed on omarchy-pc (operator).
+  sys-admin: ""
+  # CHALDEA account, stream administration. Seed on omarchy-pc (operator).
+  chaldea-admin: ""
+  # CHALDEA account, the Akasha service. Seed with the Akasha deployment.
+  akasha: ""

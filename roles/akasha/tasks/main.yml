@@ -1,0 +1,165 @@
+---
+- name: Require the single local state host and fixed private paths
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'homelab'
+      - akasha_state_root == '/var/lib/akasha'
+    quiet: true
+
+- name: Inspect system service state before staging
+  ansible.builtin.service_facts:
+  check_mode: false
+  when: not (akasha_activate | bool)
+
+- name: Refuse staging over a running or enabled service
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services.get('akasha.service', {}).get('state', 'stopped') != 'running'
+      - ansible_facts.services.get('akasha.service', {}).get('status', 'disabled') not in ['enabled', 'enabled-runtime']
+    fail_msg: Use the approved activation variables to update an existing Akasha service.
+    quiet: true
+  when: not (akasha_activate | bool)
+
+- name: Verify local filesystem for SQLite WAL
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, FSTYPE, --target, /var/lib]
+  register: akasha_fs
+  changed_when: false
+  check_mode: false
+  failed_when: akasha_fs.stdout | trim not in ['ext4', 'xfs', 'btrfs']
+
+- name: Require accepted runtime and adapter contracts before activation
+  ansible.builtin.assert:
+    that:
+      - akasha_exec_start | length > 0
+      - akasha_exec_start == '/opt/chaldea/node/bin/node ' ~ chaldea_host_artifact_root ~ '/akasha-service.mjs serve --config /etc/akasha/config.json'
+      - akasha_trust_bundle == chaldea_access_paths.bundle
+      - akasha_clock_health == chaldea_access_paths.clock_health
+      - akasha_interfaces_verified | bool
+      - akasha_backup_packaging_verified | bool
+    fail_msg: >-
+      Activation requires the accepted C artifact/command, F trust updater and
+      clock-health integration, and verified off-host backup packaging.
+  when: akasha_activate | bool
+
+- name: Inspect external activation inputs without reading credentials
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+    get_mime: false
+  loop:
+    - "{{ akasha_environment_file }}"
+    - "{{ akasha_trust_bundle }}"
+    - "{{ akasha_clock_health }}"
+    - "{{ chaldea_access_paths.verifier_state }}"
+    - "{{ akasha_nats_seed_file }}"
+    - "{{ chaldea_host_artifact_root }}/akasha-service.mjs"
+  register: akasha_inputs
+  when: akasha_activate | bool
+
+- name: Refuse absent runtime inputs
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    quiet: true
+  loop: "{{ akasha_inputs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: akasha_activate | bool
+
+- name: Require private runtime environment
+  ansible.builtin.assert:
+    that:
+      - akasha_inputs.results[0].stat.mode == '0600'
+      - akasha_inputs.results[0].stat.uid == 0
+    quiet: true
+  when: akasha_activate | bool
+
+- name: Create service identity
+  ansible.builtin.user:
+    name: akasha
+    system: true
+    home: /var/lib/akasha
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create private local state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: akasha
+    group: akasha
+    mode: "0700"
+  loop:
+    - /var/lib/akasha
+    - /var/lib/akasha/backup
+    - /var/lib/akasha/tmp
+
+- name: Create the maintenance executable directory
+  ansible.builtin.file:
+    path: /usr/local/libexec
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install bounded maintenance helper
+  ansible.builtin.copy:
+    src: akasha-maintenance
+    dest: /usr/local/libexec/akasha-maintenance
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create public runtime configuration directory
+  ansible.builtin.file:
+    path: /etc/akasha
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render Akasha public configuration with exact source registry and anchor
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: /etc/akasha/config.json
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install service and maintenance units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - akasha.service
+    - akasha-health.service
+    - akasha-health.timer
+    - akasha-backup.service
+    - akasha-backup.timer
+  register: akasha_units
+
+- name: Reload definitions
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: akasha_units is changed
+
+# Staging definitions must not stop an existing service or enable a new one.
+- name: Start only the explicitly approved runtime
+  ansible.builtin.systemd_service:
+    name: akasha.service
+    enabled: true
+    state: "{{ 'restarted' if akasha_units is changed else 'started' }}"
+  when: akasha_activate | bool
+
+- name: Enable approved maintenance schedules
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [akasha-health.timer, akasha-backup.timer]
+  when: akasha_activate | bool

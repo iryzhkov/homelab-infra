@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Chaldea trust within 120 seconds
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=120s
+AccuracySec=1s
+RandomizedDelaySec=0
+Unit=chaldea-access-trust.service
+
+[Install]
+WantedBy=timers.target

@@ -1,6 +1,13 @@
 ---
+# NATS JetStream (docs/nats-jetstream.md, docs/chaldea-infra-foundation.md).
+# The server configuration is rendered from stacks/nats/templates/nats.conf.j2
+# by swarm-prepare.yml, from the public keys in nats.yml beside this file. It
+# holds no secret, so the stack no longer loads secrets/nats.sops.yaml. Its
+# hash is in the service's environment, so a changed configuration redeploys
+# the broker.
 swarm_stacks_nats:
   - name: nats
     pin: homelab
-    secrets: nats
     prepare_tasks: swarm-prepare.yml
+    env_extra:
+      NATS_CONFIG_SHA256: "{{ lookup('template', '../stacks/nats/templates/nats.conf.j2') | hash('sha256') }}"

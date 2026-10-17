@@ -1,4 +1,15 @@
 ---
+# v1 keeps events in CHALDEA. Host JetStream APIs can redirect replies into
+# akasha.> regardless of their publish ACL; do not enable them in this account.
+- name: Refuse host identities in the Akasha v1 account
+  ansible.builtin.assert:
+    that:
+      - nats_chaldea_hosts | length == 0
+    fail_msg: >-
+      Akasha v1 requires nats_chaldea_hosts=[] while events share CHALDEA.
+      Future host work/quota users need account isolation and new review.
+    quiet: true
+
 - name: Preserve maintenance guard before NATS deployment
   ansible.builtin.include_role:
     name: maintenance_guard
@@ -25,4 +36,51 @@
     owner: "1000"
     group: "1000"
     mode: "0700"
+  become: true
+
+- name: Refuse unknown or duplicate optional identities
+  ansible.builtin.assert:
+    that:
+      - nats_chaldea_hosts | difference(nats_optional_hosts) | length == 0
+      - nats_chaldea_hosts | unique | length == nats_chaldea_hosts | length
+    quiet: true
+
+# Every identity the configuration names must have a well-formed public key
+# (inventory/group_vars/swarm/nats.yml). An empty key would render a user
+# the server rejects, and a seed pasted by mistake would publish a secret.
+- name: Refuse missing or malformed NATS public keys
+  ansible.builtin.assert:
+    that:
+      - nats_nkeys[item] | default('') is match('^U[A-Z2-7]{55}$')
+    fail_msg: >-
+      nats_nkeys['{{ item }}'] in inventory/group_vars/swarm/nats.yml is not a
+      public user NKey. Generate the seed on that identity's machine and
+      paste only the output of `nats auth nkey show`.
+    quiet: true
+  loop: "{{ ['sys-admin', 'chaldea-admin', 'akasha'] + nats_chaldea_hosts }}"
+
+- name: Create the NATS configuration directory
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/nats/config"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# validate runs the pinned server's own parser on the rendered file before it
+# replaces the installed one, so a configuration the broker would refuse
+# never reaches its bind mount (the service is stop-first: a refused file
+# would leave the broker down).
+- name: Render the NATS configuration
+  ansible.builtin.template:
+    src: "{{ swarm_stack_src }}/templates/nats.conf.j2"
+    dest: "{{ swarm_state_root }}/nats/config/nats.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: >-
+      docker run --rm --network none -v %s:/etc/nats/nats.conf:ro
+      {{ (lookup('file', swarm_stack_src ~ '/stack.yml') | from_yaml).services.nats.image }}
+      -t -c /etc/nats/nats.conf
   become: true

@@ -1,0 +1,10 @@
+{{ {
+  'state': chaldea_access_trust_state,
+  'node': chaldea_access_trust_node,
+  'runtime': chaldea_access_trust_runtime,
+  'key': chaldea_access_trust_ssh_key,
+  'known_hosts': chaldea_access_trust_known_hosts,
+  'anchors': chaldea_access_trust_root + '/anchors.json',
+  'health': chaldea_access_paths.clock_health,
+  'output': chaldea_access_paths.bundle
+} | to_nice_json }}

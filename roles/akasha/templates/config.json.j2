@@ -1,0 +1,12 @@
+{{ {
+  'database': akasha_state_root + '/events.db',
+  'access_state': chaldea_access_paths.verifier_state,
+  'anchors': chaldea_access_trust_anchors,
+  'bundle_file': chaldea_access_paths.bundle,
+  'clock_health_file': chaldea_access_paths.clock_health,
+  'registry': akasha_registry,
+  'nats_url': 'wss://nats.ryzhkov.dev',
+  'nats_seed_file': akasha_nats_seed_file,
+  'bind': '127.0.0.1',
+  'port': 1935
+} | to_nice_json }}

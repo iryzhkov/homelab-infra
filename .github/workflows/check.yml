@@ -25,6 +25,9 @@ jobs:
       - run: python3 scripts/test-observability-textfile.py
       - name: Install the deployment templating version for guarded role tests
         run: pip install --disable-pip-version-check ansible-core==2.19.13
+      - name: Validate the NATS stack
+        run: |
+          python3 scripts/stack-lint.py stacks/nats/stack.yml
       - name: Test cold-transition, inventory and activation guards
         run: |
           python3 -m unittest discover -s roles/base/tests -v
@@ -37,6 +40,60 @@ jobs:
       - run: python3 -m py_compile roles/base/files/homelab-gpu-report roles/observability_pve/files/pve-exporter-launcher.py roles/observability_grafana/library/grafana_observability.py
       - run: python3 -m py_compile roles/backup/files/homelab-swarm-snapshot roles/backup/files/homelab-sqlite-backup
       - run: python3 -m py_compile stacks/jocasta/files/jocasta-backup scripts/jocasta-credentials.py
-      - run: shellcheck -S warning stacks/jocasta/files/jocasta-firewall
+      - run: shellcheck -S warning stacks/jocasta/files/jocasta-firewall scripts/nats-jetstream-apply.sh
       - run: shellcheck -S warning roles/backup/files/homelab-bulk-backup roles/backup/files/homelab-backup-run roles/backup/files/homelab-restore-verify roles/offsite_phone/files/homelab-offsite-run roles/offsite_phone/files/homelab-offsite-bundle roles/fleet_helpers/files/zigbee-watchdog.sh
       - run: python3 -m py_compile roles/drift_check/files/homelab-drift-check
+
+  akasha:
+    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    container:
+      options: --memory=512m --cpus=1
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    env:
+      TMPDIR: /home/igor/.cache/chaldea-scratch/akasha-i
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated scratch and test dependencies
+        run: |
+          mkdir -p "$TMPDIR/bin"
+          pip install --disable-pip-version-check ansible-core==2.19.13 'nats-py[nkeys]==2.16.0'
+      - name: Install checksum-pinned disposable broker and CLI
+        run: |
+          python3 - <<'PY'
+          import hashlib, io, os, pathlib, tarfile, urllib.request, zipfile
+          out = pathlib.Path(os.environ["TMPDIR"]) / "bin"
+          assets = [
+              ("https://github.com/nats-io/nats-server/releases/download/v2.15.1/nats-server-v2.15.1-linux-amd64.tar.gz",
+               "bf5edc7b1ce98e885c368cb43a886eb148dc5d0551d99f3cf6141fb5e1954c70",
+               "nats-server-v2.15.1-linux-amd64/nats-server", "nats-server"),
+              ("https://github.com/nats-io/natscli/releases/download/v0.5.0/nats-0.5.0-linux-amd64.zip",
+               "d9fc93e9e9ab0310deff7e719a8a0da6f9d66f26d473f039aaee70155507aecc",
+               "nats-0.5.0-linux-amd64/nats", "nats"),
+          ]
+          for url, digest, member, name in assets:
+              raw = urllib.request.urlopen(url, timeout=60).read()
+              assert hashlib.sha256(raw).hexdigest() == digest, name
+              if name == "nats-server":
+                  with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+                      data = archive.extractfile(member).read()
+              else:
+                  with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                      data = archive.read(member)
+              target = out / name
+              target.write_bytes(data)
+              target.chmod(0o755)
+          PY
+          echo "$TMPDIR/bin" >> "$GITHUB_PATH"
+      - name: Test actual NATS ACLs, selected convergence and SQLite restore
+        run: |
+          python3 scripts/test-akasha-infra.py -v
+          export HOME="$TMPDIR/.scratch-home"
+          export ROLLOUT_TEST_HOME="$HOME"
+          test "$HOME" = "$TMPDIR/.scratch-home"
+          mkdir -p "$HOME"
+          python3 scripts/test-trust-rollout.py -v
+          ansible-playbook playbooks/akasha.yml --syntax-check
+          ansible-playbook playbooks/akasha.yml --list-hosts
