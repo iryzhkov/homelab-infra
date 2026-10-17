@@ -153,6 +153,9 @@ class RolloutTest(unittest.TestCase):
             enrolled = {
                 "ansible_facts": {"services": {}},
                 "chaldea_access_trust_enabled": True,
+                # Public-only synthetic JWK. Production placeholders must remain invalid.
+                "chaldea_deployment_anchor_public_jwk": {
+                    "kty": "OKP", "crv": "Ed25519", "x": "A" * 43},
                 "chaldea_access_trust_root": str(config),
                 "chaldea_access_trust_state": str(state),
                 "chaldea_access_trust_public": str(public),
