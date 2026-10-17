@@ -4,6 +4,7 @@ import base64
 from contextlib import closing
 import importlib.machinery
 import importlib.util
+import itertools
 import json
 import os
 from pathlib import Path
@@ -120,6 +121,167 @@ class PublisherTests(unittest.TestCase):
             git("update-index", "--add", "--cacheinfo", "100644," + blob + "," + path, index=True)
         tree = git("write-tree", index=True).decode().strip()
         return git("commit-tree", tree, *(["-p", parent] if parent else []), data=b"fixture\n").decode().strip()
+
+    def run_main(self, *args):
+        config = self.root / "config.json"
+        config.write_text(json.dumps(self.publisher.config))
+        with mock.patch.object(sys, "argv", ["chaldea-publisher", "--config", str(config), *args]), \
+                mock.patch.object(p, "Publisher", return_value=self.publisher), \
+                mock.patch.object(self.publisher, "bootstrap"), \
+                mock.patch.object(sys, "stderr") as journal:
+            result = p.main()
+        logs = "".join(call.args[0] for call in journal.write.call_args_list)
+        return result, logs
+
+    def heartbeat_fixture(self):
+        token_file = self.root / "heartbeat-token"
+        token_file.write_text("a" * 64 + "\n")
+        self.publisher.config.update(heartbeat_token_file=str(token_file),
+            heartbeat_url="http://192.0.2.1:3002/api/v1/endpoints/chaldea_trust-publisher/external")
+        opener = mock.MagicMock()
+        opener.open.return_value.__enter__.return_value.status = 200
+        return opener
+
+    def test_successful_publication_pushes_heartbeat_after_publication_without_token_in_argv_or_logs(self):
+        opener = self.heartbeat_fixture()
+
+        def opened(request, timeout):
+            self.assertIn("push", self.calls)
+            self.assertTrue((self.publisher.state / "published.jws").exists())
+            self.assertTrue(request.full_url.endswith("/chaldea_trust-publisher/external?success=true"))
+            self.assertEqual(request.get_method(), "POST")
+            self.assertEqual(request.get_header("Authorization"), "Bearer " + "a" * 64)
+            self.assertEqual(timeout, 10)
+            return mock.MagicMock(__enter__=lambda _: mock.Mock(status=200))
+
+        opener.open.side_effect = opened
+        with mock.patch.object(p.urllib.request, "build_opener", return_value=opener), \
+                mock.patch.object(self.publisher, "run", wraps=self.publisher.run) as commands:
+            result, logs = self.run_main()
+        self.assertEqual(result, 0)
+        opener.open.assert_called_once()
+        self.assertIn("heartbeat=sent success=true", logs)
+        self.assertNotIn("a" * 64, logs)
+        self.assertNotIn("a" * 64, str(commands.call_args_list))
+
+    def test_failed_publication_pushes_failure_heartbeat(self):
+        opener = self.heartbeat_fixture()
+        self.fail_push = True
+        with mock.patch.object(p.urllib.request, "build_opener", return_value=opener):
+            result, logs = self.run_main()
+        self.assertEqual(result, 1)
+        opener.open.assert_called_once()
+        self.assertTrue(opener.open.call_args.args[0].full_url.endswith("?success=false"))
+        self.assertFalse((self.publisher.state / "published.jws").exists())
+        self.assertIn("heartbeat=sent success=false", logs)
+        self.assertNotIn("a" * 64, logs)
+
+    def test_heartbeat_error_never_changes_publication_result_or_logs_credentials(self):
+        for failure in (False, True):
+            with self.subTest(publication_fails=failure):
+                opener = self.heartbeat_fixture()
+                opener.open.side_effect = RuntimeError("Bearer " + "a" * 64)
+                self.fail_push = failure
+                with mock.patch.object(p.urllib.request, "build_opener", return_value=opener):
+                    result, logs = self.run_main()
+                self.assertEqual(result, int(failure))
+                opener.open.assert_called_once()
+                self.assertIn("heartbeat=error cause=RuntimeError", logs)
+                self.assertNotIn("a" * 64, logs)
+                if not failure:
+                    self.assertTrue((self.publisher.state / "published.jws").exists())
+
+    def test_missing_url_disables_heartbeat_without_guessing_an_address(self):
+        self.heartbeat_fixture()
+        del self.publisher.config["heartbeat_url"]
+        with mock.patch.object(p.urllib.request, "build_opener") as opener:
+            result, logs = self.run_main()
+        self.assertEqual(result, 0)
+        self.assertEqual(logs.count("heartbeat=disabled"), 1)
+        opener.assert_not_called()
+
+    def test_missing_token_disables_heartbeat_once_per_publication_run(self):
+        self.heartbeat_fixture()
+        self.publisher.config["heartbeat_token_file"] = str(self.root / "absent-token")
+        with mock.patch.object(p.urllib.request, "build_opener") as opener:
+            result, logs = self.run_main()
+        self.assertEqual(result, 0)
+        self.assertEqual(logs.count("heartbeat=disabled"), 1)
+        opener.assert_not_called()
+
+    def test_age_and_alert_checks_never_push_even_on_failure(self):
+        self.heartbeat_fixture()
+        for mode in ("--check-age", "--test-alert"):
+            for failure in (False, True):
+                with self.subTest(mode=mode, failure=failure), \
+                        mock.patch.object(self.publisher, "fetch", side_effect=RuntimeError("fetch failed")
+                                          if failure else None, return_value=self.base), \
+                        mock.patch.object(self.publisher, "notify"), \
+                        mock.patch.object(p.urllib.request, "build_opener") as opener:
+                    self.run_main(mode)
+                    opener.assert_not_called()
+
+    def test_heartbeat_disallows_redirects_and_environment_proxies(self):
+        opener = self.heartbeat_fixture()
+        with mock.patch.object(p.urllib.request, "build_opener", return_value=opener) as build:
+            self.publisher.heartbeat(True)
+        self.assertEqual(build.call_args.args[0].proxies, {})
+        redirect = build.call_args.args[1]
+        self.assertIsNone(redirect.redirect_request(None, None, 302, "", {}, "http://elsewhere/"))
+
+    def test_heartbeat_provisioning_uses_gatus_sops_and_suppresses_secret_output(self):
+        play = yaml.safe_load((ROOT / "playbooks/chaldea-publisher-heartbeat.yml").read_text())[0]
+        self.assertEqual(play["hosts"], "chaldea_publishers")
+        self.assertIs(play["become"], True)
+        load, guard, install = play["tasks"]
+        self.assertTrue(load["community.sops.load_vars"]["file"].endswith("/secrets/gatus-alerting.sops.yaml"))
+        self.assertEqual(load["delegate_to"], "localhost")
+        for task in (load, guard, install):
+            self.assertIs(task["no_log"], True)
+        self.assertIs(install["diff"], False)
+        copy = install["ansible.builtin.copy"]
+        self.assertEqual(copy["dest"], "/etc/chaldea-publisher/heartbeat-token")
+        self.assertEqual((copy["owner"], copy["group"], copy["mode"]),
+                         ("root", "chaldea-publisher", "0640"))
+        self.assertIs(copy["follow"], False)
+        self.assertIs(copy["backup"], False)
+
+    def test_gatus_template_renders_one_external_list_and_immediate_discord_alert(self):
+        import jinja2
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env.filters["swarm_stacks"] = lambda hosts, groups: []
+        env.filters["stack_hosts"] = lambda hosts, groups, name: []
+        template = env.from_string((ROOT / "stacks/gatus/templates/config.yaml.j2").read_text())
+        token_contexts = [{}, {"stack_secrets": {}}]
+        token_contexts += [{"stack_secrets": {"CHALDEA_PUBLISHER_HEARTBEAT_TOKEN": token}}
+                           for token in ("", None, "   ", "a" * 64)]
+        for (host, smart_host), token_context in itertools.product(
+                (("homelab", "normandy"), ("normandy", "normandy"),
+                 ("oci", "normandy"), ("homelab", "homelab")), token_contexts):
+            with self.subTest(host=host, smart_host=smart_host, token_context=token_context):
+                rendered = template.render(**token_context,
+                    inventory_hostname=host, smart_gatus_host=smart_host,
+                    hostvars={"homelab": {"ansible_host": "192.0.2.1"},
+                              "normandy": {"ansible_host": "192.0.2.2"},
+                              "oci": {"mesh_host": "192.0.2.3"},
+                              "pve": {"smart_drives": [{"model": "disk", "serial": "fixture"}]}},
+                    groups={"docker_hosts": [], "edge_proxy": [], "hypervisors": ["pve"]},
+                    traefik_static_routes=[], adguard_instances=[], mqtt_broker_ip="192.0.2.4",
+                    edge_proxy_ip="192.0.2.5", smart_secrets={"GATUS_TOKEN": "fixture"},
+                    smart_gatus_group="SMART", smart_heartbeat="45m")
+                self.assertLessEqual(rendered.count("external-endpoints:"), 1)
+                endpoints = yaml.safe_load(rendered).get("external-endpoints", [])
+                publisher = [e for e in endpoints if e["name"] == "trust-publisher"]
+                token = token_context.get("stack_secrets", {}).get("CHALDEA_PUBLISHER_HEARTBEAT_TOKEN")
+                self.assertEqual(len(publisher), int(host == "homelab" and bool(token and token.strip())))
+                self.assertEqual(len([e for e in endpoints if e["group"] == "SMART"]),
+                                 int(host == smart_host))
+                if publisher:
+                    self.assertEqual(publisher[0]["heartbeat"]["interval"], "13h")
+                    self.assertEqual(publisher[0]["group"], "chaldea")
+                    self.assertEqual(publisher[0]["token"], "${CHALDEA_PUBLISHER_HEARTBEAT_TOKEN}")
+                    self.assertEqual(publisher[0]["alerts"], [{"type": "discord",
+                        "failure-threshold": 1, "success-threshold": 1, "send-on-resolved": True}])
 
     def test_forged_remote_high_water_and_timestamp_cannot_advance_or_hide_age(self):
         node = shutil.which("node")
@@ -414,7 +576,8 @@ class PublisherTests(unittest.TestCase):
         inv = self.root / "inventory.yml"
         inv.write_text(yaml.safe_dump({"all": {"children": {"chaldea_publishers": {"hosts": {
             "omarchy-normandy": {"ansible_connection": "local", "ansible_become": False,
-                                "ansible_python_interpreter": sys.executable}}}}}}))
+                                "ansible_python_interpreter": sys.executable}}},
+            "docker_hosts": {"hosts": {"homelab": {"ansible_host": "192.0.2.1"}}}}}}))
         variables = {
             "chaldea_publisher_root": str(self.root / "publisher"),
             "chaldea_publisher_config_root": str(self.root / "config"),

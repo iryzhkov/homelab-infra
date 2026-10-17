@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.request
 
 REMOTE = "ssh://git@github.com/iryzhkov/chaldea-trust.git"
 FLEET_REMOTE = "ssh://git@github.com/iryzhkov/chaldea-fleet-config.git"
@@ -66,6 +67,12 @@ def private_file(path):
     require(path.is_file() and not path.is_symlink() and s.st_nlink == 1
             and s.st_uid == os.geteuid() and s.st_mode & 0o777 == 0o600,
             "unsafe bootstrap file: " + path.name)
+
+
+class NoHeartbeatRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the bearer to a redirect target.
+        return None
 
 
 class Publisher:
@@ -254,6 +261,35 @@ class Publisher:
         elif not stale:
             marker.unlink(missing_ok=True)
 
+    def heartbeat(self, success):
+        # Monitoring is best effort and must never change the publication result.
+        try:
+            url = self.config.get("heartbeat_url")
+            if not url:
+                print("chaldea-publisher: heartbeat=disabled", file=sys.stderr, flush=True)
+                return
+            token_file = Path(self.config.get(
+                "heartbeat_token_file", "/etc/chaldea-publisher/heartbeat-token"))
+            try:
+                token = token_file.read_text().strip()
+            except FileNotFoundError:
+                print("chaldea-publisher: heartbeat=disabled", file=sys.stderr, flush=True)
+                return
+            require(len(token) == 64 and all(c in "0123456789abcdef" for c in token),
+                    "invalid heartbeat token")
+            result = "true" if success else "false"
+            request = urllib.request.Request(url + "?success=" + result, data=b"",
+                                             headers={"Authorization": "Bearer " + token},
+                                             method="POST")
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoHeartbeatRedirect())
+            with opener.open(request, timeout=10) as response:
+                require(200 <= response.status < 300, "heartbeat rejected")
+            print("chaldea-publisher: heartbeat=sent success=" + result, file=sys.stderr, flush=True)
+        except Exception as error:
+            # HTTP errors and response bodies can contain credentials. Log only the class.
+            print("chaldea-publisher: heartbeat=error cause=" + type(error).__name__,
+                  file=sys.stderr, flush=True)
+
     def notify(self, message, severity="fail"):
         # Journal is always available through the unit. No igor credentials/home are inherited.
         print("chaldea-publisher: " + message, file=sys.stderr, flush=True)
@@ -293,8 +329,11 @@ def main():
                 publisher.age_alert(base)
             else:
                 publisher.publish(base, emergency_empty=args.emergency_empty)
+                publisher.heartbeat(True)
         return 0
     except Exception as error:
+        if not args.check_age and not args.test_alert:
+            publisher.heartbeat(False)
         detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__
         if isinstance(error, subprocess.CalledProcessError):
             detail = "command exit " + str(error.returncode)
