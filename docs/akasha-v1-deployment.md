@@ -35,9 +35,8 @@ Host code lives in /opt/chaldea-host/releases/VERSION/host and includes producti
 dependencies. No npm or source compilation runs on homelab.
 
 The matching host-v0.2.1 pin includes the data-only trust fetcher.
-Before merging the pin update, the orchestrator tags reviewed main, waits for
-release CI and fills both SHA-256 TODOs from the published chaldea-host.tar.gz
-asset. The TODO value is deliberately invalid for installation. The publisher
+The release was published from reviewed main fcf3651, including the retention
+fix. Both inventory SHA-256 pins match the published chaldea-host.tar.gz asset. The publisher
 procedure checks the installed Akasha capability before key creation. Never use
 a floating ref, unpublished candidate or invented checksum.
 
@@ -66,10 +65,10 @@ bundle_path keys. Older configs without those keys fail closed.
 
 ## Fetcher artifact update
 
-After the orchestrator publishes host-v0.2.1, fill both inventory SHA-256 TODOs
-from that release asset, run scripts/check-trust-pins.py against the matching
-fleet and infra checkouts, and merge both reviewed consumer PRs. The installer
-rejects the TODO checksum. Do not deploy a candidate archive.
+The published host-v0.2.1 asset is pinned in both inventories. Run
+scripts/check-trust-pins.py against the matching fleet and infra checkouts before
+convergence. Fleet-config merges after accepted review and passing CI;
+homelab-infra merge and convergence remain the orchestrator's separate action.
 
 From the existing protected Ansible environment on the controller, with INFRA
 and FLEET set to those merged checkouts:

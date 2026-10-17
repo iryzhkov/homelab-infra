@@ -162,8 +162,8 @@ Run from the existing protected Ansible environment on the controller. Normandy
 must already have Python3, git, OpenSSH, openssl, acl, systemd/busctl and timesyncd.
 Verify its SSH host identity independently first. The signer alias scopes this play.
 Freeze reviewed merged INFRA_COMMIT and FLEET_COMMIT, with successful CI.
-The matching runtime pin is host-v0.2.1. Before merging or converging, replace
-both SHA-256 TODOs with the published release asset's exact digest.
+The matching runtime pin is published host-v0.2.1 from main fcf3651, with the
+release asset's exact SHA-256 in both inventories.
 
 1. Stage the runtime, locked UID, directories, program and inactive timers.
    The first apply accepts public placeholders because it cannot start renewal.
