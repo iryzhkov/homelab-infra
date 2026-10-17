@@ -1,4 +1,15 @@
 ---
+# v1 keeps events in CHALDEA. Host JetStream APIs can redirect replies into
+# akasha.> regardless of their publish ACL; do not enable them in this account.
+- name: Refuse host identities in the Akasha v1 account
+  ansible.builtin.assert:
+    that:
+      - nats_chaldea_hosts | length == 0
+    fail_msg: >-
+      Akasha v1 requires nats_chaldea_hosts=[] while events share CHALDEA.
+      Future host work/quota users need account isolation and new review.
+    quiet: true
+
 - name: Preserve maintenance guard before NATS deployment
   ansible.builtin.include_role:
     name: maintenance_guard

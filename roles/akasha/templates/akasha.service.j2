@@ -24,7 +24,8 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/akasha
-ReadOnlyPaths={{ akasha_trust_bundle }} {{ akasha_clock_health }}
+# ProtectSystem=strict covers adapters; missing boot-time paths must not
+# cause a namespace failure. The application rejects missing/stale evidence.
 RestrictSUIDSGID=true
 ProtectKernelTunables=true
 ProtectKernelModules=true

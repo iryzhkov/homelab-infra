@@ -5,6 +5,7 @@ Requires nats-server 2.15.1, nats CLI, PyYAML, Jinja2 and nats-py[nkeys].
 All generated test identities and state live below TMPDIR, never on a host.
 """
 import asyncio
+import base64
 import importlib.machinery
 import importlib.util
 import json
@@ -77,6 +78,35 @@ class SnapshotTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "WAL exceeds"):
                 helper.check_storage(root)
 
+    def test_actual_deployment_guards_refuse_host_users_and_live_restaging(self):
+        cases = [
+            ("stacks/nats/swarm-prepare.yml", "Refuse host identities in the Akasha v1 account",
+             {"nats_chaldea_hosts": []}, 0),
+            ("stacks/nats/swarm-prepare.yml", "Refuse host identities in the Akasha v1 account",
+             {"nats_chaldea_hosts": ["agent-a"]}, 2),
+            ("roles/akasha/tasks/main.yml", "Refuse staging over a running or enabled service",
+             {"akasha_activate": False, "ansible_facts": {"services": {}}}, 0),
+            ("roles/akasha/tasks/main.yml", "Refuse staging over a running or enabled service",
+             {"akasha_activate": False, "ansible_facts": {"services": {
+                 "akasha.service": {"state": "running", "status": "disabled"}}}}, 2),
+            ("roles/akasha/tasks/main.yml", "Refuse staging over a running or enabled service",
+             {"akasha_activate": False, "ansible_facts": {"services": {
+                 "akasha.service": {"state": "stopped", "status": "enabled"}}}}, 2),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            for source, name, variables, expected in cases:
+                task = next(t for t in yaml.safe_load((ROOT / source).read_text())
+                            if t.get("name") == name)
+                play = Path(directory) / "guard.yml"
+                play.write_text(yaml.safe_dump([{"hosts": "localhost", "gather_facts": False,
+                                                "tasks": [task]}]))
+                proc = subprocess.run(
+                    ["ansible-playbook", "-i", "localhost,", "-c", "local", "--check",
+                     str(play), "-e", json.dumps(variables)],
+                    env={**os.environ, "ANSIBLE_LOCAL_TEMP": directory + "/ansible"},
+                    capture_output=True, text=True)
+                self.assertEqual(proc.returncode, expected, name + proc.stdout + proc.stderr)
+
     def test_staged_role_has_no_activation_without_external_contracts(self):
         defaults = yaml.safe_load((ROOT / "roles/akasha/defaults/main.yml").read_text())
         self.assertIs(defaults["akasha_activate"], False)
@@ -107,7 +137,7 @@ class BrokerTest(unittest.IsolatedAsyncioTestCase):
         self.url = "nats://127.0.0.1:%d" % port
         source = (ROOT / "stacks/nats/templates/nats.conf.j2").read_text()
         conf = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(source).render(
-            nats_nkeys=self.keys, nats_chaldea_hosts=["agent-a"])
+            nats_nkeys=self.keys, nats_chaldea_hosts=[])
         conf = conf.replace('listen: "0.0.0.0:4222"', 'listen: "127.0.0.1:%d"' % port)
         conf = conf.replace('http: "0.0.0.0:8222"', 'http: "127.0.0.1:0"')
         conf = conf.replace("store_dir: /data/jetstream", "store_dir: " + str(self.directory / "js"))
@@ -185,6 +215,33 @@ class BrokerTest(unittest.IsolatedAsyncioTestCase):
                               capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    async def test_host_cannot_connect_or_redirect_api_replies_into_events(self):
+        await self.apply()
+        # Pipeline authenticated CONNECT plus a forged reply-subject request.
+        # No host identity is admitted at all in v1, including one with a
+        # perfectly valid NKey. The broker must reject before processing PUB.
+        for subject, reply in [
+            ("akasha.agent-a.report", "_INBOX_agent-a.x"),
+            ("akasha.agent-b.report", "_INBOX_agent-a.x"),
+            ("$JS.API.INFO", "akasha.forged-api.report"),
+            ("$JS.API.DIRECT.GET.KV_CHALDEA_QUOTA", "akasha.agent-a-daily-health.report"),
+            ("$JS.API.CONSUMER.MSG.NEXT.CHALDEA_WORK.fleet", "akasha.forged-work.report"),
+        ]:
+            port = int(self.url.rsplit(":", 1)[1])
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            info = json.loads((await reader.readline()).decode().removeprefix("INFO "))
+            key = nkeys.from_seed(self.seeds["agent-a"].read_bytes())
+            signature = base64.urlsafe_b64encode(key.sign(info["nonce"].encode())).decode().rstrip("=")
+            auth = json.dumps({"nkey": self.keys["agent-a"], "sig": signature, "verbose": True})
+            wire = "CONNECT " + auth + "\r\nPUB " + subject + " " + reply + " 2\r\n{}\r\nPING\r\n"
+            writer.write(wire.encode())
+            await writer.drain()
+            response = await asyncio.wait_for(reader.readline(), 2)
+            self.assertIn(b"Authorization Violation", response)
+            writer.close()
+            await writer.wait_closed()
+        self.assertEqual((await self.admin.jetstream().stream_info("AKASHA_EVENTS")).state.messages, 0)
+
     async def test_selector_check_idempotence_and_drift(self):
         js = self.admin.jetstream()
         await self.apply("--check", "--stream", "AKASHA_EVENTS")
@@ -209,9 +266,8 @@ class BrokerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_gateway_ack_replay_size_and_host_forgery_denials(self):
         await self.apply()
-        gateway_errors, host_errors = [], []
+        gateway_errors = []
         gateway = await self.connect("akasha", gateway_errors)
-        host = await self.connect("agent-a", host_errors)
         js = gateway.jetstream()
         ack = await js.publish("akasha.agent-a-daily-health.report", b"x" * 327000,
                                headers={"Nats-Msg-Id": "stable-event", "Nats-Expected-Stream": "AKASHA_EVENTS"})
@@ -227,10 +283,6 @@ class BrokerTest(unittest.IsolatedAsyncioTestCase):
         await messages[0].ack_sync()
         replay = await js.get_msg("AKASHA_EVENTS", seq=ack.seq, direct=True)
         self.assertEqual(len(replay.data), 327000)
-        for subject in ["akasha.agent-a.report", "akasha.agent-b.report",
-                        "akasha.agent-a-daily-health.report"]:
-            await host.publish(subject, b'{"source":"agent-a-daily-health"}')
-        await host.flush()
         # Concrete protocol denials, including stream administration and
         # another principal's inbox, must be emitted by the real broker.
         for subject in ["$JS.API.STREAM.CREATE.FORGED", "$JS.API.STREAM.DELETE.AKASHA_EVENTS",
@@ -240,7 +292,6 @@ class BrokerTest(unittest.IsolatedAsyncioTestCase):
         await gateway.subscribe("_INBOX_agent-a.forged")
         await gateway.flush()
         await asyncio.sleep(0.1)
-        self.assertGreaterEqual(len(host_errors), 3, host_errors)
         self.assertGreaterEqual(len(gateway_errors), 4, gateway_errors)
         self.assertEqual((await self.admin.jetstream().stream_info("AKASHA_EVENTS")).state.messages, 1)
 

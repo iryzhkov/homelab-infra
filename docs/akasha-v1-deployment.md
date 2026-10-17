@@ -28,14 +28,20 @@ list/approval. No broad site convergence, agent-tools build or fleet rollout.
   and CHALDEA `akasha` for the service on homelab. This lane handles no
   credentials. Provision private material out of band with its owner.
   Only public keys go in `inventory/group_vars/swarm/nats.yml`.
-- `nats_chaldea_hosts: []` is deliberate. Optional future work/quota users
-  can be enabled from `nats_optional_hosts`, each with a public key. Empty
-  disabled keys are harmless. Enabled malformed keys fail deployment;
-  the pinned server parser validates their actual encoding/uniqueness.
+- `nats_chaldea_hosts: []` is enforced before any deployment work.
+  Optional future work/quota identity definitions and public-key slots are
+  parked. A nonempty list is refused: host JetStream APIs can redirect their
+  replies into Akasha subjects even without a publish grant. Enabling hosts
+  requires account isolation and new review. Disabled keys may stay empty;
+  the three required public keys must pass the pinned server parser.
 - Gateway owns `akasha.>` within CHALDEA, not SYS. JWT source registry
   authorization is the service's job; JSON host/source fields are not
-  authentication. Even an enabled host user cannot publish *any* Akasha
-  subject, including its own or another host's source.
+  authentication. No host user may be enabled in this shared account.
+  The protocol test rejects host authentication plus direct-publication and
+  API-reply redirection attempts before any event can enter the stream.
+  C ingest must also reject redirected `Nats-Stream` messages and envelopes
+  without a matching admitted outbox/receipt; that is defense in depth, not
+  a substitute for the broker identity boundary.
 - Akasha can pull/ACK only `akasha-ingest`, inspect its stream/consumer and
   get events by sequence; replies use `_INBOX_akasha`. It cannot create,
   update, purge or delete streams/consumers. The operator creates them.
@@ -115,7 +121,9 @@ ansible-playbook playbooks/akasha.yml --limit homelab --check --diff
 ansible-playbook playbooks/akasha.yml --limit homelab
 ```
 
-The first Akasha apply stages definitions only. After owner verification,
+The first Akasha apply stages definitions only and refuses to overwrite a
+running/enabled installation with the inactive defaults. Always retain the
+approved variables for subsequent updates. After owner verification,
 use a private variables file containing the accepted invocation, verified
 paths and three explicit true values (activate/interfaces/backup packaging);
 do not include credential contents in commands, PRs or logs. Check then

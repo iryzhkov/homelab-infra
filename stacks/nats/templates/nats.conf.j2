@@ -74,6 +74,8 @@ accounts {
           subscribe: {allow: ["_INBOX_akasha.>"]}
         }
       }
+{# Parked definitions: swarm-prepare refuses any enabled host for v1.
+   Their JetStream reply subjects bypass publish ACLs in a shared account. #}
 {% for host in nats_chaldea_hosts %}
 
       # {{ host }}: that host's Chaldea client. Submits work to the fleet queue

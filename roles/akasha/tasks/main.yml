@@ -6,6 +6,19 @@
       - akasha_state_root == '/var/lib/akasha'
     quiet: true
 
+- name: Inspect system service state before staging
+  ansible.builtin.service_facts:
+  when: not (akasha_activate | bool)
+
+- name: Refuse staging over a running or enabled service
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services.get('akasha.service', {}).get('state', 'stopped') != 'running'
+      - ansible_facts.services.get('akasha.service', {}).get('status', 'disabled') not in ['enabled', 'enabled-runtime']
+    fail_msg: Use the approved activation variables to update an existing Akasha service.
+    quiet: true
+  when: not (akasha_activate | bool)
+
 - name: Verify local filesystem for SQLite WAL
   ansible.builtin.command:
     argv: [findmnt, -n, -o, FSTYPE, --target, /var/lib]
@@ -76,6 +89,14 @@
     - /var/lib/akasha
     - /var/lib/akasha/backup
     - /var/lib/akasha/tmp
+
+- name: Create the maintenance executable directory
+  ansible.builtin.file:
+    path: /usr/local/libexec
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Install bounded maintenance helper
   ansible.builtin.copy:

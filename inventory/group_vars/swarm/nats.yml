@@ -13,8 +13,10 @@
 # the explicitly enabled optional hosts. Revoking an identity is replacing its key (or removing
 # a host from nats_chaldea_hosts) and redeploying the stack.
 
-# Optional future work/quota users, disabled for gateway-only Akasha v1.
-# Enabling one requires its public key; it never grants Akasha publication.
+# Optional future work/quota identities, parked for gateway-only Akasha v1.
+# Deployment REFUSES a nonempty list: host JetStream API reply subjects can
+# bypass publish ACLs inside the shared account. Enabling hosts needs account
+# isolation and a new review; public keys alone are not sufficient.
 # Parked work consumer definitions remain in source regardless of this list.
 nats_chaldea_hosts: []
 nats_optional_hosts: [agent-a, agent-b, omarchy-pc, laptop]

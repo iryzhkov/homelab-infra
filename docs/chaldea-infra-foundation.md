@@ -10,7 +10,9 @@ SYS/CHALDEA configuration accounts, three operator/gateway NKeys,
 AKASHA_EVENTS and its durable akasha-ingest consumer. The trusted Akasha
 gateway publishes approved source IDs in CHALDEA; host users have no
 Akasha publication grant. Optional future host work/quota users are disabled
-by default. The service cannot administer streams or consumers.
+by default; deployment refuses to enable any while events share CHALDEA.
+Their JetStream API reply subjects could bypass direct publish ACLs.
+The service cannot administer streams or consumers.
 
 NATS state remains /srv/swarm/nats/data/jetstream on homelab local disk.
 AKASHA_EVENTS is a 14d/1 GiB replay buffer with a 327680-byte message cap,
@@ -33,7 +35,11 @@ NATS_CONTEXT=chaldea-admin bash scripts/nats-jetstream-apply.sh --stream AKASHA_
 ```
 
 The original broad Garage/Traefik/Gatus rollout sequence and host-publish
-examples have been withdrawn. The current runbook names every participating
+examples have been withdrawn as current instructions and preserved in
+[the parked historical proposal](parked-chaldea-infra-foundation.md).
+Existing source references to "NATS accounts and users", "Deploy", secrets,
+client key delivery, retention, rollback and open questions refer to that
+archive; none authorizes deployment. The current runbook names every participating
 host, pending trust/clock/backup interfaces, proposed <=24h backup RPO,
 and parity/rollback gates. Loki's existing 30d raw-log retention is unchanged.
 
