@@ -146,8 +146,12 @@ even with X-Forwarded-For: 192.168.90.212. From a genuine off-LAN source without
 mesh, the LAN VIP is unroutable. Record that refusal, or record "not testable";
 do not count a spoofed forwarded header alone as an off-LAN test.
 From an allowed LAN peer, GET /healthz and authenticated GET /api/entries with
-Cf-Ray: 230b030023ae2822-SJC must return 404 through each edge. Headerless
-/healthz remains public LAN liveness; headerless unauthenticated API stays 401.
+Cf-Ray: 230b030023ae2822-SJC must miss the Akasha router through each edge.
+In production the priority-1 catch-all must return 302 with
+Location: https://igor.ryzhkov.dev/404. Do not follow redirects; an Akasha response
+or a different status/location fails this gate. The disposable fixture has no
+catch-all and must return 404 instead. Headerless /healthz remains public LAN
+liveness; headerless unauthenticated API stays 401.
 The disposable ingress test exercises pinned Traefik v3.7.15 path/method selection,
 401, authenticated health, 413, 429, peer-IP 403 with forged forwarded headers,
 and GET/POST refusal from an allowed peer carrying mixed-case or empty Cf-Ray.
