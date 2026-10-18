@@ -9,8 +9,19 @@ import sys
 import yaml
 
 
+def fleet_group_vars(fleet):
+    """Read fleet's all-hosts vars from all.yml, or merge the all/ directory in name order."""
+    single = Path(fleet) / "inventory/group_vars/all.yml"
+    if single.is_file():
+        return yaml.safe_load(single.read_text())
+    merged = {}
+    for part in sorted((Path(fleet) / "inventory/group_vars/all").glob("*.yml")):
+        merged.update(yaml.safe_load(part.read_text()) or {})
+    return merged
+
+
 def check(fleet, infra):
-    f = yaml.safe_load((Path(fleet) / "inventory/group_vars/all.yml").read_text())
+    f = fleet_group_vars(fleet)
     h = yaml.safe_load((Path(infra) / "vars/chaldea-runtime.yml").read_text())
     for key in ("chaldea_host_version", "chaldea_host_sha256", "chaldea_node_version", "chaldea_access_paths",
                 "chaldea_access_trust_repository", "chaldea_access_trust_bundle_path",
