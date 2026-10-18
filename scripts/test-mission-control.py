@@ -201,8 +201,8 @@ class MissionControlTest(unittest.TestCase):
             (role / "tasks/main.yml").write_text(yaml.safe_dump(rows))
             (directory / "units").mkdir()
             values = dict(mission_control_enabled=True, mission_control_ingress_enabled=False,
-                mission_control_runtime_enabled=True, mission_control_node="/bin/true",
-                mission_control_release_root="/fixture", mission_control_version="client-v9.8.7")
+                mission_control_runtime_enabled=True, mission_control_runtime_node="/bin/true",
+                mission_control_runtime_release_root="/fixture", mission_control_runtime_version="client-v9.8.7")
             play = directory / "play.yml"
             def run(check=False):
                 play.write_text(yaml.safe_dump([dict(hosts="omarchy-normandy", connection="local",

@@ -41,11 +41,12 @@
       register: mission_control_fleet_dirty
       failed_when: mission_control_fleet_dirty.stdout | length > 0
   tasks:
-    - name: Install the canonical independent release once
+    # Exact absolute dependencies are intentional and guarded above.
+    - name: Install the canonical independent release once # noqa role-name[path]
       ansible.builtin.include_role:
         name: "{{ mission_control_fleet_checkout }}/roles/mission_control_runtime"
         public: true
-    - name: Configure the canonical restricted reader once
+    - name: Configure the canonical restricted reader once # noqa role-name[path]
       ansible.builtin.include_role:
         name: "{{ mission_control_fleet_checkout }}/roles/mission_control_reader"
         public: true
