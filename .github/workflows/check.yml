@@ -61,6 +61,14 @@ jobs:
           mkdir -p "$TMPDIR/bin"
           apt-get update -qq && apt-get install -y --no-install-recommends git
           pip install --disable-pip-version-check ansible-core==2.19.13 'nats-py[nkeys]==2.16.0'
+      - name: Check copied installer roles against the reviewed fleet pin
+        run: |
+          export TMPDIR=/home/igor/.cache/chaldea-scratch/audit-role-drift
+          export HOME="$TMPDIR/.scratch-home"
+          test "$HOME" = /home/igor/.cache/chaldea-scratch/audit-role-drift/.scratch-home
+          mkdir -p "$HOME"
+          python3 -B scripts/test-installer-role-drift.py -v
+          python3 -B scripts/check-installer-role-drift.py
       - name: Install checksum-pinned disposable broker and CLI
         run: |
           python3 - <<'PY'
