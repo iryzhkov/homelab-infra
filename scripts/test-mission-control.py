@@ -55,7 +55,7 @@ class MissionControlTest(unittest.TestCase):
             out.mkdir(parents=True, exist_ok=True)
             for suffix in ("socket", "service"):
                 template = (ROOT / "roles/mission_control/templates" / ("mission-control-ingress." + suffix + ".j2")).read_text()
-                (out / ("mission-control-ingress." + suffix)).write_text(jinja2.Template(template).render() + "\\n")
+                (out / ("mission-control-ingress." + suffix)).write_text(jinja2.Template(template).render() + "\n")
             (out / "mission-control-traefik.yml").write_text(yaml.safe_dump(dynamic))
         router = dynamic["http"]["routers"]["mission-control"]
         self.assertEqual(router["tls"]["certResolver"], "letencrypt")
@@ -238,7 +238,7 @@ class SystemUnitsQualification(unittest.TestCase):
             directory = Path(scratch)
             (directory / "units").mkdir()
             (directory / "units/mission-control.service").write_text(
-                "[Service]\\nExecStart=/bin/true\\n")
+                "[Service]\nExecStart=/bin/true\n")
             for suffix in ("service", "socket"):
                 (directory / "units" / ("mission-control-ingress." + suffix)).write_text(
                     (ROOT / "roles/mission_control/templates" / ("mission-control-ingress." + suffix + ".j2")).read_text())
@@ -248,7 +248,7 @@ class SystemUnitsQualification(unittest.TestCase):
             system = rootfs / "etc/systemd/system"
             system.mkdir(parents=True)
             for target in ("basic", "sysinit", "sockets", "multi-user", "shutdown"):
-                (system / (target + ".target")).write_text("[Unit]\\nDescription=Fixture target\\n")
+                (system / (target + ".target")).write_text("[Unit]\nDescription=Fixture target\n")
             for fixture_exec in ("bin/true", "usr/lib/systemd/systemd-socket-proxyd"):
                 target = rootfs / fixture_exec
                 target.parent.mkdir(parents=True, exist_ok=True)
