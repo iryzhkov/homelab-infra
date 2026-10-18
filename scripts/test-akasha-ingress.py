@@ -148,21 +148,21 @@ class IngressTest(unittest.TestCase):
             role = root / "roles/akasha_ingress"
             shutil.copytree(ROOT / "roles/akasha_ingress", role)
             tasks = role / "tasks/main.yml"
-            fixed = tasks.read_text().replace("/usr/lib/systemd/systemd-socket-proxyd", str(root / "proxyd"))
+            fixed = tasks.read_text().replace("/usr/lib/systemd/systemd-socket-proxyd", str(root / "proxyd")).replace("ansible.builtin.systemd_service", "cold_systemd")
             (root / "proxyd").write_text("#!/bin/sh\\nexit 0\\n")
             (root / "proxyd").chmod(0o755)
             modules = root / "library"
             modules.mkdir()
-            (modules / "systemd_service.py").write_text(
+            (modules / "cold_systemd.py").write_text(
                 "from ansible.module_utils.basic import AnsibleModule\n"
                 "AnsibleModule(argument_spec=dict(name=dict(),enabled=dict(type='bool'),state=dict()),"
                 "supports_check_mode=True).fail_json(msg='cold listener absent')\n")
             play = root / "check.yml"
             play.write_text(yaml.safe_dump([dict(hosts="homelab", gather_facts=False,
-                vars=dict(ansible_host="192.168.70.223", hostvars_unused={}), roles=["akasha_ingress"])]))
+                roles=["akasha_ingress"])]))
             inventory = root / "hosts.yml"
             inventory.write_text(yaml.safe_dump(dict(all=dict(children=dict(
-                backend=dict(hosts=dict(homelab=dict(ansible_connection="local"))),
+                backend=dict(hosts=dict(homelab=dict(ansible_connection="local", ansible_host="192.168.70.223"))),
                 edge_proxy=dict(hosts={"public-api": dict(ansible_host="192.168.20.33"),
                                        "public-api-b": dict(ansible_host="192.168.20.4")}))))))
             env = dict(os.environ, ANSIBLE_ROLES_PATH=str(root / "roles"), ANSIBLE_LIBRARY=str(modules))
