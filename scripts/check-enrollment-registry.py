@@ -9,6 +9,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("render")
 parser.add_argument("--pc-reader", action="store_true")
 parser.add_argument("--pc-quota", action="store_true")
+parser.add_argument("--laptop-quota", action="store_true")
+parser.add_argument("--pc-quota-reader", action="store_true")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 data = yaml.safe_load((root / "vars/akasha-enrollment-registry.yml").read_text())
@@ -17,6 +19,10 @@ if args.pc_reader:
     expected += data["akasha_enrollment_pc_reader"]
 if args.pc_quota:
     expected += data["akasha_enrollment_pc_quota"]
+if args.laptop_quota:
+    expected += data["akasha_enrollment_quota_laptop_publisher"]
+if args.pc_quota_reader:
+    expected += data["akasha_enrollment_quota_pc_reader"]
 actual = json.loads(Path(args.render).read_text())["registry"]
 order = lambda row: (row["issuer"], row["source"])
 if sorted(actual, key=order) != sorted(expected, key=order):

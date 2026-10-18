@@ -3,6 +3,9 @@
 akasha_enrollment_registry_enabled: false
 akasha_pc_global_reader_enabled: false
 akasha_pc_quota_events_enabled: false
+# Separate quota-only service sharing, not the seven-kind PC publisher.
+akasha_quota_laptop_publisher_enabled: false
+akasha_quota_pc_reader_enabled: false
 akasha_enrollment_registry_additions:
   - {"issuer":"chaldea:agent-a","source":"feed","host":"agent-a","source_id":"agent-a--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:agent-b","source":"feed","host":"agent-b","source_id":"agent-b--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
@@ -22,6 +25,10 @@ akasha_enrollment_registry_additions:
   - {"issuer":"chaldea:omarchy-normandy","source":"backup","host":"omarchy-normandy","source_id":"omarchy-normandy--backup","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:omarchy-normandy","source":"drift-check","host":"omarchy-normandy","source_id":"omarchy-normandy--drift-check","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:omarchy-normandy","source":"omarchy-normandy.toolfeedback","host":"omarchy-normandy","source_id":"omarchy-normandy--omarchy-normandy_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+akasha_enrollment_quota_laptop_publisher:
+  - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"quota","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--quota","profile":"quota-service","project":"chaldea","mode":"service","kinds":["quota_headroom_snapshot"]}
+akasha_enrollment_quota_pc_reader:
+  - {"issuer":"chaldea:omarchy-pc","source":"quota","host":"omarchy-pc","source_id":"omarchy-pc--quota","profile":"quota-service","project":"chaldea","mode":"service","kinds":["quota_headroom_snapshot"],"quota_fleet_read":true}
 akasha_enrollment_pc_reader:
   - {"issuer":"chaldea:omarchy-pc","source":"fleet-reader","host":"omarchy-pc","source_id":"omarchy-pc--fleet-reader","profile":"fleet-reader","project":"chaldea","mode":"operator","kinds":["feed_post","tool_call"],"global_read":true}
 akasha_enrollment_pc_quota:
