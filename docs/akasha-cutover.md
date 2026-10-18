@@ -174,7 +174,10 @@ For EACH host the orchestrator creates and records:
   approved interactive operator UIDs. Restricted scheduled runs still use
   RunLeases; do not give model profiles unrestricted issuer sudo access.
 - Matching Akasha registry entry per distinct issuer/source/host, unique source_id,
-  exact profile/project, mode and allowed kinds. Update vars/akasha-registry.yml
+  exact profile/project, mode and allowed kinds. For the fixed sources below,
+  use source_id HOST--SOURCE with dots changed to underscores, such as
+  agent-a--agent-a_toolfeedback and homelab--backup. Preserve existing IDs.
+  Update vars/akasha-registry.yml
   only after public-key/ceiling approval, preserving other lanes' registrations.
   Source registration grants nothing without a valid signed ceiling.
 - Trust updater and clock-health installation/enabling. Reuse fleet roles
@@ -269,8 +272,15 @@ Confirm FEED_DB was not overridden in the installed unit before using that path.
 Copy the snapshot, with operator privileges, into a 0700 directory readable by
 akasha, such as /var/lib/akasha/cutover/feed.db, mode 0600 owner akasha.
 Stop the Akasha consumer and maintenance oneshots during the local import;
-keep independent trust/clock updater timers running. As akasha, using the pinned
-Node and service artifact, run:
+keep independent trust/clock updater timers running. On homelab as root:
+
+~~~sh
+systemctl stop akasha-health.timer akasha-backup.timer akasha-offsite.timer
+systemctl stop akasha-health.service akasha-backup.service akasha-offsite.service
+systemctl stop akasha.service
+~~~
+
+As akasha, using the pinned Node and service artifact, run:
 
 ~~~sh
 # Define these from the reviewed installed artifact, not an arbitrary checkout.
@@ -295,9 +305,17 @@ history, checkpoints every row and safely resumes after interruption. Investigat
 any rejection rather than silently ignoring history. New IDs start above the old
 range. The source snapshot is opened read-only. Retain it and the original DB.
 
-Restart Akasha and the existing health/backup/offsite timers. Then switch agent-a
-first, followed immediately by agent-b, omarchy-pc, laptop and homelab. Include
-Normandy if its producers remain. On each producer account:
+Restart Akasha and the existing maintenance schedules as root on homelab:
+
+~~~sh
+systemctl start akasha.service
+systemctl start akasha-backup.service
+systemctl start akasha-health.timer akasha-backup.timer akasha-offsite.timer
+systemctl start akasha-health.service
+~~~
+
+Then switch agent-a first, followed immediately by agent-b, omarchy-pc, laptop and
+homelab. Include Normandy if its producers remain. On each producer account:
 
 ~~~sh
 systemctl --user disable --now toolfeedback-ship.timer
