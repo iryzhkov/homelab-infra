@@ -1,0 +1,161 @@
+---
+- name: Read protected application configuration
+  ansible.builtin.slurp:
+    src: "/srv/swarm/{{ media_recovery_app.stack }}/config/config.xml"
+  register: media_recovery_config
+  no_log: true
+
+- name: Read current media management settings
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_recovery_app.port }}/api/v3/config/mediamanagement"
+    headers:
+      X-Api-Key: "{{ (media_recovery_config.content | b64decode | regex_findall('<ApiKey>([^<]+)</ApiKey>')) | first }}"
+    return_content: true
+  register: media_recovery_before
+  check_mode: false
+  no_log: true
+
+- name: Validate known setting schema and refuse to replace another recovery policy
+  ansible.builtin.assert:
+    that:
+      - media_recovery_before.json.id == 1
+      - media_recovery_before.json.recycleBin is string
+      - media_recovery_before.json.recycleBinCleanupDays is number
+      - media_recovery_before.json.recycleBin in ['', '/mnt/shared/.recycle/' ~ media_recovery_app.name]
+    fail_msg: Existing recycle policy differs; reconcile it before applying.
+  no_log: true
+
+- name: Locate exactly one running application container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --filter
+      - "label=com.docker.swarm.service.name={{ media_recovery_app.stack }}_{{ media_recovery_app.name }}"
+      - --format
+      - "{{ '{{.ID}}' }}"
+  register: media_recovery_container
+  changed_when: false
+  check_mode: false
+  failed_when: media_recovery_container.stdout_lines | length != 1
+
+- name: Read the actual application user
+  ansible.builtin.command:
+    argv: [docker, exec, "{{ media_recovery_container.stdout }}", id, -u, abc]
+  register: media_recovery_uid
+  changed_when: false
+  check_mode: false
+
+- name: Read the actual application group
+  ansible.builtin.command:
+    argv: [docker, exec, "{{ media_recovery_container.stdout }}", id, -g, abc]
+  register: media_recovery_gid
+  changed_when: false
+  check_mode: false
+
+- name: Inspect recovery paths before changing permissions
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - /mnt/shared/.recycle
+    - "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+  register: media_recovery_paths
+
+- name: Refuse symlinks or non-directory recovery paths
+  ansible.builtin.assert:
+    that: not item.stat.exists or (item.stat.isdir | default(false) and not item.stat.islnk | default(false))
+  loop: "{{ media_recovery_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Create private recovery parent
+  ansible.builtin.file:
+    path: /mnt/shared/.recycle
+    state: directory
+    owner: root
+    group: "{{ media_recovery_gid.stdout }}"
+    mode: "0710"
+
+- name: Create application-owned recovery directory outside library roots
+  ansible.builtin.file:
+    path: "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+    state: directory
+    owner: "{{ media_recovery_uid.stdout }}"
+    group: "{{ media_recovery_gid.stdout }}"
+    mode: "0700"
+
+- name: Check container access using its application user
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - -u
+      - abc
+      - "{{ media_recovery_container.stdout }}"
+      - test
+      - -w
+      - "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Create protected configuration rollback directory
+  ansible.builtin.file:
+    path: /var/backups/media-recovery
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Preserve the original media management settings once
+  ansible.builtin.copy:
+    dest: "/var/backups/media-recovery/{{ media_recovery_app.name }}-before.json"
+    content: "{{ media_recovery_before.json | to_nice_json }}\n"
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+
+- name: Set recycle path and disable automatic expiry while preserving other settings
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_recovery_app.port }}/api/v3/config/mediamanagement/1"
+    method: PUT
+    headers:
+      X-Api-Key: "{{ (media_recovery_config.content | b64decode | regex_findall('<ApiKey>([^<]+)</ApiKey>')) | first }}"
+    body_format: json
+    body: "{{ media_recovery_before.json | combine({'recycleBin': '/mnt/shared/.recycle/' ~ media_recovery_app.name, 'recycleBinCleanupDays': 0}) }}"
+    return_content: true
+    status_code: [200, 202]
+  when:
+    - not ansible_check_mode
+    - media_recovery_before.json.recycleBin != '/mnt/shared/.recycle/' ~ media_recovery_app.name or media_recovery_before.json.recycleBinCleanupDays != 0
+  changed_when: true
+  no_log: true
+  diff: false
+
+- name: Report proposed settings in check mode
+  ansible.builtin.debug:
+    msg: "{{ media_recovery_app.name }} recycle path=/mnt/shared/.recycle/{{ media_recovery_app.name }}, automatic expiry disabled"
+  changed_when: media_recovery_before.json.recycleBin != '/mnt/shared/.recycle/' ~ media_recovery_app.name or media_recovery_before.json.recycleBinCleanupDays != 0
+  when: ansible_check_mode
+
+- name: Read back and compare settings
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ media_recovery_app.port }}/api/v3/config/mediamanagement"
+    headers:
+      X-Api-Key: "{{ (media_recovery_config.content | b64decode | regex_findall('<ApiKey>([^<]+)</ApiKey>')) | first }}"
+    return_content: true
+  register: media_recovery_after
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Verify owned settings and preservation of every unrelated field
+  ansible.builtin.assert:
+    that:
+      - >-
+        media_recovery_after.json == media_recovery_before.json | combine({'recycleBin': '/mnt/shared/.recycle/' ~ media_recovery_app.name, 'recycleBinCleanupDays': 0})
+    success_msg: "{{ media_recovery_app.name }} recovery settings verified; all unrelated fields preserved."
+  no_log: true
+  when: not ansible_check_mode
