@@ -81,6 +81,25 @@ class RecoveryTest(unittest.TestCase):
             self.recovery.repair(TARGET, SOURCE, [container])
         self.assertNotIn(("umount", TARGET), self.commands())
 
+    def test_oserror_does_not_skip_other_mounts(self):
+        self.recovery.config["/mnt/backup"] = "nas:/backup"
+        self.recovery.mount_info.side_effect = OSError("stale staging directory")
+        with self.assertRaisesRegex(RuntimeError, "stale staging"):
+            self.recovery.cycle()
+        self.assertEqual(2, self.recovery.mount_info.call_count)
+
+    def test_leftover_stage_unmounted_before_mkdir(self):
+        self.stale()
+        self.recovery.mount_info.side_effect = lambda p, fstab=False: INFO
+        def command(*args, **kwargs):
+            if args[0] == "umount" and args[1] != TARGET:
+                raise RuntimeError("stage cleanup attempted")
+            return Mock(stdout="", returncode=0)
+        self.recovery.run.side_effect = command
+        with self.assertRaisesRegex(RuntimeError, "stage cleanup attempted"):
+            self.recovery.repair(TARGET, SOURCE, [CONTAINER])
+        self.assertEqual("umount", self.commands()[0][0])
+
     def test_nonstale_error_does_not_remount(self):
         self.recovery.probe.return_value = 1
         with self.assertRaisesRegex(RuntimeError, "without ESTALE"):

@@ -1,6 +1,6 @@
 # Automatic recovery of stale NAS mounts
 
-Deploy on homelab with `ansible-playbook playbooks/nas-recovery.yml --diff`.
+Deploy on homelab and Normandy with `ansible-playbook playbooks/nas-recovery.yml --diff`.
 The role installs a systemd timer that runs 90 seconds after boot and 60 seconds
 after the last check. Inspect with `systemctl status nas-recovery.timer` and
 `journalctl -u nas-recovery.service`. Run a check immediately with
@@ -33,7 +33,12 @@ handles changing; it recovers the client once the NAS is usable.
 
 Disable with `sudo systemctl disable --now nas-recovery.timer`. Stop an
 in-progress check separately with `sudo systemctl stop nas-recovery.service`.
-The playbook changes neither fstab options nor other hosts.
+The playbook changes neither fstab options nor hosts beyond homelab and Normandy.
+
+If a pending container source was intentionally removed, stop the timer and service,
+back up /var/lib/nas-recovery/pending.json, and remove only that container ID from
+its JSON object. Restart the timer afterwards. Keep pending entries for transient
+NAS failures, so recovery can retry them.
 
 Fault-injection checks run through Chaldea:
 `chaldea exec --host agent-a -- python3 scripts/test_nas_recovery.py`.

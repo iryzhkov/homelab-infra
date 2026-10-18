@@ -75,9 +75,9 @@ class Recovery:
             if status != 116:
                 raise RuntimeError(f"{target}: inaccessible without ESTALE; leaving mount alone")
         stage = self.state_dir / ("probe-" + target.strip("/").replace("/", "-"))
-        stage.mkdir(exist_ok=True)
         if self.mount_info(str(stage)):
             self.run("umount", str(stage))
+        stage.mkdir(exist_ok=True)
         mount_args = ["mount", "-t", definition["fstype"], "-o", definition["options"], expected_source]
         try:
             # Establish that a fresh export is readable before touching the old mount.
@@ -138,12 +138,12 @@ class Recovery:
                 if containers is None:
                     containers = self.containers()
                 self.repair(target, source, containers)
-            except (RuntimeError, subprocess.TimeoutExpired) as error:
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                 errors.append(f"{target}: {error}")
         try:
             if self.pending:
                 self.refresh_containers()
-        except (RuntimeError, subprocess.TimeoutExpired) as error:
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
             errors.append(str(error))
         if errors or self.pending:
             raise RuntimeError("; ".join(errors) or "container refresh still pending")
