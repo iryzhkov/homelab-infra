@@ -11,6 +11,23 @@
     fail_msg: Set reviewed chaldea_host_version and chaldea_host_sha256 inventory pins.
     quiet: true
 
+- name: Validate bounded explicit host release preservation
+  ansible.builtin.assert:
+    that:
+      - chaldea_host_artifact_preserve_versions | type_debug == 'list'
+      - chaldea_host_artifact_preserve_versions | length <= 4
+      - chaldea_host_artifact_preserve_versions | unique | length == chaldea_host_artifact_preserve_versions | length
+    quiet: true
+
+- name: Validate every exact preserved host version before file changes
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | length <= 128
+      - item is regex('^host-v[0-9]+[.][0-9]+[.][0-9]+([.-][A-Za-z0-9.-]+)?$', match_type='fullmatch')
+    quiet: true
+  loop: "{{ chaldea_host_artifact_preserve_versions }}"
+
 - name: Create root-owned host release cache and directory
   become: "{{ chaldea_host_artifact_become }}"
   ansible.builtin.file:
@@ -198,7 +215,9 @@
   loop: "{{ (chaldea_host_artifact_prior_releases | default([]))[1:] }}"
   loop_control:
     label: "{{ item.path }}"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - item.path | basename not in chaldea_host_artifact_preserve_versions
 
 - name: Find managed archive and manifest cache files
   become: "{{ chaldea_host_artifact_become }}"
@@ -214,7 +233,7 @@
 
 - name: Derive the two retained releases' cache filenames
   ansible.builtin.set_fact:
-    chaldea_host_artifact_retained_versions: "{{ [chaldea_host_version] + (chaldea_host_artifact_prior_releases[:1] | map(attribute='path') | map('basename') | list) }}"
+    chaldea_host_artifact_retained_versions: "{{ ([chaldea_host_version] + (chaldea_host_artifact_prior_releases[:1] | map(attribute='path') | map('basename') | list) + chaldea_host_artifact_preserve_versions) | unique | list }}"
   when: not ansible_check_mode
 
 - name: Remove archives and manifests for unretained releases
