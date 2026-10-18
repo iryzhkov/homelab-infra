@@ -10,6 +10,16 @@
     - ../vars/akasha-registry.yml
     - ../vars/akasha-enrollment-registry.yml
   pre_tasks:
+    - name: Require the qualified host for Mission Control reader registrations
+      ansible.builtin.assert:
+        that: akasha_host_version == 'host-v0.2.4'
+        fail_msg: Mission Control reader registrations require the exact qualified host-v0.2.4 packet.
+        quiet: true
+      when: >-
+        (akasha_registry + (akasha_enrollment_registry_additions
+         if akasha_enrollment_registry_enabled | bool else []))
+        | selectattr('mission_control_read_sources', 'defined') | list | length > 0
+      tags: [always]
     - name: Compose explicitly enabled fixed enrollment registrations
       ansible.builtin.set_fact:
         akasha_registry: >-
