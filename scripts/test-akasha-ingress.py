@@ -140,6 +140,46 @@ class IngressTest(unittest.TestCase):
             thread.join()
             backend.server_close()
 
+    def test_cold_check_renders_units_without_calling_absent_listener(self):
+        self.assertEqual(os.environ["HOME"], os.environ["AKASHA_TEST_HOME"])
+        self.assertIn(".scratch", os.environ["HOME"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            role = root / "roles/akasha_ingress"
+            shutil.copytree(ROOT / "roles/akasha_ingress", role)
+            tasks = role / "tasks/main.yml"
+            fixed = tasks.read_text().replace("/usr/lib/systemd/systemd-socket-proxyd", str(root / "proxyd"))
+            (root / "proxyd").write_text("#!/bin/sh\\nexit 0\\n")
+            (root / "proxyd").chmod(0o755)
+            modules = root / "library"
+            modules.mkdir()
+            (modules / "systemd_service.py").write_text(
+                "from ansible.module_utils.basic import AnsibleModule\n"
+                "AnsibleModule(argument_spec=dict(name=dict(),enabled=dict(type='bool'),state=dict()),"
+                "supports_check_mode=True).fail_json(msg='cold listener absent')\n")
+            play = root / "check.yml"
+            play.write_text(yaml.safe_dump([dict(hosts="homelab", gather_facts=False,
+                vars=dict(ansible_host="192.168.70.223", hostvars_unused={}), roles=["akasha_ingress"])]))
+            inventory = root / "hosts.yml"
+            inventory.write_text(yaml.safe_dump(dict(all=dict(children=dict(
+                backend=dict(hosts=dict(homelab=dict(ansible_connection="local"))),
+                edge_proxy=dict(hosts={"public-api": dict(ansible_host="192.168.20.33"),
+                                       "public-api-b": dict(ansible_host="192.168.20.4")}))))))
+            env = dict(os.environ, ANSIBLE_ROLES_PATH=str(root / "roles"), ANSIBLE_LIBRARY=str(modules))
+            args = ["ansible-playbook", "-i", str(inventory), str(play), "--check", "--diff"]
+            tasks.write_text(fixed.replace("  when: not ansible_check_mode\n", ""))
+            before = subprocess.run(args, env=env, capture_output=True, text=True)
+            self.assertNotEqual(before.returncode, 0)
+            self.assertIn("cold listener absent", before.stdout)
+            tasks.write_text(fixed)
+            after = subprocess.run(args, env=env, capture_output=True, text=True)
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+            for expected in ("ListenStream=192.168.70.223:1936", "FreeBind=true",
+                             "IPAddressDeny=any", "IPAddressAllow=192.168.20.33/32",
+                             "IPAddressAllow=192.168.20.4/32", "127.0.0.1:1935"):
+                self.assertIn(expected, after.stdout)
+            self.assertNotIn("cold listener absent", after.stdout)
+
     def test_socket_keeps_the_gateway_loopback_and_allows_only_edges(self):
         hostvars = {"public-api": {"ansible_host": "192.168.20.33"},
                     "public-api-b": {"ansible_host": "192.168.20.4"}}
