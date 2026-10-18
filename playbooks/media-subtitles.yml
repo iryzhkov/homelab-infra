@@ -1,0 +1,18 @@
+---
+- name: Configure English subtitles with original and dual audio preserved
+  hosts: homelab
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Reconcile English subtitle profiles, providers, and six-hour searches
+      ansible.builtin.script:
+        cmd: "../scripts/media-subtitles.py {{ '--check' if ansible_check_mode else '--apply' }} {{ media_subtitles_extra_args | default('--providers yifysubtitles gestdown --automatic-search') }}"
+        executable: /usr/bin/python3
+      check_mode: false
+      no_log: true
+      register: media_subtitles
+      changed_when: (media_subtitles.stdout | from_json).changed | bool
+
+    - name: Show credential-free subtitle configuration summary
+      ansible.builtin.debug:
+        msg: "{{ media_subtitles.stdout | from_json }}"

@@ -13,6 +13,10 @@
 services:
   radarr:
     image: lscr.io/linuxserver/radarr:6.4.4.10685-ls318
+    # Match the media owner/group on the NFS share; default 911 cannot traverse it.
+    environment:
+      PUID: "1002"
+      PGID: "988"
     ports:
       - "7878:7878"
     volumes:

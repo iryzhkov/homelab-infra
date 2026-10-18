@@ -14,6 +14,7 @@ observability_grafana_dashboard_files:
   - disks.json
   - capacity.json
   - containers.json
+  - media.json
   - logs.json
   - unifi.json
   - homeassistant.json

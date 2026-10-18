@@ -1,0 +1,26 @@
+---
+# Configuration only: no worker, receiver, timer or application code is installed.
+- name: Preserve replaced media using the existing arr recycle bins
+  hosts: homelab
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require the real NAS mount before creating recovery directories
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, FSTYPE, --mountpoint, /mnt/shared]
+      register: media_recovery_mount
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse local fallback storage
+      ansible.builtin.assert:
+        that: media_recovery_mount.stdout in ['nfs', 'nfs4']
+
+    - name: Configure independent recycle paths without automatic expiry
+      ansible.builtin.include_tasks: media-recovery-app.yml
+      loop:
+        - {name: sonarr, stack: sonarr-tv, port: 8989}
+        - {name: radarr, stack: radarr-movie, port: 7878}
+      loop_control:
+        loop_var: media_recovery_app
+        label: "{{ media_recovery_app.name }}"

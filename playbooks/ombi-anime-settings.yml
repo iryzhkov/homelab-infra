@@ -1,0 +1,25 @@
+---
+- name: Reconcile Ombi anime routing without changing import lists
+  hosts: homelab
+  become: true
+  gather_facts: false
+  vars:
+    ombi_anime_quality_profile_id: 6
+    ombi_anime_root_id: 3
+  tasks:
+    - name: Plan or apply anime defaults using Ombi's existing local API key
+      ansible.builtin.script:
+        cmd: >-
+          ../scripts/ombi-anime-settings.py
+          {{ '--check' if ansible_check_mode else '--apply' }}
+          --quality-profile-id {{ ombi_anime_quality_profile_id | int }}
+          --root-id {{ ombi_anime_root_id | int }}
+        executable: /usr/bin/python3
+      check_mode: false
+      no_log: true
+      register: ombi_anime_settings
+      changed_when: (ombi_anime_settings.stdout | from_json).changed | bool
+
+    - name: Show credential-free anime routing summary
+      ansible.builtin.debug:
+        msg: "{{ ombi_anime_settings.stdout | from_json }}"
