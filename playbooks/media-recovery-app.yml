@@ -80,8 +80,22 @@
   ansible.builtin.file:
     path: "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
     state: directory
-    mode: "0700"
+    mode: "0770"
   become: false
+
+- name: Verify NAS-mapped recovery group without changing ownership
+  ansible.builtin.stat:
+    path: "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+  register: media_recovery_directory
+  when: not ansible_check_mode
+
+- name: Require the application group on the mapped directory
+  ansible.builtin.assert:
+    that:
+      - media_recovery_uid.stdout == '1002'
+      - media_recovery_gid.stdout == '988'
+      - media_recovery_directory.stat.gid == 988
+  when: not ansible_check_mode
 
 - name: Check container access using its application user
   ansible.builtin.command:
@@ -91,8 +105,10 @@
       - -u
       - abc
       - "{{ media_recovery_container.stdout }}"
-      - test
-      - -w
+      - sh
+      - -c
+      - 'test -r "$1" && test -w "$1" && test -x "$1"'
+      - access-check
       - "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
   changed_when: false
   when: not ansible_check_mode
