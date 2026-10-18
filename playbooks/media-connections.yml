@@ -1,0 +1,68 @@
+---
+- name: Adopt media service connections without changing library policy
+  hosts: homelab
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Load existing torrent credentials on the controller
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/blackpearl-torrent.sops.yaml"
+        name: media_connections_secrets
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Reconcile connections through a private temporary input
+      block:
+        - name: Create a private temporary connection input
+          ansible.builtin.tempfile:
+            state: file
+            prefix: media-connections-
+          register: media_connections_input
+          check_mode: false
+          changed_when: false
+          no_log: true
+
+        - name: Populate inventory endpoints and existing SOPS credentials
+          ansible.builtin.copy:
+            dest: "{{ media_connections_input.path }}"
+            content: >-
+              {{ {'arr_host': hostvars['homelab'].ansible_host,
+                  'prowlarr_host': hostvars['homelab'].ansible_host,
+                  'emby_host': hostvars['homelab'].ansible_host,
+                  'qbit_host': hostvars['blackpearl'].ansible_host,
+                  'qbit_username': media_connections_secrets.QBITTORRENT_USER,
+                  'qbit_password': media_connections_secrets.QBITTORRENT_PASS} | to_json }}
+            owner: root
+            group: root
+            mode: "0600"
+          check_mode: false
+          changed_when: false
+          no_log: true
+          diff: false
+
+        - name: Plan or apply only the declared connection fields
+          ansible.builtin.script:
+            cmd: >-
+              ../scripts/media-connections.py
+              {{ '--check' if ansible_check_mode else '--apply' }}
+              --config {{ media_connections_input.path | quote }}
+            executable: /usr/bin/python3
+          check_mode: false
+          register: media_connections_result
+          changed_when: (media_connections_result.stdout | from_json).changed | bool
+          no_log: true
+
+        - name: Show credential-free connection reconciliation summary
+          ansible.builtin.debug:
+            msg: "{{ media_connections_result.stdout | from_json }}"
+
+      always:
+        - name: Remove the private temporary connection input
+          ansible.builtin.file:
+            path: "{{ media_connections_input.path }}"
+            state: absent
+          when: media_connections_input.path is defined
+          check_mode: false
+          changed_when: false
+          no_log: true

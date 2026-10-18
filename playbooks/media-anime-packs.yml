@@ -1,0 +1,13 @@
+---
+- name: Install read-only fast anime pack discovery
+  hosts: homelab
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install the root-only anime pack search helper
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../scripts/media-anime-packs.py"
+        dest: /usr/local/sbin/media-anime-packs
+        owner: root
+        group: root
+        mode: "0700"

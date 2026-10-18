@@ -1,0 +1,188 @@
+---
+# Reconcile native Emby preferences. No executable, service or plugin is installed.
+- name: Configure native Emby browsing and playback
+  hosts: homelab
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Preview or reconcile the scoped native settings through Emby APIs
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, "-"]
+        stdin: |
+          import copy, importlib.util, json, os, tempfile
+          from pathlib import Path
+          from importlib.machinery import SourceFileLoader
+          desired = json.loads(os.environ["EMBY_EXPERIENCE_CONFIG"])
+          apply = os.environ["EMBY_EXPERIENCE_APPLY"] == "true"
+          spec = importlib.util.spec_from_loader("favorites", SourceFileLoader("favorites", "/usr/local/sbin/emby-favorite-upgrades"))
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          api = module.clients(Path("/srv/swarm"))["emby"]
+          users = api.call("Users")
+          selected = {}
+          for name in desired["profiles"]:
+              matches = [u for u in users if u["Name"] == name]
+              if len(matches) != 1:
+                  raise RuntimeError("Expected one named profile")
+              selected[name] = matches[0]
+          libraries = api.call("Library/VirtualFolders")
+          movies = [v for v in libraries if v["Name"] == "Movies"]
+          if len(movies) != 1:
+              raise RuntimeError("Expected one Movies library")
+          before_other = {u["Id"]: copy.deepcopy(u["Configuration"]) for u in users if u["Name"] not in selected}
+          changed = 0
+          summaries = []
+          def matches(actual, wanted):
+              if isinstance(wanted, dict):
+                  return isinstance(actual, dict) and all((k in actual or v is None) and matches(actual.get(k), v) for k, v in wanted.items())
+              return actual == wanted
+          def snapshot(name, data):
+              if not apply:
+                  return
+              os.umask(0o077)
+              directory = Path("/var/backups/emby-experience")
+              directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+              path = directory / (name + "-before.json")
+              def validate():
+                  with path.open() as stream:
+                      saved = json.load(stream)
+                  if not isinstance(saved, dict) or set(saved) != set(data):
+                      raise RuntimeError("Invalid original snapshot")
+                  if "configuration" in data:
+                      valid = isinstance(saved["configuration"], dict) and isinstance(saved["sections"], list)
+                      valid = valid and all(isinstance(row, dict) and "Id" in row and "SectionType" in row for row in saved["sections"])
+                  else:
+                      valid = saved["Id"] == data["Id"] and isinstance(saved["LibraryOptions"], dict)
+                  if not valid:
+                      raise RuntimeError("Invalid original snapshot")
+              if path.exists():
+                  validate()
+                  return
+              temporary = None
+              try:
+                  with tempfile.NamedTemporaryFile(mode="w", dir=directory, prefix=".snapshot-", delete=False) as stream:
+                      temporary = Path(stream.name)
+                      json.dump(data, stream)
+                      stream.flush()
+                      os.fsync(stream.fileno())
+                  try:
+                      os.link(temporary, path)
+                  except FileExistsError:
+                      pass
+                  validate()
+                  fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                  try:
+                      os.fsync(fd)
+                  finally:
+                      os.close(fd)
+              finally:
+                  if temporary is not None:
+                      temporary.unlink(missing_ok=True)
+          # Validate every original backup before any API mutation.
+          originals = {}
+          for user in selected.values():
+              uid = user["Id"]
+              originals[uid] = api.call("Users/" + uid + "/HomeSections?isEditMode=true")
+              snapshot(uid, {"configuration": user["Configuration"], "sections": originals[uid]})
+          snapshot("movies-library-options", {"Id": movies[0]["ItemId"], "LibraryOptions": movies[0]["LibraryOptions"]})
+          for name, user in selected.items():
+              uid = user["Id"]
+              endpoint = "Users/" + uid + "/HomeSections"
+              current = originals[uid]
+              original_config = copy.deepcopy(user["Configuration"])
+              views = api.call("Users/" + uid + "/Views?IncludeHidden=true&AllowDynamicChildren=false")["Items"]
+              targets = []
+              for recipe in desired["sections"]:
+                  section = {k: copy.deepcopy(v) for k, v in recipe.items() if k not in ("key", "libraries")}
+                  section.setdefault("ItemTypes", [])
+                  section.setdefault("IncludeNextUpInResume", True)
+                  section.setdefault("ScrollDirection", "Horizontal")
+                  section.setdefault("SortOrder", "Ascending")
+                  section.setdefault("Query", {})
+                  allowed = recipe.get("libraries")
+                  if allowed:
+                      if any(sum(v["Name"] == n for v in views) != 1 for n in allowed):
+                          raise RuntimeError("Missing or ambiguous library")
+                      section["ExcludedFolders"] = [v["Id"] for v in views if v["Name"] not in allowed]
+                  else:
+                      section["ExcludedFolders"] = []
+                  targets.append(section)
+              wanted_preview_ids = []
+              def same_row(row, target):
+                  return row["SectionType"] == target["SectionType"] and (
+                      not target.get("CustomName") or
+                      (row.get("CustomName") or row.get("Name")) == target["CustomName"])
+              for target in targets:
+                  found = [s for s in current if same_row(s, target)]
+                  if len(found) > 1:
+                      raise RuntimeError("Ambiguous existing home row")
+                  if found:
+                      target["Id"] = found[0]["Id"]
+                  if not found or not matches(found[0], target):
+                      changed += 1
+                      if apply:
+                          body = dict(found[0]) if found else {}
+                          body.update(target)
+                          # New rows omit Id; this server allocates it and rejects unknown IDs.
+                          api.call(endpoint, "POST", body)
+                          check = [s for s in api.call(endpoint + "?isEditMode=true") if same_row(s, target)]
+                          if len(check) != 1 or not matches(check[0], target):
+                              raise RuntimeError("Home section did not round-trip")
+                          target["Id"] = check[0]["Id"]
+                  if "Id" not in target:
+                      target["Id"] = "preview:" + str(len(wanted_preview_ids))
+                  wanted_preview_ids.append(target["Id"])
+              wanted_ids = [s["Id"] for s in targets]
+              obsolete = list(dict.fromkeys(s["Id"] for s in current if s["Id"] not in wanted_ids))
+              if obsolete:
+                  changed += 1
+                  if apply:
+                      # Delete only home-screen rows, after every replacement row was verified.
+                      api.call(endpoint + "/Delete", "POST", {"ids": obsolete})
+              actual_ids = [s["Id"] for s in api.call(endpoint + "?isEditMode=true")] if apply else [s["Id"] for s in current]
+              for index, sid in enumerate(wanted_ids):
+                  if index >= len(actual_ids) or actual_ids[index] != sid:
+                      changed += 1
+                      if apply:
+                          api.call(endpoint + "/Move", "POST", {"ids": [sid], "newIndex": index})
+                          actual_ids = [s["Id"] for s in api.call(endpoint + "?isEditMode=true")]
+              config = dict(original_config)
+              config.update(desired["playback"])
+              if config != original_config:
+                  changed += 1
+                  if apply:
+                      api.call("Users/" + uid + "/Configuration", "POST", config)
+              if apply:
+                  result = api.call("Users/" + uid)
+                  if result["Configuration"] != config:
+                      raise RuntimeError("Unexpected user preference drift")
+                  final = api.call(endpoint + "?isEditMode=true")
+                  if [s["Id"] for s in final] != wanted_ids:
+                      raise RuntimeError("Unexpected home-screen order")
+              summaries.append({"profile": name, "home_rows": len(targets), "resume_rewind_seconds": config["ResumeRewindSeconds"]})
+          movie = movies[0]
+          options = copy.deepcopy(movie["LibraryOptions"])
+          expected_options = dict(options, ImportCollections=desired["importMovieCollections"])
+          if options != expected_options:
+              changed += 1
+              if apply:
+                  api.call("Library/VirtualFolders/LibraryOptions", "POST", {"Id": movie["ItemId"], "LibraryOptions": expected_options})
+                  actual = [v for v in api.call("Library/VirtualFolders") if v["ItemId"] == movie["ItemId"]][0]["LibraryOptions"]
+                  if actual != expected_options:
+                      raise RuntimeError("Unexpected library option drift")
+          if apply:
+              after_other = {u["Id"]: u["Configuration"] for u in api.call("Users") if u["Id"] in before_other}
+              if after_other != before_other:
+                  raise RuntimeError("Unexpected changes to another profile")
+          print(json.dumps({"changed": changed, "mode": "apply" if apply else "check", "profiles": summaries, "native_movie_collections": desired["importMovieCollections"]}))
+      environment:
+        EMBY_EXPERIENCE_CONFIG: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/emby-experience.json') }}"
+        EMBY_EXPERIENCE_APPLY: "{{ (not ansible_check_mode) | ternary('true', 'false') }}"
+      check_mode: false
+      register: emby_experience_result
+      changed_when: (emby_experience_result.stdout | from_json).changed | int > 0
+      no_log: true
+
+    - name: Show credential-free configuration summary
+      ansible.builtin.debug:
+        msg: "{{ emby_experience_result.stdout | from_json }}"
