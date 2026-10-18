@@ -28,14 +28,20 @@ Akasha's executable rejects a non-loopback bind. Keep 127.0.0.1:1935 and the
 existing health/backup clients. The new systemd socket listens only on
 192.168.70.223:1936 and forwards to loopback. Both socket and service have
 IPAddressDeny=any; only 192.168.20.33 and 192.168.20.4 can use the listener.
-The service may additionally connect to 127.0.0.1.
+The service may additionally connect to 127.0.0.1. FreeBind=true lets the socket
+start before the LAN address exists at boot, without widening the bind or filters.
 
 The file-provider route uses the existing LAN wildcard DNS, websecure entrypoint
 and letencrypt resolver/wildcard certificate. There was no shared IP allowlist
 middleware in the repository. akasha-lan explicitly admits the existing management,
 service, client and agent VLANs 20/70/90/130, using the connection peer rather
-than X-Forwarded-For. It excludes Nebula, guests and the internet. Add no
-Cloudflare Tunnel hostname, public DNS record or router forwarding.
+than X-Forwarded-For. It excludes Nebula, guests and public connection peers.
+Cloudflared connectors on homelab/Normandy are allowed LAN peers, so the router
+also rejects any request containing Cf-Ray, including an empty value. Ordinary
+Cloudflare-origin requests carry that header; a LAN caller adding it only denies
+itself. Add no tunnel hostname, public DNS record or router forwarding. This rule
+is not proof against future proxy/header-stripping changes; retain the inventory
+gates below and recheck them after any DNS, tunnel or forwarding change.
 
 Only GET /healthz, /api/entries, numeric /api/entries/ID, /api/v1/events,
 and /api/v1/receipts, plus POST /api/entries and /api/v1/events are routed.
@@ -58,21 +64,32 @@ ansible-playbook playbooks/akasha-ingress.yml --limit homelab --check --diff
 ~~~
 
 Before exposing the route, verify systemd's BPF firewall support and the effective
-network restriction. systemd IPAddressDeny is ineffective on unsupported kernels.
-Inspect the proxy socket/service journal for BPF failures. From an edge, HTTP to
-192.168.70.223:1936/api/entries must return 401; from omarchy-pc or an agent it
-must refuse or time out. If a non-edge reaches the proxy, stop/disable
-akasha-ingress.socket and akasha-ingress.service and fix the restriction first.
-The UDM must permit only both edges to homelab TCP 1936. Existing backend
-policies may require that additional port; do not widen an entire VLAN.
+network restriction. IPAddressDeny is ineffective on unsupported kernels. The
+homelab-local probe below targets its own LAN address, with no UDM in the path;
+it must refuse or time out. A refusal from omarchy-pc alone can be caused by the
+UDM and does not prove BPF filtering. Require both that local refusal and no
+BPF/IP firewall installation errors in the current-boot socket/service journal.
+From an edge the API must return 401, proving the listener actually works.
+If any gate fails or cannot be verified, stop/disable akasha-ingress.socket and
+stop akasha-ingress.service; fix it before exposing Traefik.
+The UDM must separately permit only both edges to homelab TCP 1936. Existing
+backend policies may require that additional port; do not widen an entire VLAN.
 
-After the backend restrictions pass, expose the route:
+After all backend, journal and DNS/tunnel gates pass, expose the route:
 
 ~~~sh
 set -eu
 ansible edge_proxy -m ansible.builtin.uri \
   -a 'url=http://192.168.70.223:1936/api/entries status_code=401 use_proxy=false'
-# On omarchy-pc, which is not an allowed proxy peer:
+# BPF negative control: run curl ON homelab to its own LAN address.
+# Only connection refusal (7) or timeout (28) counts, never an HTTP response.
+ansible homelab -m ansible.builtin.shell -a 'rc=0; curl --noproxy "*" --interface 192.168.70.223 --silent --show-error --connect-timeout 2 --max-time 3 -o /dev/null http://192.168.70.223:1936/healthz || rc=$?; test "$rc" -eq 7 -o "$rc" -eq 28'
+ansible homelab -b -m ansible.builtin.command \
+  -a 'journalctl -b -u akasha-ingress.socket -u akasha-ingress.service --no-pager'
+# STOP here unless the local probe passed AND the journal has no unsupported,
+# failed-to-install or other BPF/IP firewall errors. Record both results.
+
+# Separate routed/UDM negative control, on omarchy-pc:
 if curl --noproxy '*' --silent --show-error --connect-timeout 2 --max-time 3 \
     http://192.168.70.223:1936/healthz >/dev/null; then
   ansible homelab -b -m ansible.builtin.command \
@@ -82,6 +99,21 @@ if curl --noproxy '*' --silent --show-error --connect-timeout 2 --max-time 3 \
   echo 'Refusing route exposure: a non-edge reached the backend' >&2
   exit 1
 fi
+
+# Before continuing, refresh the existing read-only Cloudflare API snapshot:
+./scripts/snapshot-cloudflare.sh
+# Inspect snapshot/cloudflare/dns_records.json and every active tunnel's
+# tunnel-*-config.json. Require successful, complete API responses; paginate
+# if result_info reports more pages. No exact/wildcard DNS or ingress rule may
+# match akasha.ryzhkov.dev. Each tunnel must end with an unqualified
+# http_status:404 catch-all. Inspect locally managed tunnel config separately
+# if the API cannot return it. Missing/partial inventory is a failed gate.
+for type in A AAAA CNAME; do
+  dig @1.1.1.1 akasha.ryzhkov.dev "$type" +noall +comments +answer
+done
+# Require NXDOMAIN or NOERROR with no answers for every query. SERVFAIL,
+# timeout or any record is a failed gate. Record snapshot/query time and results.
+# STOP unless the current DNS/tunnel inventory meets all requirements above.
 
 ansible-playbook playbooks/traefik.yml --limit edge_proxy --check --diff
 ansible-playbook playbooks/traefik.yml --limit edge_proxy
@@ -113,8 +145,18 @@ From a Nebula peer, use its edge mesh address with --resolve and require 403
 even with X-Forwarded-For: 192.168.90.212. From a genuine off-LAN source without
 mesh, the LAN VIP is unroutable. Record that refusal, or record "not testable";
 do not count a spoofed forwarded header alone as an off-LAN test.
-The disposable ingress test exercises real Traefik path/method selection,
-401, authenticated health, 413, 429 and peer-IP 403 with forged forwarded headers.
+From an allowed LAN peer, GET /healthz and authenticated GET /api/entries with
+Cf-Ray: 230b030023ae2822-SJC must return 404 through each edge. Headerless
+/healthz remains public LAN liveness; headerless unauthenticated API stays 401.
+The disposable ingress test exercises pinned Traefik v3.7.15 path/method selection,
+401, authenticated health, 413, 429, peer-IP 403 with forged forwarded headers,
+and GET/POST refusal from an allowed peer carrying mixed-case or empty Cf-Ray.
+
+Header semantics: [Cloudflare origin headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/)
+documents Cf-Ray upstream delivery; [Cloudflare header transforms](https://developers.cloudflare.com/rules/transform/request-header-modification/)
+cannot remove cf-* headers except CF-Connecting-IP, so that optional IP header
+is not the exclusion gate. [Traefik v3.7 matchers](https://doc.traefik.io/traefik/v3.7/reference/routing-configuration/http/routing/rules-and-priority/)
+support HeaderRegexp and negation. The test proves this rule on the pinned binary.
 
 Reference for socket/service filter semantics and the unsupported-kernel caveat:
 [systemd resource control](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html#IPAddressAllow=ADDRESS%5B/PREFIXLENGTH%5D%E2%80%A6).

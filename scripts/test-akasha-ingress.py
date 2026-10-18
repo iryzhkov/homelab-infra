@@ -114,6 +114,15 @@ class IngressTest(unittest.TestCase):
                         self.assertEqual(request("/api/entries", method="DELETE"), 404)
                         self.assertEqual(request("/api/entries", method="POST", Host="other.test"), 404)
                         before = len(calls)
+                        # A tunnel connector is an allowed LAN peer. Its Cloudflare
+                        # marker must exclude the route even with a valid bearer.
+                        for header in ({"Cf-Ray": "230b030023ae2822-SJC"},
+                                       {"cF-rAy": "230b030023ae2822-SJC"}, {"Cf-Ray": ""}):
+                            for method, path in (("GET", "/healthz"), ("GET", "/api/entries"),
+                                                 ("POST", "/api/v1/events")):
+                                self.assertEqual(request(path, method=method, Authorization="Bearer fixture",
+                                                        **header), 404, (method, path, header))
+                        self.assertEqual(len(calls), before)
                         self.assertEqual(request("/api/v1/events", peer="127.0.0.2",
                                                 **{"X-Forwarded-For": "192.168.90.212"}), 403)
                         self.assertEqual(len(calls), before)
@@ -139,6 +148,9 @@ class IngressTest(unittest.TestCase):
         for name in ("socket", "service"):
             text = env.get_template(f"akasha-ingress.{name}.j2").render(
                 ansible_host="192.168.70.223", groups={"edge_proxy": list(hostvars)}, hostvars=hostvars)
+            if name == "socket":
+                self.assertIn("ListenStream=192.168.70.223:1936", text)
+                self.assertIn("FreeBind=true", text)
             self.assertIn("IPAddressDeny=any", text)
             self.assertIn("IPAddressAllow=192.168.20.33/32", text)
             self.assertIn("IPAddressAllow=192.168.20.4/32", text)

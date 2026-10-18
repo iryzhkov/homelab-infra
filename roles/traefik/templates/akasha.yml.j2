@@ -1,9 +1,9 @@
-# LAN DNS only. No Cloudflare Tunnel or mesh route.
+# LAN peers only; exclude Cloudflare-marked requests even from LAN connectors.
 http:
   routers:
     akasha:
       entryPoints: [websecure]
-      rule: 'Host(`akasha.ryzhkov.dev`) && ((Method(`GET`) && (Path(`/healthz`) || Path(`/api/entries`) || Path(`/api/v1/events`) || Path(`/api/v1/receipts`) || PathRegexp(`^/api/entries/[0-9]+$`))) || (Method(`POST`) && (Path(`/api/entries`) || Path(`/api/v1/events`))))'
+      rule: 'Host(`akasha.ryzhkov.dev`) && !HeaderRegexp(`Cf-Ray`, `.*`) && ((Method(`GET`) && (Path(`/healthz`) || Path(`/api/entries`) || Path(`/api/v1/events`) || Path(`/api/v1/receipts`) || PathRegexp(`^/api/entries/[0-9]+$`))) || (Method(`POST`) && (Path(`/api/entries`) || Path(`/api/v1/events`))))'
       service: akasha
       middlewares: [akasha-lan, akasha-rate, akasha-size]
 {% include 'router-tls.j2' %}

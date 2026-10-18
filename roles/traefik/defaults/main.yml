@@ -6,7 +6,8 @@ traefik_wildcard_only: true
 traefik_wildcard_domain: ryzhkov.dev
 
 # Existing LAN VLANs for management, services, clients, and agent workers.
-# No Nebula, guest VLANs, loopback, forwarded-header trust, or public sources.
+# Excludes Nebula, guests, loopback and public connection peers. LAN tunnel
+# connectors are inside these ranges; the router separately rejects Cf-Ray.
 akasha_lan_cidrs:
   - 192.168.20.0/24
   - 192.168.70.0/24
