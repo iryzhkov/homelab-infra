@@ -7,12 +7,15 @@ after cutover. This PR creates no keys and deploys nothing.
 
 ## Release and enrollment order
 
-1. Merge the reviewed Chaldea collector CLI change. Publish a new main-only host
-   release, verify its archive/manifest independently, and pin the version and
-   SHA-256 in fleet-config and homelab-infra together. host-v0.2.1 lacks the new
-   collector flags. Do not point a launcher at that version.
-2. Merge the reviewed homelab-cli change and pin its full commit in
-   fleet-config agent_tools_sources. Save each installed current symlink target
+1. The reviewed collector CLI is in Chaldea main. host-v0.2.2 was published from
+   main 330926ddbde3aa9465f3f235edd94767d14232f3 by release workflow 39102141373.
+   Its archive SHA-256 is
+   ebaf896b2b4552002f00ad9b83855ff2364abe02f57ec667d7c9fcafb308c357,
+   pinned with the version in fleet-config and homelab-infra. Verify the archive,
+   manifest and collector CLI before installation. host-v0.2.1 ignores the new
+   flags and can perform real work on --dry-run. Do not use it for cutover.
+2. The reviewed homelab-cli change is merged and fleet-config agent_tools_sources
+   pins f035d2820a28a523012078114005c30e8a0f00cc. Save each installed current symlink target
    and public feed config before updating. Keep the old immutable tool release,
    old shared-key files, database and shipper offsets for rollback.
 3. Approve and complete the issuer enrollment below. Update the signed public
