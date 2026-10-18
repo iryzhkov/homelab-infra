@@ -43,3 +43,5 @@
     name: akasha-ingress.socket
     enabled: true
     state: "{{ 'restarted' if akasha_ingress_units is changed else 'started' }}"
+  # A cold check predicts unit files but cannot load them into systemd.
+  when: not ansible_check_mode
