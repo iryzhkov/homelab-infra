@@ -9,7 +9,7 @@
       ansible.builtin.command:
         argv: [/usr/bin/python3, "-"]
         stdin: |
-          import copy, importlib.util, json, os, uuid
+          import copy, importlib.util, json, os
           from pathlib import Path
           from importlib.machinery import SourceFileLoader
           desired = json.loads(os.environ["EMBY_EXPERIENCE_CONFIG"])
@@ -56,7 +56,6 @@
               targets = []
               for recipe in desired["sections"]:
                   section = {k: copy.deepcopy(v) for k, v in recipe.items() if k not in ("key", "libraries")}
-                  section["Id"] = uuid.uuid5(uuid.NAMESPACE_URL, "emby-experience-v1:" + uid + ":" + recipe["key"]).hex
                   section.setdefault("ItemTypes", [])
                   section.setdefault("IncludeNextUpInResume", True)
                   section.setdefault("ScrollDirection", "Horizontal")
@@ -70,17 +69,31 @@
                   else:
                       section["ExcludedFolders"] = []
                   targets.append(section)
+              wanted_preview_ids = []
+              def same_row(row, target):
+                  return row["SectionType"] == target["SectionType"] and (
+                      not target.get("CustomName") or
+                      (row.get("CustomName") or row.get("Name")) == target["CustomName"])
               for target in targets:
-                  found = [s for s in current if s["Id"] == target["Id"]]
+                  found = [s for s in current if same_row(s, target)]
+                  if len(found) > 1:
+                      raise RuntimeError("Ambiguous existing home row")
+                  if found:
+                      target["Id"] = found[0]["Id"]
                   if not found or not matches(found[0], target):
                       changed += 1
                       if apply:
                           body = dict(found[0]) if found else {}
                           body.update(target)
+                          # New rows omit Id; this server allocates it and rejects unknown IDs.
                           api.call(endpoint, "POST", body)
-                          check = [s for s in api.call(endpoint + "?isEditMode=true") if s["Id"] == target["Id"]]
+                          check = [s for s in api.call(endpoint + "?isEditMode=true") if same_row(s, target)]
                           if len(check) != 1 or not matches(check[0], target):
                               raise RuntimeError("Home section did not round-trip")
+                          target["Id"] = check[0]["Id"]
+                  if "Id" not in target:
+                      target["Id"] = "preview:" + str(len(wanted_preview_ids))
+                  wanted_preview_ids.append(target["Id"])
               wanted_ids = [s["Id"] for s in targets]
               obsolete = list(dict.fromkeys(s["Id"] for s in current if s["Id"] not in wanted_ids))
               if obsolete:
