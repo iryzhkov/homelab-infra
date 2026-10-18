@@ -1,0 +1,85 @@
+{
+  "profiles": [
+    "Igor",
+    "TV"
+  ],
+  "playback": {
+    "ResumeRewindSeconds": 5,
+    "EnableNextEpisodeAutoPlay": true,
+    "IntroSkipMode": "ShowButton",
+    "HidePlayedInSuggestions": true,
+    "HidePlayedInMoreLikeThis": true
+  },
+  "importMovieCollections": true,
+  "sections": [
+    {
+      "key": "movie-spotlight",
+      "CustomName": "Movie Night",
+      "SectionType": "items",
+      "ItemTypes": [
+        "Movie"
+      ],
+      "libraries": [
+        "Movies"
+      ],
+      "ViewType": "spotlight",
+      "SortBy": "Random",
+      "Query": {
+        "IsPlayed": false
+      }
+    },
+    {
+      "key": "continue",
+      "CustomName": "Continue Watching",
+      "SectionType": "resume",
+      "IncludeNextUpInResume": true
+    },
+    {
+      "key": "libraries",
+      "CustomName": "Browse Libraries",
+      "SectionType": "userviews",
+      "ViewType": "buttons"
+    },
+    {
+      "key": "latest",
+      "SectionType": "latestmediablock",
+      "Query": {
+        "IsPlayed": false
+      }
+    },
+    {
+      "key": "anime",
+      "CustomName": "Explore Anime",
+      "SectionType": "items",
+      "ItemTypes": [
+        "Series"
+      ],
+      "libraries": [
+        "Anime"
+      ],
+      "SortBy": "Random",
+      "Query": {
+        "IsPlayed": false
+      }
+    },
+    {
+      "key": "favorites",
+      "CustomName": "Your Favorites",
+      "SectionType": "items",
+      "ItemTypes": [
+        "Movie",
+        "Series"
+      ],
+      "SortBy": "SortName",
+      "Query": {
+        "IsFavorite": true
+      }
+    },
+    {
+      "key": "collections",
+      "CustomName": "Movie Collections",
+      "SectionType": "collections",
+      "SortBy": "SortName"
+    }
+  ]
+}
