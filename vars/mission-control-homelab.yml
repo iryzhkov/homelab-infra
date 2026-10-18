@@ -1,0 +1,16 @@
+---
+# EXTRA-VARS ONLY: Homelab Akasha server packet, not a shared host/trust upgrade.
+# Reviewed main6f3aa16, release416722339, archive654523759, run39167630357.
+akasha_host_version: host-v0.2.4
+akasha_host_sha256: 531710066a7f67ac68f82ad1234d8f9a32e3311c839a894f86125c7d4f170592
+# Preserve shared trust and the running/rollback server through every GC include.
+chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3]
+# Preserve existing enrollment/PC permissions; independent sharing stays OFF.
+akasha_enrollment_registry_enabled: true
+akasha_pc_global_reader_enabled: true
+akasha_pc_quota_events_enabled: true
+akasha_quota_laptop_publisher_enabled: false
+akasha_quota_pc_reader_enabled: false
+# HOLD: on the current active server false REFUSES, it does not stage safely.
+# Runtime-only --tags runtime is separate; service phase requires reviewed true.
+akasha_activate: false
