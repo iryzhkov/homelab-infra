@@ -1,0 +1,30 @@
+# LAN DNS only. No Cloudflare Tunnel or mesh route.
+http:
+  routers:
+    akasha:
+      entryPoints: [websecure]
+      rule: 'Host(`akasha.ryzhkov.dev`) && ((Method(`GET`) && (Path(`/healthz`, `/api/entries`, `/api/v1/events`, `/api/v1/receipts`) || PathRegexp(`^/api/entries/[0-9]+$`))) || (Method(`POST`) && Path(`/api/entries`, `/api/v1/events`)))'
+      service: akasha
+      middlewares: [akasha-lan, akasha-rate, akasha-size]
+{% include 'router-tls.j2' %}
+  middlewares:
+    akasha-lan:
+      ipAllowList:
+        # Use the connection peer, never caller-supplied X-Forwarded-For.
+        sourceRange:
+{% for subnet in akasha_lan_cidrs %}
+          - "{{ subnet }}"
+{% endfor %}
+    akasha-rate:
+      rateLimit:
+        average: 20
+        burst: 100
+    akasha-size:
+      buffering:
+        maxRequestBodyBytes: 65536
+        memRequestBodyBytes: 65536
+  services:
+    akasha:
+      loadBalancer:
+        servers:
+          - url: "http://{{ hostvars['homelab'].ansible_host }}:1936"

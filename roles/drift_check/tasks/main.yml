@@ -56,28 +56,16 @@
       repository.
   when: drift_check_reports | default(true)
 
-- name: Load the feed token
-  community.sops.load_vars:
-    file: "{{ playbook_dir }}/../secrets/feed.sops.yaml"
-    name: feed_secrets
-  delegate_to: localhost
-  no_log: true
-  when: drift_check_reports | default(true)
-
-- name: Point the feed client at the feed
+# Public configuration only. Existing key files are retained for rollback;
+# a configured helper never falls back to them.
+- name: Point the feed client at Akasha through the scoped helper
   ansible.builtin.copy:
     content: |
       FEED_URL={{ feed_url }}
+      FEED_TOKEN_HELPER=/usr/local/bin/chaldea-token-helper
+      FEED_READ_SOURCE=fleet-reader
     dest: "{{ ansible_env.HOME }}/.config/feed/config"
     mode: "0644"
-  when: drift_check_reports | default(true)
-
-- name: Install the feed token
-  ansible.builtin.copy:
-    content: "{{ feed_secrets.FEED_TOKEN }}\n"
-    dest: "{{ ansible_env.HOME }}/.config/feed/key"
-    mode: "0600"
-  no_log: true
   when: drift_check_reports | default(true)
 
 - name: Install the checker

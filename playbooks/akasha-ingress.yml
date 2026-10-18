@@ -1,0 +1,7 @@
+---
+# Explicit deployment only. Akasha itself remains bound to loopback.
+- name: Expose Akasha only to the Traefik backends
+  hosts: homelab
+  gather_facts: false
+  become: true
+  roles: [akasha_ingress]

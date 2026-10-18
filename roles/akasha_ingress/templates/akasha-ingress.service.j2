@@ -1,0 +1,19 @@
+[Unit]
+Description=Forward Traefik to loopback Akasha
+Requires=akasha.service
+After=akasha.service
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:1935
+DynamicUser=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+{% for edge in groups['edge_proxy'] %}
+IPAddressAllow={{ hostvars[edge].ansible_host }}/32
+{% endfor %}
+RestrictAddressFamilies=AF_INET AF_UNIX
+MemoryMax=32M
+TasksMax=16

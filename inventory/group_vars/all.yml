@@ -70,6 +70,7 @@ traefik_rendered_files:
   - whisper.yml
   - t3.yml
   - cartest.yml
+  - akasha.yml
 #   catchall.yml  the wildcard-certificate 404 for unclaimed hostnames
 traefik_static_files:
   - catchall.yml
@@ -162,7 +163,7 @@ forgejo_webhooks_dir: "/home/iryzhkov/app/webhook"
 # systemd service on homelab rather than as a Compose stack, so its address is
 # taken from the host rather than from a stack.
 feed_host: homelab
-feed_url: "http://{{ hostvars[feed_host].ansible_host }}:1934"
+feed_url: https://akasha.ryzhkov.dev
 
 # Pinged over the mesh after a Nebula restart, to prove the tunnel came back
 # before the change is accepted: the lighthouse, and a peer that is not it.
