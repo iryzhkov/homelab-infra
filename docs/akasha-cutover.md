@@ -54,11 +54,6 @@ ansible-playbook playbooks/akasha-ingress.yml --limit homelab --check --diff
 ansible-playbook playbooks/akasha-ingress.yml --limit homelab
 ansible-playbook playbooks/akasha-ingress.yml --limit homelab --check --diff
 # Require changed=0 before touching the edge configuration.
-
-ansible-playbook playbooks/traefik.yml --limit edge_proxy --check --diff
-ansible-playbook playbooks/traefik.yml --limit edge_proxy
-ansible-playbook playbooks/traefik.yml --limit edge_proxy --check --diff
-# Require changed=0 on both edge hosts; every loaded router must be enabled.
 ~~~
 
 Before exposing the route, verify systemd's BPF firewall support and the effective
@@ -69,6 +64,28 @@ must refuse or time out. If a non-edge reaches the proxy, stop/disable
 akasha-ingress.socket and akasha-ingress.service and fix the restriction first.
 The UDM must permit only both edges to homelab TCP 1936. Existing backend
 policies may require that additional port; do not widen an entire VLAN.
+
+After the backend restrictions pass, expose the route:
+
+~~~sh
+ansible edge_proxy -m ansible.builtin.uri \
+  -a 'url=http://192.168.70.223:1936/api/entries status_code=401'
+# On omarchy-pc, which is not an allowed proxy peer:
+if curl --silent --show-error --connect-timeout 2 --max-time 3 \
+    http://192.168.70.223:1936/healthz >/dev/null; then
+  ansible homelab -b -m ansible.builtin.command \
+    -a 'systemctl disable --now akasha-ingress.socket'
+  ansible homelab -b -m ansible.builtin.command \
+    -a 'systemctl stop akasha-ingress.service'
+  echo 'Refusing route exposure: a non-edge reached the backend' >&2
+  exit 1
+fi
+
+ansible-playbook playbooks/traefik.yml --limit edge_proxy --check --diff
+ansible-playbook playbooks/traefik.yml --limit edge_proxy
+ansible-playbook playbooks/traefik.yml --limit edge_proxy --check --diff
+# Require changed=0 on both edge hosts; every loaded router must be enabled.
+~~~
 
 Run this on each enrolled LAN reader. The bearer travels in curl's private
 configuration input, not argv, history, transcript, URL or a persistent token file:
