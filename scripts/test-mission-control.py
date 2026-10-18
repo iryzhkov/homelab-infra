@@ -220,7 +220,7 @@ class MissionControlTest(unittest.TestCase):
                     (ROOT / "roles/mission_control/templates" / ("mission-control-ingress." + suffix + ".j2")).read_text())
             runtime = directory / "xdg"
             runtime.mkdir(mode=0o700)
-            result = subprocess.run(["systemd-analyze", "verify", "--man=no", *map(str, (directory / "units").glob("*"))],
+            result = subprocess.run(["systemd-analyze", "--user", "verify", "--man=no", *map(str, (directory / "units").glob("*"))],
                 env=dict(os.environ, XDG_RUNTIME_DIR=str(runtime)), capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
