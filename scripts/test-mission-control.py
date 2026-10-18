@@ -183,7 +183,8 @@ class MissionControlTest(unittest.TestCase):
             for row in rows[0]["block"]:
                 for module in ("ansible.builtin.file", "ansible.builtin.template"):
                     if module in row:
-                        row[module]["owner"] = row[module]["group"] = "root"
+                        row[module]["owner"] = str(os.getuid())
+                        row[module]["group"] = str(os.getgid())
                 if "ansible.builtin.systemd_service" in row:
                     row["ansible.builtin.fail"] = dict(msg="cold unit manager must not run")
                     del row["ansible.builtin.systemd_service"]
