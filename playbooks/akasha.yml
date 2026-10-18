@@ -6,6 +6,7 @@
   become: true
   vars_files:
     - ../vars/chaldea-runtime.yml
+    - ../vars/akasha-runtime.yml
     - ../vars/akasha-registry.yml
     - ../vars/akasha-enrollment-registry.yml
   pre_tasks:
@@ -21,8 +22,14 @@
       tags: [always]
   roles:
     - {role: chaldea_node, tags: [runtime]}
-    - {role: chaldea_host_artifact, tags: [runtime]}
+    - role: chaldea_host_artifact
+      tags: [runtime]
+      vars:
+        chaldea_host_version: "{{ akasha_host_version }}"
+        chaldea_host_sha256: "{{ akasha_host_sha256 }}"
     - role: chaldea_access_trust
       when: chaldea_access_trust_enabled | bool
       tags: [trust]
-    - akasha
+    - role: akasha
+      vars:
+        chaldea_host_version: "{{ akasha_host_version }}"
