@@ -50,6 +50,7 @@ that token valid. An authenticated API read below proves authentication.
 From the pinned reviewed infra checkout, after rollout approval:
 
 ~~~sh
+set -eu
 ansible-playbook playbooks/akasha-ingress.yml --limit homelab --check --diff
 ansible-playbook playbooks/akasha-ingress.yml --limit homelab
 ansible-playbook playbooks/akasha-ingress.yml --limit homelab --check --diff
@@ -68,10 +69,11 @@ policies may require that additional port; do not widen an entire VLAN.
 After the backend restrictions pass, expose the route:
 
 ~~~sh
+set -eu
 ansible edge_proxy -m ansible.builtin.uri \
-  -a 'url=http://192.168.70.223:1936/api/entries status_code=401'
+  -a 'url=http://192.168.70.223:1936/api/entries status_code=401 use_proxy=false'
 # On omarchy-pc, which is not an allowed proxy peer:
-if curl --silent --show-error --connect-timeout 2 --max-time 3 \
+if curl --noproxy '*' --silent --show-error --connect-timeout 2 --max-time 3 \
     http://192.168.70.223:1936/healthz >/dev/null; then
   ansible homelab -b -m ansible.builtin.command \
     -a 'systemctl disable --now akasha-ingress.socket'
