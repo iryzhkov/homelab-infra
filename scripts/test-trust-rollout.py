@@ -55,7 +55,8 @@ class RolloutTest(unittest.TestCase):
         base = yaml.safe_load((ROOT / "vars/akasha-registry.yml").read_text())["akasha_registry"]
         extra = yaml.safe_load((ROOT / "vars/akasha-enrollment-registry.yml").read_text())
         play = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
-        task = play["pre_tasks"][0]
+        task = next(task for task in play["pre_tasks"]
+                    if "akasha_registry" in task.get("ansible.builtin.set_fact", {}))
         self.assertIs(extra["akasha_enrollment_registry_enabled"], False)
         self.assertIs(extra["akasha_pc_global_reader_enabled"], False)
         self.assertIs(extra["akasha_pc_quota_events_enabled"], False)
@@ -88,7 +89,10 @@ class RolloutTest(unittest.TestCase):
         extra = yaml.safe_load((ROOT / "vars/akasha-enrollment-registry.yml").read_text())
         self.assertIs(extra["akasha_quota_laptop_publisher_enabled"], False)
         self.assertIs(extra["akasha_quota_pc_reader_enabled"], False)
-        expression = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]["pre_tasks"][0]["ansible.builtin.set_fact"]["akasha_registry"]
+        play = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+        task = next(task for task in play["pre_tasks"]
+                    if "akasha_registry" in task.get("ansible.builtin.set_fact", {}))
+        expression = task["ansible.builtin.set_fact"]["akasha_registry"]
         native = NativeEnvironment(undefined=StrictUndefined)
         native.filters["bool"] = to_bool
         for laptop, reader, operator, seven in product((False, True), repeat=4):
