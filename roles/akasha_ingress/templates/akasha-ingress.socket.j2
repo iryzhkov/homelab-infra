@@ -1,0 +1,13 @@
+[Unit]
+Description=Akasha ingress from the Traefik hosts only
+[Socket]
+ListenStream={{ ansible_host }}:1936
+# Socket activation precedes address configuration during boot.
+FreeBind=true
+NoDelay=true
+IPAddressDeny=any
+{% for edge in groups['edge_proxy'] %}
+IPAddressAllow={{ hostvars[edge].ansible_host }}/32
+{% endfor %}
+[Install]
+WantedBy=sockets.target

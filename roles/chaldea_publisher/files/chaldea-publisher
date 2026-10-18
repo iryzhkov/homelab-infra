@@ -293,16 +293,9 @@ class Publisher:
     def notify(self, message, severity="fail"):
         # Journal is always available through the unit. No igor credentials/home are inherited.
         print("chaldea-publisher: " + message, file=sys.stderr, flush=True)
-        feed = shutil.which("feed", path=self.env["PATH"])
-        if feed:
-            try:
-                self.run([feed, "post", message, "--severity", severity,
-                          "--source", "chaldea-publisher", "--tag", "trust infra"])
-                print("chaldea-publisher: alert route=feed", file=sys.stderr)
-                return
-            except (OSError, subprocess.SubprocessError):
-                pass
-        print("chaldea-publisher: alert route=journal", file=sys.stderr)
+        # The Gatus heartbeat is the independent alert route. A broken trust
+        # publisher must not need its own signed bundle to report a failure.
+        print("chaldea-publisher: alert route=journal; heartbeat=Gatus", file=sys.stderr)
 
 
 def main():

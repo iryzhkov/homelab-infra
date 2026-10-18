@@ -346,7 +346,7 @@ class PublisherTests(unittest.TestCase):
         known = next(t for t in tasks if t["name"] == "Install independently pinned GitHub host key")
         self.assertEqual(known["ansible.builtin.copy"]["dest"], "{{ chaldea_publisher_config_root }}/known_hosts")
 
-    def test_feed_failure_falls_back_without_retry(self):
+    def test_alert_never_depends_on_retired_feed_or_its_issuer(self):
         calls = []
         def fail(args, *other):
             calls.append(args)
@@ -355,7 +355,7 @@ class PublisherTests(unittest.TestCase):
         with mock.patch.object(p.shutil, "which", return_value="/usr/local/bin/feed"):
             with mock.patch("sys.stderr") as journal:
                 self.publisher.notify("fixture failure")
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, [])
         self.assertIn("alert route=journal", "".join(str(c) for c in journal.write.call_args_list))
 
     def test_pin_checker_rejects_placeholders_mapping_drift_and_mismatched_keys(self):

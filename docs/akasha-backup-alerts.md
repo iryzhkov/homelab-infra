@@ -288,8 +288,8 @@ do not use either unchecked. Fetch a matched previous pair with
 the manifest hash/size/integrity and record its actual age; diagnose any >24h
 RPO breach. Never hard-delete B2 versions or prune the bucket for this rollout.
 
-Rollback stops/disables `akasha-offsite.timer` and waits for
-`akasha-offsite.service` alongside Akasha's existing consumer/health/snapshot
-units. Retain all local state, remote generations, lock and tokens; keep
-feedd on :1934. Three days of shadow parity without differences are required;
-the rollback observation remains seven days.
+Plan revision 28 drops the shadow/parity and seven-day observation windows.
+The [direct cutover and rollback commands](akasha-cutover.md) retain feedd data,
+Akasha state, remote backup generations, locks and credentials. Stop/drain the
+consumer and maintenance jobs before export or rollback. Keep backup/alert paths
+active during normal cutover; do not delete backup generations or reset trust.

@@ -328,10 +328,10 @@ C owns end-to-end admission/ACK/crash recovery evidence.
 
 ## Parity and rollback
 
-Plan revision 22 requires **3 days of shadow operation without differences**
-for measured parity. Keep feedd and its shipper through that parity period and
-**7 days of rollback observation**. Step-9 retirement and shared-key rotation require
-separate approval and a complete consumer inventory. To roll back this
-service, stop/disable only akasha and its timers, retain its state and keep
-feedd on :1934. Never delete streams, receipts or imported IDs as rollback.
-Reverting the gateway ACL to host-publish permissions is not a safe rollback.
+Plan revision 28 supersedes the shadow/parity and seven-day observation windows.
+Use the [direct cutover runbook](akasha-cutover.md): stop old writers, import the
+final consistent feedd snapshot, verify import integrity once, switch clients and
+retire feedd/shippers immediately. Retain all old data for rollback. Enrollment
+keys and multi-host convergence need their separate approval. Never delete streams,
+receipts, imported IDs or trust high-water state, or reopen host NATS publication,
+as rollback.

@@ -5,6 +5,8 @@ on:
   pull_request:
 jobs:
   drift:
+    env:
+      TMPDIR: ${{ github.workspace }}/../akasha-cutover-${{ github.run_id }}-${{ github.run_attempt }}
     runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
     timeout-minutes: 15
     permissions:
@@ -14,6 +16,12 @@ jobs:
       image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare the isolated fixture home
+        run: |
+          export HOME="$TMPDIR/.scratch-home"
+          test "$HOME" = "$TMPDIR/.scratch-home"
+          mkdir -p "$HOME" "$TMPDIR"
+          printf 'HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
       - name: Install ShellCheck in the disposable CI container
         run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck
       - run: python3 scripts/test-upkeeper-drift.py
@@ -79,6 +87,9 @@ jobs:
           import hashlib, io, os, pathlib, tarfile, urllib.request, zipfile
           out = pathlib.Path(os.environ["TMPDIR"]) / "bin"
           assets = [
+              ("https://github.com/traefik/traefik/releases/download/v3.7.15/traefik_v3.7.15_linux_amd64.tar.gz",
+               "5b9f51199fcb7a3b5f7ae0f9dae8dcf01efadafd92c5fca96ea2822eca81f8e6",
+               "traefik", "traefik"),
               ("https://nodejs.org/dist/v26.10.0/node-v26.10.0-linux-x64.tar.xz",
                "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022",
                "node-v26.10.0-linux-x64/bin/node", "node"),
@@ -92,7 +103,7 @@ jobs:
           for url, digest, member, name in assets:
               raw = urllib.request.urlopen(url, timeout=60).read()
               assert hashlib.sha256(raw).hexdigest() == digest, name
-              if name in ("nats-server", "node"):
+              if name in ("nats-server", "node", "traefik"):
                   with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
                       data = archive.extractfile(member).read()
               else:
@@ -111,6 +122,8 @@ jobs:
           mkdir -p "$HOME"
           export AKASHA_TEST_HOME="$HOME"
           python3 scripts/test-akasha-infra.py -v
+          python3 scripts/test-akasha-ingress.py -v
+          ansible-playbook playbooks/akasha-ingress.yml --syntax-check
           python3 scripts/test-akasha-backup.py -v
           python3 scripts/test-trust-fetcher.py -v
           python3 scripts/test-trust-rollout.py -v

@@ -1,0 +1,45 @@
+---
+- name: Require the existing homelab backend
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'homelab'
+      - ansible_host == hostvars['homelab'].ansible_host
+      - groups['edge_proxy'] | length == 2
+    quiet: true
+
+- name: Check for the systemd TCP proxy
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/systemd-socket-proxyd
+  register: akasha_socket_proxy
+
+- name: Require the systemd TCP proxy
+  ansible.builtin.assert:
+    that: akasha_socket_proxy.stat.executable | default(false)
+    quiet: true
+
+- name: Install the edge-only socket proxy units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [akasha-ingress.socket, akasha-ingress.service]
+  register: akasha_ingress_units
+
+- name: Reload ingress units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: akasha_ingress_units is changed and not ansible_check_mode
+
+- name: Stop the old proxy before replacing its listener
+  ansible.builtin.systemd_service:
+    name: akasha-ingress.service
+    state: stopped
+  when: akasha_ingress_units is changed and not ansible_check_mode
+
+- name: Enable the edge-only listener
+  ansible.builtin.systemd_service:
+    name: akasha-ingress.socket
+    enabled: true
+    state: "{{ 'restarted' if akasha_ingress_units is changed else 'started' }}"
