@@ -165,14 +165,18 @@ agent-a key or the deployment anchor. Even agent-a gets a new cutover key.
 Keep its old agent-a-2026-10 issuer record during overlap, then separately retire it.
 The files below are credential references, not credentials.
 
-| Host alias | Token host / issuer | New private key basename | Producer account |
-| --- | --- | --- | --- |
-| agent-a | agent-a / chaldea:agent-a | agent-a-2026-10-cutover.pem | igor |
-| agent-b | agent-b / chaldea:agent-b | agent-b-2026-10-cutover.pem | igor |
-| omarchy-pc | omarchy-pc / chaldea:omarchy-pc | omarchy-pc-2026-10-cutover.pem | igor |
-| laptop | omarchy-macbook-air-igor / chaldea:omarchy-macbook-air-igor | omarchy-macbook-air-igor-2026-10-cutover.pem | igor |
-| homelab | homelab / chaldea:homelab | homelab-2026-10-cutover.pem | iryzhkov |
-| Normandy, if retained | omarchy-normandy / chaldea:omarchy-normandy | omarchy-normandy-2026-10-cutover.pem | igor |
+| Host alias | Token host / issuer | New private key basename | Producer account / UID | Issuer UID |
+| --- | --- | --- | --- | --- |
+| agent-a | agent-a / chaldea:agent-a | agent-a-2026-10-cutover.pem | igor / 1000 | 995, existing |
+| agent-b | agent-b / chaldea:agent-b | agent-b-2026-10-cutover.pem | igor / 1000 | 995, proposed |
+| omarchy-pc | omarchy-pc / chaldea:omarchy-pc | omarchy-pc-2026-10-cutover.pem | igor / 1000 | 995, proposed |
+| laptop | omarchy-macbook-air-igor / chaldea:omarchy-macbook-air-igor | omarchy-macbook-air-igor-2026-10-cutover.pem | igor / 1001 | 995, proposed |
+| homelab | homelab / chaldea:homelab | homelab-2026-10-cutover.pem | iryzhkov / 1000 | 989, proposed |
+| Normandy, if retained | omarchy-normandy / chaldea:omarchy-normandy | omarchy-normandy-2026-10-cutover.pem | igor / 1000 | 995, proposed |
+
+Read-only passwd checks on 2026-10-18 confirmed those producer UIDs and that
+homelab UID 995 belongs to polkitd. UID 989 was free there; UID 995 was free
+on the other unenrolled hosts. Recheck reservations immediately before creation.
 
 For every row, the proposed kid is the key basename without .pem, such as
 agent-a-2026-10-cutover. For EACH host the orchestrator creates and records:
