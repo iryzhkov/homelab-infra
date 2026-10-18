@@ -70,8 +70,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Prepare isolated scratch and test dependencies
         run: |
-          mkdir -p "$TMPDIR/bin"
-          apt-get update -qq && apt-get install -y --no-install-recommends git
+          export HOME="$TMPDIR/.scratch-home"
+          test "$TMPDIR" = /home/igor/.cache/chaldea-scratch/publisher
+          test "$HOME" = "$TMPDIR/.scratch-home"
+          mkdir -p "$HOME" "$TMPDIR/bin"
+          # systemd supplies systemd-analyze for offline unit validation.
+          apt-get update -qq && apt-get install -y --no-install-recommends git systemd
           pip install --disable-pip-version-check ansible-core==2.19.13 'nats-py[nkeys]==2.16.0'
       - name: Check copied installer roles against the reviewed fleet pin
         run: |
