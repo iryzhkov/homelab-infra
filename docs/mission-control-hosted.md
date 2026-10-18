@@ -47,5 +47,15 @@ The copied canonical installer now accepts at most four exact preserve_versions,
 default empty, alongside current plus newest prior. Root must select the actual
 trust version still in use in the exact homelab packet before any new server pin
 can prune it. This source sets no preservation version and never upgrades trust.
+System-mode offline verification remains a mandatory deployment gate before any
+Mission Control unit enable/start. Source job systemd257.13 fails with
+"Failed to create directory '/run/systemd/': Read-only file system" even with
+--root set to scratch and XDG_RUNTIME_DIR asserted. User-mode verification passes
+only web/capture/reader and cannot qualify the DynamicUser proxy. No hardening
+was relaxed. The retained separate fixture command is
+python3 scripts/test-mission-control.py --system-units -v.
+Root must verify the exact real rendered units with the target's system-mode
+systemd-analyze before enabling them. This is not counted as a passing source check.
+
 Test the dedicated reader's direct issuer key/state reads and writes are denied;
 only its exact sudo issuer command may write the issuer access directory.

@@ -10,6 +10,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -47,6 +48,15 @@ class MissionControlTest(unittest.TestCase):
                                              "192.168.90.0/24", "192.168.130.0/24"])
         for forbidden in ("8.8.8.8", "192.168.50.1", "10.42.0.5", "127.0.0.1"):
             self.assertFalse(any(ipaddress.ip_address(forbidden) in ipaddress.ip_network(net) for net in lan["sourceRange"]))
+        evidence = os.environ.get("MC_UNIT_EVIDENCE")
+        if evidence:
+            out = Path(evidence).resolve()
+            assert out.is_relative_to(Path(os.environ["TMPDIR"]))
+            out.mkdir(parents=True, exist_ok=True)
+            for suffix in ("socket", "service"):
+                template = (ROOT / "roles/mission_control/templates" / ("mission-control-ingress." + suffix + ".j2")).read_text()
+                (out / ("mission-control-ingress." + suffix)).write_text(jinja2.Template(template).render() + "\\n")
+            (out / "mission-control-traefik.yml").write_text(yaml.safe_dump(dynamic))
         router = dynamic["http"]["routers"]["mission-control"]
         self.assertEqual(router["tls"]["certResolver"], "letencrypt")
         self.assertNotIn("buffering", dynamic["http"]["middlewares"]["mission-control-lan"])
@@ -216,6 +226,19 @@ class MissionControlTest(unittest.TestCase):
             unit = directory / "units/mission-control.service"
             self.assertNotIn("ReadWritePaths", unit.read_text())
             self.assertIn("NoNewPrivileges=yes", unit.read_text())
+            result = subprocess.run(["systemd-analyze", "--user", "verify", "--man=no", str(unit)],
+                env=dict(os.environ, XDG_RUNTIME_DIR=str(directory)), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class SystemUnitsQualification(unittest.TestCase):
+    """Separate required system-mode qualification; never counted as a source pass."""
+    def test_exact_system_units_in_qualified_environment(self):
+        with tempfile.TemporaryDirectory(dir=isolated()) as scratch:
+            directory = Path(scratch)
+            (directory / "units").mkdir()
+            (directory / "units/mission-control.service").write_text(
+                "[Service]\\nExecStart=/bin/true\\n")
             for suffix in ("service", "socket"):
                 (directory / "units" / ("mission-control-ingress." + suffix)).write_text(
                     (ROOT / "roles/mission_control/templates" / ("mission-control-ingress." + suffix + ".j2")).read_text())
@@ -240,4 +263,9 @@ class MissionControlTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # Explicit mandatory qualification is retained even where the job's /run is
+    # read-only. It is not skipped or represented as a source-test success.
+    system_units = "--system-units" in sys.argv
+    if system_units:
+        sys.argv.remove("--system-units")
+    unittest.main(defaultTest="SystemUnitsQualification" if system_units else "MissionControlTest")
