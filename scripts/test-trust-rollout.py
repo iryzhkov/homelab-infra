@@ -65,7 +65,8 @@ class RolloutTest(unittest.TestCase):
                 # Jinja native rendering executes the actual Ansible composition expression.
                 from jinja2.nativetypes import NativeEnvironment
                 native = NativeEnvironment(undefined=StrictUndefined)
-                native.filters["bool"] = bool
+                from ansible.plugins.filter.core import to_bool
+                native.filters["bool"] = to_bool
                 rendered = native.from_string(task["ansible.builtin.set_fact"]["akasha_registry"]).render(
                     extra | dict(akasha_registry=base, akasha_pc_global_reader_enabled=reader,
                                  akasha_pc_quota_events_enabled=quota))
@@ -77,6 +78,32 @@ class RolloutTest(unittest.TestCase):
                 self.assertEqual(len(optional), int(reader) + int(quota))
                 self.assertTrue(all(r["host"] == "omarchy-pc" for r in optional))
         self.assertNotIn("public_key", json.dumps(extra))
+
+
+    def test_normandy_consumer_path_is_disabled_and_requires_exact_host(self):
+        play = yaml.safe_load((ROOT / "playbooks/akasha-normandy-consumer-trust.yml").read_text())[0]
+        self.assertEqual(play["hosts"], "normandy")
+        self.assertIs(play["vars"]["akasha_normandy_consumer_trust_enabled"], False)
+        self.assertEqual([r["role"] for r in play["roles"]],
+                         ["chaldea_node", "chaldea_host_artifact", "chaldea_access_trust"])
+        pre = play["pre_tasks"]
+        self.assertEqual(pre[0]["ansible.builtin.meta"], "end_play")
+        self.assertEqual(pre[0]["when"], "not akasha_normandy_consumer_trust_enabled | bool")
+        self.assertIn("ansible_limit == 'normandy'", pre[1]["ansible.builtin.assert"]["that"])
+        self.assertNotIn("initialize-state", json.dumps(play))
+        self.assertNotIn("sign-bundle", json.dumps(play))
+
+    def test_infra_remains_the_only_server_feed_config_owner(self):
+        tasks = yaml.safe_load((ROOT / "roles/drift_check/tasks/main.yml").read_text())
+        config = next(t["ansible.builtin.copy"] for t in tasks if t["name"] == "Point the feed client at Akasha through the scoped helper")
+        self.assertEqual(config["mode"], "0600")
+        for host in ("homelab", "normandy"):
+            text = Environment(undefined=StrictUndefined).from_string(config["content"]).render(
+                feed_url="https://akasha.ryzhkov.dev", inventory_hostname=host)
+            self.assertNotIn("fleet-reader", text)
+            self.assertIn("FEED_TOKEN_HOST=" + ("omarchy-normandy" if host == "normandy" else host), text)
+            self.assertIn("FEED_TOKEN=''", text)
+            self.assertIn("FEED_KEY_FILE=''", text)
 
     def test_ported_units_and_bootstrap_never_create_credentials_or_state(self):
         role = ROOT / "roles/chaldea_access_trust"

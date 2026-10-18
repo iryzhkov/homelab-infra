@@ -1,0 +1,59 @@
+---
+# Consumer trust only, separate from Normandy's private deployment publisher.
+- name: Explicit Normandy Akasha consumer trust
+  hosts: normandy
+  gather_facts: false
+  become: true
+  vars_files: [../vars/chaldea-runtime.yml]
+  vars:
+    akasha_normandy_consumer_trust_enabled: false
+    chaldea_access_trust_enabled: true
+  pre_tasks:
+    - name: Leave disabled Normandy consumer enrollment inert
+      ansible.builtin.meta: end_play
+      when: not akasha_normandy_consumer_trust_enabled | bool
+      tags: [always]
+    - name: Require exactly the Normandy inventory alias
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'normandy'
+          - ansible_limit == 'normandy'
+        quiet: true
+      tags: [always]
+    - name: Gather only the actual hostname
+      ansible.builtin.setup:
+        gather_subset: [min]
+        filter: ansible_hostname
+      tags: [always]
+    - name: Bind consumer trust to the actual Normandy host
+      ansible.builtin.assert:
+        that: ansible_facts.hostname == 'omarchy-normandy'
+        quiet: true
+      tags: [always]
+    - name: Inspect operator-provisioned Normandy transport and durable state
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        follow: false
+        get_checksum: false
+      loop:
+        - {path: /etc/chaldea-access-trust/deploy-key, mode: "0600"}
+        - {path: /etc/chaldea-access-trust/known_hosts, mode: "0644"}
+        - {path: /var/lib/chaldea-access-trust/updater.sqlite, mode: "0600"}
+      register: akasha_normandy_transport
+      tags: [always]
+    - name: Require existing root-owned consumer bootstrap before any install
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - not item.stat.islnk | default(false)
+          - item.stat.uid | default(-1) == 0
+          - item.stat.mode | default('') == item.item.mode
+          - item.stat.nlink | default(0) == 1
+        quiet: true
+      loop: "{{ akasha_normandy_transport.results }}"
+      tags: [always]
+  roles:
+    - {role: chaldea_node, tags: [runtime]}
+    - {role: chaldea_host_artifact, tags: [runtime]}
+    - {role: chaldea_access_trust, tags: [trust]}

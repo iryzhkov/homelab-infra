@@ -63,9 +63,14 @@
     content: |
       FEED_URL={{ feed_url }}
       FEED_TOKEN_HELPER=/usr/local/bin/chaldea-token-helper
-      FEED_READ_SOURCE=fleet-reader
+      FEED_TOKEN=''
+      FEED_KEY_FILE=''
+      FEED_TOKEN_HOST={{ 'omarchy-normandy' if inventory_hostname == 'normandy' else inventory_hostname }}
+      FEED_READ_SOURCE=
+      TOOLFEEDBACK_TOKEN_SOURCE=
     dest: "{{ ansible_env.HOME }}/.config/feed/config"
-    mode: "0644"
+    mode: "0600"
+    backup: true
   when: drift_check_reports | default(true)
 
 - name: Install the checker
