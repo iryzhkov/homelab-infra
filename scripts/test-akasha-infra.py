@@ -147,7 +147,9 @@ class SnapshotTest(unittest.TestCase):
             for role, assertions in checks.items():
                 target = root / "roles" / role
                 (target / "tasks").mkdir(parents=True)
-                shutil.copytree(ROOT / "roles" / role / "defaults", target / "defaults")
+                defaults = ROOT / "roles" / role / "defaults"
+                if defaults.exists():
+                    shutil.copytree(defaults, target / "defaults")
                 tasks = [{"ansible.builtin.assert": {"that": assertions, "quiet": True}}]
                 if role == "akasha":
                     tasks.append({"ansible.builtin.template": {
