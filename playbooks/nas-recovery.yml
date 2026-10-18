@@ -1,0 +1,13 @@
+---
+# Only homelab is authorized. This playbook does not change fstab or other hosts.
+- name: Recover stale NAS mounts on homelab
+  hosts: homelab
+  gather_facts: false
+  become: true
+  vars:
+    nas_recovery_mounts:
+      /mnt/shared: 192.168.40.40:/var/nfs/shared/media
+      /mnt/backup: 192.168.40.40:/var/nfs/shared/services_backup
+      /mnt/nas/ml: 192.168.40.40:/var/nfs/shared/machine_learning
+  roles:
+    - nas_recovery
