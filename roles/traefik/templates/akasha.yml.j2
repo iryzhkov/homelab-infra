@@ -3,7 +3,7 @@ http:
   routers:
     akasha:
       entryPoints: [websecure]
-      rule: 'Host(`akasha.ryzhkov.dev`) && ((Method(`GET`) && (Path(`/healthz`, `/api/entries`, `/api/v1/events`, `/api/v1/receipts`) || PathRegexp(`^/api/entries/[0-9]+$`))) || (Method(`POST`) && Path(`/api/entries`, `/api/v1/events`)))'
+      rule: 'Host(`akasha.ryzhkov.dev`) && ((Method(`GET`) && (Path(`/healthz`) || Path(`/api/entries`) || Path(`/api/v1/events`) || Path(`/api/v1/receipts`) || PathRegexp(`^/api/entries/[0-9]+$`))) || (Method(`POST`) && (Path(`/api/entries`) || Path(`/api/v1/events`))))'
       service: akasha
       middlewares: [akasha-lan, akasha-rate, akasha-size]
 {% include 'router-tls.j2' %}

@@ -112,6 +112,7 @@ class IngressTest(unittest.TestCase):
                         for path in ("/", "/index.html", "/api/entries/nope", "/api/v1/health", "/metrics", "/debug/pprof"):
                             self.assertEqual(request(path), 404, path)
                         self.assertEqual(request("/api/entries", method="DELETE"), 404)
+                        self.assertEqual(request("/api/entries", method="POST", Host="other.test"), 404)
                         before = len(calls)
                         self.assertEqual(request("/api/v1/events", peer="127.0.0.2",
                                                 **{"X-Forwarded-For": "192.168.90.212"}), 403)
