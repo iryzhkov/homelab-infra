@@ -1,0 +1,28 @@
+---
+# Fixed public registrations only. No issuer keys or automatic activation.
+akasha_enrollment_registry_enabled: false
+akasha_pc_global_reader_enabled: false
+akasha_pc_quota_events_enabled: false
+akasha_enrollment_registry_additions:
+  - {"issuer":"chaldea:agent-a","source":"feed","host":"agent-a","source_id":"agent-a--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:agent-b","source":"feed","host":"agent-b","source_id":"agent-b--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:agent-b","source":"agent-b.fleet","host":"agent-b","source_id":"agent-b--agent-b_fleet","profile":"fleet-timers","project":"chaldea","mode":"service","kinds":["job_finished"]}
+  - {"issuer":"chaldea:agent-b","source":"agent-b.toolfeedback","host":"agent-b","source_id":"agent-b--agent-b_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+  - {"issuer":"chaldea:omarchy-pc","source":"feed","host":"omarchy-pc","source_id":"omarchy-pc--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:omarchy-pc","source":"omarchy-pc.fleet","host":"omarchy-pc","source_id":"omarchy-pc--omarchy-pc_fleet","profile":"fleet-timers","project":"chaldea","mode":"service","kinds":["job_finished"]}
+  - {"issuer":"chaldea:omarchy-pc","source":"omarchy-pc.toolfeedback","host":"omarchy-pc","source_id":"omarchy-pc--omarchy-pc_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+  - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"feed","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"omarchy-macbook-air-igor.fleet","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--omarchy-macbook-air-igor_fleet","profile":"fleet-timers","project":"chaldea","mode":"service","kinds":["job_finished"]}
+  - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"omarchy-macbook-air-igor.toolfeedback","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--omarchy-macbook-air-igor_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+  - {"issuer":"chaldea:homelab","source":"feed","host":"homelab","source_id":"homelab--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:homelab","source":"backup","host":"homelab","source_id":"homelab--backup","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:homelab","source":"drift-check","host":"homelab","source_id":"homelab--drift-check","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:homelab","source":"offsite","host":"homelab","source_id":"homelab--offsite","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:homelab","source":"homelab.toolfeedback","host":"homelab","source_id":"homelab--homelab_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+  - {"issuer":"chaldea:omarchy-normandy","source":"backup","host":"omarchy-normandy","source_id":"omarchy-normandy--backup","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:omarchy-normandy","source":"drift-check","host":"omarchy-normandy","source_id":"omarchy-normandy--drift-check","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:omarchy-normandy","source":"omarchy-normandy.toolfeedback","host":"omarchy-normandy","source_id":"omarchy-normandy--omarchy-normandy_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+akasha_enrollment_pc_reader:
+  - {"issuer":"chaldea:omarchy-pc","source":"fleet-reader","host":"omarchy-pc","source_id":"omarchy-pc--fleet-reader","profile":"fleet-reader","project":"chaldea","mode":"operator","kinds":["feed_post","tool_call"],"global_read":true}
+akasha_enrollment_pc_quota:
+  - {"issuer":"chaldea:omarchy-pc","source":"chaldea-quota","host":"omarchy-pc","source_id":"omarchy-pc--chaldea-quota","profile":"quota-service","project":"chaldea","mode":"service","kinds":["quota_parked","quota_reset_unknown","quota_resumed","restart_resumed","quota_headroom_snapshot","quota_headroom_changed","quota_headroom_low"]}

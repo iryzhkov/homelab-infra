@@ -51,6 +51,60 @@ class RolloutTest(unittest.TestCase):
         self.assertEqual(c["bind"], "127.0.0.1")
         self.assertEqual(c["port"], 1935)
 
+    def test_enrollment_is_opt_in_and_preserves_initial_registry(self):
+        base = yaml.safe_load((ROOT / "vars/akasha-registry.yml").read_text())["akasha_registry"]
+        extra = yaml.safe_load((ROOT / "vars/akasha-enrollment-registry.yml").read_text())
+        play = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+        task = play["pre_tasks"][0]
+        self.assertIs(extra["akasha_enrollment_registry_enabled"], False)
+        self.assertIs(extra["akasha_pc_global_reader_enabled"], False)
+        self.assertIs(extra["akasha_pc_quota_events_enabled"], False)
+        self.assertEqual(task["when"], "akasha_enrollment_registry_enabled | bool")
+        for reader in (False, True):
+            for quota in (False, True):
+                # Jinja native rendering executes the actual Ansible composition expression.
+                from jinja2.nativetypes import NativeEnvironment
+                native = NativeEnvironment(undefined=StrictUndefined)
+                from ansible.plugins.filter.core import to_bool
+                native.filters["bool"] = to_bool
+                rendered = native.from_string(task["ansible.builtin.set_fact"]["akasha_registry"]).render(
+                    extra | dict(akasha_registry=base, akasha_pc_global_reader_enabled=reader,
+                                 akasha_pc_quota_events_enabled=quota))
+                self.assertIsInstance(rendered, list)
+                assert isinstance(rendered, list)
+                self.assertEqual(rendered[:len(base)], base)
+                self.assertEqual(len({r["source_id"] for r in rendered}), len(rendered))
+                optional = [r for r in rendered if r.get("global_read") or r["source"] == "chaldea-quota"]
+                self.assertEqual(len(optional), int(reader) + int(quota))
+                self.assertTrue(all(r["host"] == "omarchy-pc" for r in optional))
+        self.assertNotIn("public_key", json.dumps(extra))
+
+
+    def test_normandy_consumer_path_is_disabled_and_requires_exact_host(self):
+        play = yaml.safe_load((ROOT / "playbooks/akasha-normandy-consumer-trust.yml").read_text())[0]
+        self.assertEqual(play["hosts"], "normandy")
+        self.assertIs(play["vars"]["akasha_normandy_consumer_trust_enabled"], False)
+        self.assertEqual([r["role"] for r in play["roles"]],
+                         ["chaldea_node", "chaldea_host_artifact", "chaldea_access_trust"])
+        pre = play["pre_tasks"]
+        self.assertEqual(pre[0]["ansible.builtin.meta"], "end_play")
+        self.assertEqual(pre[0]["when"], "not akasha_normandy_consumer_trust_enabled | bool")
+        self.assertIn("ansible_limit == 'normandy'", pre[1]["ansible.builtin.assert"]["that"])
+        self.assertNotIn("initialize-state", json.dumps(play))
+        self.assertNotIn("sign-bundle", json.dumps(play))
+
+    def test_infra_remains_the_only_server_feed_config_owner(self):
+        tasks = yaml.safe_load((ROOT / "roles/drift_check/tasks/main.yml").read_text())
+        config = next(t["ansible.builtin.copy"] for t in tasks if t["name"] == "Point the feed client at Akasha through the scoped helper")
+        self.assertEqual(config["mode"], "0600")
+        for host in ("homelab", "normandy"):
+            text = Environment(undefined=StrictUndefined).from_string(config["content"]).render(
+                feed_url="https://akasha.ryzhkov.dev", inventory_hostname=host)
+            self.assertNotIn("fleet-reader", text)
+            self.assertIn("FEED_TOKEN_HOST=" + ("omarchy-normandy" if host == "normandy" else host), text)
+            self.assertIn("FEED_TOKEN=''", text)
+            self.assertIn("FEED_KEY_FILE=''", text)
+
     def test_ported_units_and_bootstrap_never_create_credentials_or_state(self):
         role = ROOT / "roles/chaldea_access_trust"
         tasks = (role / "tasks/main.yml").read_text()

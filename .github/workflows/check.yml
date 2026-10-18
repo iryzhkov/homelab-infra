@@ -136,4 +136,5 @@ jobs:
           ansible-playbook playbooks/akasha-heartbeat.yml --syntax-check
           ansible-playbook playbooks/akasha-backup.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --syntax-check
+          ansible-playbook playbooks/akasha-normandy-consumer-trust.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --list-hosts
