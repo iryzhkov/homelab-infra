@@ -1,0 +1,54 @@
+---
+# Explicit one-host composition. Never normal site ownership of Normandy.
+# ANSIBLE_LIBRARY must point to the pinned fleet checkout's library directory.
+- name: Independently hosted Mission Control
+  hosts: all
+  gather_facts: false
+  become: true
+  vars_files: [../roles/mission_control/defaults/main.yml]
+  vars:
+    mission_control_runtime_enabled: false
+    mission_control_reader_enabled: false
+  pre_tasks:
+    - name: Require one exact Normandy target and a pinned canonical dependency
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all == ['omarchy-normandy']
+          - ansible_limit == 'omarchy-normandy'
+          - mission_control_fleet_checkout is match('^/')
+          - mission_control_fleet_revision is regex('^[a-f0-9]{40}$', match_type='fullmatch')
+          - lookup('ansible.builtin.env', 'ANSIBLE_LIBRARY') == mission_control_fleet_checkout ~ '/library'
+        quiet: true
+    - name: Verify canonical source revision on the controller
+      ansible.builtin.command:
+        argv: [git, -C, "{{ mission_control_fleet_checkout }}", rev-parse, HEAD]
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      register: mission_control_fleet_head
+    - name: Require the exact reviewed canonical revision
+      ansible.builtin.assert:
+        that: mission_control_fleet_head.stdout | trim == mission_control_fleet_revision
+        quiet: true
+    - name: Require an unchanged canonical dependency
+      ansible.builtin.command:
+        argv: [git, -C, "{{ mission_control_fleet_checkout }}", status, --porcelain, --untracked-files=all]
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      register: mission_control_fleet_dirty
+      failed_when: mission_control_fleet_dirty.stdout | length > 0
+  tasks:
+    - name: Install the canonical independent release once
+      ansible.builtin.include_role:
+        name: "{{ mission_control_fleet_checkout }}/roles/mission_control_runtime"
+        public: true
+    - name: Configure the canonical restricted reader once
+      ansible.builtin.include_role:
+        name: "{{ mission_control_fleet_checkout }}/roles/mission_control_reader"
+        public: true
+    - name: Configure the infra-owned web service
+      ansible.builtin.include_role:
+        name: mission_control

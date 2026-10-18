@@ -1,0 +1,10 @@
+---
+# Unapplied registry proposal. Not included by the Akasha play.
+# Populate only after selecting the dedicated UID and reviewing canonical output.
+mission_control_registry_proposal: []
+# Publisher: chaldea:agent-a / agent-a.mission-control / agent-a--mission-control,
+# profile mission-control-publisher / project chaldea / service / [agent_status].
+# Reader: chaldea:omarchy-normandy / mission-control-reader /
+# omarchy-normandy--mission-control-reader / profile mission-control-reader /
+# project chaldea / service / [agent_status] /
+# mission_control_read_sources: [agent-a--mission-control].

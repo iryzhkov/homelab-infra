@@ -1,0 +1,19 @@
+[Unit]
+Description=LAN Mission Control cached dashboard
+[Service]
+User=mission-control
+Group=mission-control
+SupplementaryGroups=mission-control-cache
+ExecStart={{ mission_control_node }} {{ mission_control_release_root }}/releases/{{ mission_control_version }}/bin/chaldea mission-control serve --config /etc/mission-control/server.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=-/var/cache/mission-control
+UMask=0077
+RestrictAddressFamilies=AF_INET AF_UNIX
+MemoryMax=256M
+TasksMax=32
+[Install]
+WantedBy=multi-user.target

@@ -123,6 +123,8 @@ jobs:
           export AKASHA_TEST_HOME="$HOME"
           python3 scripts/test-akasha-infra.py -v
           python3 scripts/test-akasha-ingress.py -v
+          export MC_TEST_HOME="$HOME"
+          python3 scripts/test-mission-control.py -v
           ansible-playbook playbooks/akasha-ingress.yml --syntax-check
           python3 scripts/test-akasha-backup.py -v
           python3 scripts/test-trust-fetcher.py -v

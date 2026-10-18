@@ -1,0 +1,8 @@
+---
+mission_control_enabled: false
+mission_control_ingress_enabled: false
+mission_control_site_origin: https://chaldeas.ryzhkov.dev
+mission_control_cache_file: /var/cache/mission-control/latest.json
+# Set to the reviewed fleet commit before invoking the explicit composition.
+mission_control_fleet_checkout: ""
+mission_control_fleet_revision: ""

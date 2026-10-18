@@ -1,0 +1,11 @@
+[Unit]
+Description=Mission Control ingress from the two Traefik peers
+[Socket]
+ListenStream=192.168.70.234:7393
+FreeBind=yes
+NoDelay=yes
+IPAddressDeny=any
+IPAddressAllow=192.168.20.33/32
+IPAddressAllow=192.168.20.4/32
+[Install]
+WantedBy=sockets.target
