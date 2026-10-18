@@ -41,3 +41,11 @@ demonstration. /healthz is liveness, not fresh data. Cached stale serving must c
 when source/Akasha connectivity is unavailable. No live probes occurred in this lane.
 Rollback removes the LAN route, stops only MC services and restores prior pinned config
 and release. Keep bounded cache and previous release14days.
+
+The eventual Akasha server upgrade needs a newly qualified host artifact too.
+The copied canonical installer now accepts at most four exact preserve_versions,
+default empty, alongside current plus newest prior. Root must select the actual
+trust version still in use in the exact homelab packet before any new server pin
+can prune it. This source sets no preservation version and never upgrades trust.
+Test the dedicated reader's direct issuer key/state reads and writes are denied;
+only its exact sudo issuer command may write the issuer access directory.

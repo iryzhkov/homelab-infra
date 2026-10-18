@@ -123,7 +123,7 @@ class MissionControlTest(unittest.TestCase):
                             self.assertEqual(status, 302)
                             self.assertEqual(response_headers["Location"], "https://igor.ryzhkov.dev/404")
                         self.assertEqual(request(peer="127.0.0.2", **{"X-Forwarded-For": "192.168.90.212"})[0], 403)
-                        self.assertEqual(request(method="POST")[0], 302)
+                        self.assertEqual(request(method="POST")[0], 307)
                         self.assertEqual(len(calls), before)
                     finally:
                         process.terminate()
@@ -221,7 +221,20 @@ class MissionControlTest(unittest.TestCase):
                     (ROOT / "roles/mission_control/templates" / ("mission-control-ingress." + suffix + ".j2")).read_text())
             runtime = directory / "xdg"
             runtime.mkdir(mode=0o700)
-            result = subprocess.run(["systemd-analyze", "--user", "verify", "--man=no", *map(str, (directory / "units").glob("*"))],
+            rootfs = directory / "systemd-root"
+            system = rootfs / "etc/systemd/system"
+            system.mkdir(parents=True)
+            for target in ("basic", "sysinit", "sockets", "multi-user", "shutdown"):
+                (system / (target + ".target")).write_text("[Unit]\\nDescription=Fixture target\\n")
+            for fixture_exec in ("bin/true", "usr/lib/systemd/systemd-socket-proxyd"):
+                target = rootfs / fixture_exec
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile("/bin/true", target)
+                target.chmod(0o755)
+            for source in (directory / "units").glob("*"):
+                shutil.copyfile(source, system / source.name)
+            result = subprocess.run(["systemd-analyze", "--root=" + str(rootfs), "verify", "--man=no",
+                *[p.name for p in (directory / "units").glob("*")]],
                 env=dict(os.environ, XDG_RUNTIME_DIR=str(runtime)), capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
