@@ -21,8 +21,10 @@ http:
         burst: 100
     akasha-size:
       buffering:
-        maxRequestBodyBytes: 65536
-        memRequestBodyBytes: 65536
+        # Preserve feed's 256 KiB compatibility limit. Akasha independently
+        # caps v1 event bodies at 64 KiB.
+        maxRequestBodyBytes: 262144
+        memRequestBodyBytes: 262144
   services:
     akasha:
       loadBalancer:

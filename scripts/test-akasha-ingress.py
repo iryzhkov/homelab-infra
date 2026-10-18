@@ -117,7 +117,7 @@ class IngressTest(unittest.TestCase):
                         self.assertEqual(request("/api/v1/events", peer="127.0.0.2",
                                                 **{"X-Forwarded-For": "192.168.90.212"}), 403)
                         self.assertEqual(len(calls), before)
-                        self.assertEqual(request("/api/v1/events", method="POST", body=b"x" * 65537,
+                        self.assertEqual(request("/api/v1/events", method="POST", body=b"x" * 262145,
                                                 Authorization="Bearer fixture"), 413)
                         self.assertEqual(len(calls), before)
                         self.assertEqual(request("/api/v1/events", **{"X-Forwarded-For": "8.8.8.8"}), 401)

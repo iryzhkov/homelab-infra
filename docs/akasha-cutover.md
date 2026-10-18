@@ -40,7 +40,8 @@ Cloudflare Tunnel hostname, public DNS record or router forwarding.
 Only GET /healthz, /api/entries, numeric /api/entries/ID, /api/v1/events,
 and /api/v1/receipts, plus POST /api/entries and /api/v1/events are routed.
 No HTML, operator diagnostics, debug, metrics, arbitrary methods or path prefixes.
-A 64 KiB request cap and per-peer rate of 20/s with burst 100 precede Akasha's
+A 256 KiB request cap preserves feed's compatibility limit; Akasha's v1 API
+still caps event bodies at 64 KiB. A per-peer rate of 20/s with burst 100 precede Akasha's
 existing source rate and concurrency limits. The rate is per edge instance.
 Akasha verifies every API bearer itself. /healthz remains the existing public
 liveness endpoint within the LAN allowlist; sending a bearer there does not prove
@@ -105,7 +106,12 @@ Repository inventory was checked in fresh homelab-infra, homelab-cli, Chaldea,
 fleet-config and omarchy-setup clones. Read-only live timer checks were made on
 homelab, Normandy, agent-a, agent-b, omarchy-pc and laptop on 2026-10-18.
 This thread's T3 scheduler lists no tasks; that is not an inventory of other
-projects or other hosts. Export each host's full native T3 schedules before
+projects or other hosts. A read-only feedd aggregate at about 02:59Z found
+518 rows, 162 within seven days and a largest body of 12,587 bytes. Recent
+sources were drift-check, offsite, swarm, backup, chaldea-fleet,
+chaldea-retention, chaldea-quota, claude-gaming-pc and igor. The last two and
+swarm are interactive feed identities; timer sources change to HOST.fleet.
+No titles or bodies were fetched. Export each host's full native T3 schedules before
 cutover and reconcile the job names below. No remote T3 schedule was edited.
 
 | Producer | Where and trigger | Switch |
@@ -190,7 +196,7 @@ For EACH host the orchestrator creates and records:
 
 | Source | Profile / project | Mode / kinds | Ceiling actions and local selectors |
 | --- | --- | --- | --- |
-| feed and each exact legacy source used locally: backup, offsite, drift-check, docker-update, docker-update-agent, ov-memory-curation, toolfeedback, tool-feedback-digest | feed-writer / chaldea | service / feed_post | append; one helper grant per source, kind feed_post |
+| feed and each exact legacy source used locally: backup, offsite, drift-check, docker-update, docker-update-agent, ov-memory-curation, toolfeedback, tool-feedback-digest, swarm, claude-gaming-pc, igor | feed-writer / chaldea | service / feed_post | append; one helper grant per source, kind feed_post |
 | HOST.fleet, four agent hosts | fleet-timers / chaldea | service / job_finished | append; kind job_finished |
 | HOST.toolfeedback, every instrumentation host | toolfeedback / chaldea | service / tool_call | append; kind tool_call |
 | fleet-reader | fleet-reader / chaldea | operator / feed_post, tool_call; global_read=true | read only; separate helper selectors feed_post and tool_call |
