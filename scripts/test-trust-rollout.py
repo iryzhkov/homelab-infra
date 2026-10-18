@@ -51,6 +51,33 @@ class RolloutTest(unittest.TestCase):
         self.assertEqual(c["bind"], "127.0.0.1")
         self.assertEqual(c["port"], 1935)
 
+    def test_enrollment_is_opt_in_and_preserves_initial_registry(self):
+        base = yaml.safe_load((ROOT / "vars/akasha-registry.yml").read_text())["akasha_registry"]
+        extra = yaml.safe_load((ROOT / "vars/akasha-enrollment-registry.yml").read_text())
+        play = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+        task = play["pre_tasks"][0]
+        self.assertIs(extra["akasha_enrollment_registry_enabled"], False)
+        self.assertIs(extra["akasha_pc_global_reader_enabled"], False)
+        self.assertIs(extra["akasha_pc_quota_events_enabled"], False)
+        self.assertEqual(task["when"], "akasha_enrollment_registry_enabled | bool")
+        for reader in (False, True):
+            for quota in (False, True):
+                # Jinja native rendering executes the actual Ansible composition expression.
+                from jinja2.nativetypes import NativeEnvironment
+                native = NativeEnvironment(undefined=StrictUndefined)
+                native.filters["bool"] = bool
+                rendered = native.from_string(task["ansible.builtin.set_fact"]["akasha_registry"]).render(
+                    extra | dict(akasha_registry=base, akasha_pc_global_reader_enabled=reader,
+                                 akasha_pc_quota_events_enabled=quota))
+                self.assertIsInstance(rendered, list)
+                assert isinstance(rendered, list)
+                self.assertEqual(rendered[:len(base)], base)
+                self.assertEqual(len({r["source_id"] for r in rendered}), len(rendered))
+                optional = [r for r in rendered if r.get("global_read") or r["source"] == "chaldea-quota"]
+                self.assertEqual(len(optional), int(reader) + int(quota))
+                self.assertTrue(all(r["host"] == "omarchy-pc" for r in optional))
+        self.assertNotIn("public_key", json.dumps(extra))
+
     def test_ported_units_and_bootstrap_never_create_credentials_or_state(self):
         role = ROOT / "roles/chaldea_access_trust"
         tasks = (role / "tasks/main.yml").read_text()

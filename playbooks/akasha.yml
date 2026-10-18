@@ -7,6 +7,16 @@
   vars_files:
     - ../vars/chaldea-runtime.yml
     - ../vars/akasha-registry.yml
+    - ../vars/akasha-enrollment-registry.yml
+  pre_tasks:
+    - name: Compose explicitly enabled fixed enrollment registrations
+      ansible.builtin.set_fact:
+        akasha_registry: >-
+          {{ akasha_registry + akasha_enrollment_registry_additions
+             + (akasha_enrollment_pc_reader if akasha_pc_global_reader_enabled | bool else [])
+             + (akasha_enrollment_pc_quota if akasha_pc_quota_events_enabled | bool else []) }}
+      when: akasha_enrollment_registry_enabled | bool
+      tags: [always]
   roles:
     - {role: chaldea_node, tags: [runtime]}
     - {role: chaldea_host_artifact, tags: [runtime]}
