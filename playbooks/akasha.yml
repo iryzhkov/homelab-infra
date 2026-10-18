@@ -14,7 +14,9 @@
         akasha_registry: >-
           {{ akasha_registry + akasha_enrollment_registry_additions
              + (akasha_enrollment_pc_reader if akasha_pc_global_reader_enabled | bool else [])
-             + (akasha_enrollment_pc_quota if akasha_pc_quota_events_enabled | bool else []) }}
+             + (akasha_enrollment_pc_quota if akasha_pc_quota_events_enabled | bool else [])
+             + (akasha_enrollment_quota_laptop_publisher if akasha_quota_laptop_publisher_enabled | bool else [])
+             + (akasha_enrollment_quota_pc_reader if akasha_quota_pc_reader_enabled | bool else []) }}
       when: akasha_enrollment_registry_enabled | bool
       tags: [always]
   roles:

@@ -80,6 +80,37 @@ class RolloutTest(unittest.TestCase):
         self.assertNotIn("public_key", json.dumps(extra))
 
 
+    def test_quota_sharing_is_separate_service_scope(self):
+        from itertools import product
+        from jinja2.nativetypes import NativeEnvironment
+        from ansible.plugins.filter.core import to_bool
+        base = yaml.safe_load((ROOT / "vars/akasha-registry.yml").read_text())["akasha_registry"]
+        extra = yaml.safe_load((ROOT / "vars/akasha-enrollment-registry.yml").read_text())
+        self.assertIs(extra["akasha_quota_laptop_publisher_enabled"], False)
+        self.assertIs(extra["akasha_quota_pc_reader_enabled"], False)
+        expression = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]["pre_tasks"][0]["ansible.builtin.set_fact"]["akasha_registry"]
+        native = NativeEnvironment(undefined=StrictUndefined)
+        native.filters["bool"] = to_bool
+        for laptop, reader, operator, seven in product((False, True), repeat=4):
+            rendered = native.from_string(expression).render(extra | dict(
+                akasha_registry=base, akasha_quota_laptop_publisher_enabled=laptop,
+                akasha_quota_pc_reader_enabled=reader, akasha_pc_global_reader_enabled=operator,
+                akasha_pc_quota_events_enabled=seven))
+            assert isinstance(rendered, list)
+            sharing = [r for r in rendered if r["source"] == "quota"]
+            self.assertEqual({r["host"] for r in sharing},
+                             ({"omarchy-macbook-air-igor"} if laptop else set()) |
+                             ({"omarchy-pc"} if reader else set()))
+            self.assertEqual(len({r["source_id"] for r in rendered}), len(rendered))
+            self.assertEqual(rendered[:len(base)], base)
+            for row in sharing:
+                self.assertEqual((row["profile"], row["project"], row["mode"], row["kinds"]),
+                                 ("quota-service", "chaldea", "service", ["quota_headroom_snapshot"]))
+                self.assertNotIn("global_read", row)
+                self.assertEqual(row.get("quota_fleet_read", False), row["host"] == "omarchy-pc")
+            self.assertEqual(len([r for r in rendered if r.get("global_read")]), int(operator))
+            self.assertEqual(len([r for r in rendered if r["source"] == "chaldea-quota"]), int(seven))
+
     def test_normandy_consumer_path_is_disabled_and_requires_exact_host(self):
         play = yaml.safe_load((ROOT / "playbooks/akasha-normandy-consumer-trust.yml").read_text())[0]
         self.assertEqual(play["hosts"], "normandy")
