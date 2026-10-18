@@ -378,6 +378,37 @@ for batch in $(seq 1 10000); do
   if test "$scanned" -lt 100; then break; fi
   test "$batch" -lt 10000
 done
+~~~
+
+Import admits immutable receipts to the outbox; it does not run the delivery
+worker. Parity compares committed projections, so checking it before the consumer
+drains reports every admitted row missing. Keep ingress and all new producers
+closed. As root, start only the existing Akasha service with its existing broker
+identity, wait at most60 seconds for the normal consumer, then stop it for parity.
+Do not retry import, reset cursors or write projections directly to fix this.
+
+~~~sh
+systemctl start akasha.service
+python3 - <<'PY'
+import sqlite3, time
+deadline = time.monotonic() + 60
+with sqlite3.connect("file:/var/lib/akasha/events.db?mode=ro", uri=True) as db:
+    while time.monotonic() < deadline:
+        pending = db.execute("SELECT count(*) FROM outbox").fetchone()[0]
+        quarantined = db.execute("SELECT count(*) FROM quarantine").fetchone()[0]
+        assert quarantined == 0, "inspect quarantine before continuing"
+        if pending == 0:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("consumer did not drain; inspect broker and receipts")
+PY
+systemctl stop akasha.service
+~~~
+
+As akasha, require zero missing/extra/changed/rejected before restoring ingress:
+
+~~~sh
 "$AKASHA_NODE" "$AKASHA_SERVICE" parity --config /etc/akasha/config.json \
   --snapshot /var/lib/akasha/cutover/feed.db
 ~~~
