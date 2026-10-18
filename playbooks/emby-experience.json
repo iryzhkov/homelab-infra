@@ -38,14 +38,7 @@
       "key": "libraries",
       "CustomName": "Browse Libraries",
       "SectionType": "userviews",
-      "ViewType": "buttons"
-    },
-    {
-      "key": "latest",
-      "SectionType": "latestmediablock",
-      "Query": {
-        "IsPlayed": false
-      }
+      "ViewType": null
     },
     {
       "key": "anime",

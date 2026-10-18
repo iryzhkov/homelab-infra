@@ -34,7 +34,7 @@
           summaries = []
           def matches(actual, wanted):
               if isinstance(wanted, dict):
-                  return isinstance(actual, dict) and all(k in actual and matches(actual[k], v) for k, v in wanted.items())
+                  return isinstance(actual, dict) and all((k in actual or v is None) and matches(actual.get(k), v) for k, v in wanted.items())
               return actual == wanted
           def snapshot(name, data):
               if not apply:
