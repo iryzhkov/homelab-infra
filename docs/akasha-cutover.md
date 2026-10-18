@@ -297,9 +297,13 @@ Confirm FEED_DB was not overridden in the installed unit before using that path.
 Copy the snapshot, with operator privileges, into a 0700 directory readable by
 akasha, such as /var/lib/akasha/cutover/feed.db, mode 0600 owner akasha.
 Stop the Akasha consumer and maintenance oneshots during the local import;
-keep independent trust/clock updater timers running. On homelab as root:
+keep independent trust/clock updater timers running. Stop the ingress socket first:
+otherwise an incoming request can activate the proxy and its required Akasha
+service while import is running. On homelab as root:
 
 ~~~sh
+systemctl stop akasha-ingress.socket
+systemctl stop akasha-ingress.service
 systemctl stop akasha-health.timer akasha-backup.timer akasha-offsite.timer
 systemctl stop akasha-health.service akasha-backup.service akasha-offsite.service
 systemctl stop akasha.service
@@ -334,6 +338,7 @@ Restart Akasha and the existing maintenance schedules as root on homelab:
 
 ~~~sh
 systemctl start akasha.service
+systemctl start akasha-ingress.socket
 systemctl start akasha-backup.service
 systemctl start akasha-health.timer akasha-backup.timer akasha-offsite.timer
 systemctl start akasha-health.service
@@ -379,8 +384,18 @@ No fixed seven-day observation is required. Data cleanup is a later explicit
 decision.
 
 For rollback, first pause new producers, stop the collector timers, and stop
-Akasha with its consumer/maintenance units drained. Export new feed rows with the
-existing Akasha exporter to a NEW private file. The exporter contains only new
+Akasha with its consumer/maintenance units drained. On homelab as root, prevent
+socket activation before exporting:
+
+~~~sh
+systemctl stop akasha-ingress.socket
+systemctl stop akasha-ingress.service
+systemctl stop akasha-health.timer akasha-backup.timer akasha-offsite.timer
+systemctl stop akasha-health.service akasha-backup.service akasha-offsite.service
+systemctl stop akasha.service
+~~~
+
+Export new feed rows with the existing Akasha exporter to a NEW private file. The exporter contains only new
 IDs, so merging it into the retained old DB is necessary to keep both histories.
 
 ~~~sh
