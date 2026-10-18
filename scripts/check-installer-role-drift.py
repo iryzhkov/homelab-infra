@@ -9,7 +9,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "https://github.com/iryzhkov/chaldea-fleet-config.git"
-PIN = "252c23b7c17662e88d97d148acff7df808ffcca9"
+PIN = "0a47aa2eee09901e7544ca618537f80fb2706e22"
 ROLES = ("roles/chaldea_access_trust", "roles/chaldea_host_artifact")
 HANDLER = "roles/chaldea_access_trust/handlers/main.yml"
 # Exact upstream bytes, with exactly one approved infra-only line appended.
