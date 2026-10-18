@@ -9,7 +9,7 @@
       ansible.builtin.command:
         argv: [/usr/bin/python3, "-"]
         stdin: |
-          import copy, importlib.util, json, os
+          import copy, importlib.util, json, os, tempfile
           from pathlib import Path
           from importlib.machinery import SourceFileLoader
           desired = json.loads(os.environ["EMBY_EXPERIENCE_CONFIG"])
@@ -43,15 +43,53 @@
               directory = Path("/var/backups/emby-experience")
               directory.mkdir(mode=0o700, parents=True, exist_ok=True)
               path = directory / (name + "-before.json")
-              if not path.exists():
-                  with path.open("x") as stream:
+              def validate():
+                  with path.open() as stream:
+                      saved = json.load(stream)
+                  if not isinstance(saved, dict) or set(saved) != set(data):
+                      raise RuntimeError("Invalid original snapshot")
+                  if "configuration" in data:
+                      valid = isinstance(saved["configuration"], dict) and isinstance(saved["sections"], list)
+                      valid = valid and all(isinstance(row, dict) and "Id" in row and "SectionType" in row for row in saved["sections"])
+                  else:
+                      valid = saved["Id"] == data["Id"] and isinstance(saved["LibraryOptions"], dict)
+                  if not valid:
+                      raise RuntimeError("Invalid original snapshot")
+              if path.exists():
+                  validate()
+                  return
+              temporary = None
+              try:
+                  with tempfile.NamedTemporaryFile(mode="w", dir=directory, prefix=".snapshot-", delete=False) as stream:
+                      temporary = Path(stream.name)
                       json.dump(data, stream)
+                      stream.flush()
+                      os.fsync(stream.fileno())
+                  try:
+                      os.link(temporary, path)
+                  except FileExistsError:
+                      pass
+                  validate()
+                  fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                  try:
+                      os.fsync(fd)
+                  finally:
+                      os.close(fd)
+              finally:
+                  if temporary is not None:
+                      temporary.unlink(missing_ok=True)
+          # Validate every original backup before any API mutation.
+          originals = {}
+          for user in selected.values():
+              uid = user["Id"]
+              originals[uid] = api.call("Users/" + uid + "/HomeSections?isEditMode=true")
+              snapshot(uid, {"configuration": user["Configuration"], "sections": originals[uid]})
+          snapshot("movies-library-options", {"Id": movies[0]["ItemId"], "LibraryOptions": movies[0]["LibraryOptions"]})
           for name, user in selected.items():
               uid = user["Id"]
               endpoint = "Users/" + uid + "/HomeSections"
-              current = api.call(endpoint + "?isEditMode=true")
+              current = originals[uid]
               original_config = copy.deepcopy(user["Configuration"])
-              snapshot(uid, {"configuration": original_config, "sections": current})
               views = api.call("Users/" + uid + "/Views?IncludeHidden=true&AllowDynamicChildren=false")["Items"]
               targets = []
               for recipe in desired["sections"]:
@@ -124,7 +162,6 @@
               summaries.append({"profile": name, "home_rows": len(targets), "resume_rewind_seconds": config["ResumeRewindSeconds"]})
           movie = movies[0]
           options = copy.deepcopy(movie["LibraryOptions"])
-          snapshot("movies-library-options", {"Id": movie["ItemId"], "LibraryOptions": options})
           expected_options = dict(options, ImportCollections=desired["importMovieCollections"])
           if options != expected_options:
               changed += 1
