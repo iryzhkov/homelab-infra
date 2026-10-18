@@ -73,17 +73,15 @@
   ansible.builtin.file:
     path: /mnt/shared/.recycle
     state: directory
-    owner: root
-    group: "{{ media_recovery_gid.stdout }}"
     mode: "0710"
+  become: false
 
 - name: Create application-owned recovery directory outside library roots
   ansible.builtin.file:
     path: "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
     state: directory
-    owner: "{{ media_recovery_uid.stdout }}"
-    group: "{{ media_recovery_gid.stdout }}"
     mode: "0700"
+  become: false
 
 - name: Check container access using its application user
   ansible.builtin.command:
