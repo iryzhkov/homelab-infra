@@ -101,7 +101,7 @@ class MissionControlTest(unittest.TestCase):
                             try:
                                 c.request(method, path, headers={"Host": "chaldeas.ryzhkov.dev", **headers})
                                 response = c.getresponse()
-                                data = response.fp.readline() if path == "/events" and response.status == 200 else response.read()
+                                data = response.readline() if path == "/events" and response.status == 200 else response.read()
                                 return response.status, dict(response.headers), data
                             finally:
                                 c.close()
