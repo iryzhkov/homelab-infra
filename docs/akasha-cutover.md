@@ -165,7 +165,7 @@ agent-a key or the deployment anchor. Even agent-a gets a new cutover key.
 Keep its old agent-a-2026-10 issuer record during overlap, then separately retire it.
 The files below are credential references, not credentials.
 
-| Host alias | Token host / issuer | New kid and private key basename | Producer account |
+| Host alias | Token host / issuer | New private key basename | Producer account |
 | --- | --- | --- | --- |
 | agent-a | agent-a / chaldea:agent-a | agent-a-2026-10-cutover.pem | igor |
 | agent-b | agent-b / chaldea:agent-b | agent-b-2026-10-cutover.pem | igor |
@@ -174,7 +174,8 @@ The files below are credential references, not credentials.
 | homelab | homelab / chaldea:homelab | homelab-2026-10-cutover.pem | iryzhkov |
 | Normandy, if retained | omarchy-normandy / chaldea:omarchy-normandy | omarchy-normandy-2026-10-cutover.pem | igor |
 
-For EACH host the orchestrator creates and records:
+For every row, the proposed kid is the key basename without .pem, such as
+agent-a-2026-10-cutover. For EACH host the orchestrator creates and records:
 
 - Locked chaldea-issuer Unix identity with an unused local UID, no login and no
   producer group membership. Retain agent-a uid 995; verify UID availability on
