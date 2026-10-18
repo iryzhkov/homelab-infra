@@ -16,6 +16,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install ShellCheck in the disposable CI container
         run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck
+      - name: Test NAS stale-mount recovery
+        run: |
+          export HOME="$GITHUB_WORKSPACE/.scratch/nas-recovery-home"
+          export TMPDIR="$HOME/tmp" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$GITHUB_WORKSPACE/.scratch/nas-recovery-home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test_nas_recovery.py
       - run: python3 scripts/test-upkeeper-drift.py
       - run: python3 scripts/test-authentik-drift.py
       - run: python3 scripts/test-helper-backups.py
