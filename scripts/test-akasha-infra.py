@@ -107,6 +107,52 @@ class SnapshotTest(unittest.TestCase):
                     capture_output=True, text=True)
                 self.assertEqual(proc.returncode, expected, name + proc.stdout + proc.stderr)
 
+
+    def test_mission_control_registry_requires_qualified_host_before_writes(self):
+        scratch = Path(os.environ["TMPDIR"]).resolve()
+        self.assertTrue(Path.home().resolve().is_relative_to(scratch))
+        source = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+        defaults = {}
+        for name in source["vars_files"]:
+            defaults.update(yaml.safe_load((ROOT / "playbooks" / name).read_text()))
+        cases = [(v, "enabled", 0 if v == "host-v0.2.4" else 2)
+                 for v in ["host-v0.2.3", "host-v0.2.4", "host-v0.2.1", "host-v0.2.2", "host-v0.2.5"]]
+        cases += [("host-v0.2.3", "disabled", 0), ("host-v0.2.3", "legacy", 0),
+                  ("host-v0.2.3", "base-only", 2)]
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            root = Path(directory)
+            for index, (version, mode, expected) in enumerate(cases):
+                for tagged in [False, True]:
+                    with self.subTest(version=version, mode=mode, runtime_tags=tagged):
+                        marker = root / f"effect-{index}-{tagged}"
+                        values = {**defaults, "akasha_host_version": version,
+                                  "akasha_enrollment_registry_enabled": mode not in ["disabled", "base-only"]}
+                        if mode == "legacy":
+                            values["akasha_enrollment_registry_additions"] = [
+                                row for row in defaults["akasha_enrollment_registry_additions"]
+                                if "mission_control_read_sources" not in row]
+                        if mode == "base-only":
+                            reader = next(row for row in defaults["akasha_enrollment_registry_additions"]
+                                          if "mission_control_read_sources" in row)
+                            values["akasha_registry"] = defaults["akasha_registry"] + [reader]
+                        play = root / "guard.yml"
+                        # Execute the real ordered pre-tasks; replace all host-writing roles
+                        # with one scratch sentinel selected by the same runtime tag.
+                        play.write_text(yaml.safe_dump([{
+                            "hosts": "localhost", "gather_facts": False, "vars": values,
+                            "pre_tasks": source["pre_tasks"], "tasks": [{
+                                "name": "Fixture artifact or configuration effect",
+                                "ansible.builtin.copy": {"content": "effect", "dest": str(marker), "mode": "0600"},
+                                "tags": ["runtime"]}]}]))
+                        proc = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local",
+                                               str(play), *(["--tags", "runtime"] if tagged else [])],
+                            env={**os.environ, "ANSIBLE_LOCAL_TEMP": str(root / "ansible")},
+                            capture_output=True, text=True)
+                        self.assertEqual(proc.returncode, expected, proc.stdout + proc.stderr)
+                        self.assertEqual(marker.exists(), expected == 0)
+                        if expected:
+                            self.assertNotIn("TASK [Compose explicitly enabled", proc.stdout)
+
     def test_staged_role_has_no_activation_without_external_contracts(self):
         defaults = yaml.safe_load((ROOT / "roles/akasha/defaults/main.yml").read_text())
         self.assertIs(defaults["akasha_activate"], False)

@@ -6,7 +6,11 @@ vars/akasha-enrollment-registry.yml contains the two scoped registrations in its
 
 ## Homelab server only
 
-vars/mission-control-homelab.yml is NOT imported by any play. It is a held explicit EXTRA-VARS packet selecting actual host-v0.2.4/SHA531710066a7f67ac68f82ad1234d8f9a32e3311c839a894f86125c7d4f170592 and preserve_versions:[host-v0.2.2]. Archive654523759/manifest654523754, manifestSHA0fd697257963498e1f946e4fb5274a0c141cf5287120b6d6617721aa0e788a72, release416722339/run39167630357. Current vars/akasha-runtime.yml remains0.2.3 and vars/chaldea-runtime.yml remains2.2. No trust upgrade or fleet rollout.
+I38 is MERGE-HELD together with F67 for ROOT's exact reviewed permission packet and coordinated Homelab host-v0.2.4 service phase. The enrollment gate is already true on the live server. Every future akasha.yml run whose effective registry contains mission_control_read_sources MUST select exact qualified host-v0.2.4; the first always-tagged pre-task refuses before composition, runtime artifacts or configuration writes, including --tags runtime. Unused additions with enrollment disabled and a legacy base registry stay inert.
+
+A downgrade to host-v0.2.3 MUST first restore the previous registry and matching configuration without the new reader field, then perform the canonical restart. Keep access/antirollback databases and high-water state: never restore old access-state databases to bypass antirollback. Both current shared2.2 and server/rollback2.3 must remain available throughout staging/cutover.
+
+vars/mission-control-homelab.yml is NOT imported by any play. It is a held explicit EXTRA-VARS packet selecting actual host-v0.2.4/SHA531710066a7f67ac68f82ad1234d8f9a32e3311c839a894f86125c7d4f170592 and preserve_versions:[host-v0.2.2,host-v0.2.3]. Archive654523759/manifest654523754, manifestSHA0fd697257963498e1f946e4fb5274a0c141cf5287120b6d6617721aa0e788a72, release416722339/run39167630357. Current vars/akasha-runtime.yml remains0.2.3 and vars/chaldea-runtime.yml remains2.2. No trust upgrade or fleet rollout.
 
 Future command shapes, NOT authorized/executed:
 ```sh
@@ -14,7 +18,7 @@ ansible-playbook playbooks/akasha.yml --limit homelab --tags runtime -e @vars/mi
 # After ROOT releases inspected runtime-only real/second-real phases:
 ansible-playbook playbooks/akasha.yml --limit homelab -e @vars/mission-control-homelab.yml -e akasha_activate=true --check --diff
 ```
-The file deliberately says akasha_activate:false. A full play with false on the CURRENT ACTIVE server REFUSES; it is not a staging mode. Runtime-only --tags runtime is a separate artifact/retention phase, with trust2.2 preservation checked BEFORE GC. The separately reviewed service phase requires explicittrue only after new host package, registry/permission equality, existing runtime/DAC/backups and live broker gates. Source qualification used an external projector fixture, not the real NATS broker. Existing PCreader+sevenquota grants remain true in the explicit packet; separate sharing stays false. Do not widen or replace them.
+The file deliberately says akasha_activate:false. A full play with false on the CURRENT ACTIVE server REFUSES; it is not a staging mode. Runtime-only --tags runtime is a separate artifact/retention phase, with trust2.2 AND running/rollback server2.3 preservation checked BEFORE every GC include. Privately back up the existing host0.2.1 rollback tree/cache before GC; do not add an all-host preserve policy. The separately reviewed service phase requires explicittrue only after new host package, registry/permission equality, existing runtime/DAC/backups and live broker gates. Source qualification used an external projector fixture, not the real NATS broker. Existing PCreader+sevenquota grants remain true in the explicit packet; separate sharing stays false. Do not widen or replace them.
 
 ## Normandy / agent-a only
 
