@@ -79,6 +79,7 @@
       "key": "collections",
       "CustomName": "Movie Collections",
       "SectionType": "collections",
+      "ItemTypes": ["BoxSet"],
       "SortBy": "SortName"
     }
   ]
