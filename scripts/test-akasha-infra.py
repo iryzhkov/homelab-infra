@@ -114,7 +114,65 @@ class SnapshotTest(unittest.TestCase):
         self.assertIs(defaults["akasha_backup_packaging_verified"], False)
         play = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())
         self.assertEqual(play[0]["hosts"], "homelab")
-        self.assertEqual(play[0]["roles"][-1], "akasha")
+        self.assertEqual(play[0]["roles"][-1]["role"], "akasha")
+
+
+    def test_homelab_runtime_pin_is_role_local_and_keeps_trust_on_shared_release(self):
+        shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
+        pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
+        self.assertEqual(shared["chaldea_host_version"], "host-v0.2.2")
+        self.assertEqual(pin["akasha_host_version"], "host-v0.2.3")
+        self.assertEqual(pin["akasha_host_sha256"],
+                         "b17f20315ff09746b04467c03f24207c0151ff42537e014dd6a7d0f9b6f3dae4")
+        old_root = "/opt/chaldea-host/releases/host-v0.2.2/host"
+        new_root = "/opt/chaldea-host/releases/host-v0.2.3/host"
+        checks = {
+            "chaldea_node": ["chaldea_host_version == 'host-v0.2.2'"],
+            "chaldea_host_artifact": [
+                "chaldea_host_version == 'host-v0.2.3'",
+                "chaldea_host_sha256 == akasha_host_sha256",
+                "chaldea_host_artifact_root == '" + new_root + "'"],
+            "chaldea_access_trust": [
+                "chaldea_host_version == 'host-v0.2.2'",
+                "chaldea_host_sha256 == '" + shared["chaldea_host_sha256"] + "'",
+                "chaldea_host_artifact_root == '" + old_root + "'",
+                "chaldea_access_trust_runtime == '" + old_root + "/access-maintenance.mjs'"],
+            "akasha": [
+                "chaldea_host_version == 'host-v0.2.3'",
+                "chaldea_host_artifact_root == '" + new_root + "'",
+                "'" + new_root + "/akasha-service.mjs' in akasha_exec_start"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for role, assertions in checks.items():
+                target = root / "roles" / role
+                (target / "tasks").mkdir(parents=True)
+                shutil.copytree(ROOT / "roles" / role / "defaults", target / "defaults")
+                tasks = [{"ansible.builtin.assert": {"that": assertions, "quiet": True}}]
+                if role == "akasha":
+                    tasks.append({"ansible.builtin.template": {
+                        "src": str(ROOT / "roles/akasha/templates/akasha.service.j2"),
+                        "dest": str(root / "akasha.service"), "mode": "0600"}})
+                (target / "tasks/main.yml").write_text(yaml.safe_dump(tasks))
+            play = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+            play["become"] = False
+            play["vars"] = {"chaldea_access_trust_enabled": True}
+            play["vars_files"] = [str((ROOT / "playbooks" / path).resolve())
+                                  for path in play["vars_files"]]
+            play["post_tasks"] = [{"ansible.builtin.assert": {"that": [
+                "chaldea_host_version == 'host-v0.2.2'",
+                "chaldea_host_artifact_root == '" + old_root + "'"], "quiet": True}}]
+            path = root / "play.yml"
+            path.write_text(yaml.safe_dump([play]))
+            proc = subprocess.run(
+                ["ansible-playbook", "-i", "homelab,", "-c", "local", str(path)],
+                env={**os.environ, "ANSIBLE_ROLES_PATH": str(root / "roles"),
+                     "ANSIBLE_LOCAL_TEMP": str(root / "local"),
+                     "ANSIBLE_REMOTE_TEMP": str(root / "remote")},
+                capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn(new_root + "/akasha-service.mjs",
+                          (root / "akasha.service").read_text())
 
 
 class BrokerTest(unittest.IsolatedAsyncioTestCase):

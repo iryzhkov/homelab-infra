@@ -1,0 +1,6 @@
+---
+# Homelab Akasha only; shared consumer trust remains on host-v0.2.2.
+# Chaldea main b9a90e76660f368a4c02a23850046de03f4e28c2, host workflow 39129046118.
+# Actual asset 653488666 qualified on agent-a in job 68d14deb-af46-4df7-b8db-e8fdeae35bfd.
+akasha_host_version: host-v0.2.3
+akasha_host_sha256: "b17f20315ff09746b04467c03f24207c0151ff42537e014dd6a7d0f9b6f3dae4"
