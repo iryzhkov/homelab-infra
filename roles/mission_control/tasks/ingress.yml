@@ -1,0 +1,34 @@
+---
+- name: Require exact Normandy and edge peers
+  ansible.builtin.assert:
+    that:
+      - mission_control_enabled | bool
+      - inventory_hostname == 'omarchy-normandy'
+      - ansible_host == '192.168.70.234'
+      - groups['edge_proxy'] | length == 2
+      - groups['edge_proxy'] | map('extract', hostvars, 'ansible_host') | sort == ['192.168.20.33', '192.168.20.4']
+    quiet: true
+- name: Install only Mission Control ingress units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [mission-control-ingress.socket, mission-control-ingress.service]
+  register: mission_control_ingress_units
+- name: Reload changed ingress definitions
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: mission_control_ingress_units is changed and not ansible_check_mode
+- name: Stop only the replaced Mission Control proxy
+  ansible.builtin.systemd_service:
+    name: mission-control-ingress.service
+    state: stopped
+  when: mission_control_ingress_units is changed and not ansible_check_mode
+- name: Enable the edge-only listener after installation
+  ansible.builtin.systemd_service:
+    name: mission-control-ingress.socket
+    enabled: true
+    state: "{{ 'restarted' if mission_control_ingress_units is changed else 'started' }}"
+  when: not ansible_check_mode

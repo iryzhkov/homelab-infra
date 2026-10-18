@@ -1,0 +1,59 @@
+---
+- name: Configure the independent Normandy web service
+  when: mission_control_enabled | bool
+  block:
+    - name: Require the exact web-only contract
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'omarchy-normandy'
+          - mission_control_runtime_enabled | bool
+          - mission_control_site_origin == 'https://chaldeas.ryzhkov.dev'
+          - mission_control_cache_file == '/var/cache/mission-control/latest.json'
+        quiet: true
+    - name: Create the cache read group
+      ansible.builtin.group:
+        name: mission-control-cache
+        system: true
+    - name: Create the locked web identity without a home or helper
+      ansible.builtin.user:
+        name: mission-control
+        system: true
+        create_home: false
+        home: /nonexistent
+        shell: /usr/sbin/nologin
+        password_lock: true
+        groups: mission-control-cache
+        append: true
+    - name: Create protected web configuration directory
+      ansible.builtin.file:
+        path: /etc/mission-control
+        state: directory
+        owner: root
+        group: mission-control
+        mode: "0750"
+    - name: Write web-only configuration
+      ansible.builtin.template:
+        src: server.json.j2
+        dest: /etc/mission-control/server.json
+        owner: root
+        group: mission-control
+        mode: "0640"
+      register: mission_control_config
+    - name: Write the web unit
+      ansible.builtin.template:
+        src: mission-control.service.j2
+        dest: /etc/systemd/system/mission-control.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: mission_control_unit
+    - name: Converge only the Mission Control web service
+      ansible.builtin.systemd_service:
+        name: mission-control.service
+        enabled: true
+        daemon_reload: "{{ mission_control_unit is changed }}"
+        state: "{{ 'restarted' if mission_control_unit is changed or mission_control_config is changed else 'started' }}"
+      when: not ansible_check_mode
+- name: Configure only the explicitly enabled ingress
+  ansible.builtin.include_tasks: ingress.yml
+  when: mission_control_ingress_enabled | bool

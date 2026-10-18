@@ -5,6 +5,8 @@ chaldea_host_artifact_release_dir: "{{ chaldea_host_artifact_release_root }}/{{ 
 chaldea_host_artifact_root: "{{ chaldea_host_artifact_release_dir }}/host"
 chaldea_host_artifact_cache: /var/cache/chaldea-host
 chaldea_host_artifact_release_url: "https://github.com/iryzhkov/chaldea/releases/download/{{ chaldea_host_version }}"
+# Exact older releases still used by an independent consumer. No activation by default.
+chaldea_host_artifact_preserve_versions: []
 # Optional controller-local release inputs for isolated installation tests.
 chaldea_host_artifact_archive_source: ""
 chaldea_host_artifact_manifest_source: ""

@@ -1,0 +1,28 @@
+# LAN connection peers only. Never trust caller X-Forwarded-For.
+http:
+  routers:
+    mission-control:
+      entryPoints: [websecure]
+      rule: 'Host(`chaldeas.ryzhkov.dev`) && !HeaderRegexp(`Cf-Ray`, `.*`) && Method(`GET`)'
+      service: mission-control
+      middlewares: [mission-control-lan]
+{% include 'router-tls.j2' %}
+  middlewares:
+    mission-control-lan:
+      ipAllowList:
+        sourceRange:
+{% for subnet in akasha_lan_cidrs %}
+          - "{{ subnet }}"
+{% endfor %}
+  services:
+    mission-control:
+      loadBalancer:
+        responseForwarding:
+          flushInterval: -1ms
+        healthCheck:
+          path: /healthz
+          hostname: chaldeas.ryzhkov.dev
+          interval: 15s
+          timeout: 5s
+        servers:
+          - url: "http://192.168.70.234:7393"

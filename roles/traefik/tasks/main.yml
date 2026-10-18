@@ -19,6 +19,19 @@
     mode: "0644"
   loop: "{{ traefik_rendered_files }}"
 
+- name: Render the explicitly enabled Mission Control LAN route
+  ansible.builtin.template:
+    src: mission-control.yml.j2
+    dest: "{{ traefik_dynamic_dir }}/mission-control.yml"
+    mode: "0644"
+  when: mission_control_route_enabled | bool
+
+- name: Remove the disabled Mission Control route
+  ansible.builtin.file:
+    path: "{{ traefik_dynamic_dir }}/mission-control.yml"
+    state: absent
+  when: not mission_control_route_enabled | bool
+
 - name: Render the push-only observability routes
   ansible.builtin.template:
     src: observability-ingest.yml.j2

@@ -1,0 +1,17 @@
+[Unit]
+Description=Forward the edge to loopback Mission Control
+Requires=mission-control.service
+After=mission-control.service
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:7392
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+IPAddressAllow=192.168.20.33/32
+IPAddressAllow=192.168.20.4/32
+RestrictAddressFamilies=AF_INET AF_UNIX
+MemoryMax=32M
+TasksMax=16

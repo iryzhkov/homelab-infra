@@ -3,6 +3,7 @@
 # host name; see templates/router-tls.j2. On for every edge since the phase 4
 # cutover (2026-10-02).
 traefik_wildcard_only: true
+mission_control_route_enabled: false
 traefik_wildcard_domain: ryzhkov.dev
 
 # Existing LAN VLANs for management, services, clients, and agent workers.
