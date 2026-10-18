@@ -21,7 +21,7 @@ INFRA_HANDLER = FLEET_HANDLER + b"  when: not ansible_check_mode\n"
 def fetch_reference(pin=PIN, repository=REPOSITORY):
     if not re.fullmatch(r"[0-9a-f]{40}", pin) or pin == "0" * 40:
         raise ValueError("reference pin must be a full nonzero lowercase commit SHA")
-    with tempfile.TemporaryDirectory(prefix="installer-role-reference-") as directory:
+    with tempfile.TemporaryDirectory(dir=Path.home(), prefix="installer-role-reference-") as directory:
         def git(*args):
             return subprocess.run(
                 ["git", "-C", directory, *args], check=True, capture_output=True,
