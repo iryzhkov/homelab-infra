@@ -5,10 +5,6 @@
   hosts: all
   gather_facts: false
   become: true
-  vars_files: [../roles/mission_control/defaults/main.yml]
-  vars:
-    mission_control_runtime_enabled: false
-    mission_control_reader_enabled: false
   pre_tasks:
     - name: Require one exact Normandy target and a pinned canonical dependency
       ansible.builtin.assert:
@@ -42,14 +38,30 @@
       failed_when: mission_control_fleet_dirty.stdout | length > 0
   tasks:
     # Exact absolute dependencies are intentional and guarded above.
-    - name: Install the canonical independent release once  # noqa role-name[path]
-      ansible.builtin.include_role:
-        name: "{{ mission_control_fleet_checkout }}/roles/mission_control_runtime"
+    - name: Stage the infra-owned web and ingress with genuine role defaults
+      ansible.builtin.import_role:
+        name: mission_control
         public: true
-    - name: Configure the canonical restricted reader once  # noqa role-name[path]
+    - name: Stage the canonical restricted reader once  # noqa role-name[path]
       ansible.builtin.include_role:
         name: "{{ mission_control_fleet_checkout }}/roles/mission_control_reader"
         public: true
-    - name: Configure the infra-owned web service
+    - name: Install the canonical independent release once  # noqa role-name[path]
+      # Static import exposes runtime defaults before earlier staging templates.
+      ansible.builtin.import_role:
+        name: "{{ mission_control_fleet_checkout }}/roles/mission_control_runtime"
+        public: true
+    - name: Qualify the exact installed units
       ansible.builtin.include_role:
         name: mission_control
+        tasks_from: verify
+    - name: Activate the staged canonical reader  # noqa role-name[path]
+      ansible.builtin.include_role:
+        name: "{{ mission_control_fleet_checkout }}/roles/mission_control_reader"
+        tasks_from: activate
+      when: mission_control_activate | bool
+    - name: Activate the staged infra-owned services
+      ansible.builtin.include_role:
+        name: mission_control
+        tasks_from: activate
+      when: mission_control_activate | bool

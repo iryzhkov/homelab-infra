@@ -1,0 +1,16 @@
+---
+- name: Verify all four exact installed Normandy units in target SYSTEM mode
+  ansible.builtin.command:
+    argv:
+      - systemd-analyze
+      - verify
+      - --man=no
+      - /etc/systemd/system/mission-control-reader.service
+      - /etc/systemd/system/mission-control.service
+      - /etc/systemd/system/mission-control-ingress.socket
+      - /etc/systemd/system/mission-control-ingress.service
+  changed_when: false
+  register: mission_control_system_verification
+  when: >-
+    not ansible_check_mode and
+    (mission_control_enabled | bool or mission_control_reader_enabled | bool or mission_control_ingress_enabled | bool)

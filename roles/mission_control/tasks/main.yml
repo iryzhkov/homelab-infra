@@ -1,19 +1,89 @@
 ---
-- name: Configure the independent Normandy web service
+- name: Inspect selected owned units before stage-only writes
+  ansible.builtin.service_facts:
+  when: >-
+    not ansible_check_mode and not mission_control_activate | bool and
+    (mission_control_enabled | bool or mission_control_reader_enabled | bool or mission_control_ingress_enabled | bool)
+- name: Refuse stage-only updates of active or enabled selected units
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services.get(item.unit, {}).get('state', 'stopped') not in ['running', 'active', 'activating', 'reloading']
+      - ansible_facts.services.get(item.unit, {}).get('status', 'disabled') not in ['enabled', 'enabled-runtime']
+    fail_msg: Use one complete stage, verify and activate invocation for warm updates.
+    quiet: true
+  loop:
+    - {unit: mission-control-reader.service, selected: "{{ mission_control_reader_enabled }}"}
+    - {unit: mission-control.service, selected: "{{ mission_control_enabled }}"}
+    - {unit: mission-control-ingress.socket, selected: "{{ mission_control_ingress_enabled }}"}
+    - {unit: mission-control-ingress.service, selected: "{{ mission_control_ingress_enabled }}"}
+  when: not ansible_check_mode and not mission_control_activate | bool and item.selected | bool
+- name: Inspect the selected ingress socket before stage-only writes
+  ansible.builtin.command:
+    argv: [systemctl, show, mission-control-ingress.socket, --property=ActiveState, --property=UnitFileState]
+  register: mission_control_socket_before
+  changed_when: false
+  failed_when: mission_control_socket_before.rc not in [0, 4]
+  when: not ansible_check_mode and not mission_control_activate | bool and mission_control_ingress_enabled | bool
+- name: Refuse stage-only updates of an active or enabled ingress socket
+  ansible.builtin.assert:
+    that:
+      - >-
+        mission_control_socket_before.rc == 4 or
+        'ActiveState=inactive' in mission_control_socket_before.stdout_lines or
+        'ActiveState=failed' in mission_control_socket_before.stdout_lines
+      - >-
+        mission_control_socket_before.rc == 4 or
+        mission_control_socket_before.stdout_lines | select('match', '^UnitFileState=') | list | length == 1
+      - >-
+        mission_control_socket_before.stdout_lines |
+        intersect(['UnitFileState=enabled', 'UnitFileState=enabled-runtime']) | length == 0
+    fail_msg: Use one complete stage, verify and activate invocation for warm updates.
+    quiet: true
+  when: not ansible_check_mode and not mission_control_activate | bool and mission_control_ingress_enabled | bool
+- name: Require the exact web-only contract
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'omarchy-normandy'
+      - mission_control_runtime_enabled | bool
+      - mission_control_site_origin == 'https://chaldeas.ryzhkov.dev'
+      - mission_control_cache_file == '/var/cache/mission-control/latest.json'
+    quiet: true
   when: mission_control_enabled | bool
+- name: Inspect the existing web configuration parent for check mode
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+  loop: [/etc/mission-control, /etc/systemd/system]
+  register: mission_control_check_parent
+  when: mission_control_enabled | bool and ansible_check_mode
+- name: Inspect existing web identities for check mode
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - [getent, passwd, mission-control]
+    - [getent, group, mission-control, mission-control-cache]
+  register: mission_control_check_identities
+  changed_when: false
+  check_mode: false
+  failed_when: mission_control_check_identities.rc not in [0, 2]
+  when: mission_control_enabled | bool and ansible_check_mode
+- name: Determine whether existing web files can be checked
+  ansible.builtin.set_fact:
+    mission_control_check_ready: >-
+      {{ mission_control_check_parent.results | selectattr('stat.isdir', 'defined') |
+         selectattr('stat.isdir') | list | length == 2
+         and mission_control_check_identities.results | map(attribute='rc') | list == [0, 0] }}
+  when: mission_control_enabled | bool and ansible_check_mode
+- name: Configure the independent Normandy web service
+  when: mission_control_enabled | bool and (not ansible_check_mode or mission_control_check_ready | default(false))
   block:
-    - name: Require the exact web-only contract
-      ansible.builtin.assert:
-        that:
-          - inventory_hostname == 'omarchy-normandy'
-          - mission_control_runtime_enabled | bool
-          - mission_control_site_origin == 'https://chaldeas.ryzhkov.dev'
-          - mission_control_cache_file == '/var/cache/mission-control/latest.json'
-        quiet: true
     - name: Create the cache read group
       ansible.builtin.group:
         name: mission-control-cache
         system: true
+      when: not ansible_check_mode
     - name: Create the locked web identity without a home or helper
       ansible.builtin.user:
         name: mission-control
@@ -24,6 +94,7 @@
         password_lock: true
         groups: mission-control-cache
         append: true
+      when: not ansible_check_mode
     - name: Create protected web configuration directory
       ansible.builtin.file:
         path: /etc/mission-control
@@ -47,13 +118,10 @@
         group: root
         mode: "0644"
       register: mission_control_unit
-    - name: Converge only the Mission Control web service
-      ansible.builtin.systemd_service:
-        name: mission-control.service
-        enabled: true
-        daemon_reload: "{{ mission_control_unit is changed }}"
-        state: "{{ 'restarted' if mission_control_unit is changed or mission_control_config is changed else 'started' }}"
-      when: not ansible_check_mode
 - name: Configure only the explicitly enabled ingress
   ansible.builtin.include_tasks: ingress.yml
   when: mission_control_ingress_enabled | bool
+- name: Explain deferred check-mode staging
+  ansible.builtin.debug:
+    msg: Check mode defers absent accounts or parents and SYSTEM verification; existing web files show proposed diffs.
+  when: ansible_check_mode and (mission_control_enabled | bool or mission_control_reader_enabled | bool or mission_control_ingress_enabled | bool)

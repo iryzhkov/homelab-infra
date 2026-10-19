@@ -1,0 +1,49 @@
+---
+- name: Activate only the staged web and ingress services
+  when: mission_control_activate | bool and not ansible_check_mode
+  block:
+    - name: Require successful target SYSTEM qualification
+      ansible.builtin.assert:
+        that:
+          - mission_control_system_verification is defined
+          - not mission_control_system_verification.skipped | default(false)
+          - mission_control_system_verification.rc | default(-1) == 0
+        quiet: true
+    - name: Converge only the Mission Control web service
+      ansible.builtin.systemd_service:
+        name: mission-control.service
+        enabled: true
+        daemon_reload: "{{ mission_control_unit is changed }}"
+        state: "{{ 'restarted' if mission_control_unit is changed or mission_control_config is changed else 'started' }}"
+      when: mission_control_enabled | bool
+    - name: Activate only the selected ingress
+      when: mission_control_ingress_enabled | bool
+      block:
+        - name: Reload changed ingress definitions
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+          when: mission_control_ingress_units is changed and not ansible_check_mode
+        - name: Stop only the replaced Mission Control proxy
+          ansible.builtin.systemd_service:
+            name: mission-control-ingress.service
+            state: stopped
+          when: mission_control_ingress_units is changed and not ansible_check_mode
+        - name: Allow only the two edge peers through the host firewall
+          ansible.builtin.command:
+            argv: >-
+              {{ ['ufw'] + (['--dry-run'] if ansible_check_mode else [])
+                 + ['allow', 'in', 'proto', 'tcp', 'from', item,
+                    'to', '192.168.70.234', 'port', '7393'] }}
+          environment:
+            LC_ALL: C
+          become: true
+          loop: ['192.168.20.33', '192.168.20.4']
+          register: mission_control_ufw
+          changed_when: "'Skipping' not in mission_control_ufw.stdout"
+          check_mode: false
+        - name: Enable the edge-only listener after installation
+          ansible.builtin.systemd_service:
+            name: mission-control-ingress.socket
+            enabled: true
+            state: "{{ 'restarted' if mission_control_ingress_units is changed else 'started' }}"
+          when: not ansible_check_mode
