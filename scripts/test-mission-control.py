@@ -156,7 +156,14 @@ class MissionControlTest(unittest.TestCase):
                 (path / "main.yml").write_text(yaml.safe_dump([{"name": "Assert effective inventory selection",
                     "ansible.builtin.assert": {"that": [
                         "mission_control_runtime_enabled == fixture_selected | default(false)",
-                        "mission_control_reader_enabled == fixture_selected | default(false)"], "quiet": True}}]))
+                        "mission_control_reader_enabled == fixture_selected | default(false)",
+                        "mission_control_runtime_node == '/fixture/node'",
+                        "mission_control_runtime_release_root == '/fixture/releases'"], "quiet": True}}]))
+            defaults = canonical / "roles/mission_control_runtime/defaults"
+            defaults.mkdir()
+            (defaults / "main.yml").write_text(yaml.safe_dump(dict(
+                mission_control_runtime_node="/fixture/node",
+                mission_control_runtime_release_root="/fixture/releases")))
             def git(*args):
                 return subprocess.run(["git", "-C", str(canonical), *args], check=True, text=True, capture_output=True).stdout.strip()
             git("init", "--quiet")
@@ -198,6 +205,10 @@ class MissionControlTest(unittest.TestCase):
                         "/etc/systemd/system", str(directory / "units"))
                     path.write_text(text)
             rows = yaml.safe_load((role / "tasks/main.yml").read_text())
+            for row in rows:
+                if "ansible.builtin.service_facts" in row:
+                    row.pop("ansible.builtin.service_facts")
+                    row["ansible.builtin.set_fact"] = dict(ansible_facts=dict(services={}))
             web = next(row for row in rows if row.get("name") == "Configure the independent Normandy web service")
             block = web["block"]
             web["block"] = [row for row in block if not any(key in row for key in (
@@ -302,6 +313,7 @@ else:
             def rewrite(rows):
                 result = []
                 for row in rows:
+                    row["become"] = False
                     if any(key in row for key in ("ansible.builtin.user", "ansible.builtin.group")):
                         continue
                     if "block" in row:

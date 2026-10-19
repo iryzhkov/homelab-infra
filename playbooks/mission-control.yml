@@ -47,7 +47,8 @@
         name: "{{ mission_control_fleet_checkout }}/roles/mission_control_reader"
         public: true
     - name: Install the canonical independent release once  # noqa role-name[path]
-      ansible.builtin.include_role:
+      # Static import exposes runtime defaults before earlier staging templates.
+      ansible.builtin.import_role:
         name: "{{ mission_control_fleet_checkout }}/roles/mission_control_runtime"
         public: true
     - name: Qualify the exact installed units
