@@ -220,7 +220,8 @@ class SnapshotTest(unittest.TestCase):
                         if "ansible.builtin.template" in task:
                             task["ansible.builtin.template"].update({
                                 "src": str(ROOT / "roles/akasha/templates") + "/{{ item }}.j2",
-                                "dest": str(case) + "/{{ item }}"})
+                                "dest": str(case) + "/{{ item }}",
+                                "owner": os.getuid(), "group": os.getgid()})
                         if task.get("name") == "Verify actual installed SYSTEM units before activation":
                             task["ansible.builtin.command"]["argv"][0] = str(validator)
                         if "ansible.builtin.systemd_service" in task:
