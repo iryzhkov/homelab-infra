@@ -175,7 +175,8 @@ class MissionControlTest(unittest.TestCase):
             env = dict(os.environ, ANSIBLE_LIBRARY=str(canonical / "library"), ANSIBLE_ROLES_PATH=str(ROOT / "roles"),
                 ANSIBLE_LOCAL_TEMP=str(directory / "local"), ANSIBLE_REMOTE_TEMP=str(directory / "remote"))
             def run(pin, limit="omarchy-normandy", library=None, check=False):
-                values = dict(mission_control_fleet_checkout=str(canonical), mission_control_fleet_revision=pin)
+                values = dict(mission_control_fleet_checkout=str(canonical), mission_control_fleet_revision=pin,
+                    ansible_become=False)
                 return subprocess.run(["ansible-playbook", "-i", str(inventory), str(ROOT / "playbooks/mission-control.yml"),
                     "--limit", limit, *(["--check"] if check else []), "-e", json.dumps(values)],
                     env=env | ({"ANSIBLE_LIBRARY": library} if library is not None else {}), text=True, capture_output=True)
