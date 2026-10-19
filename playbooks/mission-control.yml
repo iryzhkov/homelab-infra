@@ -36,6 +36,15 @@
       check_mode: false
       register: mission_control_fleet_dirty
       failed_when: mission_control_fleet_dirty.stdout | length > 0
+    - name: Refuse an operations opt-in the canonical reader role would ignore
+      ansible.builtin.assert:
+        that:
+          - mission_control_reader_operations_enabled | default(false) is boolean
+          - >-
+            not mission_control_reader_operations_enabled | default(false) or
+            'mission_control_reader_operations_enabled' in (lookup('ansible.builtin.file',
+            mission_control_fleet_checkout ~ '/roles/mission_control_reader/defaults/main.yml') | from_yaml)
+        quiet: true
   tasks:
     # Exact absolute dependencies are intentional and guarded above.
     - name: Stage the infra-owned web and ingress with genuine role defaults
