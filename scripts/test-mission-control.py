@@ -313,7 +313,8 @@ else:
             def rewrite(rows):
                 result = []
                 for row in rows:
-                    row["become"] = False
+                    if "become" in row:
+                        row["become"] = False
                     if any(key in row for key in ("ansible.builtin.user", "ansible.builtin.group")):
                         continue
                     if "block" in row:
