@@ -167,10 +167,10 @@ class MissionControlTest(unittest.TestCase):
             inventory.write_text(yaml.safe_dump(dict(all=dict(hosts={"omarchy-normandy": dict(ansible_connection="local")}))))
             env = dict(os.environ, ANSIBLE_LIBRARY=str(canonical / "library"), ANSIBLE_ROLES_PATH=str(ROOT / "roles"),
                 ANSIBLE_LOCAL_TEMP=str(directory / "local"), ANSIBLE_REMOTE_TEMP=str(directory / "remote"))
-            def run(pin, limit="omarchy-normandy", library=None):
+            def run(pin, limit="omarchy-normandy", library=None, check=False):
                 values = dict(mission_control_fleet_checkout=str(canonical), mission_control_fleet_revision=pin)
                 return subprocess.run(["ansible-playbook", "-i", str(inventory), str(ROOT / "playbooks/mission-control.yml"),
-                    "--limit", limit, "--check", "-e", json.dumps(values)],
+                    "--limit", limit, *(["--check"] if check else []), "-e", json.dumps(values)],
                     env=env | ({"ANSIBLE_LIBRARY": library} if library is not None else {}), text=True, capture_output=True)
             good = run(revision)
             self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
@@ -178,7 +178,7 @@ class MissionControlTest(unittest.TestCase):
             inventory.write_text(yaml.safe_dump(dict(all=dict(hosts={"omarchy-normandy": dict(
                 ansible_connection="local", fixture_selected=True, mission_control_runtime_enabled=True,
                 mission_control_reader_enabled=True, mission_control_enabled=True)}))))
-            selected = run(revision)
+            selected = run(revision, check=True)
             self.assertEqual(selected.returncode, 0, selected.stdout + selected.stderr)
             self.assertNotEqual(run(revision, limit="all").returncode, 0)
             self.assertNotEqual(run(revision, library="/wrong/library").returncode, 0)
@@ -416,6 +416,14 @@ else:
             passed(run(activate=True))
             events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
             self.assertEqual([row["manager"] for row in events if row.get("manager", {}).get("name") == "mission-control-ingress.socket"][-1]["state"], "restarted")
+            original_inventory = inventory.read_text()
+            for old, bad in (("192.168.20.33", "192.168.20.99"), ("192.168.70.234", "192.168.70.235")):
+                inventory.write_text(original_inventory.replace(old, bad))
+                before = (directory / "events.jsonl").read_text()
+                rejected = run(activate=True)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+                self.assertEqual((directory / "events.jsonl").read_text(), before)
+            inventory.write_text(original_inventory)
 
 
 class SystemUnitsQualification(unittest.TestCase):
