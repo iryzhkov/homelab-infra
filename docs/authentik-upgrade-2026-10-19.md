@@ -83,11 +83,15 @@ UID/GID1000, mode0750. Mount the data root at `/data` and the EXISTING
 `/srv/swarm/authentik/media` at `/data/media` in both services, replacing
 the old `/media` target. This nested bind preserves existing media at its
 host location; no copy or destructive media move is needed. Snapshot both
-host paths. Templates/certs mounts remain unchanged.
+host paths. Templates/certs mounts remain unchanged. Confirm UID1000 can traverse
+and write the media root and existing subdirectories; stop on permission failures.
+Do not recursively change ownership of existing files as an upgrade shortcut.
 
 For 2026.8 set the fixed public base URL and trusted proxy CIDRs from stack.yml.
 Observed direct ingress peers were10.200.0.2 and10.200.0.3, with ingress
 subnet10.200.0.0/24. Verify that translated path before reusing this setting.
+At this stage itself, verify HTTPS redirect/issuer scheme and existing forward-auth
+before progression, rather than deferring these checks to final reconciliation.
 Both final service checks use `ak healthcheck` with120s startup allowance.
 The pinned lifecycle/ak reads the process mode and selects the appropriate
 Rust health check. The final image's OCI metadata did not retain its Dockerfile

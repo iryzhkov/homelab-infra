@@ -12,8 +12,8 @@
 #
 # Credentials are Docker secrets. Postgres reads POSTGRES_PASSWORD_FILE;
 # Authentik reads any setting from a file when its value is a file:// URI
-# (authentik/lib/config.py parse_uri and the Go server's parseScheme, both in
-# 2025.8.6).
+# (retained file-URI configuration support; never substitute secret values
+# into this source file).
 #
 # The worker has no Docker socket and runs as the image's own user (1000).
 # The socket and `user: root` were there for Docker-managed outposts; the
