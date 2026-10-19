@@ -8,4 +8,4 @@ mission_control_site_origin: https://chaldeas.ryzhkov.dev
 mission_control_cache_file: /var/cache/mission-control/latest.json
 # Exact fleet source with the staged reader activation interface.
 mission_control_fleet_checkout: ""
-mission_control_fleet_revision: f7acedfed358f398d1e9f8f2ce6e73c0a2d9ce71
+mission_control_fleet_revision: 07b5fbdbd227399aeb40d77d68daf43f57e86918

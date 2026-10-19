@@ -23,7 +23,9 @@
     - name: Compose explicitly enabled fixed enrollment registrations
       ansible.builtin.set_fact:
         akasha_registry: >-
-          {{ akasha_registry + akasha_enrollment_registry_additions
+          {{ akasha_registry +
+             ((akasha_enrollment_registry_additions | rejectattr('profile', 'equalto', 'mission-control-reader') | list)
+              + akasha_enrollment_pc_mission_control if mission_control_pc_permission | bool else akasha_enrollment_registry_additions)
              + (akasha_enrollment_pc_reader if akasha_pc_global_reader_enabled | bool else [])
              + (akasha_enrollment_pc_quota if akasha_pc_quota_events_enabled | bool else [])
              + (akasha_enrollment_quota_laptop_publisher if akasha_quota_laptop_publisher_enabled | bool else [])

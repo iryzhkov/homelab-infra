@@ -475,6 +475,50 @@ else:
             inventory.write_text(original_inventory)
 
 
+
+    def test_pc_existing_collector_registry_is_inert_until_permission(self):
+        with tempfile.TemporaryDirectory(dir=isolated()) as scratch:
+            directory = Path(scratch)
+            source = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+            defaults = {}
+            for name in source["vars_files"]:
+                defaults.update(yaml.safe_load((ROOT / "playbooks" / name).read_text()))
+            self.assertIs(defaults["mission_control_pc_permission"], False)
+            defaults.update(akasha_enrollment_registry_enabled=True,
+                akasha_quota_laptop_publisher_enabled=True, akasha_quota_pc_reader_enabled=True)
+            old = (defaults["akasha_registry"] + defaults["akasha_enrollment_registry_additions"]
+                + defaults["akasha_enrollment_quota_laptop_publisher"] + defaults["akasha_enrollment_quota_pc_reader"])
+            self.assertEqual(len(old), 25)
+            for enabled in (False, True):
+                target = directory / ("pc.json" if enabled else "old.json")
+                values = defaults | dict(mission_control_pc_permission=enabled)
+                play = directory / "contract.yml"
+                play.write_text(yaml.safe_dump([dict(hosts="localhost", gather_facts=False,
+                    vars=values, pre_tasks=source["pre_tasks"], tasks=[
+                        {"ansible.builtin.copy": dict(content="{{ akasha_registry | to_json }}",
+                            dest=str(target), mode="0600")}])]))
+                result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)],
+                    env=dict(os.environ, ANSIBLE_LOCAL_TEMP=str(directory / "local"),
+                        ANSIBLE_REMOTE_TEMP=str(directory / "remote")), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                registry = json.loads(target.read_text())
+                if not enabled:
+                    self.assertEqual(registry, old)
+                else:
+                    self.assertEqual(len(registry), 26)
+                    self.assertTrue(all(row in registry for row in old if row["profile"] != "mission-control-reader"))
+                    pc = next(row for row in registry if row["source"] == "omarchy-pc.mission-control")
+                    self.assertEqual(pc["source_id"], "omarchy-pc--mission-control")
+                    reader = next(row for row in registry if row["profile"] == "mission-control-reader")
+                    self.assertEqual(reader["mission_control_read_sources"], ["agent-a--mission-control", "omarchy-pc--mission-control"])
+                render = directory / "render.json"
+                render.write_text(json.dumps(dict(registry=registry[len(defaults["akasha_registry"]):])))
+                checked = subprocess.run([sys.executable, str(ROOT / "scripts/check-enrollment-registry.py"),
+                    str(render), "--laptop-quota", "--pc-quota-reader", *(["--pc-mission-control"] if enabled else [])],
+                    capture_output=True, text=True)
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+
 class SystemUnitsQualification(unittest.TestCase):
     """Separate required system-mode qualification; never counted as a source pass."""
     def test_exact_system_units_in_qualified_environment(self):
