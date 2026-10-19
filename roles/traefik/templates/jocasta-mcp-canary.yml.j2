@@ -8,7 +8,8 @@ http:
       # Every path goes to the backend: /mcp and the protected-resource
       # metadata under /.well-known must both arrive unchanged. No forward-auth,
       # because Jocasta verifies bearer tokens itself. Cloudflare-marked
-      # requests are excluded so the route stays LAN-only.
+      # tunnel requests are excluded. Direct LAN and mesh clients can reach
+      # this route; Jocasta enforces bearer and project permissions.
       rule: 'Host(`jocasta.mcp.ryzhkov.dev`) && !HeaderRegexp(`Cf-Ray`, `.*`)'
       service: jocasta-mcp-canary
       middlewares: [jocasta-mcp-canary-host]

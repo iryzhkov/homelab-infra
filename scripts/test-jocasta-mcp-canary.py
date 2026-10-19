@@ -126,7 +126,8 @@ class CanaryRouteTest(unittest.TestCase):
     def test_enable_requires_explicit_dedicated_backend(self):
         bad = [{}, {"jocasta_mcp_canary_backend_url": BACKEND}, {"jocasta_mcp_canary_upstream_host": UPSTREAM}]
         for url in ("http://10.42.0.2:1935", "http://10.42.0.2:01935", "http://127.0.0.1:18935",
-                    "http://localhost:18935", BACKEND + "/mcp", "https://10.42.0.99:18935", "http://10.42.0.99",
+                    "http://localhost:18935", "http://LOCALHOST:8080", "http://0.0.0.0:8080",
+                    "http://0:8080", BACKEND + "/mcp", "https://10.42.0.99:18935", "http://10.42.0.99",
                     "http://user@10.42.0.99:18935", [BACKEND]):
             bad.append({"jocasta_mcp_canary_backend_url": url, "jocasta_mcp_canary_upstream_host": UPSTREAM})
         for host in (HOST, "10.42.0.2:18935", "127.0.0.1", "localhost:18935/x", "evil.test:80"):

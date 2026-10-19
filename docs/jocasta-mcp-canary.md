@@ -26,8 +26,9 @@ every other route are unchanged.
 When enabled, the route:
 
 - matches `Host(jocasta.mcp.ryzhkov.dev)` on `websecure`, except requests
-  carrying a `Cf-Ray` header, so it stays LAN-only even if a tunnel hostname
-  is added later;
+  carrying a `Cf-Ray` header, which excludes Cloudflare tunnel requests.
+  Direct LAN and mesh clients can reach it; Jocasta enforces bearer and
+  project permissions. This is not a network allowlist;
 - asks the existing `letencrypt` resolver (DNS-01 through Cloudflare) for a
   certificate for exactly `jocasta.mcp.ryzhkov.dev`. The shared
   `*.ryzhkov.dev` wildcard covers one label only and cannot serve this name;

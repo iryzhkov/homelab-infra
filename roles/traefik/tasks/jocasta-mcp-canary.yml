@@ -14,7 +14,7 @@
       - jocasta_mcp_canary_backend_url is defined
       - jocasta_mcp_canary_backend_url is string
       - jocasta_mcp_canary_backend_url is match('^http://[A-Za-z0-9.-]+:[1-9][0-9]{0,4}$')
-      - jocasta_mcp_canary_backend_url is not match('^http://(localhost|127[.])')
+      - jocasta_mcp_canary_backend_url is not match('(?i)^http://(localhost|127[.]|0[.:])')
       - jocasta_mcp_canary_backend_url is not match('.*:1935$')
       - jocasta_mcp_canary_upstream_host is defined
       - jocasta_mcp_canary_upstream_host is string
