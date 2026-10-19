@@ -153,6 +153,22 @@ class SnapshotTest(unittest.TestCase):
                         if expected:
                             self.assertNotIn("TASK [Compose explicitly enabled", proc.stdout)
 
+    def test_config_only_reload_requires_activation(self):
+        tasks = yaml.safe_load((ROOT / "roles/akasha/tasks/main.yml").read_text())
+        config = next(t for t in tasks if t.get("name") == "Render Akasha public configuration with exact source registry and anchor")
+        self.assertEqual(config["register"], "akasha_config")
+        start = next(t for t in tasks if t.get("name") == "Start only the explicitly approved runtime")
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env.filters["bool"] = bool
+        env.tests["changed"] = lambda result: result["changed"]
+        for activate in [False, True]:
+            for units, config_changed in [(False, False), (False, True), (True, False)]:
+                values = dict(akasha_activate=activate, akasha_units=dict(changed=units), akasha_config=dict(changed=config_changed))
+                enabled = env.compile_expression(start["when"])(**values)
+                state = env.from_string(start["ansible.builtin.systemd_service"]["state"]).render(**values)
+                self.assertEqual(enabled, activate)
+                self.assertEqual(state, "restarted" if units or config_changed else "started")
+
     def test_staged_role_has_no_activation_without_external_contracts(self):
         defaults = yaml.safe_load((ROOT / "roles/akasha/defaults/main.yml").read_text())
         self.assertIs(defaults["akasha_activate"], False)

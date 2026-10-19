@@ -519,6 +519,59 @@ else:
                 self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
 
+
+    def test_remaining_registry_scopes_and_laptop_qualification(self):
+        with tempfile.TemporaryDirectory(dir=isolated()) as scratch:
+            directory = Path(scratch)
+            source = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+            defaults = {}
+            for name in source["vars_files"]:
+                defaults.update(yaml.safe_load((ROOT / "playbooks" / name).read_text()))
+            self.assertIs(defaults["mission_control_agent_b_permission"], False)
+            self.assertIs(defaults["mission_control_laptop_permission"], False)
+            old = defaults["akasha_registry"] + defaults["akasha_enrollment_registry_additions"]
+            for pc, b, laptop, qualified in [(False, True, False, False), (True, True, False, False),
+                                            (True, False, True, True), (True, True, True, True),
+                                            (True, True, True, False)]:
+                target = directory / "registry.json"
+                target.unlink(missing_ok=True)
+                values = defaults | dict(akasha_enrollment_registry_enabled=True,
+                    mission_control_pc_permission=pc, mission_control_agent_b_permission=b,
+                    mission_control_laptop_permission=laptop, mission_control_laptop_qualified=qualified)
+                if qualified:
+                    # Fixture only. A real new artifact packet remains ROOT-owned.
+                    values.update(akasha_host_version="host-v9.8.7", akasha_host_sha256="a" * 64,
+                        mission_control_laptop_host_version="host-v9.8.7",
+                        mission_control_laptop_host_sha256="a" * 64)
+                play = directory / "contract.yml"
+                play.write_text(yaml.safe_dump([dict(hosts="localhost", gather_facts=False,
+                    vars=values, pre_tasks=source["pre_tasks"], tasks=[
+                        {"ansible.builtin.copy": dict(content="{{ akasha_registry | to_json }}",
+                            dest=str(target), mode="0600")}])]))
+                result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)],
+                    env=dict(os.environ, ANSIBLE_LOCAL_TEMP=str(directory / "local"),
+                        ANSIBLE_REMOTE_TEMP=str(directory / "remote")), capture_output=True, text=True)
+                if laptop and not qualified:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertFalse(target.exists())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                registry = json.loads(target.read_text())
+                self.assertTrue(all(row in registry for row in old if row["profile"] != "mission-control-reader"))
+                self.assertEqual(len(registry), len(old) + pc + b + laptop)
+                reader = next(row for row in registry if row["profile"] == "mission-control-reader")
+                self.assertEqual(reader["mission_control_read_sources"], ["agent-a--mission-control"] +
+                    (["omarchy-pc--mission-control"] if pc else []) + (["agent-b--mission-control"] if b else []) +
+                    (["omarchy-macbook-air-igor--mission-control"] if laptop else []))
+                render = directory / "render.json"
+                render.write_text(json.dumps(dict(registry=registry[len(defaults["akasha_registry"]):])))
+                checked = subprocess.run([sys.executable, str(ROOT / "scripts/check-enrollment-registry.py"),
+                    str(render), *(["--pc-mission-control"] if pc else []),
+                    *(["--agent-b-mission-control"] if b else []), *(["--laptop-mission-control"] if laptop else [])],
+                    capture_output=True, text=True)
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+
 class SystemUnitsQualification(unittest.TestCase):
     """Separate required system-mode qualification; never counted as a source pass."""
     def test_exact_system_units_in_qualified_environment(self):

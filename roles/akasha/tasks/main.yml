@@ -167,6 +167,7 @@
     owner: root
     group: root
     mode: "0644"
+  register: akasha_config
 
 - name: Install service and maintenance units
   ansible.builtin.template:
@@ -193,7 +194,7 @@
   ansible.builtin.systemd_service:
     name: akasha.service
     enabled: true
-    state: "{{ 'restarted' if akasha_units is changed else 'started' }}"
+    state: "{{ 'restarted' if (akasha_units is changed or akasha_config is changed) else 'started' }}"
   when: akasha_activate | bool
 
 - name: Enable approved maintenance schedules
