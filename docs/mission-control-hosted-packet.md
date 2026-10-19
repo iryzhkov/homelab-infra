@@ -25,7 +25,7 @@ equality. The separate proposal remains empty/unused; do not request its validat
 option or invent grants. No signing/publication/publisher work belongs to this cleanup.
 
 For Normandy, follow mission-control-hosted.md. The new composition requires the exact
-qualified fleet source 2a414f7bac7bffac934823c05e6c2edc928c623c from fleet PR68.
+qualified fleet source f7acedfed358f398d1e9f8f2ce6e73c0a2d9ce71 from fleet PR68.
 The old live dependency
 remains valid for the deployed old composition until a reviewed source update.
 client-v0.4.4 SHAda4b457e7885ffea3dde51c7e93160e90f2e81566d2e33fb9211fb07ca146ca4
