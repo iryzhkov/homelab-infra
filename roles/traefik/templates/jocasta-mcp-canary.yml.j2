@@ -1,0 +1,39 @@
+# Opt-in LAN canary for https://jocasta.mcp.ryzhkov.dev/mcp, rendered only
+# when jocasta_mcp_canary_route_enabled is true. See docs/jocasta-mcp-canary.md.
+# It serves a dedicated canary backend, never production Jocasta.
+http:
+  routers:
+    jocasta-mcp-canary:
+      entryPoints: [websecure]
+      # Every path goes to the backend: /mcp and the protected-resource
+      # metadata under /.well-known must both arrive unchanged. No forward-auth,
+      # because Jocasta verifies bearer tokens itself. Cloudflare-marked
+      # requests are excluded so the route stays LAN-only.
+      rule: 'Host(`jocasta.mcp.ryzhkov.dev`) && !HeaderRegexp(`Cf-Ray`, `.*`)'
+      service: jocasta-mcp-canary
+      middlewares: [jocasta-mcp-canary-host]
+      # A certificate for this exact name. The shared *.ryzhkov.dev wildcard
+      # covers one label only, so it cannot serve a nested name; router-tls.j2
+      # and every other route keep the wildcard.
+      tls:
+        certResolver: "{{ traefik_cert_resolver }}"
+        domains:
+          - main: jocasta.mcp.ryzhkov.dev
+  middlewares:
+    # The MCP SDK refuses a non-loopback Host on a loopback listener (DNS
+    # rebinding protection). Rewrite Host to the backend's loopback authority
+    # and leave Origin alone: Jocasta still requires Origin, when present, to
+    # equal its configured public resource origin.
+    jocasta-mcp-canary-host:
+      headers:
+        customRequestHeaders:
+          Host: "{{ jocasta_mcp_canary_upstream_host }}"
+  services:
+    jocasta-mcp-canary:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          interval: 15s
+          timeout: 5s
+        servers:
+          - url: "{{ jocasta_mcp_canary_backend_url }}"
