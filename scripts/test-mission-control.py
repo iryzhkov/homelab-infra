@@ -45,8 +45,11 @@ class MissionControlTest(unittest.TestCase):
         lan = dynamic["http"]["middlewares"]["mission-control-lan"]["ipAllowList"]
         self.assertNotIn("ipStrategy", lan)
         self.assertEqual(lan["sourceRange"], ["192.168.20.0/24", "192.168.70.0/24",
-                                             "192.168.90.0/24", "192.168.130.0/24"])
-        for forbidden in ("8.8.8.8", "192.168.50.1", "10.42.0.5", "127.0.0.1"):
+                                             "192.168.90.0/24", "192.168.130.0/24", "10.42.0.0/24"])
+        defaults = yaml.safe_load((ROOT / "roles/traefik/defaults/main.yml").read_text())
+        self.assertFalse(any(ipaddress.ip_address("10.42.0.6") in ipaddress.ip_network(net)
+                             for net in defaults["akasha_lan_cidrs"]))
+        for forbidden in ("8.8.8.8", "192.168.50.1", "10.43.0.5", "127.0.0.1"):
             self.assertFalse(any(ipaddress.ip_address(forbidden) in ipaddress.ip_network(net) for net in lan["sourceRange"]))
         evidence = os.environ.get("MC_UNIT_EVIDENCE")
         if evidence:
@@ -88,7 +91,8 @@ class MissionControlTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory(dir=isolated()) as directory:
                 directory = Path(directory)
-                lan["sourceRange"] = ["127.0.0.1/32"]  # fixture peers only
+                # Two actual fixture peers stand for LAN and trusted Nebula clients.
+                lan["sourceRange"] = ["127.0.0.1/32", "127.0.0.2/32"]
                 router["tls"] = {}
                 service = dynamic["http"]["services"]["mission-control"]["loadBalancer"]
                 service["servers"] = [{"url": f"http://127.0.0.1:{backend.server_port}"}]
@@ -127,12 +131,14 @@ class MissionControlTest(unittest.TestCase):
                                 self.fail("Traefik fixture failed: " + log.read())
                             time.sleep(0.05)
                         self.assertEqual(request("/events")[2], b": fixture heartbeat\n")
+                        self.assertEqual(request(peer="127.0.0.2")[0], 200)
+                        self.assertEqual(request("/events", peer="127.0.0.2")[2], b": fixture heartbeat\n")
                         before = len(calls)
                         for headers in ({"Cf-Ray": "fixture"}, {"cF-rAy": ""}):
                             status, response_headers, _ = request(**headers)
                             self.assertEqual(status, 302)
                             self.assertEqual(response_headers["Location"], "https://igor.ryzhkov.dev/404")
-                        self.assertEqual(request(peer="127.0.0.2", **{"X-Forwarded-For": "192.168.90.212"})[0], 403)
+                        self.assertEqual(request(peer="127.0.0.3", **{"X-Forwarded-For": "10.42.0.6"})[0], 403)
                         self.assertEqual(request(method="POST")[0], 307)
                         self.assertEqual(len(calls), before)
                     finally:

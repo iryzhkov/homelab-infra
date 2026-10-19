@@ -4,6 +4,9 @@
 # cutover (2026-10-02).
 traefik_wildcard_only: true
 mission_control_route_enabled: false
+# Dashboard reads also accept authenticated private-mesh connection peers.
+# This does not extend Akasha's API allowlist below.
+mission_control_nebula_cidrs: [10.42.0.0/24]
 traefik_wildcard_domain: ryzhkov.dev
 
 # Existing LAN VLANs for management, services, clients, and agent workers.
