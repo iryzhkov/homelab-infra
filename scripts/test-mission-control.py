@@ -491,7 +491,9 @@ else:
             self.assertEqual(len(old), 25)
             for enabled in (False, True):
                 target = directory / ("pc.json" if enabled else "old.json")
-                values = defaults | dict(mission_control_pc_permission=enabled)
+                values = defaults | dict(mission_control_pc_permission=enabled,
+                    akasha_host_version="host-v0.2.4",
+                    akasha_host_sha256="531710066a7f67ac68f82ad1234d8f9a32e3311c839a894f86125c7d4f170592")
                 play = directory / "contract.yml"
                 play.write_text(yaml.safe_dump([dict(hosts="localhost", gather_facts=False,
                     vars=values, pre_tasks=source["pre_tasks"], tasks=[
@@ -530,12 +532,28 @@ else:
             self.assertIs(defaults["mission_control_agent_b_permission"], False)
             self.assertIs(defaults["mission_control_laptop_permission"], False)
             old = defaults["akasha_registry"] + defaults["akasha_enrollment_registry_additions"]
-            for pc, b, laptop, qualified in [(False, True, False, False), (True, True, False, False),
-                                            (True, False, True, True), (True, True, True, True),
-                                            (True, True, True, False)]:
+            seen = {}
+            cases = [(pc, b, laptop, qualified, {}, False) for pc, b, laptop, qualified in [
+                (False, False, False, False), (True, False, False, False),
+                (False, True, False, False), (True, True, False, False),
+                (True, False, True, True), (True, True, True, True),
+                (True, True, True, False)]]
+            cases += [
+                (False, False, False, True, {}, False),
+                (True, False, False, True, {}, False),
+                (True, False, False, False, {"akasha_host_version": "host-v9.8.7"}, True),
+                (True, False, False, True, {"mission_control_laptop_host_version": "host-v9.8.6"}, True),
+                (True, False, False, True, {"mission_control_laptop_host_sha256": "b" * 64}, True),
+                (True, False, True, True, {"akasha_host_version": "host-v0.2.4",
+                    "akasha_host_sha256": "a" * 64,
+                    "mission_control_laptop_host_version": "host-v0.2.4"}, True),
+            ]
+            for pc, b, laptop, qualified, overrides, reject in cases:
                 target = directory / "registry.json"
                 target.unlink(missing_ok=True)
                 values = defaults | dict(akasha_enrollment_registry_enabled=True,
+                    akasha_host_version="host-v0.2.4",
+                    akasha_host_sha256="531710066a7f67ac68f82ad1234d8f9a32e3311c839a894f86125c7d4f170592",
                     mission_control_pc_permission=pc, mission_control_agent_b_permission=b,
                     mission_control_laptop_permission=laptop, mission_control_laptop_qualified=qualified)
                 if qualified:
@@ -543,6 +561,7 @@ else:
                     values.update(akasha_host_version="host-v9.8.7", akasha_host_sha256="a" * 64,
                         mission_control_laptop_host_version="host-v9.8.7",
                         mission_control_laptop_host_sha256="a" * 64)
+                values.update(overrides)
                 play = directory / "contract.yml"
                 play.write_text(yaml.safe_dump([dict(hosts="localhost", gather_facts=False,
                     vars=values, pre_tasks=source["pre_tasks"], tasks=[
@@ -551,12 +570,14 @@ else:
                 result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)],
                     env=dict(os.environ, ANSIBLE_LOCAL_TEMP=str(directory / "local"),
                         ANSIBLE_REMOTE_TEMP=str(directory / "remote")), capture_output=True, text=True)
-                if laptop and not qualified:
+                if reject or (laptop and not qualified):
                     self.assertNotEqual(result.returncode, 0, result.stdout)
                     self.assertFalse(target.exists())
                     continue
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 registry = json.loads(target.read_text())
+                selection = (pc, b, laptop)
+                self.assertEqual(registry, seen.setdefault(selection, registry))
                 self.assertTrue(all(row in registry for row in old if row["profile"] != "mission-control-reader"))
                 self.assertEqual(len(registry), len(old) + pc + b + laptop)
                 reader = next(row for row in registry if row["profile"] == "mission-control-reader")
