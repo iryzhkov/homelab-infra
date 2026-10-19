@@ -434,7 +434,7 @@ else:
             self.assertIn('"mode": "cache"', proposed.stdout)
             self.assertIn("NoNewPrivileges=yes", proposed.stdout)
             self.assertIn("ListenStream=192.168.70.234:7393", proposed.stdout)
-            if reader and "mission_control_reader_check_parents" in (reader / "tasks/main.yml").read_text():
+            if reader:
                 self.assertIn("NoNewPrivileges=no", proposed.stdout)
                 self.assertEqual((directory / "reader-config/reader.json").read_text(), "{}")
                 self.assertEqual((units / "mission-control-reader.service").read_text(), "[Service]\n")
