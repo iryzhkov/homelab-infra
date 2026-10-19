@@ -167,16 +167,17 @@ class SnapshotTest(unittest.TestCase):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
         self.assertEqual(shared["chaldea_host_version"], "host-v0.2.2")
-        self.assertEqual(pin["akasha_host_version"], "host-v0.2.3")
+        self.assertEqual(pin["akasha_host_version"], "host-v0.2.4")
         self.assertEqual(pin["akasha_host_sha256"],
-                         "b17f20315ff09746b04467c03f24207c0151ff42537e014dd6a7d0f9b6f3dae4")
+                         "531710066a7f67ac68f82ad1234d8f9a32e3311c839a894f86125c7d4f170592")
         old_root = "/opt/chaldea-host/releases/host-v0.2.2/host"
-        new_root = "/opt/chaldea-host/releases/host-v0.2.3/host"
+        new_root = "/opt/chaldea-host/releases/host-v0.2.4/host"
         checks = {
             "chaldea_node": ["chaldea_host_version == 'host-v0.2.2'"],
             "chaldea_host_artifact": [
-                "chaldea_host_version == 'host-v0.2.3'",
+                "chaldea_host_version == 'host-v0.2.4'",
                 "chaldea_host_sha256 == akasha_host_sha256",
+                "chaldea_host_artifact_preserve_versions == ['host-v0.2.2', 'host-v0.2.3']",
                 "chaldea_host_artifact_root == '" + new_root + "'"],
             "chaldea_access_trust": [
                 "chaldea_host_version == 'host-v0.2.2'",
@@ -184,7 +185,7 @@ class SnapshotTest(unittest.TestCase):
                 "chaldea_host_artifact_root == '" + old_root + "'",
                 "chaldea_access_trust_runtime == '" + old_root + "/access-maintenance.mjs'"],
             "akasha": [
-                "chaldea_host_version == 'host-v0.2.3'",
+                "chaldea_host_version == 'host-v0.2.4'",
                 "chaldea_host_artifact_root == '" + new_root + "'",
                 "'" + new_root + "/akasha-service.mjs' in akasha_exec_start"],
         }

@@ -1,6 +1,24 @@
 ---
+- name: Inspect selected owned units before stage-only writes
+  ansible.builtin.service_facts:
+  when: >-
+    not ansible_check_mode and not mission_control_activate | bool and
+    (mission_control_enabled | bool or mission_control_reader_enabled | bool or mission_control_ingress_enabled | bool)
+- name: Refuse stage-only updates of active or enabled selected units
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services.get(item.unit, {}).get('state', 'stopped') not in ['running', 'active', 'activating', 'reloading']
+      - ansible_facts.services.get(item.unit, {}).get('status', 'disabled') not in ['enabled', 'enabled-runtime']
+    fail_msg: Use one complete stage, verify and activate invocation for warm updates.
+    quiet: true
+  loop:
+    - {unit: mission-control-reader.service, selected: "{{ mission_control_reader_enabled }}"}
+    - {unit: mission-control.service, selected: "{{ mission_control_enabled }}"}
+    - {unit: mission-control-ingress.socket, selected: "{{ mission_control_ingress_enabled }}"}
+    - {unit: mission-control-ingress.service, selected: "{{ mission_control_ingress_enabled }}"}
+  when: not ansible_check_mode and not mission_control_activate | bool and item.selected | bool
 - name: Configure the independent Normandy web service
-  when: mission_control_enabled | bool
+  when: mission_control_enabled | bool and not ansible_check_mode
   block:
     - name: Require the exact web-only contract
       ansible.builtin.assert:
@@ -47,13 +65,10 @@
         group: root
         mode: "0644"
       register: mission_control_unit
-    - name: Converge only the Mission Control web service
-      ansible.builtin.systemd_service:
-        name: mission-control.service
-        enabled: true
-        daemon_reload: "{{ mission_control_unit is changed }}"
-        state: "{{ 'restarted' if mission_control_unit is changed or mission_control_config is changed else 'started' }}"
-      when: not ansible_check_mode
 - name: Configure only the explicitly enabled ingress
   ansible.builtin.include_tasks: ingress.yml
-  when: mission_control_ingress_enabled | bool
+  when: mission_control_ingress_enabled | bool and not ansible_check_mode
+- name: Explain deferred check-mode staging
+  ansible.builtin.debug:
+    msg: Check mode defers staging and SYSTEM verification; absent accounts and bytes are not qualified.
+  when: ansible_check_mode and (mission_control_enabled | bool or mission_control_reader_enabled | bool or mission_control_ingress_enabled | bool)

@@ -1,4 +1,7 @@
 ---
+mission_control_activate: false
+mission_control_runtime_enabled: false
+mission_control_reader_enabled: false
 mission_control_enabled: false
 mission_control_ingress_enabled: false
 mission_control_site_origin: https://chaldeas.ryzhkov.dev

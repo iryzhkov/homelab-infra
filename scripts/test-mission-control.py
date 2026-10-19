@@ -153,7 +153,10 @@ class MissionControlTest(unittest.TestCase):
             for role in ("mission_control_runtime", "mission_control_reader"):
                 path = canonical / "roles" / role / "tasks"
                 path.mkdir(parents=True)
-                (path / "main.yml").write_text("- name: Fixture canonical role\n  ansible.builtin.debug:\n    msg: fixture composition\n")
+                (path / "main.yml").write_text(yaml.safe_dump([{"name": "Assert effective inventory selection",
+                    "ansible.builtin.assert": {"that": [
+                        "mission_control_runtime_enabled == fixture_selected | default(false)",
+                        "mission_control_reader_enabled == fixture_selected | default(false)"], "quiet": True}}]))
             def git(*args):
                 return subprocess.run(["git", "-C", str(canonical), *args], check=True, text=True, capture_output=True).stdout.strip()
             git("init", "--quiet")
@@ -164,13 +167,21 @@ class MissionControlTest(unittest.TestCase):
             inventory.write_text(yaml.safe_dump(dict(all=dict(hosts={"omarchy-normandy": dict(ansible_connection="local")}))))
             env = dict(os.environ, ANSIBLE_LIBRARY=str(canonical / "library"), ANSIBLE_ROLES_PATH=str(ROOT / "roles"),
                 ANSIBLE_LOCAL_TEMP=str(directory / "local"), ANSIBLE_REMOTE_TEMP=str(directory / "remote"))
-            def run(pin):
+            def run(pin, limit="omarchy-normandy", library=None):
                 values = dict(mission_control_fleet_checkout=str(canonical), mission_control_fleet_revision=pin)
                 return subprocess.run(["ansible-playbook", "-i", str(inventory), str(ROOT / "playbooks/mission-control.yml"),
-                    "--limit", "omarchy-normandy", "--check", "-e", json.dumps(values)], env=env, text=True, capture_output=True)
+                    "--limit", limit, "--check", "-e", json.dumps(values)],
+                    env=env | ({"ANSIBLE_LIBRARY": library} if library is not None else {}), text=True, capture_output=True)
             good = run(revision)
             self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
             self.assertIn("changed=0", good.stdout)
+            inventory.write_text(yaml.safe_dump(dict(all=dict(hosts={"omarchy-normandy": dict(
+                ansible_connection="local", fixture_selected=True, mission_control_runtime_enabled=True,
+                mission_control_reader_enabled=True, mission_control_enabled=True)}))))
+            selected = run(revision)
+            self.assertEqual(selected.returncode, 0, selected.stdout + selected.stderr)
+            self.assertNotEqual(run(revision, limit="all").returncode, 0)
+            self.assertNotEqual(run(revision, library="/wrong/library").returncode, 0)
             self.assertNotEqual(run("a" * 40).returncode, 0)
             (canonical / "library/.keep").write_text("drift")
             self.assertNotEqual(run(revision).returncode, 0)
@@ -187,10 +198,11 @@ class MissionControlTest(unittest.TestCase):
                         "/etc/systemd/system", str(directory / "units"))
                     path.write_text(text)
             rows = yaml.safe_load((role / "tasks/main.yml").read_text())
-            block = rows[0]["block"]
-            rows[0]["block"] = [row for row in block if not any(key in row for key in (
+            web = next(row for row in rows if row.get("name") == "Configure the independent Normandy web service")
+            block = web["block"]
+            web["block"] = [row for row in block if not any(key in row for key in (
                 "ansible.builtin.user", "ansible.builtin.group"))]
-            for row in rows[0]["block"]:
+            for row in web["block"]:
                 for module in ("ansible.builtin.file", "ansible.builtin.template"):
                     if module in row:
                         row[module]["owner"] = str(os.getuid())
@@ -212,7 +224,7 @@ class MissionControlTest(unittest.TestCase):
                     *(["--check", "--diff"] if check else [])], env=env, capture_output=True, text=True)
             cold = run(True)
             self.assertEqual(cold.returncode, 0, cold.stdout + cold.stderr)
-            rows[0]["block"] = [row for row in rows[0]["block"] if "ansible.builtin.fail" not in row]
+            web["block"] = [row for row in web["block"] if "ansible.builtin.fail" not in row]
             (role / "tasks/main.yml").write_text(yaml.safe_dump(rows))
             real = run()
             self.assertEqual(real.returncode, 0, real.stdout + real.stderr)
@@ -226,9 +238,184 @@ class MissionControlTest(unittest.TestCase):
             unit = directory / "units/mission-control.service"
             self.assertNotIn("ReadWritePaths", unit.read_text())
             self.assertIn("NoNewPrivileges=yes", unit.read_text())
-            result = subprocess.run(["systemd-analyze", "--user", "verify", "--man=no", str(unit)],
-                env=dict(os.environ, XDG_RUNTIME_DIR=str(directory)), capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # Full rendered units are qualified together by --system-units in SYSTEM mode.
+
+
+    def test_staged_four_unit_gate_refusal_failure_restart_and_idempotence(self):
+        with tempfile.TemporaryDirectory(dir=isolated()) as scratch:
+            directory = Path(scratch)
+            role = directory / "roles/mission_control"
+            shutil.copytree(ROOT / "roles/mission_control", role)
+            units = directory / "units"
+            units.mkdir()
+            # Without MC_FLEET_CHECKOUT this is an infra-only boundary fixture.
+            fleet = os.environ.get("MC_FLEET_CHECKOUT")
+            reader = directory / "roles/mission_control_reader" if fleet else None
+            if reader:
+                assert fleet is not None
+                shutil.copytree(Path(fleet) / "roles/mission_control_reader", reader)
+            else:
+                (units / "mission-control-reader.service").write_text("[Service]\nExecStart=/bin/true\n")
+            helper = directory / "manager.py"
+            helper.write_text("""import json, os, pathlib, sys
+root = pathlib.Path(os.environ['MC_FIXTURE_ROOT'])
+events = root / 'events.jsonl'
+mode = pathlib.Path(sys.argv[0]).name
+def event(row):
+    with events.open('a') as out: out.write(json.dumps(row) + '\\n')
+if mode == 'systemd-analyze':
+    paths = [pathlib.Path(p) for p in sys.argv[3:]]
+    assert sys.argv[1:3] == ['verify', '--man=no']
+    assert [p.name for p in paths] == ['mission-control-reader.service', 'mission-control.service', 'mission-control-ingress.socket', 'mission-control-ingress.service']
+    assert all(p.is_file() for p in paths)
+    event(dict(verify=sys.argv[1:], success=not bool(os.environ.get('MC_FIXTURE_FAIL'))))
+    sys.exit(1 if os.environ.get('MC_FIXTURE_FAIL') else 0)
+assert events.exists() and any(json.loads(x).get('success') for x in events.read_text().splitlines())
+if mode == 'ufw':
+    event(dict(ufw=sys.argv[1:]))
+    path = root / ('ufw-' + sys.argv[6])
+    changed = not path.exists()
+    path.touch()
+    print('Rule added' if changed else 'Skipping existing rule')
+else:
+    args = json.loads(sys.argv[1])
+    event(dict(manager=args))
+    path = root / 'manager.json'
+    state = json.loads(path.read_text()) if path.exists() else {}
+    name = args.get('name', '')
+    changed = bool(args.get('daemon_reload', False))
+    if name:
+        prior = state.get(name, {})
+        desired = dict(enabled=args.get('enabled', prior.get('enabled', False)),
+                       state='stopped' if args.get('state') == 'stopped' else 'started')
+        changed |= prior != desired or args.get('state') == 'restarted'
+        state[name] = desired
+    path.write_text(json.dumps(state))
+    print('CHANGED' if changed else 'UNCHANGED')
+""")
+            binary = directory / "bin"
+            binary.mkdir()
+            for name in ("systemd-analyze", "ufw"):
+                target = binary / name
+                target.write_text("#!" + sys.executable + "\n" + helper.read_text())
+                target.chmod(0o755)
+            def rewrite(rows):
+                result = []
+                for row in rows:
+                    if any(key in row for key in ("ansible.builtin.user", "ansible.builtin.group")):
+                        continue
+                    if "block" in row:
+                        row["block"] = rewrite(row["block"])
+                    if "ansible.builtin.service_facts" in row:
+                        row.pop("ansible.builtin.service_facts")
+                        row["ansible.builtin.set_fact"] = dict(ansible_facts=dict(
+                            services="{{ fixture_services | default({}) }}"))
+                    for module in ("ansible.builtin.file", "ansible.builtin.template"):
+                        if module in row:
+                            row[module]["owner"] = str(os.getuid())
+                            row[module]["group"] = str(os.getgid())
+                    if "ansible.builtin.systemd_service" in row:
+                        args = row.pop("ansible.builtin.systemd_service")
+                        row["ansible.builtin.command"] = dict(argv=[
+                            sys.executable, str(helper), "{{ fixture_manager_args | to_json }}"])
+                        row["vars"] = dict(fixture_manager_args=args)
+                        row["register"] = "fixture_manager"
+                        row["changed_when"] = "fixture_manager.stdout == 'CHANGED'"
+                    result.append(row)
+                return result
+            for selected_role in [role] + ([reader] if reader else []):
+                for path in selected_role.rglob("*"):
+                    if path.is_file():
+                        text = path.read_text().replace("/etc/mission-control-reader", str(directory / "reader-config")).replace(
+                            "/etc/mission-control", str(directory / "config")).replace(
+                            "/etc/systemd/system", str(units)).replace(
+                            "/var/lib/mission-control-reader", str(directory / "reader-state")).replace(
+                            "/var/cache/mission-control", str(directory / "cache"))
+                        path.write_text(text)
+                        if path.parent.name == "tasks":
+                            path.write_text(yaml.safe_dump(rewrite(yaml.safe_load(text))))
+            values = dict(mission_control_enabled=True, mission_control_ingress_enabled=True,
+                mission_control_reader_enabled=True, mission_control_runtime_enabled=True,
+                mission_control_runtime_node="/bin/true", mission_control_runtime_release_root="/fixture",
+                mission_control_runtime_version="client-v9.8.7",
+                mission_control_reader_uid=940, mission_control_reader_allowed_source_ids=["agent-a--mission-control"],
+                mission_control_reader_cache_file=str(directory / "cache/latest.json"),
+                mission_control_reader_grants=[dict(uid=940, audience="akasha", action="read",
+                    source="mission-control-reader", host="omarchy-normandy", kind="agent_status",
+                    profile="mission-control-reader", project="chaldea")])
+            inventory = directory / "hosts.yml"
+            inventory.write_text(yaml.safe_dump(dict(all=dict(children=dict(edge_proxy=dict(hosts={
+                "edge1": dict(ansible_host="192.168.20.33"), "edge2": dict(ansible_host="192.168.20.4")}),
+                backend=dict(hosts={"omarchy-normandy": dict(ansible_connection="local", ansible_host="192.168.70.234")}))))))
+            env = dict(os.environ, PATH=str(binary) + ":" + os.environ["PATH"], MC_FIXTURE_ROOT=str(directory),
+                ANSIBLE_LOCAL_TEMP=str(directory / "local"), ANSIBLE_REMOTE_TEMP=str(directory / "remote"))
+            play = directory / "play.yml"
+            def run(activate=False, check=False, warm=None, fail=False):
+                params = values | dict(mission_control_activate=activate, fixture_services=warm or {})
+                tasks = [{"ansible.builtin.import_role": dict(name=str(role), public=True)},
+                         {"ansible.builtin.include_role": dict(name=str(role), tasks_from="verify")},
+                         {"ansible.builtin.include_role": dict(name=str(role), tasks_from="activate"),
+                          "when": "mission_control_activate | bool"}]
+                if reader:
+                    tasks.insert(1, {"ansible.builtin.include_role": dict(name=str(reader), public=True)})
+                    tasks.insert(-1, {"ansible.builtin.include_role": dict(name=str(reader), tasks_from="activate"),
+                                      "when": "mission_control_activate | bool"})
+                play.write_text(yaml.safe_dump([dict(hosts="omarchy-normandy", gather_facts=False,
+                    vars=params, tasks=tasks)]))
+                return subprocess.run(["ansible-playbook", "-i", str(inventory), str(play),
+                    *(["--check", "--diff"] if check else [])],
+                    env=env | (dict(MC_FIXTURE_FAIL="1") if fail else {}), capture_output=True, text=True)
+            def passed(proc):
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            passed(run(check=True))
+            self.assertFalse((directory / "config").exists())
+            for unit in ("mission-control-reader.service", "mission-control.service",
+                         "mission-control-ingress.socket", "mission-control-ingress.service"):
+                for state in (dict(state="running", status="disabled"), dict(state="stopped", status="enabled")):
+                    proc = run(warm={unit: state})
+                    self.assertNotEqual(proc.returncode, 0, proc.stdout)
+                    self.assertFalse((directory / "config").exists())
+                    self.assertFalse((directory / "events.jsonl").exists())
+            passed(run())
+            events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
+            self.assertEqual(len(events), 1)
+            self.assertIn("verify", events[0])
+            for name in ("mission-control.service", "mission-control-ingress.socket", "mission-control-ingress.service"):
+                self.assertEqual((units / name).stat().st_mode & 0o777, 0o644)
+            self.assertEqual((directory / "config/server.json").stat().st_mode & 0o777, 0o640)
+            (directory / "events.jsonl").unlink()
+            failed = run(activate=True, fail=True)
+            self.assertNotEqual(failed.returncode, 0, failed.stdout)
+            events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
+            self.assertEqual(len(events), 1)
+            self.assertFalse(events[0]["success"])
+            self.assertFalse((directory / "manager.json").exists())
+            (directory / "events.jsonl").unlink()
+            passed(run(activate=True))
+            events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
+            self.assertTrue(events[0]["success"])
+            rules = [row["ufw"] for row in events if "ufw" in row]
+            self.assertEqual(rules, [
+                ["allow", "in", "proto", "tcp", "from", peer, "to", "192.168.70.234", "port", "7393"]
+                for peer in ("192.168.20.33", "192.168.20.4")])
+            (directory / "config/server.json").write_text("{}")
+            passed(run(activate=True))
+            events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
+            web_events = [row["manager"] for row in events if row.get("manager", {}).get("name") == "mission-control.service"]
+            self.assertEqual(web_events[-1]["state"], "restarted")
+            if reader:
+                (directory / "reader-config/reader.json").write_text("{}")
+                passed(run(activate=True))
+                events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
+                self.assertEqual([row["manager"] for row in events if row.get("manager", {}).get("name")
+                    == "mission-control-reader.service"][-1]["state"], "restarted")
+            again = run(activate=True)
+            passed(again)
+            self.assertIn("changed=0", again.stdout)
+            (units / "mission-control-ingress.socket").write_text("[Socket]\n")
+            passed(run(activate=True))
+            events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
+            self.assertEqual([row["manager"] for row in events if row.get("manager", {}).get("name") == "mission-control-ingress.socket"][-1]["state"], "restarted")
 
 
 class SystemUnitsQualification(unittest.TestCase):
@@ -237,11 +424,18 @@ class SystemUnitsQualification(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=isolated()) as scratch:
             directory = Path(scratch)
             (directory / "units").mkdir()
-            (directory / "units/mission-control.service").write_text(
-                "[Service]\nExecStart=/bin/true\n")
-            for suffix in ("service", "socket"):
-                (directory / "units" / ("mission-control-ingress." + suffix)).write_text(
-                    (ROOT / "roles/mission_control/templates" / ("mission-control-ingress." + suffix + ".j2")).read_text())
+            fleet = Path(os.environ["MC_FLEET_CHECKOUT"])
+            values = dict(mission_control_runtime_node="/usr/bin/node",
+                mission_control_runtime_release_root="/opt/mission-control",
+                mission_control_runtime_version="client-v9.8.7")
+            sources = {
+                "mission-control-reader.service": fleet / "roles/mission_control_reader/templates/mission-control-reader.service.j2",
+                **{name: ROOT / "roles/mission_control/templates" / (name + ".j2") for name in (
+                    "mission-control.service", "mission-control-ingress.socket", "mission-control-ingress.service")},
+            }
+            for name, source in sources.items():
+                rendered = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(source.read_text()).render(**values)
+                (directory / "units" / name).write_text(rendered + "\n")
             runtime = directory / "xdg"
             runtime.mkdir(mode=0o700)
             rootfs = directory / "systemd-root"
@@ -249,7 +443,7 @@ class SystemUnitsQualification(unittest.TestCase):
             system.mkdir(parents=True)
             for target in ("basic", "sysinit", "sockets", "multi-user", "shutdown"):
                 (system / (target + ".target")).write_text("[Unit]\nDescription=Fixture target\n")
-            for fixture_exec in ("bin/true", "usr/lib/systemd/systemd-socket-proxyd"):
+            for fixture_exec in ("usr/bin/node", "usr/lib/systemd/systemd-socket-proxyd"):
                 target = rootfs / fixture_exec
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile("/bin/true", target)
@@ -257,7 +451,7 @@ class SystemUnitsQualification(unittest.TestCase):
             for source in (directory / "units").glob("*"):
                 shutil.copyfile(source, system / source.name)
             result = subprocess.run(["systemd-analyze", "--root=" + str(rootfs), "verify", "--man=no",
-                *[p.name for p in (directory / "units").glob("*")]],
+                *sources],
                 env=dict(os.environ, XDG_RUNTIME_DIR=str(runtime)), capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
