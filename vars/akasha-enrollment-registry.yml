@@ -1,6 +1,8 @@
 ---
 # Fixed public registrations only. No issuer keys or automatic activation.
 akasha_enrollment_registry_enabled: false
+# Future explicit PC status permission; normal pulls preserve the current registry.
+mission_control_pc_permission: false
 akasha_pc_global_reader_enabled: false
 akasha_pc_quota_events_enabled: false
 # Separate quota-only service sharing, not the seven-kind PC publisher.
@@ -27,6 +29,9 @@ akasha_enrollment_registry_additions:
   - {"issuer":"chaldea:omarchy-normandy","source":"omarchy-normandy.toolfeedback","host":"omarchy-normandy","source_id":"omarchy-normandy--omarchy-normandy_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
   - {"issuer":"chaldea:agent-a","source":"agent-a.mission-control","host":"agent-a","source_id":"agent-a--mission-control","profile":"mission-control-publisher","project":"chaldea","mode":"service","kinds":["agent_status"]}
   - {"issuer":"chaldea:omarchy-normandy","source":"mission-control-reader","host":"omarchy-normandy","source_id":"omarchy-normandy--mission-control-reader","profile":"mission-control-reader","project":"chaldea","mode":"service","kinds":["agent_status"],"mission_control_read_sources":["agent-a--mission-control"]}
+akasha_enrollment_pc_mission_control:
+  - {"issuer":"chaldea:omarchy-pc","source":"omarchy-pc.mission-control","host":"omarchy-pc","source_id":"omarchy-pc--mission-control","profile":"mission-control-publisher","project":"chaldea","mode":"service","kinds":["agent_status"]}
+  - {"issuer":"chaldea:omarchy-normandy","source":"mission-control-reader","host":"omarchy-normandy","source_id":"omarchy-normandy--mission-control-reader","profile":"mission-control-reader","project":"chaldea","mode":"service","kinds":["agent_status"],"mission_control_read_sources":["agent-a--mission-control","omarchy-pc--mission-control"]}
 akasha_enrollment_quota_laptop_publisher:
   - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"quota","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--quota","profile":"quota-service","project":"chaldea","mode":"service","kinds":["quota_headroom_snapshot"]}
 akasha_enrollment_quota_pc_reader:
