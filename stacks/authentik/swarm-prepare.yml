@@ -426,3 +426,16 @@
   when:
     - not ansible_check_mode
     - p2_cutting_over or p2_compose_all.stdout | trim | length == 0
+
+- name: Prepare persistent storage for Authentik 2025.12 and later
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: "0750"
+  loop:
+    - "{{ p2_dir }}/data"
+    - "{{ p2_dir }}/data/media"
+  delegate_to: "{{ p2_node }}"
+  become: true
