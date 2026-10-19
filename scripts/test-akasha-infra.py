@@ -190,7 +190,8 @@ class SnapshotTest(unittest.TestCase):
         defaults = yaml.safe_load((ROOT / "roles/akasha/defaults/main.yml").read_text())
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             root = Path(directory)
-            for mode in ("ok", "exit", "stdout", "stderr", "whitespace", "check"):
+            for mode in ("ok", "exit", "stdout", "stderr", "whitespace",
+                         "stdout_lf", "stderr_lf", "check"):
                 with self.subTest(mode=mode):
                     case = root / mode
                     case.mkdir()
@@ -211,6 +212,8 @@ class SnapshotTest(unittest.TestCase):
                         "if mode == 'stdout': print('diagnostic')\n"
                         "if mode == 'stderr': print('diagnostic',file=sys.stderr)\n"
                         "if mode == 'whitespace': print(' ',file=sys.stderr)\n"
+                        "if mode == 'stdout_lf': print()\n"
+                        "if mode == 'stderr_lf': print(file=sys.stderr)\n"
                         "sys.exit(1 if mode == 'exit' else 0)\n")
                     validator.chmod(0o700)
                     tasks = json.loads(json.dumps(source[first:]))

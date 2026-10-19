@@ -186,6 +186,7 @@
 
 - name: Verify actual installed SYSTEM units before activation
   ansible.builtin.command:
+    strip_empty_ends: false
     argv:
       - systemd-analyze
       - verify
