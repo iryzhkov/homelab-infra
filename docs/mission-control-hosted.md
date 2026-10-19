@@ -37,6 +37,9 @@ Ingress socket/proxyd binds192.168.70.234:7393 with exact two-edge peer/BPF cont
 Activation retains the existing two fixed UFW /32 rules and guards.
 Traefik retains actual-peer LAN20/70/90/130 /24, no XFF ipStrategy and Cf-Ray catchall
 302 to https://igor.ryzhkov.dev/404. DNS/wildcard TLS/auth remain unchanged.
+The Mission Control-only `mission_control_nebula_cidrs` adds private mesh10.42.0.0/24
+for dashboard GET/SSE access. Akasha's API allowlist is unchanged. Edge convergence
+is a separate authorized step; until applied on both traffic VMs, Nebula returns403.
 
 Operator-managed UDM prerequisite: existing owned policy6ad564b11825b50cb1af9371,
 192.168.20.33 and192.168.20.4 →192.168.70.234 TCP7393 only.

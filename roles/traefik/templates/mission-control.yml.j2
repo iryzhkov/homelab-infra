@@ -1,4 +1,4 @@
-# LAN connection peers only. Never trust caller X-Forwarded-For.
+# Allowed LAN and private-mesh connection peers. Never trust caller X-Forwarded-For.
 http:
   routers:
     mission-control:
@@ -11,7 +11,7 @@ http:
     mission-control-lan:
       ipAllowList:
         sourceRange:
-{% for subnet in akasha_lan_cidrs %}
+{% for subnet in akasha_lan_cidrs + mission_control_nebula_cidrs %}
           - "{{ subnet }}"
 {% endfor %}
   services:
