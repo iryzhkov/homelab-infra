@@ -63,6 +63,8 @@
         chaldea_host_version: "{{ akasha_host_version }}"
         chaldea_host_sha256: "{{ akasha_host_sha256 }}"
     - role: chaldea_access_trust
+      vars:
+        chaldea_host_artifact_preserve_versions: "{{ akasha_trust_preserve_versions }}"
       when: chaldea_access_trust_enabled | bool
       tags: [trust]
     - role: akasha
