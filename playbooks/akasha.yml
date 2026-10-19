@@ -30,6 +30,20 @@
          if akasha_enrollment_registry_enabled | bool else []))
         | selectattr('mission_control_read_sources', 'defined') | list | length > 0
       tags: [always]
+    - name: Require the qualified four-source packet for Mission Control operations reads
+      ansible.builtin.assert:
+        that:
+          - mission_control_reader_operations_enabled is boolean
+          - >-
+            not mission_control_reader_operations_enabled or
+            (akasha_enrollment_registry_enabled | bool and mission_control_pc_permission | bool and
+             mission_control_agent_b_permission | bool and mission_control_laptop_permission | bool and
+             mission_control_laptop_qualified | bool and
+             akasha_host_version is match('^host-v[0-9]+[.][0-9]+[.][0-9]+$') and
+             akasha_host_version | regex_replace('^host-v', '') is version('0.2.9', '>='))
+        fail_msg: Operations reads require all four status sources and a qualified compatible host.
+        quiet: true
+      tags: [always]
     - name: Compose explicitly enabled fixed enrollment registrations
       ansible.builtin.set_fact:
         akasha_registry: >-
@@ -54,6 +68,15 @@
                   + (['agent-b--mission-control'] if mission_control_agent_b_permission | bool else [])
                   + (['omarchy-macbook-air-igor--mission-control'] if mission_control_laptop_permission | bool else [])})] }}
       when: akasha_enrollment_registry_enabled | bool and (mission_control_agent_b_permission | bool or mission_control_laptop_permission | bool)
+      tags: [always]
+    # Same reader row and sources; only the flag and two read kinds are added.
+    - name: Compose the approved Mission Control operations reader scope
+      ansible.builtin.set_fact:
+        akasha_registry: >-
+          {{ (akasha_registry | rejectattr('profile', 'equalto', 'mission-control-reader') | list)
+             + [(akasha_registry | selectattr('profile', 'equalto', 'mission-control-reader') | first)
+                | combine({'kinds': ['agent_status', 'job_finished', 'report'], 'mission_control_operations_read': true})] }}
+      when: mission_control_reader_operations_enabled
       tags: [always]
   roles:
     - {role: chaldea_node, tags: [runtime]}

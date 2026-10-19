@@ -15,6 +15,7 @@ parser.add_argument("--mission-control", action="store_true")
 parser.add_argument("--pc-mission-control", action="store_true")
 parser.add_argument("--agent-b-mission-control", action="store_true")
 parser.add_argument("--laptop-mission-control", action="store_true")
+parser.add_argument("--mission-control-operations", action="store_true")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 data = yaml.safe_load((root / "vars/akasha-enrollment-registry.yml").read_text())
@@ -48,6 +49,12 @@ if args.agent_b_mission_control or args.laptop_mission_control:
             sources += [rows[0]['source_id']]
     expected = [row for row in expected if row['profile'] != 'mission-control-reader'] + [
         reader | {'mission_control_read_sources': sources}]
+if args.mission_control_operations:
+    reader = next(row for row in expected if row['profile'] == 'mission-control-reader')
+    if len(reader['mission_control_read_sources']) != 4:
+        raise SystemExit('operations reads require all four status sources')
+    expected = [row for row in expected if row['profile'] != 'mission-control-reader'] + [
+        reader | {'kinds': ['agent_status', 'job_finished', 'report'], 'mission_control_operations_read': True}]
 actual = json.loads(Path(args.render).read_text())["registry"]
 order = lambda row: (row["issuer"], row["source"])
 if sorted(actual, key=order) != sorted(expected, key=order):

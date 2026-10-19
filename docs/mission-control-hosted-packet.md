@@ -8,8 +8,9 @@ vars/akasha-runtime.yml selects the qualified Homelab host-v0.2.6,
 SHA504326b4d617b8d4f5972f9fab07f6c7c52f6194c1fc149eb9610d5dcba1d74d.
 Archive655873917/run39233056206; manifest655873919
 SHA3b802e13dd92e1d86719330423b1c04cd97d8ae92c0c4f9a51f6d68ce045350b.
-vars/akasha-runtime.yml supplies preserve_versions:[host-v0.2.2,host-v0.2.3,host-v0.2.4,host-v0.2.6] to
-both artifact calls in the Homelab play, including the shared-trust include. Global vars/chaldea-runtime.yml/shared trust remain022.
+vars/akasha-runtime.yml supplies separate per-call preserve lists: the runtime call
+uses chaldea_host_artifact_preserve_versions and the shared-trust include uses
+akasha_trust_preserve_versions. Global vars/chaldea-runtime.yml/shared trust remain022.
 vars/mission-control-homelab.yml retains explicit existing permission and activation
 gates without duplicating the runtime pin or artifact preservation.
 

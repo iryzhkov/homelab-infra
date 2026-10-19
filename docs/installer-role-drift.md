@@ -5,7 +5,7 @@ Python 3 and Git. The existing Check workflow runs it alongside its focused
 unittest script, using a disposable scratch HOME and disk TMPDIR.
 
 The check fetches public `iryzhkov/chaldea-fleet-config` at reviewed commit
-`886b48dbee492455d6998ea7357fc7884695fc16`. It compares every file under
+`7308fc63bb25e3d086e1fec0147f44205cb02e76`. It compares every file under
 `roles/chaldea_access_trust/` and `roles/chaldea_host_artifact/` with this
 repository. Missing files, extra files, unexpected bytes, symbolic links,
 invalid pins and fetch failures fail the check. No content is executed from

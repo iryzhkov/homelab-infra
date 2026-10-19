@@ -275,7 +275,7 @@ class SnapshotTest(unittest.TestCase):
             "chaldea_host_artifact": [
                 "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.8')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
-                "chaldea_host_artifact_preserve_versions == (['host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7'] if fixture_artifact_calls | default([]) | length else ['host-v0.2.2', 'host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6'])",
+                "chaldea_host_artifact_preserve_versions == (['host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7', 'host-v0.2.8'] if fixture_artifact_calls | default([]) | length else ['host-v0.2.2', 'host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7'])",
                 "chaldea_host_artifact_root == '/opt/chaldea-host/releases/' ~ chaldea_host_version ~ '/host'"],
             "chaldea_access_trust": [
                 "chaldea_host_version == 'host-v0.2.2'",

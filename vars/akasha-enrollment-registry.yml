@@ -9,6 +9,9 @@ mission_control_laptop_permission: false
 mission_control_laptop_qualified: false
 mission_control_laptop_host_version: ""
 mission_control_laptop_host_sha256: ""
+# Approved fixed Events/Ops reads for the existing Normandy reader. Requires all four
+# status sources and a qualified host of at least 0.2.9; off keeps the registry unchanged.
+mission_control_reader_operations_enabled: false
 akasha_pc_global_reader_enabled: false
 akasha_pc_quota_events_enabled: false
 # Separate quota-only service sharing, not the seven-kind PC publisher.

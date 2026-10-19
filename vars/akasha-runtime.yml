@@ -2,15 +2,18 @@
 # Homelab Akasha only; shared consumer trust remains on host-v0.2.2.
 # Qualified exact-source d024 CI candidate028; ROOT must verify published downloads
 # before checks, push or deployment. No published release is claimed here.
-# Runtime028 retains old022023024026 explicitly + newest prior027 + selected028.
-# Shared022 retains old023024026027 explicitly + selected022 + newest prior028.
-# Fresh actual directory/mtime evidence is required before EACH artifact call:
-# runtime028 requires newest prior027; shared022 requires newest prior028.
-# STOP and reconcile exact per-call lists if either premise fails; never assume
-# installation mtimes or raise the bound.
+# Actual homelab releases: 022/023/024/026/027/028. Each call names every actual
+# release other than its selection explicitly, so neither call depends on which
+# release is newest by mtime and none is deleted today:
+# runtime028 retains old022/023/024/026/027 + selected028;
+# shared022 retains old023/024/026/027/028 + selected022.
+# A later runtime selection keeps these five plus its newest prior (028) and itself.
+# Fresh actual directory/mtime evidence is still required before EACH artifact call;
+# STOP and reconcile exact per-call lists if the actual set differs. Never install
+# missing versions, write mtimes or exceed the five-entry bound.
 # Use akasha_trust_preserve_versions for the trust call; never override the global
 # chaldea_host_artifact_preserve_versions through extra vars in the canonical full play.
-akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7]
-chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6]
+akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8]
+chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7]
 akasha_host_version: host-v0.2.8
 akasha_host_sha256: 599f9ba8310dbf97c56c924294383267d345e647de010d17ce0d910f1146b96a

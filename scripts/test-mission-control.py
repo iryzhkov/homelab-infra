@@ -180,9 +180,9 @@ class MissionControlTest(unittest.TestCase):
             inventory.write_text(yaml.safe_dump(dict(all=dict(hosts={"omarchy-normandy": dict(ansible_connection="local")}))))
             env = dict(os.environ, ANSIBLE_LIBRARY=str(canonical / "library"), ANSIBLE_ROLES_PATH=str(ROOT / "roles"),
                 ANSIBLE_LOCAL_TEMP=str(directory / "local"), ANSIBLE_REMOTE_TEMP=str(directory / "remote"))
-            def run(pin, limit="omarchy-normandy", library=None, check=False):
+            def run(pin, limit="omarchy-normandy", library=None, check=False, extra=None):
                 values = dict(mission_control_fleet_checkout=str(canonical), mission_control_fleet_revision=pin,
-                    ansible_become=False)
+                    ansible_become=False) | (extra or {})
                 return subprocess.run(["ansible-playbook", "-i", str(inventory), str(ROOT / "playbooks/mission-control.yml"),
                     "--limit", limit, *(["--check"] if check else []), "-e", json.dumps(values)],
                     env=env | ({"ANSIBLE_LIBRARY": library} if library is not None else {}), text=True, capture_output=True)
@@ -197,8 +197,24 @@ class MissionControlTest(unittest.TestCase):
             self.assertNotEqual(run(revision, limit="all").returncode, 0)
             self.assertNotEqual(run(revision, library="/wrong/library").returncode, 0)
             self.assertNotEqual(run("a" * 40).returncode, 0)
+            # A canonical reader role without the operations input would silently ignore it.
+            operations = dict(mission_control_reader_operations_enabled=True)
+            refused = run(revision, check=True, extra=operations)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("Refuse an operations opt-in", refused.stdout)
+            reader_defaults = canonical / "roles/mission_control_reader/defaults"
+            reader_defaults.mkdir()
+            (reader_defaults / "main.yml").write_text(yaml.safe_dump(dict(
+                mission_control_reader_operations_enabled=False)))
+            git("add", ".")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "operations input")
+            supported = git("rev-parse", "HEAD")
+            accepted = run(supported, check=True, extra=operations)
+            self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+            self.assertNotEqual(run(supported, check=True, extra=dict(
+                mission_control_reader_operations_enabled="true")).returncode, 0)
             (canonical / "library/.keep").write_text("drift")
-            self.assertNotEqual(run(revision).returncode, 0)
+            self.assertNotEqual(run(supported).returncode, 0)
 
     def test_web_real_fixture_second_apply_and_offline_units(self):
         with tempfile.TemporaryDirectory(dir=isolated()) as directory:
@@ -548,6 +564,17 @@ else:
                     "akasha_host_sha256": "a" * 64,
                     "mission_control_laptop_host_version": "host-v0.2.4"}, True),
             ]
+            # Operations reads: only the full qualified four-source packet on a
+            # compatible fixture host; strings, partial sources and old hosts refuse.
+            operations = {"mission_control_reader_operations_enabled": True}
+            cases += [
+                (True, True, True, True, operations, False),
+                (True, True, True, True, {"mission_control_reader_operations_enabled": "true"}, True),
+                (True, True, False, False, operations, True),
+                (True, False, True, True, operations, True),
+                (True, True, True, True, operations | {"akasha_host_version": "host-v0.2.8",
+                    "mission_control_laptop_host_version": "host-v0.2.8"}, True),
+            ]
             for pc, b, laptop, qualified, overrides, reject in cases:
                 target = directory / "registry.json"
                 target.unlink(missing_ok=True)
@@ -576,7 +603,8 @@ else:
                     continue
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 registry = json.loads(target.read_text())
-                selection = (pc, b, laptop)
+                ops = overrides.get("mission_control_reader_operations_enabled") is True
+                selection = (pc, b, laptop, ops)
                 self.assertEqual(registry, seen.setdefault(selection, registry))
                 self.assertTrue(all(row in registry for row in old if row["profile"] != "mission-control-reader"))
                 self.assertEqual(len(registry), len(old) + pc + b + laptop)
@@ -584,11 +612,25 @@ else:
                 self.assertEqual(reader["mission_control_read_sources"], ["agent-a--mission-control"] +
                     (["omarchy-pc--mission-control"] if pc else []) + (["agent-b--mission-control"] if b else []) +
                     (["omarchy-macbook-air-igor--mission-control"] if laptop else []))
+                if ops:
+                    legacy = seen[(pc, b, laptop, False)]
+                    self.assertEqual([r for r in registry if r is not reader],
+                                     [r for r in legacy if r["profile"] != "mission-control-reader"])
+                    legacy_reader = next(r for r in legacy if r["profile"] == "mission-control-reader")
+                    self.assertEqual(reader, legacy_reader | {"kinds": ["agent_status", "job_finished", "report"],
+                                                              "mission_control_operations_read": True})
+                    # Base daily-health (homelab) and fleet (chaldea) tuples stay exact.
+                    for row in defaults["akasha_registry"]:
+                        self.assertIn(row, registry)
+                else:
+                    self.assertEqual(reader["kinds"], ["agent_status"])
+                    self.assertNotIn("mission_control_operations_read", reader)
                 render = directory / "render.json"
                 render.write_text(json.dumps(dict(registry=registry[len(defaults["akasha_registry"]):])))
                 checked = subprocess.run([sys.executable, str(ROOT / "scripts/check-enrollment-registry.py"),
                     str(render), *(["--pc-mission-control"] if pc else []),
-                    *(["--agent-b-mission-control"] if b else []), *(["--laptop-mission-control"] if laptop else [])],
+                    *(["--agent-b-mission-control"] if b else []), *(["--laptop-mission-control"] if laptop else []),
+                    *(["--mission-control-operations"] if ops else [])],
                     capture_output=True, text=True)
                 self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
