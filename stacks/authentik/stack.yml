@@ -3,8 +3,8 @@
 # inventory/group_vars/swarm/stacks-p2.yml; see
 # docs/transition/phase5/2026-10-03-P2.md for the cutover and the rollback.
 #
-# All four services are pinned to the node labelled pin.authentik=true, beside
-# their state in /srv/swarm/authentik/{postgres,redis,media,templates,certs}
+# All three services are pinned to the node labelled pin.authentik=true, beside
+# their state in /srv/swarm/authentik/{postgres,data,media,templates,certs}
 # (until the cutover: the named volumes authentik_database and authentik_redis
 # and ~/app/authentik/{media,custom-templates,certs} on homelab). The hourly
 # snapshot job dumps the database with pg_dump and mirrors media, templates
@@ -29,8 +29,8 @@
 # Logs stay on the local driver, as in the Compose file, so that Authentik
 # stays debuggable when Loki is down.
 #
-# Images are pinned to the exact builds the Compose project ran at the
-# cutover (2026-10-02), tag and digest.
+# PostgreSQL retains its cutover pin. Authentik is upgraded sequentially to
+# 2026.8.4; see docs/authentik-upgrade-2026-10-19.md before deploying this pin.
 
 x-local-logging: &local-logging
   driver: local
@@ -43,7 +43,10 @@ x-authentik-environment: &authentik-environment
   AUTHENTIK_POSTGRESQL__NAME: authentik
   AUTHENTIK_POSTGRESQL__USER: authentik
   AUTHENTIK_POSTGRESQL__PASSWORD: file:///run/secrets/pg_pass
-  AUTHENTIK_REDIS__HOST: redis
+  AUTHENTIK_WEB__BASE_URL: https://auth.ryzhkov.dev
+  # Requests arrive through the Swarm ingress routing mesh (observed peers
+  # 10.200.0.2 and 10.200.0.3); trust that network, not all private networks.
+  AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS: "127.0.0.0/8,::1/128,10.200.0.0/24"
   AUTHENTIK_SECRET_KEY: file:///run/secrets/secret_key
   AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
 
@@ -90,41 +93,8 @@ services:
         reservations:
           memory: 160M
 
-  redis:
-    # Docker Hub redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0,
-    # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
-    image: git.ryzhkov.dev/igor/mirror/docker.io/library/redis@sha256:9edcda8e020021e916e9bd26acc90c61103cc93b6dedbb757cc206ddb320df6f
-    command: --save 60 1 --loglevel warning
-    volumes:
-      - type: bind
-        source: ${SWARM_STATE_ROOT}/authentik/redis
-        target: /data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
-      interval: 30s
-      retries: 5
-      start_period: 20s
-      start_interval: 2s
-      timeout: 3s
-    logging: *local-logging
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.labels.pin.authentik == true
-      update_config:
-        order: stop-first
-      restart_policy:
-        condition: any
-        delay: 5s
-      resources:
-        limits:
-          memory: 128M
-        reservations:
-          memory: 32M
-
   server:
-    image: ghcr.io/goauthentik/server:2025.8.6@sha256:f162a2664fc54337be65f796130443e19d038caa82be572b7d44aa8b1a895af2
+    image: ghcr.io/goauthentik/server:2026.8.4@sha256:e7226ae116dac5aa0a5643803e735b010038f492c401e08e16b3bf1ac54c090c
     command: server
     environment: *authentik-environment
     secrets:
@@ -134,22 +104,23 @@ services:
       - "4080:9000"
       - "4443:9443"
     volumes:
+      # Keep the existing media files at their host path for recovery and
+      # mount them at the 2025.12+ location. Other file categories use /data.
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/data
+        target: /data
       - type: bind
         source: ${SWARM_STATE_ROOT}/authentik/media
-        target: /media
+        target: /data/media
       - type: bind
         source: ${SWARM_STATE_ROOT}/authentik/templates
         target: /templates
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:9000/-/health/ready/", timeout=5)
+      test: ["CMD", "ak", "healthcheck"]
       interval: 30s
-      timeout: 8s
+      timeout: 30s
       retries: 3
-      start_period: 60s
+      start_period: 120s
       start_interval: 2s
     logging: *local-logging
     deploy:
@@ -170,29 +141,34 @@ services:
           memory: 640M
 
   worker:
-    image: ghcr.io/goauthentik/server:2025.8.6@sha256:f162a2664fc54337be65f796130443e19d038caa82be572b7d44aa8b1a895af2
+    image: ghcr.io/goauthentik/server:2026.8.4@sha256:e7226ae116dac5aa0a5643803e735b010038f492c401e08e16b3bf1ac54c090c
     command: worker
     environment: *authentik-environment
     secrets:
       - pg_pass
       - secret_key
     volumes:
+      # Keep the existing media files at their host path for recovery and
+      # mount them at the 2025.12+ location. Other file categories use /data.
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/authentik/data
+        target: /data
       - type: bind
         source: ${SWARM_STATE_ROOT}/authentik/media
-        target: /media
+        target: /data/media
       - type: bind
         source: ${SWARM_STATE_ROOT}/authentik/certs
         target: /certs
       - type: bind
         source: ${SWARM_STATE_ROOT}/authentik/templates
         target: /templates
-    # The image's own check (ak healthcheck), started sooner.
+    # ak selects the running mode's healthcheck, including the Rust worker.
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 30s
       timeout: 30s
       retries: 3
-      start_period: 60s
+      start_period: 120s
       start_interval: 2s
     logging: *local-logging
     deploy:
