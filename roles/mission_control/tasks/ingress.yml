@@ -28,7 +28,10 @@
   when: mission_control_ingress_units is changed and not ansible_check_mode
 - name: Allow only the two edge peers through the host firewall
   ansible.builtin.command:
-    argv: "{{ ['ufw'] + (['--dry-run'] if ansible_check_mode else []) + ['allow', 'in', 'proto', 'tcp', 'from', item, 'to', '192.168.70.234', 'port', '7393'] }}"
+    argv: >-
+      {{ ['ufw'] + (['--dry-run'] if ansible_check_mode else [])
+         + ['allow', 'in', 'proto', 'tcp', 'from', item,
+            'to', '192.168.70.234', 'port', '7393'] }}
   environment:
     LC_ALL: C
   become: true
