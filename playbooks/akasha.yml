@@ -10,12 +10,14 @@
     - ../vars/akasha-registry.yml
     - ../vars/akasha-enrollment-registry.yml
   pre_tasks:
+    # Artifact qualification permits upgrades; laptop permission remains separately selected.
+    # Compatibility still requires the operator's exact qualified artifact packet.
     - name: Require the qualified host for Mission Control reader registrations
       ansible.builtin.assert:
         that:
           - >-
             (not mission_control_laptop_permission | bool and akasha_host_version == 'host-v0.2.4') or
-            (mission_control_laptop_permission | bool and mission_control_laptop_qualified | bool and
+            (mission_control_laptop_qualified | bool and
              mission_control_laptop_host_version is match('^host-v[0-9]+[.][0-9]+[.][0-9]+$') and
              mission_control_laptop_host_version != 'host-v0.2.4' and
              mission_control_laptop_host_sha256 is match('^[a-f0-9]{64}$') and
