@@ -27,7 +27,16 @@
 - name: Refuse stage-only updates of an active or enabled ingress socket
   ansible.builtin.assert:
     that:
-      - mission_control_socket_before.stdout_lines | intersect(['ActiveState=active', 'ActiveState=activating', 'ActiveState=reloading', 'UnitFileState=enabled', 'UnitFileState=enabled-runtime']) | length == 0
+      - >-
+        mission_control_socket_before.rc == 4 or
+        'ActiveState=inactive' in mission_control_socket_before.stdout_lines or
+        'ActiveState=failed' in mission_control_socket_before.stdout_lines
+      - >-
+        mission_control_socket_before.rc == 4 or
+        mission_control_socket_before.stdout_lines | select('match', '^UnitFileState=') | list | length == 1
+      - >-
+        mission_control_socket_before.stdout_lines |
+        intersect(['UnitFileState=enabled', 'UnitFileState=enabled-runtime']) | length == 0
     fail_msg: Use one complete stage, verify and activate invocation for warm updates.
     quiet: true
   when: not ansible_check_mode and not mission_control_activate | bool and mission_control_ingress_enabled | bool
@@ -42,7 +51,11 @@
   when: mission_control_enabled | bool
 - name: Inspect the existing web configuration parent for check mode
   ansible.builtin.stat:
-    path: /etc/mission-control
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+  loop: [/etc/mission-control, /etc/systemd/system]
   register: mission_control_check_parent
   when: mission_control_enabled | bool and ansible_check_mode
 - name: Inspect existing web identities for check mode
@@ -59,7 +72,8 @@
 - name: Determine whether existing web files can be checked
   ansible.builtin.set_fact:
     mission_control_check_ready: >-
-      {{ mission_control_check_parent.stat.isdir | default(false)
+      {{ mission_control_check_parent.results | selectattr('stat.isdir', 'defined') |
+         selectattr('stat.isdir') | list | length == 2
          and mission_control_check_identities.results | map(attribute='rc') | list == [0, 0] }}
   when: mission_control_enabled | bool and ansible_check_mode
 - name: Configure the independent Normandy web service
