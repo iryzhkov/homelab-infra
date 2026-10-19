@@ -9,8 +9,10 @@ jocasta:7809f6329c87f8a3c5390221ee4d0d2e@2.
 Invoke playbooks/mission-control.yml with literal --limit omarchy-normandy, the exact
 clean reviewed mission_control_fleet_checkout/revision and
 ANSIBLE_LIBRARY=ABS_F/library. The controller HEAD and clean-tree guards run first.
-Role defaults are genuine defaults, so inventory can select enabled flags and runtime
-inputs. The explicit fleet deployment packet is optional extra-vars and defaults off.
+Pass the absolute checkout as an extra variable so Ansible can resolve the static
+runtime import. Its public defaults are visible to earlier staging templates while
+runtime installation still follows the stage-only guard. Inventory can override the
+enabled flags and runtime defaults. The explicit fleet deployment packet is optional extra-vars and defaults off.
 
 mission_control_activate defaults false. The composition inspects all selected owned
 units before staging or runtime writes and refuses stage-only updates if any is active
