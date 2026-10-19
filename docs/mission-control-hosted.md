@@ -26,7 +26,8 @@ For warm updates, use one stage → verify → activate invocation with
 mission_control_activate=true. The activation includes preserve registered config/unit
 changed results. They restart changed services and leave an unchanged second real run
 at changed=0. Never rerun main to activate and discard those results. Check mode defers
-staging and verification; absent predicted bytes/accounts are not qualified.
+absent parents or identities and verification; existing web files show proposed diffs.
+Predicted bytes/accounts are not qualified.
 False flags do not roll back running services.
 
 Templates and security constraints remain unchanged. Web NNP=yes/cache-only/

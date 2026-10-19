@@ -17,3 +17,4 @@
     mode: "0644"
   loop: [mission-control-ingress.socket, mission-control-ingress.service]
   register: mission_control_ingress_units
+  when: not ansible_check_mode or mission_control_check_ready | default(false)

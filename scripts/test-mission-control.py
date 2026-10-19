@@ -281,6 +281,15 @@ if mode == 'systemd-analyze':
     assert all(p.is_file() for p in paths)
     event(dict(verify=sys.argv[1:], success=not bool(os.environ.get('MC_FIXTURE_FAIL'))))
     sys.exit(1 if os.environ.get('MC_FIXTURE_FAIL') else 0)
+if mode == 'systemctl':
+    service = json.loads(os.environ['MC_FIXTURE_SERVICES']).get('mission-control-ingress.socket', {})
+    state = service.get('state', 'inactive')
+    print('ActiveState=' + ('active' if state == 'running' else state))
+    print('UnitFileState=' + service.get('status', 'disabled'))
+    sys.exit(0)
+if mode == 'getent':
+    print('disposable fixture identity')
+    sys.exit(0)
 assert events.exists() and any(json.loads(x).get('success') for x in events.read_text().splitlines())
 if mode == 'ufw':
     event(dict(ufw=sys.argv[1:]))
@@ -306,7 +315,7 @@ else:
 """)
             binary = directory / "bin"
             binary.mkdir()
-            for name in ("systemd-analyze", "ufw"):
+            for name in ("systemd-analyze", "ufw", "systemctl", "getent"):
                 target = binary / name
                 target.write_text("#!" + sys.executable + "\n" + helper.read_text())
                 target.chmod(0o755)
@@ -322,7 +331,7 @@ else:
                     if "ansible.builtin.service_facts" in row:
                         row.pop("ansible.builtin.service_facts")
                         row["ansible.builtin.set_fact"] = dict(ansible_facts=dict(
-                            services="{{ fixture_services | default({}) }}"))
+                            services="{{ fixture_services | default({}) | dict2items | rejectattr('key', 'equalto', 'mission-control-ingress.socket') | items2dict }}"))
                     for module in ("ansible.builtin.file", "ansible.builtin.template"):
                         if module in row:
                             row[module]["owner"] = str(os.getuid())
@@ -377,7 +386,8 @@ else:
                     vars=params, tasks=tasks)]))
                 return subprocess.run(["ansible-playbook", "-i", str(inventory), str(play),
                     *(["--check", "--diff"] if check else [])],
-                    env=env | (dict(MC_FIXTURE_FAIL="1") if fail else {}), capture_output=True, text=True)
+                    env=env | dict(MC_FIXTURE_SERVICES=json.dumps(warm or {}))
+                        | (dict(MC_FIXTURE_FAIL="1") if fail else {}), capture_output=True, text=True)
             def passed(proc):
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             passed(run(check=True))
@@ -412,6 +422,12 @@ else:
                 ["allow", "in", "proto", "tcp", "from", peer, "to", "192.168.70.234", "port", "7393"]
                 for peer in ("192.168.20.33", "192.168.20.4")])
             (directory / "config/server.json").write_text("{}")
+            before = (directory / "events.jsonl").read_text()
+            proposed = run(activate=True, check=True)
+            passed(proposed)
+            self.assertIn('"mode": "cache"', proposed.stdout)
+            self.assertEqual((directory / "config/server.json").read_text(), "{}")
+            self.assertEqual((directory / "events.jsonl").read_text(), before)
             passed(run(activate=True))
             events = [json.loads(x) for x in (directory / "events.jsonl").read_text().splitlines()]
             web_events = [row["manager"] for row in events if row.get("manager", {}).get("name") == "mission-control.service"]
