@@ -175,10 +175,10 @@ class SnapshotTest(unittest.TestCase):
         checks = {
             "chaldea_node": ["chaldea_host_version == 'host-v0.2.2'"],
             "chaldea_host_artifact": [
-                "chaldea_host_version == 'host-v0.2.4'",
-                "chaldea_host_sha256 == akasha_host_sha256",
+                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.4')",
+                "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
                 "chaldea_host_artifact_preserve_versions == ['host-v0.2.2', 'host-v0.2.3']",
-                "chaldea_host_artifact_root == '" + new_root + "'"],
+                "chaldea_host_artifact_root == '/opt/chaldea-host/releases/' ~ chaldea_host_version ~ '/host'"],
             "chaldea_access_trust": [
                 "chaldea_host_version == 'host-v0.2.2'",
                 "chaldea_host_sha256 == '" + shared["chaldea_host_sha256"] + "'",
@@ -191,6 +191,19 @@ class SnapshotTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            releases, cache = root / "releases", root / "cache"
+            releases.mkdir()
+            cache.mkdir()
+            for index, version in enumerate(("host-v0.2.1", "host-v0.2.2", "host-v0.2.3", "host-v0.2.4")):
+                release = releases / version
+                release.mkdir()
+                os.utime(release, (index + 1, index + 1))
+                for suffix in (".tar.gz", ".json"):
+                    (cache / (version + suffix)).write_text(version)
+            artifact_tasks = yaml.safe_load((ROOT / "roles/chaldea_host_artifact/tasks/main.yml").read_text())
+            gc_start = next(i for i, task in enumerate(artifact_tasks)
+                            if task.get("name") == "Find installed host releases without following links")
+            trust_include = yaml.safe_load((ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())[0]
             for role, assertions in checks.items():
                 target = root / "roles" / role
                 (target / "tasks").mkdir(parents=True)
@@ -198,6 +211,16 @@ class SnapshotTest(unittest.TestCase):
                 if defaults.exists():
                     shutil.copytree(defaults, target / "defaults")
                 tasks = [{"ansible.builtin.assert": {"that": assertions, "quiet": True}}]
+                if role == "chaldea_host_artifact":
+                    tasks.extend([
+                        {"ansible.builtin.set_fact": {"fixture_artifact_calls":
+                            "{{ fixture_artifact_calls | default([]) + [chaldea_host_version] }}"}},
+                        {"block": artifact_tasks[gc_start:], "vars": {
+                            "chaldea_host_artifact_release_root": str(releases),
+                            "chaldea_host_artifact_cache": str(cache),
+                            "chaldea_host_artifact_become": False}}])
+                if role == "chaldea_access_trust":
+                    tasks.insert(0, trust_include)
                 if role == "akasha":
                     tasks.append({"ansible.builtin.template": {
                         "src": str(ROOT / "roles/akasha/templates/akasha.service.j2"),
@@ -205,11 +228,13 @@ class SnapshotTest(unittest.TestCase):
                 (target / "tasks/main.yml").write_text(yaml.safe_dump(tasks))
             play = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
             play["become"] = False
-            play["vars"] = {"chaldea_access_trust_enabled": True}
+            play["vars"] = {"chaldea_access_trust_enabled": True,
+                            "fixture_shared_sha": shared["chaldea_host_sha256"]}
             play["vars_files"] = [str((ROOT / "playbooks" / path).resolve())
                                   for path in play["vars_files"]]
             play["post_tasks"] = [{"ansible.builtin.assert": {"that": [
                 "chaldea_host_version == 'host-v0.2.2'",
+                "fixture_artifact_calls == ['host-v0.2.4', 'host-v0.2.2']",
                 "chaldea_host_artifact_root == '" + old_root + "'"], "quiet": True}}]
             path = root / "play.yml"
             path.write_text(yaml.safe_dump([play]))
@@ -222,6 +247,13 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(new_root + "/akasha-service.mjs",
                           (root / "akasha.service").read_text())
+            for version in ("host-v0.2.2", "host-v0.2.3", "host-v0.2.4"):
+                self.assertTrue((releases / version).is_dir())
+                for suffix in (".tar.gz", ".json"):
+                    self.assertEqual((cache / (version + suffix)).read_text(), version)
+            self.assertFalse((releases / "host-v0.2.1").exists())
+            self.assertFalse((cache / "host-v0.2.1.tar.gz").exists())
+            self.assertFalse((cache / "host-v0.2.1.json").exists())
 
 
 class BrokerTest(unittest.IsolatedAsyncioTestCase):

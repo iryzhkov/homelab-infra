@@ -1,5 +1,7 @@
 ---
 # Homelab Akasha only; shared consumer trust remains on host-v0.2.2.
 # Qualified release416722339/archive654523759, workflow39167630357.
+# Both server and shared-trust artifact calls must retain the rollback release.
+chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3]
 akasha_host_version: host-v0.2.4
 akasha_host_sha256: 531710066a7f67ac68f82ad1234d8f9a32e3311c839a894f86125c7d4f170592

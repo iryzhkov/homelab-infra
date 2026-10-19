@@ -44,7 +44,7 @@ This repository does not converge UDM; its inventory still reports unconverged.
 Do not widen shared port groups, manage generated rules or add UDM automation.
 
 Homelab playbooks/akasha.yml selects qualified host024 canonically, retaining022 shared
-trust and023 rollback only in its artifact-role invocation. Permissions and activation
+trust and023 rollback through both artifact calls in this Homelab-only play. Permissions and activation
 remain explicit gates. Rollback requires matching old registry/config before023,
 never restoration of an old access/antirollback database. Stop/disable owned MC units
 and withdraw only the owned edge route explicitly. Root owns live convergence.
