@@ -184,6 +184,31 @@
     - akasha-backup.timer
   register: akasha_units
 
+- name: Verify actual installed SYSTEM units before activation
+  ansible.builtin.command:
+    strip_empty_ends: false
+    argv:
+      - systemd-analyze
+      - verify
+      - --man=no
+      - /etc/systemd/system/akasha.service
+      - /etc/systemd/system/akasha-health.service
+      - /etc/systemd/system/akasha-health.timer
+      - /etc/systemd/system/akasha-backup.service
+      - /etc/systemd/system/akasha-backup.timer
+  register: akasha_system_verify
+  changed_when: false
+  failed_when: >-
+    akasha_system_verify.rc != 0 or
+    akasha_system_verify.stdout | length > 0 or
+    akasha_system_verify.stderr | length > 0
+  when: not ansible_check_mode
+
+- name: Report installed SYSTEM qualification deferred in check mode
+  ansible.builtin.debug:
+    msg: Check mode cannot qualify the newly installed SYSTEM units; real verification is required before activation.
+  when: ansible_check_mode
+
 - name: Reload definitions
   ansible.builtin.systemd_service:
     daemon_reload: true
