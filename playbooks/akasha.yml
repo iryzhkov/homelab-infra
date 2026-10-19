@@ -12,8 +12,16 @@
   pre_tasks:
     - name: Require the qualified host for Mission Control reader registrations
       ansible.builtin.assert:
-        that: akasha_host_version == 'host-v0.2.4'
-        fail_msg: Mission Control reader registrations require the exact qualified host-v0.2.4 packet.
+        that:
+          - >-
+            (not mission_control_laptop_permission | bool and akasha_host_version == 'host-v0.2.4') or
+            (mission_control_laptop_permission | bool and mission_control_laptop_qualified | bool and
+             mission_control_laptop_host_version is match('^host-v[0-9]+[.][0-9]+[.][0-9]+$') and
+             mission_control_laptop_host_version != 'host-v0.2.4' and
+             mission_control_laptop_host_sha256 is match('^[a-f0-9]{64}$') and
+             akasha_host_version == mission_control_laptop_host_version and
+             akasha_host_sha256 == mission_control_laptop_host_sha256)
+        fail_msg: Mission Control registrations require the exact qualified host packet, with a new qualified artifact for the laptop.
         quiet: true
       when: >-
         (akasha_registry + (akasha_enrollment_registry_additions
@@ -31,6 +39,19 @@
              + (akasha_enrollment_quota_laptop_publisher if akasha_quota_laptop_publisher_enabled | bool else [])
              + (akasha_enrollment_quota_pc_reader if akasha_quota_pc_reader_enabled | bool else []) }}
       when: akasha_enrollment_registry_enabled | bool
+      tags: [always]
+    - name: Compose separately selected remaining agent status registrations
+      ansible.builtin.set_fact:
+        akasha_registry: >-
+          {{ (akasha_registry | rejectattr('profile', 'equalto', 'mission-control-reader') | list)
+             + (akasha_enrollment_agent_b_mission_control if mission_control_agent_b_permission | bool else [])
+             + (akasha_enrollment_laptop_mission_control if mission_control_laptop_permission | bool else [])
+             + [(akasha_enrollment_registry_additions | selectattr('profile', 'equalto', 'mission-control-reader') | first)
+                | combine({'mission_control_read_sources': ['agent-a--mission-control']
+                  + (['omarchy-pc--mission-control'] if mission_control_pc_permission | bool else [])
+                  + (['agent-b--mission-control'] if mission_control_agent_b_permission | bool else [])
+                  + (['omarchy-macbook-air-igor--mission-control'] if mission_control_laptop_permission | bool else [])})] }}
+      when: akasha_enrollment_registry_enabled | bool and (mission_control_agent_b_permission | bool or mission_control_laptop_permission | bool)
       tags: [always]
   roles:
     - {role: chaldea_node, tags: [runtime]}
