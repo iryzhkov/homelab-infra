@@ -1,0 +1,38 @@
+---
+# Source only. Never imported by site.yml; no default host selection.
+- name: Require explicit inventory and one target alias
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Refuse repository production inventory and implicit host patterns
+      ansible.builtin.assert:
+        that:
+          - ov_http_target | default('') is match('^[A-Za-z0-9][A-Za-z0-9_-]*$')
+          - ov_http_target | default('') in hostvars
+          - groups['all'] | length == 1
+          - ansible_inventory_sources | length == 1
+          - ansible_inventory_sources[0] is match('^/')
+          - not (ansible_inventory_sources[0] | realpath).startswith((playbook_dir ~ '/../inventory/' | realpath) ~ '/')
+          - ov_http_compose_enabled | default(false) | bool
+        quiet: true
+
+- name: Apply only the selected OV Compose reader
+  hosts: "{{ ov_http_target | default('__web_mcp_no_target__') }}"
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Refuse implicit scope even when a limit skips the controller play
+      ansible.builtin.assert:
+        that:
+          - ov_http_target | default('') is match('^[A-Za-z0-9][A-Za-z0-9_-]*$')
+          - ov_http_target | default('') in hostvars
+          - ansible_play_hosts_all | length == 1
+          - groups['all'] | length == 1
+          - ansible_inventory_sources | length == 1
+          - ansible_inventory_sources[0] is match('^/')
+          - not (ansible_inventory_sources[0] | realpath).startswith((playbook_dir ~ '/../inventory/' | realpath) ~ '/')
+          - ov_http_compose_enabled | default(false) | bool
+        quiet: true
+  roles:
+    - ov_http_compose

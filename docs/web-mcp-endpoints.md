@@ -211,12 +211,10 @@ separate scope approval. Remove only files evidenced by the ownership marker
 after confirming no consumers remain. This role does not delete users,
 credentials, release directories or other owners' files.
 
-OV packaging is deferred. After its semantic profile and source interface settle,
-qualify an actual reviewed release with packaging appropriate to its Python
-runtime and its service-specific config, ownership and health/authorization
-contract. A static OV binary is not required. Only then add its explicit
-packaging and tests in homelab-infra. There is no OV role, fake image digest,
-network pip install or generic plugin/auth broker in this slice.
+OV now has separate bounded Compose packaging source in [ov-http-compose.md](ov-http-compose.md).
+It shares only the route role and guarded Compose seam. The static endpoint
+profile remains limited to HA and the observer. OV image/runtime qualification
+and deployment remain later operator gates.
 
 ## Isolated validation
 

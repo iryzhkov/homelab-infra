@@ -1,0 +1,3 @@
+{% for key, value in ov_http.config | dictsort %}
+{{ key }} = {{ value | to_json }}
+{% endfor %}

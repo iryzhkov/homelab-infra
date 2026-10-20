@@ -7,6 +7,7 @@ from pathlib import Path
 import pwd
 import stat
 import struct
+import subprocess
 
 from ansible.module_utils.basic import AnsibleModule
 
@@ -120,16 +121,89 @@ def binary(service, sha256):
         need(digest.hexdigest() == sha256)
 
 
+
+OV_ROOT = Path("/opt/web-mcp/ov-http")
+OV_OWNER = "homelab-infra ov-http compose v1\n"
+OV_LABEL = "homelab-infra.ov-http"
+
+
+def ov_package(release, files_required=False):
+    import re
+    need(isinstance(release, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", release))
+    # No host account is created or adopted for the container's numeric identity.
+    need(optional_account(pwd.getpwuid, 8098) is None)
+    need(optional_account(grp.getgrgid, 8098) is None)
+    inspect(OV_ROOT, {0}, directory=True)
+    marker = OV_ROOT / ".homelab-infra-owned"
+    if inspect(marker, {0}, exact_mode=0o644):
+        need(marker.read_text() == OV_OWNER)
+    else:
+        need(not OV_ROOT.exists())
+    if OV_ROOT.exists():
+        need(set(p.name for p in OV_ROOT.iterdir()) <= {".homelab-infra-owned", "releases"})
+    releases = OV_ROOT / "releases"
+    inspect(releases, {0}, directory=True)
+    if releases.exists():
+        for path in releases.iterdir():
+            need(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", path.name))
+            inspect(path, {0}, directory=True)
+    directory = releases / release
+    inspect(directory, {0}, directory=True, required=files_required)
+    if directory.exists():
+        need(set(p.name for p in directory.iterdir()) <=
+             {".homelab-infra-owned", "compose.yml", "runtime.toml", "backend-key"})
+        marker = directory / ".homelab-infra-owned"
+        need(inspect(marker, {0}, exact_mode=0o644, required=True))
+        need(marker.read_text() == OV_OWNER)
+    for name in ("runtime.toml", "backend-key"):
+        info = inspect(directory / name, {0, 8098}, exact_mode=0o600,
+                       required=files_required)
+        if info:
+            need(info.st_uid == 8098 and info.st_gid == 8098)
+    inspect(directory / "compose.yml", {0}, exact_mode=0o644, required=files_required)
+
+
+def ov_runtime():
+    """Inspect only fixed Compose names. Never take over unrelated Docker objects."""
+    import json
+    import subprocess
+    def docker(*args):
+        return subprocess.run(["docker", "--host=unix:///var/run/docker.sock", *args], check=True, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    ids = docker("container", "ls", "-aq", "--filter",
+                 "label=com.docker.compose.project=ov-http").split()
+    # Also catch an unrelated object occupying either fixed container name.
+    for name in ("ov-http", "ov-http-check"):
+        ids.extend(docker("container", "ls", "-aq", "--filter", "name=^/" + name + "$").split())
+    for ident in set(ids):
+        obj = json.loads(docker("container", "inspect", ident))[0]
+        labels = obj.get("Config", {}).get("Labels", {}) or {}
+        need(labels.get(OV_LABEL) == "v1")
+        need(labels.get("com.docker.compose.project") == "ov-http")
+        need(labels.get("com.docker.compose.service") == "ov-http")
+        # Never remove or reuse a left-over check container.
+        need(obj["Name"] == "/ov-http")
+    networks = docker("network", "ls", "-q", "--filter",
+                      "label=com.docker.compose.project=ov-http").split()
+    networks.extend(docker("network", "ls", "-q", "--filter", "name=^ov-http_default$").split())
+    for ident in set(networks):
+        obj = json.loads(docker("network", "inspect", ident))[0]
+        labels = obj.get("Labels", {}) or {}
+        need(obj["Name"] == "ov-http_default" and labels.get(OV_LABEL) == "v1")
+        need(labels.get("com.docker.compose.project") == "ov-http")
+
+
 def main():
     module = AnsibleModule(argument_spec={
-        "kind": {"type": "str", "choices": ["endpoint", "credential", "route", "binary"],
+        "kind": {"type": "str", "choices": ["endpoint", "credential", "route", "binary", "ov-package", "ov-files", "ov-runtime"],
                  "required": True},
-        "service": {"type": "str", "choices": list(SERVICES)},
+        "service": {"type": "str", "choices": [*SERVICES, "ov-http"]},
         "uid": {"type": "int"},
         "gid": {"type": "int"},
         "sha256": {"type": "str"},
         "credential_names": {"type": "list", "elements": "str", "default": []},
         "source": {"type": "path", "no_log": True},
+        "release": {"type": "str"},
     }, supports_check_mode=True)
     p = module.params
     try:
@@ -139,8 +213,13 @@ def main():
             if result is None:
                 raise ValueError("missing source")
             need(result.st_uid == p["uid"])
+        elif p["kind"] in ("ov-package", "ov-files"):
+            ov_package(p["release"], files_required=p["kind"] == "ov-files")
+        elif p["kind"] == "ov-runtime":
+            ov_runtime()
         else:
-            need(p["service"] in SERVICES)
+            need(p["service"] in (*SERVICES, "ov-http") if p["kind"] == "route"
+                 else p["service"] in SERVICES)
             if p["kind"] in ("endpoint", "binary"):
                 import re
                 need(isinstance(p["sha256"], str)
@@ -154,7 +233,7 @@ def main():
             else:
                 need(p["uid"] is not None)
                 route(p["service"], p["uid"])
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError, KeyError, IndexError):
         module.fail_json(msg="web-mcp protected preflight refused; inspect fixed paths and identity")
     module.exit_json(changed=False)
 

@@ -226,7 +226,7 @@ def endpoint_contract(value):
 
 def route_contract(value):
     keys(value, ("service", "state", "directory_uid"), ("resource", "upstream"))
-    require(value["service"] in SERVICES and value["state"] in ("present", "absent"),
+    require(value["service"] in (*SERVICES, "ov-http") and value["state"] in ("present", "absent"),
             "invalid route selection")
     integer(value["directory_uid"], 0, 2147483647)
     if value["state"] == "absent":
@@ -245,7 +245,45 @@ def route_contract(value):
     return dict(value, host=resource.hostname)
 
 
+
+OV_CONTRACT = "5f5c52c2171a2fef9ebe1439342921b1e58169bd"
+
+
+def ov_contract(value):
+    keys(value, ("release", "image", "listen", "config", "credential"))
+    match(value["release"], r"[a-z0-9][a-z0-9-]{0,63}")
+    private_address(value["listen"])
+    image = value["image"]
+    keys(image, ("reference", "source_revision", "contract_revision", "provenance"))
+    match(image["reference"], r"[a-z0-9][a-z0-9./:_-]{0,240}@sha256:[0-9a-f]{64}")
+    require(":latest@" not in image["reference"], "no latest image tag")
+    match(image["source_revision"], r"[0-9a-f]{40}")
+    require(image["contract_revision"] == OV_CONTRACT, "unaccepted OV reader interface")
+    p = url(image["provenance"])
+    require(p.path not in ("", "/") and "/latest/" not in p.path,
+            "explicit reviewed build receipt required")
+    config = value["config"]
+    # Semantic deployment is deliberately unsupported in this packaging slice.
+    keys(config, ("resource", "issuer", "jwks_url", "backend_url",
+                  "backend_secret_file", "listen_host", "listen_port"))
+    trust(config, "resource", "issuer")
+    for key in ("resource", "issuer", "jwks_url", "backend_url"):
+        require("%" not in config[key], "escaped runtime URLs refused")
+    backend = url(config["backend_url"], ("http", "https"))
+    require(backend.path == "/api/v1", "OV backend must end in /api/v1")
+    integer(config["listen_port"], 8098, 8098)
+    require(config["listen_host"] == "0.0.0.0", "container listen is fixed")
+    require(config["backend_secret_file"] == "/etc/ov-http/backend-key", "fixed OV key mount")
+    credential = value["credential"]
+    keys(credential, ("source", "source_uid"))
+    match(credential["source"], r"/[A-Za-z0-9/_.-]+")
+    require(".." not in credential["source"].split("/"), "unsafe source path")
+    integer(credential["source_uid"], 0, 2147483647)
+    return value
+
+
 class FilterModule:
     def filters(self):
         return {"web_mcp_endpoint_contract": endpoint_contract,
-                "web_mcp_route_contract": route_contract}
+                "web_mcp_route_contract": route_contract,
+                "ov_http_contract": ov_contract}
