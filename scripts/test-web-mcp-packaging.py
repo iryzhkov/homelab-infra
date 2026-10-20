@@ -101,6 +101,30 @@ class PackagingTest(unittest.TestCase):
         value["config"]["gatus"][0]["token_file"] = "/legacy"
         self.rejected(value)
 
+    def test_observer_url_byte_limits_and_escaped_paths(self):
+        for field in ("issuer", "jwks_url"):
+            value = fixture("homelab-observer")
+            prefix = "https://auth.example.invalid/"
+            value["config"][field] = prefix + "k" * (511 - len(prefix)) + "/"
+            self.assertEqual(len(value["config"][field].encode()), 512)
+            contract.endpoint_contract(value)
+            value["config"][field] += "/"
+            self.rejected(value)
+        value = fixture("homelab-observer")
+        value["config"]["gatus"][0]["base_url"] = "https://" + "é" * 252
+        self.assertEqual(len(value["config"]["gatus"][0]["base_url"].encode()), 512)
+        contract.endpoint_contract(value)
+        value["config"]["gatus"][0]["base_url"] += "a"
+        self.rejected(value)
+        for field, path in (("resource", "%6dcp"), ("issuer", "%61/"),
+                            ("jwks_url", "keys%2fextra"), ("jwks_url", "%61")):
+            value = fixture("homelab-observer")
+            value["config"][field] = "https://auth.example.invalid/" + path
+            self.rejected(value)
+        value = fixture("homelab-observer")
+        value["config"]["jwks_url"] = "https://auth.example.invalid/canonical%20keys"
+        contract.endpoint_contract(value)
+
     def test_identity_bind_artifact_and_trust_refusals(self):
         for field, bad in (("uid", 0), ("gid", 65534), ("listen", ":8787"),
                            ("listen", "0.0.0.0:8787"), ("listen", "8.8.8.8:8787"),

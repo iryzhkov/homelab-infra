@@ -84,7 +84,8 @@ qualify a device or grant access.
 
 Observer config has exactly `resource, issuer, jwks_url, inventory_revision,
 stale_after_seconds, hosts, services, gatus`. Its resource/trust URL constraints
-match HA. Revision is 40..64 lowercase hex; freshness is 1..86400 seconds.
+retain the operator restrictions above. All observer URLs, including Gatus origins,
+are limited to 512 UTF-8 bytes and refuse alternate escaped-path spellings. Revision is 40..64 lowercase hex; freshness is 1..86400 seconds.
 Hosts are bounded `{id,name}` records; services add an explicit host_id and
 1..4 `{backend_id,endpoint_key}` probes. Each probe belongs to one service.
 Up to 16 Gatus records have `id, base_url, version, source_revision` and optional
@@ -228,6 +229,7 @@ revision under test:
 - playbooks/library/web_mcp_guard.py and the two playbooks/web-mcp-*.yml files
 - roles/web_mcp_endpoint/ and roles/web_mcp_route/
 - scripts/test-web-mcp-packaging.py and this document
+- .github/workflows/check.yml when inspecting or executing the packaging CI step
 
 Commit that fixture and record its tree beside the original source commit/tree.
 Exclude inventory/, secrets/, vars/, stacks/ and all protected inputs. Test
@@ -245,7 +247,7 @@ chaldea exec --host agent-a -- sh -c '
   test "$HOME" = "$PWD/.cache/web-mcp-tests/home"
   test "$TMPDIR" = "$HOME/tmp"
   mkdir -p "$TMPDIR"
-  uv run --no-project --with ansible-core==2.19.3 --with PyYAML==6.0.3 \
+  uv run --no-project --python 3.11 --with ansible-core==2.19.13 --with PyYAML==6.0.3 \
     --with Jinja2==3.1.6 python scripts/test-web-mcp-packaging.py
 '
 ```

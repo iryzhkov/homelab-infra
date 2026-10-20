@@ -143,10 +143,18 @@ def ha_config(config, listen):
     return {"backend-token"}
 
 
+def observer_https_url(value, origin=False):
+    p = url(value, origin=origin)
+    require(len(value.encode("utf-8")) <= 512
+            and quote_from_bytes(unquote_to_bytes(p.path), safe="/$&+,:;=@-_.~") == p.path,
+            "observer URL must fit 512 bytes and have no alternate escaped path")
+    return p
+
+
 def observer_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "inventory_revision",
                   "stale_after_seconds", "hosts", "services", "gatus"))
-    trust(config, "resource", "issuer")
+    trust(config, "resource", "issuer", check_url=observer_https_url)
     match(config["inventory_revision"], r"[0-9a-f]{40,64}")
     integer(config["stale_after_seconds"], 1, 86400)
     host_ids, backend_ids, service_ids, pairs, credentials = [], [], [], [], set()
@@ -160,7 +168,7 @@ def observer_config(config):
         keys(backend, ("id", "base_url", "version", "source_revision"), ("credentials_file",))
         identifier(backend["id"])
         backend_ids.append(backend["id"])
-        url(backend["base_url"], origin=True)
+        observer_https_url(backend["base_url"], origin=True)
         require(backend["version"] == "v5.37.0"
                 and backend["source_revision"] == "ae605f291928ed9b3bdbe60ae5528cc57631433b",
                 "unqualified Gatus contract")
