@@ -25,7 +25,7 @@ The required `web_mcp_endpoint` object has exactly these fields:
 | service | Only `ha-mcp` or `homelab-observer` |
 | uid, gid | Explicit unused dedicated system UID/GID, integers 100..999 |
 | listen | Explicit private/loopback IPv4 and unprivileged port, no wildcard |
-| artifact | `url`, `sha256`, `source_revision`, `contract_revision` |
+| artifact | Required `url`, `sha256`, `source_revision`, `contract_revision`; optional `local_source` |
 | config | Exact service-specific JSON object described below |
 | credentials | Exact referenced list of `{name, source, source_uid}` objects |
 
@@ -36,9 +36,53 @@ repositories are `iryzhkov/homeassistant-mcp` and `iryzhkov/homelab-cli`.
 No archives, mutable latest URL, source checkout, package installation or build
 occurs on a service host. Review and record the binary SHA256, published source
 commit, static amd64 build provenance and corresponding accepted contract first.
-The role downloads to a content-addressed directory, verifies the checksum and
+The role stages to a content-addressed directory, verifies the checksum and
 static ELF format before installing config or switching the unit, then runs the
 exact binary path. TLS certificate verification remains enabled.
+
+For a private release already obtained and verified by the operator, add exactly
+`artifact.local_source: {path, owner_uid}`. The four existing provenance fields
+remain required and validated, including the explicit HTTPS release URL. No URL
+fetch occurs when local_source is present; omission preserves the unauthenticated
+HTTPS download path. No field accepts authentication data.
+
+```yaml
+artifact:
+  url: https://github.com/iryzhkov/homelab-cli/releases/download/REVIEWED-TAG/homelab-observer-linux-amd64
+  sha256: <reviewed-64-lowercase-hex>
+  source_revision: <published-40-lowercase-hex>
+  contract_revision: 8af24606b7cf5cd89e727660266104699313e993
+  local_source:
+    path: /protected/operator-inputs/homelab-observer-linux-amd64
+    owner_uid: 1000  # Supply the actual controller file owner.
+```
+
+The local path is absolute canonical ASCII with letters, digits, underscore,
+dot and hyphen components, at most 4096 bytes, with no empty, dot or dot-dot
+components. owner_uid is an explicit integer 0..2147483647. Before any managed
+host write, the controller opens every ancestor through held directory
+descriptors with no-follow semantics. Ancestors must be owned by root or the
+specified operator UID and never group/world writable. The source must be a
+single-link regular file owned by exactly owner_uid, mode0600, size 64 bytes
+through 256 MiB. The same bounded read must match the required SHA256 and contain
+a little-endian ELF64 Linux/SystemV amd64 executable with a valid bounded program
+table and neither PT_INTERP nor PT_DYNAMIC. No source contents enter task output.
+
+The preflight also derives SHA1 from those same bytes and checks the open
+descriptor metadata again after reading. Ansible copy receives that explicit
+checksum and refuses different uploaded bytes before replacing the mode0555
+destination. SHA1 is only the existing copy protocol's transfer check; SHA256
+remains authoritative. A later source replacement can fail the deployment, but
+cannot silently install different bytes without defeating the pinned transfer
+digest. The independent target SHA256 stat and static ELF guard still run
+before config, unit or activation. Keep operator custody of the protected source
+through the run. No credential or arbitrary secret path belongs here.
+
+In check mode the controller metadata, SHA256 and ELF checks still run without
+managed writes. Copy predicts a change for an absent destination; target
+installation and runtime checks remain unproven. Staging/activation flags and
+the refusal to stage over a running or enabled service are unchanged. The
+content-addressed root-owned mode0555 target is identical for both input modes.
 
 The accepted contract revisions are:
 
@@ -225,7 +269,7 @@ revision under test:
 
 - ansible.cfg and filter_plugins/web_mcp.py
 - playbooks/library/web_mcp_guard.py and the two playbooks/web-mcp-*.yml files
-- roles/web_mcp_endpoint/ and roles/web_mcp_route/
+- roles/web_mcp_endpoint/, including library/web_mcp_local_artifact.py, and roles/web_mcp_route/
 - scripts/test-web-mcp-packaging.py, scripts/run-web-mcp-ci.py and this document
 - .github/workflows/check.yml when inspecting or executing the packaging CI step
 
@@ -275,3 +319,17 @@ source, including owned route removal and inventory mismatch refusal. Full packa
 installation, systemd activation, private network/CA access, actual Traefik
 loading, Authentik issuance, native clients and physical HA effects remain
 runtime gaps. No fixture result is deployment evidence.
+
+Local artifact fixtures additionally run the controller module and real staging
+file/copy/stat/binary tasks against a sanitized package path and synthetic CA
+file metadata. The job-mounted host CA ownership is not acceptable to the original
+guard; the fixture redirects that fixed path and retains the UID0/mode checks.
+Tests cover malformed ELF/checksum and protected-source refusals before package creation, fresh check,
+apply, second no-op, installed check, omitted-local-source URL no-op, running or
+enabled staging refusal, and a forced source mutation between preflight and copy.
+Account creation, service facts and config/unit/activation are outside this
+staging fixture. The job namespace maps only UID0, named job rather than root;
+fixture write tasks use numeric UID/GID0 for the same production ownership.
+Wrong source UID and synthetic
+ancestor UID metadata are refusal evidence, not qualification of an actual
+operator UID or runtime identity. Original production ownership checks are retained.

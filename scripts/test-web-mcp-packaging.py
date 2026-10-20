@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import hashlib
 import struct
+import stat
 import sys
 import tempfile
 import unittest
@@ -31,6 +32,21 @@ def load(name, path):
 
 contract = load("contract", "filter_plugins/web_mcp.py")
 guard = load("guard", "playbooks/library/web_mcp_guard.py")
+local_artifact = load("local_artifact", "roles/web_mcp_endpoint/library/web_mcp_local_artifact.py")
+
+
+def static_elf(machine=62, program_type=1):
+    """Minimal Linux amd64 executable: one RX load segment, exit(0), no loader."""
+    code = b"\xb8\x3c\x00\x00\x00\x31\xff\x0f\x05"
+    header = bytearray(64)
+    header[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<HHI", header, 16, 2, machine, 1)
+    struct.pack_into("<Q", header, 24, 0x400000 + 120)
+    struct.pack_into("<Q", header, 32, 64)
+    struct.pack_into("<HHH", header, 52, 64, 56, 1)
+    program = struct.pack("<IIQQQQQQ", program_type, 5, 0, 0x400000, 0x400000,
+                          120 + len(code), 120 + len(code), 4096)
+    return bytes(header + program + code)
 
 
 def fixture(service="ha-mcp"):
@@ -318,6 +334,254 @@ class PackagingTest(unittest.TestCase):
             binary.chmod(0o555)
             with self.assertRaises(ValueError):
                 guard.binary("ha-mcp", digest)
+
+    def test_local_source_contract_keeps_all_provenance_required(self):
+        for service in contract.SERVICES:
+            value = fixture(service)
+            value["artifact"]["local_source"] = {"path": "/protected/release", "owner_uid": 1000}
+            contract.endpoint_contract(value)
+            for field in ("url", "sha256", "source_revision", "contract_revision"):
+                bad = copy.deepcopy(value)
+                del bad["artifact"][field]
+                self.rejected(bad)
+            for source in ({}, None, {"path": "/protected/release"},
+                           {"path": "/protected/release", "owner_uid": True},
+                           {"path": "/protected/release", "owner_uid": -1},
+                           {"path": "/protected/release", "owner_uid": 2147483648},
+                           {"path": "/protected/release", "owner_uid": 0, "token": "forbidden"}):
+                bad = copy.deepcopy(value)
+                bad["artifact"]["local_source"] = source
+                self.rejected(bad)
+            for path in ("relative", "/", "/a/../b", "/a/./b", "/a//b", "/a/",
+                         "/a b", "/a\\\\b", "/a?", "/" + "a" * 4096):
+                bad = copy.deepcopy(value)
+                bad["artifact"]["local_source"]["path"] = path
+                self.rejected(bad)
+
+    def test_local_artifact_descriptor_and_byte_refusals(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            source = base / "artifact"
+            payload = static_elf()
+            digest = hashlib.sha256(payload).hexdigest()
+            source.write_bytes(payload)
+            source.chmod(0o600)
+            self.assertEqual(local_artifact.validate(str(source), os.getuid(), digest),
+                             hashlib.sha1(payload).hexdigest())
+            with self.assertRaises(ValueError):
+                local_artifact.validate(str(source), os.getuid() + 1, digest)
+            for mode in (0o400, 0o644, 0o660, 0o700):
+                source.chmod(mode)
+                with self.assertRaises(ValueError):
+                    local_artifact.validate(str(source), os.getuid(), digest)
+            source.chmod(0o600)
+            link = base / "link"
+            link.symlink_to(source)
+            with self.assertRaises((ValueError, OSError)):
+                local_artifact.validate(str(link), os.getuid(), digest)
+            link.unlink()
+            os.link(source, link)
+            with self.assertRaises(ValueError):
+                local_artifact.validate(str(source), os.getuid(), digest)
+            link.unlink()
+            base.chmod(0o777)
+            with self.assertRaises(ValueError):
+                local_artifact.validate(str(source), os.getuid(), digest)
+            base.chmod(0o700)
+            # Ancestor owner checks use synthetic metadata because the job maps only UID0.
+            real_fstat = local_artifact.os.fstat
+            def unsafe_parent(fd):
+                info = real_fstat(fd)
+                if stat.S_ISDIR(info.st_mode):
+                    return SimpleNamespace(st_uid=os.getuid() + 1, st_mode=info.st_mode)
+                return info
+            with mock.patch.object(local_artifact.os, "fstat", side_effect=unsafe_parent):
+                with self.assertRaises(ValueError):
+                    local_artifact.validate(str(source), os.getuid(), digest)
+            alias = base / "alias"
+            alias.symlink_to(base, target_is_directory=True)
+            with self.assertRaises(OSError):
+                local_artifact.validate(str(alias / "artifact"), os.getuid(), digest)
+            for bad in (b"not executable".ljust(120, b" "), static_elf(machine=183),
+                        static_elf(program_type=2), static_elf(program_type=3)):
+                source.write_bytes(bad)
+                with self.assertRaises(ValueError):
+                    local_artifact.validate(str(source), os.getuid(),
+                                            hashlib.sha256(bad).hexdigest())
+            source.write_bytes(payload)
+            with self.assertRaises(ValueError):
+                local_artifact.validate(str(source), os.getuid(), "0" * 64)
+            for size in (0, 63, local_artifact.MAX_BYTES + 1):
+                with source.open("wb") as stream:
+                    stream.truncate(size)
+                with self.assertRaises(ValueError):
+                    local_artifact.validate(str(source), os.getuid(), digest)
+            source.write_bytes(payload)
+            # A late mutation after hashing is refused by the descriptor metadata check.
+            calls = 0
+            def changed_source(fd):
+                nonlocal calls
+                info = real_fstat(fd)
+                if stat.S_ISREG(info.st_mode):
+                    calls += 1
+                    if calls == 3:
+                        source.write_bytes(payload + b"late mutation")
+                        info = real_fstat(fd)
+                return info
+            with mock.patch.object(local_artifact.os, "fstat", side_effect=changed_source):
+                with self.assertRaises(ValueError):
+                    local_artifact.validate(str(source), os.getuid(), digest)
+
+    def test_local_staging_actual_ansible_check_apply_noop_and_race(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            inputs = base / "inputs"
+            inputs.mkdir(mode=0o700)
+            source = inputs / "artifact"
+            payload = static_elf()
+            source.write_bytes(payload)
+            source.chmod(0o600)
+            digest = hashlib.sha256(payload).hexdigest()
+            package = base / "package"
+            library = base / "library"
+            library.mkdir()
+            # Keep production guard code and UID0 checks. Redirect package and CA boundaries.
+            ca = base / "synthetic-ca.crt"
+            ca.write_text("synthetic metadata fixture, never a trust bundle")
+            ca.chmod(0o644)
+            wrapper = (
+                "#!/usr/bin/python\nimport importlib.util\nfrom pathlib import Path\n"
+                "from ansible.module_utils.basic import AnsibleModule\n"
+                f"spec = importlib.util.spec_from_file_location('guard', {str(ROOT / 'playbooks/library/web_mcp_guard.py')!r})\n"
+                "guard = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(guard)\n"
+                f"guard.PACKAGE_ROOT = Path({str(package)!r})\n"
+                "inspect = guard.inspect\n"
+                "def fixture_inspect(path, *args, **kwargs):\n"
+                f"    path = {str(ca)!r} if str(path) == '/etc/ssl/certs/ca-certificates.crt' else path\n"
+                "    return inspect(path, *args, **kwargs)\n"
+                "guard.inspect = fixture_inspect\nguard.main()\n")
+            (library / "web_mcp_guard.py").write_text(wrapper)
+            inventory = base / "inventory.yml"
+            inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
+            original = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text())[0]
+            staged = copy.deepcopy(original)
+            tasks = []
+            for task in staged["block"]:
+                if task["name"] == "Create a root-owned protected configuration directory":
+                    break  # This fixture qualifies staging, never runtime/config/activation.
+                if any(key in task for key in ("ansible.builtin.group", "ansible.builtin.user")):
+                    continue  # Account creation cannot run in this job's single-UID namespace.
+                if "ansible.builtin.service_facts" in task:
+                    task = {"name": task["name"], "ansible.builtin.set_fact": {
+                        "ansible_facts": "{{ ansible_facts | combine({'services': fixture_services}) }}"}}
+                # Chaldea maps UID/GID0 as job, without root NSS entries.
+                # Numeric 0 retains the exact production ownership requirement.
+                for args in task.values():
+                    if isinstance(args, dict):
+                        for field in ("owner", "group"):
+                            if args.get(field) == "root":
+                                args[field] = "0"
+                tasks.append(task)
+            staged["block"] = yaml.safe_load(yaml.safe_dump(tasks).replace("/opt/web-mcp", str(package)))
+            values = fixture("homelab-observer")
+            values["artifact"].update(sha256=digest, local_source={
+                "path": str(source), "owner_uid": os.getuid()})
+            defaults = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/defaults/main.yml").read_text())
+            playbook = base / "stage.yml"
+            def write_play(race=False):
+                chosen = copy.deepcopy(staged)
+                if race:
+                    index = next(i for i, task in enumerate(chosen["block"])
+                                 if task["name"] == "Create root-owned release directories")
+                    chosen["block"].insert(index, {"name": "Synthetic source change after preflight",
+                        "ansible.builtin.copy": {"content": "alternate bytes must never install",
+                                               "dest": str(source), "mode": "0600"}})
+                playbook.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                    "vars": {**defaults, "web_mcp_endpoint_enabled": True,
+                             "web_mcp_endpoint": values, "fixture_services": {},
+                             "ansible_facts": {"system": "Linux", "os_family": "Debian",
+                                "architecture": "x86_64", "service_mgr": "systemd"}},
+                    "tasks": [chosen]}]))
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                ANSIBLE_LIBRARY=os.pathsep.join((str(library),
+                    str(ROOT / "roles/web_mcp_endpoint/library"))),
+                ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"),
+                ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+            command = ["ansible-playbook", "-i", str(inventory), str(playbook)]
+            def run(*extra, success=True):
+                result = subprocess.run(command + list(extra), env=env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                if success and result.returncode:
+                    self.fail(result.stdout)
+                if not success:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                return result.stdout
+            target = package / values["service"] / "releases" / digest / values["service"]
+            # Every malformed input fails in the real controller module before mkdir/copy.
+            for bad in (b"not ELF".ljust(120, b" "), static_elf(machine=183),
+                        static_elf(program_type=2), static_elf(program_type=3)):
+                source.write_bytes(bad)
+                values["artifact"]["sha256"] = hashlib.sha256(bad).hexdigest()
+                write_play()
+                refused = run(success=False)
+                self.assertIn("Validate protected local artifact bytes", refused)
+                self.assertNotIn("Create root-owned release directories", refused)
+                self.assertFalse(package.exists())
+            values["artifact"]["sha256"] = digest
+            source.write_bytes(payload)
+            for mutation in ("checksum", "mode", "owner", "parent", "symlink", "hardlink"):
+                alias = base / "alias"
+                if mutation == "checksum":
+                    values["artifact"]["sha256"] = "0" * 64
+                elif mutation == "mode":
+                    source.chmod(0o644)
+                elif mutation == "owner":
+                    values["artifact"]["local_source"]["owner_uid"] = os.getuid() + 1
+                elif mutation == "parent":
+                    inputs.chmod(0o777)
+                elif mutation == "symlink":
+                    alias.symlink_to(source)
+                    values["artifact"]["local_source"]["path"] = str(alias)
+                else:
+                    os.link(source, alias)
+                write_play()
+                refused = run(success=False)
+                self.assertIn("Validate protected local artifact bytes", refused)
+                self.assertNotIn("Create root-owned release directories", refused)
+                self.assertFalse(package.exists())
+                if alias.exists():
+                    alias.unlink()
+                inputs.chmod(0o700)
+                source.chmod(0o600)
+                values["artifact"].update(sha256=digest, local_source={
+                    "path": str(source), "owner_uid": os.getuid()})
+            write_play()
+            checked = run("--check")
+            self.assertFalse(package.exists())
+            self.assertIn("changed=", checked)
+            run()
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(target.stat().st_uid, 0)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o555)
+            checked_run([str(target)], check=True)  # Qualify the synthetic ELF itself.
+            self.assertIn("changed=0", run())
+            self.assertIn("changed=0", run("--check"))
+            # With local_source omitted, the existing get_url checksum path is a no-op.
+            del values["artifact"]["local_source"]
+            write_play()
+            self.assertIn("changed=0", run())
+            values["artifact"]["local_source"] = {"path": str(source), "owner_uid": os.getuid()}
+            write_play()
+            for state in ({"state": "running"}, {"status": "enabled"}):
+                run("-e", json.dumps({"fixture_services": {"homelab-observer.service": state}}),
+                    success=False)
+                self.assertEqual(target.read_bytes(), payload)
+            # Make a new target absent, then mutate bytes between preflight and copy.
+            target.unlink()
+            write_play(race=True)
+            refused = run(success=False)
+            self.assertIn("Stage the prevalidated local executable", refused)
+            self.assertFalse(target.exists())
 
     def test_enabled_route_role_without_inventory_traefik_variables(self):
         with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
