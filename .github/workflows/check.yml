@@ -38,14 +38,7 @@ jobs:
       - name: Install the deployment templating version for guarded role tests
         run: pip install --disable-pip-version-check ansible-core==2.19.13
       - name: Test bounded web MCP packaging
-        run: |
-          export HOME="$GITHUB_WORKSPACE/.cache/web-mcp-tests/home"
-          export TMPDIR="$HOME/tmp"
-          export PYTHONDONTWRITEBYTECODE=1
-          test "$HOME" = "$GITHUB_WORKSPACE/.cache/web-mcp-tests/home"
-          test "$TMPDIR" = "$HOME/tmp"
-          mkdir -p "$TMPDIR"
-          python3 scripts/test-web-mcp-packaging.py
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/run-web-mcp-ci.py
       - name: Validate the NATS stack
         run: |
           python3 scripts/stack-lint.py stacks/nats/stack.yml

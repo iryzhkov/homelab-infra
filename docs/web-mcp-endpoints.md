@@ -228,7 +228,7 @@ revision under test:
 - ansible.cfg and filter_plugins/web_mcp.py
 - playbooks/library/web_mcp_guard.py and the two playbooks/web-mcp-*.yml files
 - roles/web_mcp_endpoint/ and roles/web_mcp_route/
-- scripts/test-web-mcp-packaging.py and this document
+- scripts/test-web-mcp-packaging.py, scripts/run-web-mcp-ci.py and this document
 - .github/workflows/check.yml when inspecting or executing the packaging CI step
 
 Commit that fixture and record its tree beside the original source commit/tree.
@@ -251,6 +251,19 @@ chaldea exec --host agent-a -- sh -c '
     --with Jinja2==3.1.6 python scripts/test-web-mcp-packaging.py
 '
 ```
+
+The existing drift CI step invokes scripts/run-web-mcp-ci.py inside its disposable
+root container. Mounted checkout ancestors may belong to the runner UID, so the
+test sources are copied by an exact allowlist into a fresh root-owned
+/var/cache/web-mcp-ci-<run-id>-<attempt>/ directory. The launcher validates numeric
+run scope and protected container ancestors, asserts HOME/TMPDIR before writes,
+and refuses any pre-existing destination, including links. It never changes
+checkout ownership or production guards, cleans existing directories, or copies
+inventory/secrets/vars/stacks. Test writes stay in that fixture's scratch HOME.
+The container discards the fresh directory after the job. A CI-only
+WEB_MCP_CI_FIXTURE_PARENT override supports read-only job namespaces; that parent
+must exist outside the checkout, with every ancestor a root-owned directory
+without group/world write permission. The real CI container defaults to /var/cache.
 
 Tests exercise schema refusals, source/identity/bind/trust constraints,
 qualified controls, Gatus credential references, no-follow/mode/parent checks,
