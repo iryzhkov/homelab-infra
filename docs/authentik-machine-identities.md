@@ -119,13 +119,20 @@ valid until they expire, at most 300 seconds.
    other-writable, and the file, if present, the user's own single-link
    regular file. An unreachable host or unsafe path stops the run before
    Authentik changes.
-5. Store and apply the blueprint, and require a successful import.
+5. Store the blueprint, capture its `last_applied` after storage, and request
+   one apply. Require a newer successful result with the rendered content's
+   SHA-512 in `last_applied_hash`, plus the exact instance, name, content,
+   empty path/context and enabled state. Poll at most 11 times, three seconds
+   apart; an old success alone cannot complete this run.
 6. Look everything up again and compare: provider settings, mapping expression,
    application, the single group binding, the group's members, each account and
    each token. Ask `check_access` for every account and every application
    (`superuser_full_list`); each account must pass for the Jocasta application
    and fail for every other one. An application without bindings that admits
-   every account therefore stops the run.
+   every account therefore stops the run. Repeat this complete read-only
+   observation at most six times, three seconds apart, then fail if any
+   difference remains. No observation sends another apply. Recheck the
+   blueprint correlation before touching host credentials.
 7. Only then, for each present identity, read the key with `view_key` on the
    controller under `no_log`, write it to the host as its user (no become,
    `no_log`, no diff) and check the result; for each absent identity remove
@@ -146,8 +153,25 @@ credential-bearing request in this role refuses redirects. Every API task is `no
 own message rather than a response. A second real run changes nothing (the
 apply call is repeated, as for the access blueprint, and reports no change).
 
-If an apply fails, stop and inspect the blueprint logs and the objects changed
-so far. Storing the blueprint updates the ownership record before the import
+The completion contract was read in the installed version's upstream
+[2026.8.4 API](https://github.com/goauthentik/authentik/blob/version/2026.8.4/authentik/blueprints/api.py),
+[worker](https://github.com/goauthentik/authentik/blob/version/2026.8.4/authentik/blueprints/v1/tasks.py)
+and [model](https://github.com/goauthentik/authentik/blob/version/2026.8.4/authentik/blueprints/models.py).
+The API queues the apply without clearing status or returning a request ID.
+The worker hashes the UTF-8 content on success; ordinary saves also advance
+the model's `last_applied`, which is why the baseline follows storage.
+These fields support completion correlation, not exact task attribution under
+concurrent writers. Serialize runs and administrative edits to this blueprint.
+The final checks are observations, not a transaction with credential delivery.
+The limits bound attempts and sleeps; each URI also has Ansible's finite
+30-second socket timeout, so elapsed time includes request and controller work.
+
+If an apply times out, disconnects or fails, stop and inspect the original
+operation's blueprint logs and the objects changed so far. A timeout is
+unconfirmed, and the queued operation may still complete. The role never
+replays it within the run and leaves host credentials untouched until both
+completion and exact state are verified. Do read-only reconciliation before
+deciding whether another apply is needed. Storing the blueprint updates the ownership record before the import
 succeeds, and an import can leave partial changes. A retry may therefore refuse
 objects whose former `present` record is now `absent`. Keep the last successful
 blueprint content and compare it with both the failed content and actual objects.

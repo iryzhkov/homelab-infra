@@ -168,25 +168,56 @@
         machine_identity_pk: >-
           {{ machine_identity_stored.json.pk if machine_identity_stored is changed else machine_identity_instance.pk }}
 
-    - name: Apply it
-      ansible.builtin.uri:
-        url: "{{ machine_identity_api }}/managed/blueprints/{{ machine_identity_pk }}/apply/"
-        method: POST
-        headers: "{{ authentik_headers }}"
-        follow_redirects: none
-      changed_when: machine_identity_changed
-      no_log: true
-
-    - name: Wait for the result
+    # last_applied is auto_now: capture AFTER storing, not from discovery.
+    - name: Read the generation immediately before requesting an apply
       ansible.builtin.uri:
         url: "{{ machine_identity_api }}/managed/blueprints/{{ machine_identity_pk }}/"
         headers: "{{ authentik_headers }}"
         follow_redirects: none
-      register: machine_identity_status
-      until: machine_identity_status.json.status != 'unknown'
-      retries: 10
-      delay: 3
+      register: machine_identity_baseline
       no_log: true
+
+    - name: Validate the stored request before queuing it
+      ansible.builtin.assert:
+        that: >-
+          machine_identity_baseline.json | machine_identity_apply_state(
+            machine_identity_content, machine_identity_pk, authentik_machine_identities_blueprint_name,
+            machine_identity_baseline.json.last_applied) == 'pending'
+        quiet: true
+      no_log: true
+
+    - name: Request and await one apply
+      block:
+        - name: Apply it once
+          ansible.builtin.uri:
+            url: "{{ machine_identity_api }}/managed/blueprints/{{ machine_identity_pk }}/apply/"
+            method: POST
+            headers: "{{ authentik_headers }}"
+            follow_redirects: none
+          changed_when: machine_identity_changed
+          no_log: true
+
+        - name: Wait for a fresh result for the exact rendered content
+          ansible.builtin.uri:
+            url: "{{ machine_identity_api }}/managed/blueprints/{{ machine_identity_pk }}/"
+            headers: "{{ authentik_headers }}"
+            follow_redirects: none
+          register: machine_identity_status
+          until: >-
+            machine_identity_status.json | machine_identity_apply_state(
+              machine_identity_content, machine_identity_pk, authentik_machine_identities_blueprint_name,
+              machine_identity_baseline.json.last_applied) != 'pending'
+          retries: 10
+          delay: 3
+          no_log: true
+      rescue:
+        - name: Stop with an unconfirmed operation
+          ansible.builtin.fail:
+            msg: >-
+              Blueprint apply completion is unconfirmed. It may still finish.
+              No apply was retried and no host credential was delivered or removed.
+              Inspect the original operation and partial state before retrying;
+              see docs/authentik-machine-identities.md.
 
     - name: Require a clean import
       ansible.builtin.assert:
@@ -198,70 +229,42 @@
           See docs/authentik-machine-identities.md for recovery.
         quiet: true
 
-    - name: Look up the result
-      ansible.builtin.uri:
-        url: "{{ machine_identity_api }}{{ item.path }}"
-        headers: "{{ authentik_headers }}"
-        follow_redirects: none
-        status_code: [200, 404]
-      loop: "{{ machine_identity_spec | machine_identity_queries(machine_identity_owned) }}"
+    - name: Start bounded state verification
+      ansible.builtin.set_fact:
+        machine_identity_problems: ['State not yet verified']
+
+    - name: Wait for the exact resulting state without reapplying
+      ansible.builtin.include_tasks: verify.yml
+      loop: "{{ range(0, 6) | list }}"
       loop_control:
-        label: "{{ item.kind }} {{ item.id }}"
-      register: machine_identity_result
-      no_log: true
+        loop_var: machine_identity_attempt
+      when: machine_identity_problems | length > 0
 
-    - name: List every application
-      ansible.builtin.uri:
-        url: "{{ machine_identity_api }}/core/applications/?superuser_full_list=true&page_size=500"
-        headers: "{{ authentik_headers }}"
-        follow_redirects: none
-      register: machine_identity_apps
-      no_log: true
-
-    - name: Read the shared application's policy bindings
-      ansible.builtin.uri:
-        url: "{{ machine_identity_api }}/policies/bindings/?target={{ machine_identity_app.pk }}&page_size=500"
-        headers: "{{ authentik_headers }}"
-        follow_redirects: none
-      vars:
-        machine_identity_app: >-
-          {{ machine_identity_result.results | machine_identity_lookup('application', machine_identity_spec.access.slug) }}
-      register: machine_identity_bindings
-      when: machine_identity_spec.access.state == 'present'
-      no_log: true
-
-    # check_access honours for_user only for a superuser, which the access
-    # role's account is. Every application, not only the shared one: an
-    # application without bindings may admit any account.
-    - name: Ask Authentik which applications each account may open
-      ansible.builtin.uri:
-        url: "{{ machine_identity_api }}/core/applications/{{ item.slug }}/check_access/?for_user={{ item.pk }}"
-        headers: "{{ authentik_headers }}"
-        follow_redirects: none
-      loop: >-
-        {%- set checks = [] -%}
-        {%- for identity in machine_identity_spec.identities if identity.state == 'present' -%}
-        {%-   set user = machine_identity_result.results | machine_identity_lookup('user', identity.username) -%}
-        {%-   for app in machine_identity_apps.json.results | default([]) -%}
-        {%-     set _ = checks.append({'username': identity.username, 'pk': user.pk | default(''), 'slug': app.slug}) -%}
-        {%-   endfor -%}
-        {%- endfor -%}
-        {{ checks }}
-      loop_control:
-        label: "{{ item.username }} / {{ item.slug }}"
-      register: machine_identity_access
-      no_log: true
-
-    - name: Compare Authentik with the declared state
+    - name: Require the exact resulting state before touching host credentials
       ansible.builtin.assert:
         that: machine_identity_problems | length == 0
-        fail_msg: "{{ machine_identity_problems }}"
+        fail_msg: >-
+          {{ machine_identity_problems }}
+          Apply reported success but the exact state was not verified within six reads.
+          Host credentials were not delivered or removed. Inspect partial state before retrying.
         quiet: true
-      vars:
-        machine_identity_problems: >-
-          {{ machine_identity_spec | machine_identity_problems(
-               machine_identity_result.results, machine_identity_apps.json,
-               machine_identity_bindings.json | default({}), machine_identity_access.results | default([])) }}
+
+    - name: Confirm completion still names the rendered request
+      ansible.builtin.uri:
+        url: "{{ machine_identity_api }}/managed/blueprints/{{ machine_identity_pk }}/"
+        headers: "{{ authentik_headers }}"
+        follow_redirects: none
+      register: machine_identity_final_status
+      no_log: true
+
+    - name: Refuse delivery if the blueprint changed during verification
+      ansible.builtin.assert:
+        that: >-
+          machine_identity_final_status.json | machine_identity_apply_state(
+            machine_identity_content, machine_identity_pk, authentik_machine_identities_blueprint_name,
+            machine_identity_baseline.json.last_applied) == 'successful'
+        quiet: true
+      no_log: true
 
     # Only after the checks above passed: a host never receives a credential
     # whose account does not look exactly as declared.

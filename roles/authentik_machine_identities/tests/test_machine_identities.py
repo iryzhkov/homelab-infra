@@ -45,7 +45,13 @@ def scratch_home():
     tmp = Path(os.environ["TMPDIR"]).resolve()
     home = Path(os.environ["HOME"]).resolve()
     assert tmp != Path("/tmp") and not tmp.is_relative_to("/tmp"), "TMPDIR must not be host /tmp"
-    assert home.is_relative_to(tmp) and home != tmp, "HOME must be scratch inside TMPDIR"
+    expected = os.environ.get("MACHINE_IDENTITY_TEST_HOME")
+    if expected:
+        assert home == Path(expected).resolve(), "HOME must match the asserted fixture home"
+        assert tmp.is_relative_to(home) and tmp != home, "TMPDIR must be inside scratch HOME"
+    else:
+        # Existing CI uses HOME inside its disk TMPDIR.
+        assert home.is_relative_to(tmp) and home != tmp, "HOME must be scratch inside TMPDIR"
     return home
 
 
@@ -123,6 +129,45 @@ class DeclarationTest(unittest.TestCase):
 def lookup(kind, ident, rows, count=None, status=200):
     return {"item": {"kind": kind, "id": ident}, "status": status,
             "json": {"pagination": {"count": len(rows) if count is None else count}, "results": rows}}
+
+
+class ApplyStateTest(unittest.TestCase):
+    def setUp(self):
+        self.content = "version: 1\n# ownership and desired content"
+        self.baseline = "2026-10-20T13:36:00.000001Z"
+        self.row = {"pk": str(uuid.uuid4()), "name": "owned", "content": self.content,
+                    "path": "", "context": {}, "enabled": True, "status": "successful",
+                    "last_applied": self.baseline,
+                    "last_applied_hash": fake.hashlib.sha512(self.content.encode()).hexdigest()}
+
+    def state(self, **fields):
+        return mi.machine_identity_apply_state(self.row | fields, self.content, self.row["pk"],
+                                               "owned", self.baseline)
+
+    def test_previous_success_even_with_same_hash_needs_a_fresh_generation(self):
+        self.assertEqual(self.state(), "pending")
+        self.assertEqual(self.state(last_applied="2026-10-20T13:35:00Z"), "pending")
+        self.assertEqual(self.state(last_applied="2026-10-20T13:36:00.000002Z"), "successful")
+        self.assertEqual(self.state(last_applied="2026-10-20T13:36:01Z",
+                                    last_applied_hash="0" * 128), "pending")
+
+    def test_failures_require_a_fresh_generation_too(self):
+        for status in ("error", "warning", "orphaned"):
+            self.assertEqual(self.state(status=status), "pending")
+            self.assertEqual(self.state(status=status, last_applied="2026-10-20T13:36:01Z"), "failed")
+
+    def test_changed_request_or_missing_contract_fields_are_refused(self):
+        for field in self.row:
+            row = dict(self.row)
+            del row[field]
+            with self.subTest(missing=field), self.assertRaises(mi.AnsibleFilterError):
+                mi.machine_identity_apply_state(row, self.content, self.row["pk"], "owned", self.baseline)
+        for fields in ({"content": "foreign"}, {"pk": str(uuid.uuid4())}, {"name": "other"},
+                       {"path": "file.yaml"}, {"context": {"override": True}}, {"enabled": False},
+                       {"status": "done"}, {"last_applied_hash": None},
+                       {"last_applied": "invalid"}, {"last_applied": "2026-10-20T13:36:01"}):
+            with self.subTest(fields=fields), self.assertRaises(mi.AnsibleFilterError):
+                self.state(**fields)
 
 
 class OwnershipTest(unittest.TestCase):
@@ -310,6 +355,77 @@ class RoleTest(unittest.TestCase):
         self.assertFalse((self.x.homes["agent-one"] / ".config").exists())
         self.assertIn("client_credentials", output)
         self.assertIn("seconds=300", output)
+
+    def test_stale_success_waits_for_current_absent_apply_without_replay(self):
+        self.ok([identity()])
+        before = self.x.secret("agent-one").read_bytes()
+        self.x.state.apply_reads = 2
+        def still_pending():
+            self.assertEqual(self.x.secret("agent-one").read_bytes(), before)
+            self.assertEqual(self.x.key_reads(), [])
+        self.x.state.on_pending = still_pending
+        self.ok([identity(state="absent")])
+        self.assertFalse(self.x.secret("agent-one").exists())
+        self.assertIsNone(self.x.state.pending)
+        self.assertEqual(sum(p.endswith("/apply/") for _, p in self.x.writes()), 1)
+
+    def test_delayed_create_does_not_deliver_before_completion(self):
+        self.x.state.apply_reads = 2
+        self.x.state.on_pending = lambda: self.assertFalse(self.x.secret("agent-one").exists())
+        self.ok([identity()])
+        self.assertIsNone(self.x.state.pending)
+        self.assertEqual(sum(p.endswith("/apply/") for _, p in self.x.writes()), 1)
+
+    def test_fresh_worker_failure_preserves_host_file_without_replay(self):
+        self.ok([identity()])
+        before = self.x.secret("agent-one").read_bytes()
+        self.x.state.apply_reads = 1
+        self.x.state.apply_failure = True
+        self.refused("inspect partial changes before retrying", [identity(state="absent")])
+        self.assertEqual(self.x.secret("agent-one").read_bytes(), before)
+        self.assertEqual(self.x.key_reads(), [])
+        self.assertEqual(sum(p.endswith("/apply/") for _, p in self.x.writes()), 1)
+
+    def test_stale_success_timeout_is_unconfirmed_and_preserves_host_file(self):
+        self.ok([identity()])
+        before = self.x.secret("agent-one").read_bytes()
+        self.x.state.apply_reads = 100
+        self.refused("completion is unconfirmed", [identity(state="absent")])
+        self.assertEqual(self.x.secret("agent-one").read_bytes(), before)
+        self.assertEqual(self.x.key_reads(), [])
+        self.assertIsNotNone(self.x.state.pending)
+        self.assertEqual(sum(p.endswith("/apply/") for _, p in self.x.writes()), 1)
+        # All discovery/baseline/poll reads stay bounded, and there is no reapply.
+        details = [p for m, p, _ in self.x.state.requests
+                   if m == "GET" and p.startswith("/api/v3/managed/blueprints/")
+                   and p != "/api/v3/managed/blueprints/"]
+        self.assertLessEqual(len(details), 12)
+
+    def test_exact_postconditions_retry_reads_before_delivery(self):
+        remaining = [2]
+        def delayed_user_view():
+            if any(p.endswith("/apply/") for _, p, _ in self.x.state.requests) and remaining[0]:
+                remaining[0] -= 1
+                self.assertEqual(self.x.key_reads(), [])
+                self.assertFalse(self.x.secret("agent-one").exists())
+                return 200, fake.page([])
+            return None
+        self.x.state.responses[("GET", "/core/users/")] = delayed_user_view
+        self.ok([identity()])
+        self.assertEqual(remaining, [0])
+        self.assertTrue(self.x.secret("agent-one").exists())
+        self.assertEqual(sum(p.endswith("/apply/") for _, p in self.x.writes()), 1)
+
+    def test_unverified_postconditions_never_deliver_or_reapply(self):
+        def missing_user_view():
+            if any(p.endswith("/apply/") for _, p, _ in self.x.state.requests):
+                return 200, fake.page([])
+            return None
+        self.x.state.responses[("GET", "/core/users/")] = missing_user_view
+        self.refused("exact state was not verified", [identity()])
+        self.assertFalse(self.x.secret("agent-one").exists())
+        self.assertEqual(self.x.key_reads(), [])
+        self.assertEqual(sum(p.endswith("/apply/") for _, p in self.x.writes()), 1)
 
     def test_apply_delivers_once_and_a_second_run_changes_nothing(self):
         self.ok([identity(), identity(host="laptop-one")])
