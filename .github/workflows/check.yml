@@ -70,15 +70,16 @@ jobs:
       options: --memory=512m --cpus=1
       image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     env:
-      TMPDIR: ${{ github.workspace }}/../authentik-identities-${{ github.run_id }}-${{ github.run_attempt }}
+      TMPDIR: ${{ github.workspace }}/authentik-identities-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - name: Prepare the isolated fixture home
         run: |
+          export TMPDIR="$(realpath -m -- "$TMPDIR")"
           export HOME="$TMPDIR/.scratch-home"
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME" "$TMPDIR"
-          printf 'HOME=%s\\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'HOME=%s\nTMPDIR=%s\n' "$HOME" "$TMPDIR" >>"$GITHUB_ENV"
       - name: Install the deployment templating version
         run: pip install --disable-pip-version-check ansible-core==2.19.13
       - name: Test machine identities against the isolated HTTPS fixture
