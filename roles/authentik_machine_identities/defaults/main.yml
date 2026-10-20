@@ -1,0 +1,46 @@
+---
+# Ordinary Authentik service accounts that let named Chaldea hosts obtain
+# short-lived Jocasta access tokens: docs/authentik-machine-identities.md.
+# Off by default; playbooks/authentik.yml includes this role only when
+# authentik_machine_identities_enabled is true.
+authentik_machine_identities_enabled: false
+
+# The blueprint this role owns, found by name. Its stored content records
+# every object the role created; renaming it here would orphan them.
+authentik_machine_identities_blueprint_name: homelab-infra machine identities
+
+# The one shared Jocasta application. Every value is operator-owned; nothing
+# here comes from a host or from a token request. Override the whole mapping.
+authentik_jocasta_machine_access:
+  state: present
+  slug: chaldea-jocasta
+  name: Chaldea Jocasta machine access
+  # The account group bound to the application, and the only group the
+  # accounts belong to.
+  group: chaldea-jocasta-machine-identities
+  # Public client ID the hosts send with their app password. Required.
+  client_id: ""
+  # Canonical Jocasta MCP resource URL, issued as the tokens' `aud`. Required.
+  resource: ""
+  # kp_uuid of an existing Authentik keypair with a private key, which signs
+  # the tokens. Required; this role never creates a key.
+  signing_key: ""
+  # Fixed: the only scope and token lifetime this role supports.
+  scope: jocasta.read
+  token_seconds: 300
+
+# One service account per host and Chaldea preset (profile). For example:
+#   - host: laptop                       # inventory host that receives the secret
+#     profile: jocasta-projectA-reporter # the Chaldea preset ID
+#     project: projectA                  # the only Jocasta project its tokens name
+#     generation: 1                      # raise to rotate the app password
+#     expires: "2027-01-15T00:00:00Z"    # app password expiry
+#     state: present                     # absent deletes the account and the host file
+# The host's secret file is ~/.config/chaldea/authentik/<profile>.app-password
+# of the host's ssh_user, whose home is /home/<ssh_user> unless the host sets
+# authentik_machine_identity_home.
+authentik_machine_identities: []
+
+# Upper bound for an app password's expiry, in days from the run. Also set on
+# each account as its maximum token lifetime, so Authentik accepts the expiry.
+authentik_machine_identity_max_days: 180

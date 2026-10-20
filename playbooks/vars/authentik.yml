@@ -61,3 +61,9 @@ authentik_removed_apps:
 # WebAuthn) at their next login. Everyone else logs in as before: the default
 # MFA stage still asks for a device whenever one exists.
 authentik_mfa_required_group: authentik Admins
+
+# Ordinary service accounts through which named Chaldea hosts obtain
+# short-lived Jocasta tokens (roles/authentik_machine_identities, whose
+# defaults describe the variables; docs/authentik-machine-identities.md).
+# Off: the play does not include the role.
+authentik_machine_identities_enabled: false
