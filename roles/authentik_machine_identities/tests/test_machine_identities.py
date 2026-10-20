@@ -73,7 +73,7 @@ class DeclarationTest(unittest.TestCase):
         # The Jocasta grant is the service profile's; naming and paths are not.
         self.assertEqual((agent["service"], agent["grant"], agent["grant_attributes"]),
                          ("jocasta", {"project": "projectA"}, {"chaldea_jocasta": {"project": "projectA"}}))
-        self.assertNotIn("jocasta", agent["username"] + agent["secret_path"].replace("jocasta-projectA-reporter", ""))
+        self.assertNotIn("jocasta", (agent["username"] + agent["secret_path"]).replace(agent["profile"], ""))
         self.assertIn(f'"aud": "{RESOURCE}"', s["access"]["expression"])
         self.assertNotIn("request", s["access"]["expression"])
         self.assertEqual(mi.machine_identity_owned("version: 1\n" + s["marker"]), s["objects"])
