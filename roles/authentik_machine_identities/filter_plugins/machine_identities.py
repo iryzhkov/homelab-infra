@@ -238,11 +238,11 @@ def _ha_grant(item, name):
     return grant, {"chaldea_ha": grant}
 
 
-def _bounded_expression(access, service):
+def _bounded_expression(access, service, scope=None):
     # The allowlist is embedded from the validated operator declaration, never
     # from request parameters. Require an exact account grant and group membership.
     expected = access["account_grants"]
-    return "\n".join([
+    lines = [
         "# Rendered by homelab-infra roles/authentik_machine_identities.",
         f"expected = {expected!r}",
         f"grant = user.attributes.get('chaldea_{service}') if user else None",
@@ -250,8 +250,30 @@ def _bounded_expression(access, service):
         f"        or not ak_is_group_member(user, name={access['group']!r})",
         "        or user.username not in expected or grant != expected[user.username]):",
         "    return {}",
-        f"return dict(grant, aud={access['resource']!r})",
-    ])
+    ]
+    if service == "ha":
+        # Authentik 2026.8.4 get_claims evaluates requested mappings with token
+        # and deepmerge appends arrays. Elect one selected mapping to emit both
+        # arrays exactly once, even when both scopes are requested. token.scope
+        # is BaseGrantModel's list, not an untrusted HTTP request parameter.
+        lines += [
+            "requested = token.scope",
+            f"allowed = {list(access['scope_mappings'])!r}",
+            "if (not isinstance(requested, list) or not requested",
+            "        or any(s not in allowed for s in requested)",
+            "        or len(set(requested)) != len(requested)):",
+            "    return {}",
+            f"if {scope!r} != sorted(requested)[0]:",
+            "    return {}",
+            "actions = [a for a in grant['ha_actions']",
+            "           if ('ha.read' if a == 'state.read' else 'ha.control') in requested]",
+            "if not actions:",
+            "    return {}",
+            f"return {{'aud': {access['resource']!r}, 'ha_entities': grant['ha_entities'], 'ha_actions': actions}}",
+        ]
+    else:
+        lines.append(f"return dict(grant, aud={access['resource']!r})")
+    return "\n".join(lines)
 
 
 SERVICES = {
@@ -410,7 +432,10 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         if service != "jocasta":
             access["account_grants"] = {i["username"]: i["grant"] for i in out
                                         if i["service"] == service and i["state"] == "present"}
-            access["expression"] = _bounded_expression(access, service)
+            access["expression"] = _bounded_expression(access, service, next(iter(access["scope_mappings"])))
+        access["scope_expressions"] = {
+            scope: _bounded_expression(access, service, scope) if service == "ha" else access["expression"]
+            for scope in access["scope_mappings"]}
         for mapping in access["scope_mappings"].values():
             objects.append(["scopemapping", mapping, access["state"]])
         for kind, ident in (("provider", access["name"]), ("application", access["slug"]),
@@ -567,6 +592,8 @@ def _service_refusals(spec, owned, results, applications):
         key = found.get(("keypair", access["signing_key"]))
         if not isinstance(key, dict) or key.get("private_key_available") is not True:
             problems.append(f"signing key {access['signing_key']} is missing or has no private key")
+        if access["service"] != "jocasta" and (not isinstance(key, dict) or key.get("key_type") != "rsa"):
+            problems.append(f"signing key {access['signing_key']} must have key_type rsa for {access['service']}")
     if access["state"] == "absent":
         provider = found.get(("provider", access["name"]))
         try:
@@ -606,6 +633,11 @@ def _single_problems(spec, results, applications, bindings, checks):
             problems.append(f"{kind} {ident} still exists")
     if access["state"] == "absent":
         return problems
+    if access["service"] != "jocasta":
+        key = found.get(("keypair", access["signing_key"]))
+        if (not isinstance(key, dict) or key.get("private_key_available") is not True
+                or key.get("key_type") != "rsa"):
+            problems.append(f"signing key {access['signing_key']} must remain an available RSA private key")
 
     def need(kind, ident):
         obj = found.get((kind, ident))
@@ -622,7 +654,7 @@ def _single_problems(spec, results, applications, bindings, checks):
     for scope, name in access["scope_mappings"].items():
         mapping = need("scopemapping", name)
         expect(mapping, "scope_name", scope, "scope mapping")
-        expect(mapping, "expression", access["expression"], "scope mapping")
+        expect(mapping, "expression", access["scope_expressions"][scope], "scope mapping")
         mapping_pks.append(mapping.get("pk"))
     provider = need("provider", access["name"])
     for field, value in (("client_id", access["client_id"]), ("client_type", "confidential"),

@@ -25,7 +25,7 @@ entries:
     attrs:
       scope_name: {{ scope | to_json }}
       description: ""
-      expression: {{ access.expression | to_json }}
+      expression: {{ access.scope_expressions[scope] | to_json }}
 {% endfor %}
   # Client credentials only, {{ access.token_seconds }}-second tokens signed by an
   # existing keypair. The provider's client secret is never read or delivered:

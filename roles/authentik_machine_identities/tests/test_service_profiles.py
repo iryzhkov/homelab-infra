@@ -1,7 +1,11 @@
 """Closed web MCP profiles. All issuer/host operations use the synthetic real-role fixture."""
 import copy
+from importlib.metadata import version
+from itertools import permutations
 import types
 import unittest
+
+from deepmerge import always_merger
 
 import test_machine_identities as base
 
@@ -33,10 +37,27 @@ def spec(identities, services):
                                     base.NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), services)
 
 
-def evaluate(expression, user, group):
-    scope = {"user": user, "ak_is_group_member": lambda u, name: name == group}
+def evaluate(expression, user, group, requested=("ha.read",)):
+    scope = {"user": user, "token": types.SimpleNamespace(scope=list(requested)),
+             "ak_is_group_member": lambda u, name: name == group}
     exec("def mapping():\n" + "\n".join("    " + line for line in expression.splitlines()), scope)
     return scope["mapping"]()
+
+
+def merged_claims(mappings, user, group, requested):
+    # Authentik version/2026.8.4, commit 410f46e5cf18f97a1f0056b30984a145242df55d:
+    # providers/oauth2/views/userinfo.py:62-98 selects token.scope mappings,
+    # orders by scope_name, evaluates with token, then always_merger.merge.
+    # Its pyproject.toml and uv.lock pin deepmerge==2.1.0, whose lists append.
+    assert version("deepmerge") == "2.1.0"
+    claims = {}
+    for mapping in sorted(mappings, key=lambda m: m["scope_name"]):
+        if mapping["scope_name"] not in requested:
+            continue
+        value = evaluate(mapping["expression"], user, group, requested)
+        if isinstance(value, dict):
+            always_merger.merge(claims, value)
+    return claims
 
 
 class ProfileTest(unittest.TestCase):
@@ -108,6 +129,50 @@ class ProfileTest(unittest.TestCase):
             s = spec([identity("ha") | {"ha_entities": ["light.a"], "ha_actions": actions}],
                      {"ha": access("ha") | {"scope": scope}})
             self.assertEqual(set(s["services"]["ha"]["scope_mappings"]), set(scope.split(" ")))
+
+    def test_new_profiles_require_public_rsa_metadata_but_jocasta_is_unchanged(self):
+        for service in ("ov", "homelab", "ha"):
+            s = spec([identity(service)], {service: access(service)})
+            for metadata in ({}, {"key_type": None}, {"key_type": "ec"}, {"key_type": "ed25519"},
+                             {"key_type": "ed448"}, {"key_type": "dsa"}, {"key_type": "RSA"},
+                             {"key_type": True}):
+                key = {"item": {"kind": "keypair", "id": fake.KEYPAIR}, "status": 200,
+                       "json": {"private_key_available": True} | metadata}
+                with self.subTest(service=service, metadata=metadata):
+                    self.assertTrue(any("must have key_type rsa" in p
+                                        for p in mi.machine_identity_refusals(s, [], [key])))
+            key["json"]["key_type"] = "rsa"
+            self.assertEqual(mi.machine_identity_refusals(s, [], [key]), [])
+        legacy = base.spec([base.identity()])
+        key["json"].pop("key_type")
+        self.assertEqual(mi.machine_identity_refusals(legacy, [], [key]), [])
+
+    def test_ha_composition_preserves_exact_requested_action_ceiling(self):
+        # Demonstrate the dependency's append semantics, rather than emulate dedup.
+        self.assertEqual(always_merger.merge({"a": [1]}, {"a": [1]}), {"a": [1, 1]})
+        grant = {"ha_entities": ["light.a", "switch.a"],
+                 "ha_actions": ["state.read", "light.control", "switch.control"]}
+        for declared in ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read"):
+            item = identity("ha") | grant
+            item["ha_actions"] = [a for a in grant["ha_actions"]
+                                  if ("ha.read" if a == "state.read" else "ha.control") in declared.split()]
+            s = spec([item], {"ha": access("ha") | {"scope": declared}})
+            app = s["services"]["ha"]
+            user = types.SimpleNamespace(username=s["identities"][0]["username"], type="service_account",
+                                         attributes=copy.deepcopy(s["identities"][0]["grant_attributes"]))
+            mappings = [{"scope_name": scope, "expression": expression}
+                        for scope, expression in app["scope_expressions"].items()]
+            requests = [(scope,) for scope in declared.split()] + list(permutations(declared.split()))
+            for requested in requests:
+                with self.subTest(declared=declared, requested=requested):
+                    actions = [a for a in item["ha_actions"]
+                               if ("ha.read" if a == "state.read" else "ha.control") in requested]
+                    expected = {"aud": app["resource"], "ha_entities": grant["ha_entities"], "ha_actions": actions}
+                    self.assertEqual(merged_claims(mappings, user, app["group"], requested), expected)
+                    self.assertEqual(merged_claims(mappings, user, "foreign", requested), {})
+                    changed = copy.deepcopy(user)
+                    changed.attributes["chaldea_ha"]["ha_entities"].append("light.foreign")
+                    self.assertEqual(merged_claims(mappings, changed, app["group"], requested), {})
 
     def test_mapping_exact_claims_and_cross_service_and_same_subject_denials(self):
         s = spec([identity("ov"), identity("homelab"), identity("ha")],
@@ -206,10 +271,41 @@ class MultiServiceRoleTest(unittest.TestCase):
                     "ha_actions": self.items[-1]["ha_actions"]}
         for scope, mapping in zip(("ha.read", "ha.control"), mappings):
             self.assertEqual(mapping["scope_name"], scope)
-            self.assertEqual(evaluate(mapping["expression"], user, app["group"]), expected)
+        for requested in (("ha.read", "ha.control"), ("ha.control", "ha.read"),
+                          ("ha.read",), ("ha.control",)):
+            actions = [a for a in expected["ha_actions"]
+                       if ("ha.read" if a == "state.read" else "ha.control") in requested]
+            self.assertEqual(merged_claims(mappings, user, app["group"], requested),
+                             expected | {"ha_actions": actions})
         absent = [i | {"state": "absent"} for i in self.items]
         self.run_role(absent, {k: v | {"state": "absent"} for k, v in self.services.items()})
         self.assertFalse(self.x.state.mappings or self.x.state.providers)
+
+    def test_new_profiles_refuse_missing_or_nonrsa_metadata_before_mutation_or_delivery(self):
+        for service in ("ov", "homelab", "ha"):
+            for key_type in (None, "ec", "ed25519"):
+                with self.subTest(service=service, key_type=key_type):
+                    key = self.x.state.keypairs[fake.KEYPAIR]
+                    key.pop("key_type", None)
+                    if key_type is not None:
+                        key["key_type"] = key_type
+                    output = self.run_role([identity(service)], {service: self.services[service]}, ok=False)
+                    self.assertIn("must have key_type rsa", output)
+                    self.assertFalse(self.x.writes() or self.x.key_reads())
+                    self.assertFalse(self.x.secret("agent-one", service + "-reader").exists())
+                    self.assertFalse(any("/view_private_key/" in p for _, p, _ in self.x.state.requests))
+
+    def test_signing_key_type_drift_after_apply_blocks_delivery(self):
+        complete_apply = self.x.state.complete_apply
+        def apply_then_change_key_type():
+            complete_apply()
+            self.x.state.keypairs[fake.KEYPAIR]["key_type"] = "ec"
+        self.x.state.complete_apply = apply_then_change_key_type
+        output = self.run_role([identity("ha")], {"ha": self.services["ha"]}, ok=False)
+        self.assertIn("must remain an available RSA private key", output)
+        self.assertEqual(len([p for m, p in self.x.writes() if p.endswith("/apply/")]), 1)
+        self.assertFalse(self.x.key_reads())
+        self.assertFalse(self.x.secret("agent-one", "ha-reader").exists())
 
     def test_cross_service_membership_drift_refused_before_mutation(self):
         self.run_role()

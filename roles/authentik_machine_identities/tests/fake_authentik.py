@@ -55,7 +55,7 @@ class Authentik:
                                 "policy_engine_mode": "any", "backchannel_providers": [], "bindings": []}}
         self.apps["budget"]["bindings"].append(self._binding(self.apps["budget"], self.groups["family"]["pk"]))
         self.keypairs = {KEYPAIR: {"pk": KEYPAIR, "name": "authentik Self-signed Certificate",
-                                   "private_key_available": True}}
+                                   "private_key_available": True, "key_type": "rsa"}}
         self.next_pk = 100
         self.responses = {}
         self.redirects = {}

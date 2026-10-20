@@ -80,7 +80,7 @@ jobs:
           export HOME="$TMPDIR/.scratch-home"
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME" "$TMPDIR"
-          pip install --disable-pip-version-check ansible-core==2.19.13
+          pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
             -s roles/authentik_machine_identities/tests -p test_service_profiles.py -v
 

@@ -203,7 +203,10 @@ OV, homelab and HA applications require the same fields as Jocasta, plus explici
 `https://auth.example.test/application/o/chaldea-ov/jwks/`.
 Both trailing slashes are required. Online runs require that origin to match
 the controller's canonical Authentik API origin. The existing operator-supplied
-`signing_key` remains mandatory; no key is created or read.
+`signing_key` remains mandatory. OV, homelab and HA require public keypair
+metadata `key_type: rsa` and `private_key_available: true`; missing or non-RSA
+metadata refuses enrollment before mutation or delivery. No key is created and
+no private key is read. Jocasta retains its existing signing-key check.
 
 | Profile | Fixed resource audience | Fixed scope | Required identity fields |
 | --- | --- | --- | --- |
@@ -218,8 +221,8 @@ Their scope mappings emit only
 the fixed `aud` and the service's named grant arrays. They require an ordinary
 service account, membership in the service's group, the exact declared
 username and the exact operator-owned attribute grant. Missing, modified or
-cross-service attributes yield no resource claims. No request parameter selects
-claims. The provider attaches only that service's declared scope mappings.
+cross-service attributes yield no resource claims. No request parameter supplies
+grants. The provider attaches only that service's declared scope mappings.
 
 OV requires 1–16 distinct, non-overlapping canonical roots under
 `viking://resources/`, each at most 1024 ASCII characters. Segments admit
@@ -250,7 +253,13 @@ The initial HA enrollment must use `scope: ha.read` and
 are qualified. Only an explicit operator declaration may select `ha.control`
 or both `ha.read ha.control`. Each selected scope has a separately named
 Authentik scope mapping, and the provider attaches exactly those mappings.
-Enrollment refuses an action whose corresponding scope is absent.
+Enrollment refuses an action whose corresponding scope is absent. Authentik
+2026.8.4 merges scope mappings with deepmerge 2.1.0, which appends arrays.
+For HA, one selected mapping emits both grant arrays exactly once. It uses
+Authentik's authenticated `token.scope` list to select the emitter and reduce
+actions to the requested scopes: read emits only declared `state.read`, control
+emits only declared control actions, and both preserve the complete declared
+grant. A narrower scope request never adds an action.
 The verifier intersects entities, actions and scopes with its operator registry,
 including domain and control qualification; enrollment cannot replace those gates.
 Removing a scope mapping from an existing application requires declaring that
