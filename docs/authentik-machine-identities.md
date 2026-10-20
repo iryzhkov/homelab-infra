@@ -5,7 +5,8 @@ Jocasta access tokens from Authentik without holding any administrative
 credential. It is off: `playbooks/vars/authentik.yml` sets
 `authentik_machine_identities_enabled: false`, and `playbooks/authentik.yml`
 includes the role only when that is true. Nothing in this repository enables it,
-and no host or Authentik object has been changed by adding it.
+and no host or Authentik object has been changed by adding it. Complete infra
+identity creation and host credential delivery before enabling the fleet enrollment.
 
 ## What it manages
 
@@ -74,7 +75,9 @@ JWKS URL against the live provider before relying on them.
 ## Ownership, removal and rotation
 
 The stored blueprint's content is the ownership record: one comment line lists
-every object it names. Before storing anything the role looks up every name
+every object it names and its desired state. Only prior `present` entries establish
+ownership. An `absent` declaration never grants authority over an object that
+appears later, including after a successful removal. Before storing anything the role looks up every name
 involved, read-only, and refuses when:
 
 - an object with one of its names exists but no stored blueprint of this role
@@ -87,7 +90,10 @@ involved, read-only, and refuses when:
   group has a foreign member, parent or role;
 - another provider already uses the client ID, or the signing key is missing or
   has no private key;
-- a lookup did not return every candidate or answered in an unexpected shape.
+- a lookup did not return every candidate or answered in an unexpected shape,
+  including a malformed or ambiguous blueprint lookup;
+- a foreign application uses the provider being removed, as its primary or
+  backchannel provider. The complete application list is checked before mutation.
 
 `state: absent` on an identity deletes its tokens and account (which also
 removes its group membership) and then its host file; other identities and the
@@ -125,9 +131,14 @@ valid until they expire, at most 300 seconds.
    `no_log`, no diff) and check the result; for each absent identity remove
    the file.
 
-Check mode performs steps 1 to 3 only, all on the controller and read-only, and
-shows the blueprint and the planned files. It reads no key, connects to no host
-and stores nothing. Every API task is `no_log`, so a failure shows the role's
+The integrated playbook skips `authentik_config` in check mode, so it never
+decrypts SOPS. Without explicit controller API facts it validates and shows an
+offline blueprint and file plan; it cannot check live ownership or collisions.
+When API facts are explicitly supplied, check mode also performs the read-only
+preflight in steps 2 and 3. It reads no key, connects to no host and stores nothing.
+Before the new role sends credentials, it requires a canonical HTTPS origin
+followed by the fixed `/api/v3` path, without userinfo, query or fragment. Every
+credential-bearing request in this role refuses redirects. Every API task is `no_log`, so a failure shows the role's
 own message rather than a response. A second real run changes nothing (the
 apply call is repeated, as for the access blueprint, and reports no change).
 
@@ -187,7 +198,8 @@ cover the declaration and ownership refusals. The role tests play the real role
 with `ansible-playbook` against an in-memory fake of the Authentik API (only
 what the role uses, applying the blueprint entry by entry), with the destination
 hosts as local scratch directories: default off, check mode without writes or
-key reads, delivery and an unchanged second run, refusal to take over an
+key reads, integrated check mode with a decryption sentinel, trusted TLS,
+redirect refusal, complete blueprint lookup, foreign provider consumers, delivery and an unchanged second run, refusal to take over an
 existing account, refusal of a symlinked destination before Authentik changes,
 rotation, absent identities, full removal, owner drift, dropping a declared
 identity, and an application open to every account. Every run asserts that

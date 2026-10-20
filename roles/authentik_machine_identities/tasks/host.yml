@@ -59,8 +59,9 @@
 # Read on the controller, never logged, and forgotten once written.
 - name: Read the app password from Authentik
   ansible.builtin.uri:
-    url: "{{ authentik_url }}/core/tokens/{{ machine_identity.token | urlencode }}/view_key/"
+    url: "{{ machine_identity_api }}/core/tokens/{{ machine_identity.token | urlencode }}/view_key/"
     headers: "{{ authentik_headers }}"
+    follow_redirects: none
   register: machine_identity_key
   when: machine_identity_phase == 'deliver' and machine_identity.state == 'present'
   no_log: true

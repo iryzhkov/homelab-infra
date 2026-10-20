@@ -18,7 +18,9 @@
   vars_files:
     - vars/authentik.yml
   roles:
-    - authentik_config
+    - role: authentik_config
+      # Check mode must not load the controller's SOPS credentials.
+      when: not ansible_check_mode
   tasks:
     # Off unless enabled in vars/authentik.yml; docs/authentik-machine-identities.md.
     - name: Enrol Chaldea machine identities

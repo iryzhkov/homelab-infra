@@ -3,8 +3,10 @@ run by ansible-playbook against a fake Authentik, writing only in a scratch
 HOME. Nothing here reaches Authentik, a host or a secret store."""
 import getpass
 import importlib.util
+import ipaddress
 import os
 import re
+import uuid
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -174,7 +180,21 @@ class Scratch:
         root.mkdir(exist_ok=True)
         self.base = Path(tempfile.mkdtemp(dir=root))
         self.state = fake.Authentik()
-        self.server = fake.serve(self.state)
+        self.cert, key = self.base / "ca.pem", self.base / "key.pem"
+        # Use ansible-core's cryptography dependency, independent of the job
+        # image's openssl CLI configuration. Trust only this disposable CA.
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+        cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                .public_key(private.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(NOW - timedelta(minutes=1)).not_valid_after(NOW + timedelta(days=1))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+                               critical=False).sign(private, hashes.SHA256()))
+        key.write_bytes(private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                              serialization.NoEncryption()))
+        self.cert.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        self.server = fake.serve(self.state, self.cert, key)
         case.addCleanup(self.server.server_close)
         case.addCleanup(self.server.shutdown)
         self.homes = {host: self.base / host for host in ("agent-one", "laptop-one")}
@@ -189,11 +209,13 @@ class Scratch:
     def secret(self, host, profile="jocasta-projectA-reporter"):
         return self.homes[host] / ".config/chaldea/authentik" / (profile + ".app-password")
 
-    def run(self, identities, access=ACCESS, enabled=True, check=False):
+    def run(self, identities, access=ACCESS, enabled=True, check=False, integrated=False,
+            offline=False, api_url=None):
         play = [{"name": "Machine identities against a fake Authentik", "hosts": "localhost",
                  "connection": "local", "gather_facts": False,
+                 "module_defaults": {"ansible.builtin.uri": {"ca_path": str(self.cert)}},
                  "vars": {"ansible_python_interpreter": sys.executable,
-                          "authentik_url": f"http://127.0.0.1:{self.server.server_port}/api/v3",
+                          "authentik_url": api_url or f"https://127.0.0.1:{self.server.server_port}/api/v3",
                           "authentik_headers": {"Authorization": "Bearer " + fake.ADMIN},
                           "authentik_machine_identities_enabled": enabled,
                           "authentik_jocasta_machine_access": access,
@@ -201,15 +223,43 @@ class Scratch:
                  "tasks": [{"name": "Enrol Chaldea machine identities",
                              "ansible.builtin.include_role": {"name": "authentik_machine_identities"},
                              "when": "authentik_machine_identities_enabled | default(false) | bool"}]}]
+        extra_path = self.base / "extra.yml"
         path = self.base / "play.yml"
         path.write_text(yaml.safe_dump(play))
+        if integrated:
+            extra = dict(play[0]["vars"])
+            if offline:
+                extra.pop("authentik_url")
+                extra.pop("authentik_headers")
+            path = ROOT / "playbooks/authentik.yml"
+            extra_path.write_text(yaml.safe_dump(extra))
+            # A sentinel action refuses and records ANY SOPS load, even in check
+            # mode. It has no decryption capability and no real credentials.
+            plugins = self.base / "collections/ansible_collections/community/sops/plugins"
+            (plugins / "action").mkdir(parents=True, exist_ok=True)
+            (plugins / "modules").mkdir(exist_ok=True)
+            (plugins / "modules/load_vars.py").write_text("")
+            (plugins / "action/load_vars.py").write_text(
+                "from ansible.plugins.action import ActionBase\n"
+                "from ansible.errors import AnsibleActionFail\n"
+                "from pathlib import Path\n"
+                "class ActionModule(ActionBase):\n"
+                "    def run(self, tmp=None, task_vars=None):\n"
+                f"        Path({str(self.base / 'sops-called')!r}).touch()\n"
+                "        raise AnsibleActionFail('SOPS_DECRYPT_FORBIDDEN')\n")
         self.state.requests.clear()
         env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"), ANSIBLE_NOCOLOR="1",
                    ANSIBLE_LOCAL_TEMP=str(self.base / "ansible-local"),
                    ANSIBLE_REMOTE_TEMP=str(self.base / "ansible-remote"))
+        if integrated:
+            env["ANSIBLE_COLLECTIONS_PATH"] = str(self.base / "collections")
+        env["SSL_CERT_FILE"] = str(self.cert)
         argv = ["ansible-playbook", "-i", str(self.inventory), str(path), "--diff"] + (["--check"] if check else [])
+        if integrated:
+            argv += ["-e", "@" + str(extra_path)]
         result = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
         output = result.stdout + result.stderr
+        assert not (self.base / "sops-called").exists(), "integrated check attempted SOPS decryption"
         assert fake.ADMIN not in output and fake.KEY_PREFIX not in output, "a credential reached the output"
         return result.returncode, output
 
@@ -362,6 +412,119 @@ class RoleTest(unittest.TestCase):
         self.refused("access answer for wiki is True", [identity()])
         self.assertEqual(self.x.key_reads(), [])
         self.assertFalse(self.x.secret("agent-one").exists())
+
+
+    def test_absent_declarations_never_confer_future_ownership(self):
+        # A declaration that has never created the account must not authorize
+        # adoption or deletion when a foreign account later appears.
+        self.ok([identity(state="absent")])
+        name = "chaldea-agent-one-jocasta-projectA-reporter"
+        self.x.state.add_user(name, type="service_account")
+        for desired in ("present", "absent"):
+            with self.subTest(desired=desired):
+                self.refused("refusing to", [identity(state=desired)])
+                self.assertEqual(self.x.writes(), [])
+                self.assertIn(name, self.x.state.users)
+
+    def test_removed_account_reappearance_is_foreign(self):
+        self.ok([identity()])
+        self.ok([identity(state="absent")])
+        name = "chaldea-agent-one-jocasta-projectA-reporter"
+        self.x.state.add_user(name, type="service_account")
+        self.refused("refusing to delete", [identity(state="absent")])
+        self.assertEqual(self.x.writes(), [])
+        self.assertIn(name, self.x.state.users)
+
+    def test_blueprint_lookup_must_be_complete_well_formed_and_unambiguous(self):
+        row = {"pk": str(uuid.uuid4()), "name": "homelab-infra machine identities",
+               "content": "version: 1"}
+        bad = [{}, {"pagination": {"count": 0}}, fake.page([None]),
+               fake.page([row | {"content": None}]), fake.page([row | {"pk": "../foreign"}]),
+               fake.page([row, row | {"pk": str(uuid.uuid4())}]),
+               fake.page([]) | {"pagination": {"count": 1}},
+               fake.page([]) | {"pagination": {"count": False}},
+               fake.page([]) | {"pagination": {"count": 0, "total_pages": 2}}]
+        for body in bad:
+            with self.subTest(body=body):
+                self.x.state.responses[("GET", "/managed/blueprints/")] = (200, body)
+                self.refused("blueprint:", [identity()])
+                self.assertEqual(self.x.writes(), [])
+                self.assertEqual(self.x.key_reads(), [])
+                self.assertFalse(self.x.secret("agent-one").exists())
+
+    def test_integrated_check_mode_never_decrypts_or_connects_to_hosts(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                output = self.ok([identity()], check=True, integrated=True, offline=True, enabled=enabled)
+                self.assertEqual(self.x.state.requests, [])
+                self.assertFalse((self.x.homes["agent-one"] / ".config").exists())
+                if enabled:
+                    self.assertIn("client_credentials", output)
+        # Explicit synthetic API facts retain the read-only preflight path.
+        self.ok([identity()], check=True, integrated=True)
+        self.assertTrue(self.x.state.requests)
+        self.assertEqual(self.x.writes(), [])
+        self.assertEqual(self.x.key_reads(), [])
+
+    def test_provider_removal_refuses_foreign_consumers_before_mutation(self):
+        self.ok([identity()])
+        provider = self.x.state.providers[ACCESS["name"]]["pk"]
+        for field in ("provider", "backchannel_providers"):
+            with self.subTest(field=field):
+                app = self.x.state.apps["budget"]
+                app[field] = provider if field == "provider" else [provider]
+                self.refused("foreign application budget", [identity(state="absent")],
+                             access=ACCESS | {"state": "absent"})
+                self.assertEqual(self.x.writes(), [])
+                self.assertEqual(self.x.key_reads(), [])
+                self.assertIn(ACCESS["name"], self.x.state.providers)
+                app[field] = None if field == "provider" else []
+
+    def test_provider_removal_requires_complete_applications(self):
+        self.ok([identity()])
+        self.x.state.responses[("GET", "/core/applications/")] = (
+            200, fake.page([]) | {"pagination": {"count": 3}})
+        self.refused("applications: lookup did not return every candidate",
+                     [identity(state="absent")], access=ACCESS | {"state": "absent"})
+        self.assertEqual(self.x.writes(), [])
+
+    def test_invalid_api_origins_fail_before_credentials_are_sent(self):
+        for url in ("http://127.0.0.1/api/v3", "https://user:pass@example.test/api/v3",
+                    "https://example.test/api/v3?q=x", "https://example.test/api/v3#x",
+                    "https://example.test/api/v3/", "https://example.test:99999/api/v3"):
+            with self.subTest(url=url):
+                code, _ = self.x.run([identity()], api_url=url)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(self.x.state.requests, [])
+                self.assertFalse(self.x.secret("agent-one").exists())
+
+    def test_redirects_are_refused_for_discovery_and_key_delivery(self):
+        origin = f"https://127.0.0.1:{self.x.server.server_port}"
+        self.x.state.redirects[("GET", "/api/v3/managed/blueprints/")] = origin + "/api/v3/redirect-target/"
+        code, _ = self.x.run([identity()])
+        self.assertNotEqual(code, 0)
+        self.assertEqual([p for _, p, _ in self.x.state.requests], ["/api/v3/managed/blueprints/"])
+        self.assertEqual(self.x.writes(), [])
+        self.x.state.redirects.clear()
+        self.ok([identity()])
+        name = "chaldea-agent-one-jocasta-projectA-reporter"
+        path = f"/api/v3/core/tokens/{name}-g1/view_key/"
+        self.x.state.redirects[("GET", path)] = origin + "/api/v3/redirect-target/"
+        before = self.x.secret("agent-one").read_bytes()
+        code, _ = self.x.run([identity()])
+        self.assertNotEqual(code, 0)
+        self.assertFalse(any(p.endswith("/redirect-target/") for _, p, _ in self.x.state.requests))
+        self.assertEqual(self.x.secret("agent-one").read_bytes(), before)
+
+    def test_expiry_extension_keeps_key_and_does_not_rewrite_host_file(self):
+        self.ok([identity()])
+        path = self.x.secret("agent-one")
+        before = path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns
+        later = (NOW + timedelta(days=120)).strftime("%Y-%m-%dT00:00:00Z")
+        self.ok([identity(expires=later)])
+        self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), before)
+        token = self.x.state.tokens["chaldea-agent-one-jocasta-projectA-reporter-g1"]
+        self.assertEqual(token["expires"], later)
 
 
 if __name__ == "__main__":

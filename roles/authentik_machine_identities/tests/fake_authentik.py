@@ -9,6 +9,7 @@ recorded, so a test can prove what a run did not do.
 import http.server
 import json
 import secrets
+import ssl
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -55,6 +56,8 @@ class Authentik:
         self.keypairs = {KEYPAIR: {"pk": KEYPAIR, "name": "authentik Self-signed Certificate",
                                    "private_key_available": True}}
         self.next_pk = 100
+        self.responses = {}
+        self.redirects = {}
 
     # -- model ---------------------------------------------------------------
     def _pk(self):
@@ -220,6 +223,8 @@ class Authentik:
         assert path.startswith("/api/v3/")
         path = path[len("/api/v3"):]
         bp = "/managed/blueprints/"
+        if (method, path) in self.responses:
+            return self.responses[(method, path)]
         if path == bp and method == "GET":
             return 200, page([b for b in self.blueprints.values() if query.get("name", "") in b["name"]])
         if path == bp and method == "POST":
@@ -285,9 +290,17 @@ class Authentik:
         return 404, {"detail": "Not found."}
 
 
-def serve(state):
+def serve(state, cert, key):
     class Handler(http.server.BaseHTTPRequestHandler):
         def _respond(self, method):
+            redirect = state.redirects.get((method, urlsplit(self.path).path))
+            if redirect:
+                state.requests.append((method, urlsplit(self.path).path, {}))
+                self.send_response(302)
+                self.send_header("Location", redirect)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if self.headers.get("Authorization") != "Bearer " + ADMIN:
                 status, body = 403, {"detail": "denied"}
             else:
@@ -315,5 +328,8 @@ def serve(state):
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

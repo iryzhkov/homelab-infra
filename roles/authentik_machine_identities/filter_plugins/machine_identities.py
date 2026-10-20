@@ -4,9 +4,9 @@ Pure functions over plain data, so every refusal can be tested without Ansible
 or Authentik. Messages name objects and fields, never a credential.
 
 The blueprint's stored content is the ownership record: its "owned" comment
-line lists every object the blueprint names. An object is this role's only if
-a stored blueprint named it; anything else with a colliding name is refused,
-never adopted or deleted.
+line lists every object and its desired state. Only a stored present entry
+confers ownership; absent entries are deletion requests. Other colliding names
+are refused, never adopted or deleted.
 """
 import json
 import posixpath
@@ -85,6 +85,51 @@ def _time(value, name):
     if parsed.tzinfo is None:
         _refuse(f"{name} must name a time zone")
     return parsed
+
+
+def machine_identity_api_url(value):
+    """Credential transport: one canonical HTTPS origin and the fixed API path."""
+    if not isinstance(value, str) or not re.fullmatch(
+            r"https://(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\[[0-9a-f:]+\])"
+            r"(?::[1-9][0-9]{0,4})?/api/v3", value):
+        _refuse("authentik_url must be a canonical HTTPS origin followed by /api/v3")
+    try:
+        parts = urlsplit(value)
+        if parts.port is not None and not 1 <= parts.port <= 65535:
+            raise ValueError
+    except ValueError:
+        _refuse("authentik_url has an invalid origin")
+    return value
+
+
+def _complete_rows(body, label, field):
+    """Require a complete, well-formed collection before trusting absence."""
+    rows = body.get("results") if isinstance(body, dict) else None
+    pagination = body.get("pagination") if isinstance(body, dict) else None
+    if (not isinstance(rows, list) or not isinstance(pagination, dict)
+            or type(pagination.get("count")) is not int or pagination["count"] < 0
+            or any(not isinstance(row, dict) or not isinstance(row.get(field), str)
+                   or not row[field] for row in rows)):
+        _refuse(f"{label}: lookup answered in an unexpected shape")
+    if (pagination["count"] != len(rows) or body.get("next")
+            or pagination.get("next") or pagination.get("current", 1) != 1
+            or pagination.get("total_pages", 1) not in (0, 1)):
+        _refuse(f"{label}: lookup did not return every candidate")
+    return rows
+
+
+def machine_identity_blueprint(result, name):
+    """Validate the entire lookup before accepting zero or one exact match."""
+    if not isinstance(result, dict) or result.get("status") != 200:
+        _refuse("blueprint: lookup answered in an unexpected shape")
+    rows = _complete_rows(result.get("json"), "blueprint", "name")
+    if any(not isinstance(row.get("pk"), str) or not UUID.fullmatch(row["pk"])
+           or not isinstance(row.get("content"), str) or not row["content"] for row in rows):
+        _refuse("blueprint: lookup answered in an unexpected shape")
+    exact = [row for row in rows if row["name"] == name]
+    if len(exact) > 1:
+        _refuse("blueprint: more than one object has this name")
+    return exact[0] if exact else {}
 
 
 def _resource(value):
@@ -289,17 +334,17 @@ def _found(results, problems):
         if kind == "keypair":
             found[(kind, ident)] = body if result.get("status") == 200 else None
             continue
-        rows = body.get("results")
-        count = (body.get("pagination") or {}).get("count")
-        if result.get("status") != 200 or not isinstance(rows, list) or not isinstance(count, int):
+        if result.get("status") != 200:
             problems.append(f"{kind} {ident}: lookup answered in an unexpected shape")
             found[(kind, ident)] = MISSING
             continue
-        if count > len(rows):
-            problems.append(f"{kind} {ident}: lookup did not return every candidate")
+        field = LOOKUPS[kind][1]
+        try:
+            rows = _complete_rows(body, f"{kind} {ident}", field)
+        except AnsibleFilterError as exc:
+            problems.append(str(exc))
             found[(kind, ident)] = MISSING
             continue
-        field = LOOKUPS[kind][1]
         exact = [row for row in rows if isinstance(row, dict) and row.get(field) == ident]
         if kind == "client_id":
             found[(kind, ident)] = exact
@@ -358,11 +403,12 @@ def _binding_problems(spec, found, owned_names):
     return problems
 
 
-def machine_identity_refusals(spec, owned, results):
+def machine_identity_refusals(spec, owned, results, applications=None):
     """Reasons not to store the blueprint. Empty: storing it is safe."""
     problems = []
     found = _found(results, problems)
-    owned_state = {(k, i): s for k, i, s in owned}
+    recorded_state = {(k, i): s for k, i, s in owned}
+    owned_state = {key: state for key, state in recorded_state.items() if state == "present"}
     desired = {(k, i): s for k, i, s in spec["objects"]}
     for (kind, ident), state in sorted(desired.items()):
         obj = found.get((kind, ident), MISSING)
@@ -372,7 +418,7 @@ def machine_identity_refusals(spec, owned, results):
             verb = "take over" if state == "present" else "delete"
             problems.append(f"{kind} {ident} exists but no stored blueprint of this role created it; "
                             f"refusing to {verb} it")
-    for (kind, ident), state in sorted(owned_state.items()):
+    for (kind, ident), state in sorted(recorded_state.items()):
         if (kind, ident) in desired:
             continue
         if state == "present":
@@ -387,6 +433,22 @@ def machine_identity_refusals(spec, owned, results):
         key = found.get(("keypair", access["signing_key"]))
         if not isinstance(key, dict) or key.get("private_key_available") is not True:
             problems.append(f"signing key {access['signing_key']} is missing or has no private key")
+    if access["state"] == "absent":
+        provider = found.get(("provider", access["name"]))
+        try:
+            apps = _complete_rows(applications, "applications", "slug")
+        except AnsibleFilterError as exc:
+            problems.append(str(exc))
+            apps = []
+        for app in apps:
+            consumers = app.get("backchannel_providers", [])
+            if ("provider" not in app or not isinstance(consumers, list)
+                    or any(type(pk) is not int for pk in consumers)
+                    or (app["provider"] is not None and type(app["provider"]) is not int)):
+                problems.append("applications: lookup answered in an unexpected shape")
+            elif (isinstance(provider, dict) and app["slug"] != access["slug"]
+                  and (app["provider"] == provider.get("pk") or provider.get("pk") in consumers)):
+                problems.append(f"provider {access['name']}: foreign application {app['slug']} uses it")
     problems.extend(_binding_problems(spec, found, set(owned_state)))
     return problems
 
@@ -490,6 +552,8 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
 class FilterModule:
     def filters(self):
         return {
+            "machine_identity_api_url": machine_identity_api_url,
+            "machine_identity_blueprint": machine_identity_blueprint,
             "machine_identity_spec": machine_identity_spec,
             "machine_identity_owned": machine_identity_owned,
             "machine_identity_queries": machine_identity_queries,
