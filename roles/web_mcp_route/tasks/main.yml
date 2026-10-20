@@ -10,8 +10,8 @@
     - name: Require the existing file-provider path and resolver
       ansible.builtin.assert:
         that:
-          - traefik_dynamic_dir == '/home/igor/apps/traefik/file_provider'
-          - traefik_cert_resolver == 'letencrypt'
+          - traefik_dynamic_dir is not defined or traefik_dynamic_dir == _web_mcp_route_directory
+          - traefik_cert_resolver is not defined or traefik_cert_resolver == _web_mcp_route_resolver
         quiet: true
 
     - name: Guard the route directory and owned route file
@@ -23,14 +23,14 @@
     - name: Render the one selected HTTPS route
       ansible.builtin.template:
         src: route.yml.j2
-        dest: "{{ traefik_dynamic_dir }}/web-mcp-{{ web_mcp_edge.service }}.yml"
-        owner: root
-        group: root
+        dest: "{{ _web_mcp_route_directory }}/web-mcp-{{ web_mcp_edge.service }}.yml"
+        owner: "0"
+        group: "0"
         mode: "0644"
       when: web_mcp_edge.state == 'present'
 
     - name: Remove only this owned route before backend retirement
       ansible.builtin.file:
-        path: "{{ traefik_dynamic_dir }}/web-mcp-{{ web_mcp_edge.service }}.yml"
+        path: "{{ _web_mcp_route_directory }}/web-mcp-{{ web_mcp_edge.service }}.yml"
         state: absent
       when: web_mcp_edge.state == 'absent'

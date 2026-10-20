@@ -6,7 +6,7 @@ http:
       rule: 'Host(`{{ web_mcp_edge.host }}`) && (Path(`/mcp`) || Path(`/.well-known/oauth-protected-resource/mcp`)) && !HeaderRegexp(`Cf-Ray`, `.*`)'
       service: web-mcp-{{ web_mcp_edge.service }}
       tls:
-        certResolver: "{{ traefik_cert_resolver }}"
+        certResolver: "{{ _web_mcp_route_resolver }}"
         domains:
           - main: "{{ web_mcp_edge.host }}"
   services:

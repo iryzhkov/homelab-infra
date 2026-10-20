@@ -56,8 +56,12 @@ GitHub push39376978478/PR39376979811 checks. This is source publication evidence
 not a deployed runtime or release asset. Build/review a static binary from that
 commit and set its explicit operator artifact URL and SHA256 in the later
 scoped approval vars. Keep the original contract revision unless the interface
-changes and is accepted again. Observer interface remains accepted at 8af2460;
-homelab-cli PR20 publication is pending an unrelated legacy-help CI repair.
+changes and is accepted again. Observer publication is qualified at merged commit
+[`db6f9ead377cded2a7229443c9daecf2c057c3b9`](https://github.com/iryzhkov/homelab-cli/commit/db6f9ead377cded2a7229443c9daecf2c057c3b9),
+module `mcp-observer/`. The integration owner reported PR20 merged after
+push39377683292 and PR39377687338 succeeded at exact e713583. The observer
+interface remains accepted at 8af2460. This also establishes source publication
+only; no binary release asset or deployment is claimed.
 
 ## Service config and custody
 
@@ -70,7 +74,10 @@ HTTP/HTTPS origin. `listen` must equal the top-level explicit bind.
 Each of 1..64 entities has `id, name, actions` and optional
 `control_qualified, brightness`. IDs are explicit light/switch/sensor/binary_sensor
 entity IDs. Actions are state.read/light.control/switch.control; control requires
-matching domain and `control_qualified: true`. Optional light-control brightness
+matching domain and `control_qualified: true`. A read-only entity must not set
+control_qualified true. HA URL preflight also rejects explicit default ports,
+trailing-dot hosts and noncanonical URL/escaped-path round trips before writes.
+Optional light-control brightness
 requires both integer min_percent/max_percent within 0..100. The service README
 defines the physical qualification and uncertain-write limits; Ansible does not
 qualify a device or grant access.
@@ -111,8 +118,9 @@ in a repository, Chaldea snapshot, scratch fixture or logged variable output.
 No SOPS, Authentik enrollment/admin credential or helper access is implemented.
 
 The role creates a dedicated nologin system identity without a home. Existing
-name/UID/GID collisions, supplementary group members, unowned package roots or
-unit files are refused. Fixed config/release paths and every ancestor are
+name/UID/GID collisions, other members of the dedicated group, membership of
+the service identity in any other NSS group, unowned package roots or unit files
+are refused before writes. The primary GID is included in that membership check. Fixed config/release paths and every ancestor are
 checked before writes; symlinks and writable parents are refused. An ownership
 marker bounds later updates. Root owns the executable, directory and unit.
 Runtime config and credential files are mode0600 and owned by the explicit
@@ -135,7 +143,10 @@ UID of the existing edge file-provider directory; no default owner is assumed.
 No service-host/edge-host co-location is assumed.
 
 The fixed existing directory is
-`/home/igor/apps/traefik/file_provider`; resolver is `letencrypt`.
+`/home/igor/apps/traefik/file_provider`; resolver is `letencrypt`. Both are
+role-local constants, so standalone inventory needs no Traefik variables.
+If inventory supplies traefik_dynamic_dir or traefik_cert_resolver, the role
+cross-checks them against those constants before writes.
 The narrow role manages only `web-mcp-<service>.yml`, hot-reloaded by the
 existing file provider. It checks directory ancestry and rejects an existing
 file without the exact management marker. It never starts/reconfigures Traefik.
@@ -186,6 +197,13 @@ after verification. For rollback, restore those exact old vars and protected
 file versions and re-run. Releases are retained; there is no automatic garbage
 collection or inferred rollback after an uncertain service result.
 
+If initial staging fails after creating an endpoint root but before its ownership
+marker, a later run deliberately refuses adoption. Under separate operator
+scope, inspect the interrupted run's evidence and the exact partial directory.
+Restore the marker only after establishing that all contents belong to this
+package, or remove only evidenced files from that interrupted run. Do not bypass
+the guard or delete an unmarked directory merely because its name matches.
+
 For retirement, remove the owned route first with the route role state absent,
 verify it is gone from Traefik, then stop/disable that exact endpoint under
 separate scope approval. Remove only files evidenced by the ownership marker
@@ -193,10 +211,11 @@ after confirming no consumers remain. This role does not delete users,
 credentials, release directories or other owners' files.
 
 OV packaging is deferred. After its semantic profile and source interface settle,
-qualify an actual reviewed static release and its service-specific config,
-ownership and health/authorization contract. Only then add an explicit profile
-and tests to this mechanism in homelab-infra. There is no OV role, fake image
-digest, network pip install or generic plugin/auth broker in this slice.
+qualify an actual reviewed release with packaging appropriate to its Python
+runtime and its service-specific config, ownership and health/authorization
+contract. A static OV binary is not required. Only then add its explicit
+packaging and tests in homelab-infra. There is no OV role, fake image digest,
+network pip install or generic plugin/auth broker in this slice.
 
 ## Isolated validation
 
@@ -233,8 +252,13 @@ chaldea exec --host agent-a -- sh -c '
 
 Tests exercise schema refusals, source/identity/bind/trust constraints,
 qualified controls, Gatus credential references, no-follow/mode/parent checks,
-route ownership refusal, actual templates, Ansible syntax, disabled no-op roles
-and two-pass template idempotence on a synthetic local inventory. Full package
+route ownership refusal, actual templates, Ansible syntax, disabled no-op roles,
+and two-pass template idempotence on a synthetic local inventory. Regressions
+also cover fully mocked NSS supplementary groups, HA canonical URLs and read-only
+qualification refusal, and the actual enabled route role with no inventory
+Traefik variables. That role fixture redirects only its private output directory
+and guard EDGE to scratch; tasks, resolver vars, template and guard remain actual
+source, including owned route removal and inventory mismatch refusal. Full package
 installation, systemd activation, private network/CA access, actual Traefik
 loading, Authentik issuance, native clients and physical HA effects remain
 runtime gaps. No fixture result is deployment evidence.

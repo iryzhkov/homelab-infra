@@ -58,8 +58,10 @@ def dedicated(service, uid, gid):
                          and user.pw_dir == "/nonexistent"
                          and user.pw_shell == "/usr/sbin/nologin"))
     need(by_uid is None or by_uid.pw_name == service)
-    need(group is None or (group.gr_gid == gid and not group.gr_mem))
+    need(group is None or (group.gr_gid == gid and set(group.gr_mem) <= {service}))
     need(by_gid is None or by_gid.gr_name == service)
+    # getgrouplist includes the requested primary GID as well as NSS memberships.
+    need(set(os.getgrouplist(service, gid)) == {gid})
     need(all(entry.pw_name == service for entry in pwd.getpwall()
              if entry.pw_uid == uid or entry.pw_gid == gid))
 

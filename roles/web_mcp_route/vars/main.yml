@@ -1,0 +1,4 @@
+---
+# Fixed to the existing file-provider contract; these are not operator inputs.
+_web_mcp_route_directory: /home/igor/apps/traefik/file_provider
+_web_mcp_route_resolver: letencrypt

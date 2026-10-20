@@ -11,6 +11,8 @@ import struct
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 import jinja2
 import yaml
@@ -122,6 +124,60 @@ class PackagingTest(unittest.TestCase):
             value["config"][field] = bad
             self.rejected(value)
 
+    def test_dedicated_identity_refuses_unexpected_nss_memberships(self):
+        service, uid, gid = "ha-mcp", 731, 731
+        user = SimpleNamespace(pw_name=service, pw_uid=uid, pw_gid=gid,
+                               pw_dir="/nonexistent", pw_shell="/usr/sbin/nologin")
+        # Membership in the dedicated primary group itself is harmless.
+        group = SimpleNamespace(gr_name=service, gr_gid=gid, gr_mem=[service])
+        with mock.patch.multiple(guard.pwd,
+                getpwnam=mock.Mock(return_value=user), getpwuid=mock.Mock(return_value=user),
+                getpwall=mock.Mock(return_value=[user])), mock.patch.multiple(guard.grp,
+                getgrnam=mock.Mock(return_value=group), getgrgid=mock.Mock(return_value=group)), \
+                mock.patch.object(guard.os, "getgrouplist", return_value=[gid]) as memberships:
+            guard.dedicated(service, uid, gid)
+            memberships.assert_called_once_with(service, gid)
+            memberships.return_value = [gid, 999]  # Synthetic docker supplementary GID.
+            with self.assertRaises(ValueError):
+                guard.dedicated(service, uid, gid)
+            memberships.return_value = [gid]
+            group.gr_mem.append("unrelated")
+            with self.assertRaises(ValueError):
+                guard.dedicated(service, uid, gid)
+
+    def test_ha_read_only_qualification_and_canonical_url_parity(self):
+        for entity_id in ("sensor.synthetic", "light.synthetic"):
+            value = fixture()
+            value["config"]["entities"][0].update(id=entity_id, control_qualified=True)
+            self.rejected(value)
+            value["config"]["entities"][0]["control_qualified"] = False
+            contract.endpoint_contract(value)
+        cases = (
+            ("issuer_url", "https://auth.example.invalid:443/application/o/ha/"),
+            ("jwks_url", "https://auth.example.invalid:443/application/o/ha/jwks/"),
+            ("ha_url", "http://backend.example.invalid:80"),
+            ("ha_url", "https://backend.example.invalid:443"),
+            ("issuer_url", "https://auth.example.invalid./application/o/ha/"),
+            ("jwks_url", "https://auth.example.invalid./keys"),
+            ("ha_url", "http://backend.example.invalid.:8123"),
+            ("issuer_url", "HTTPS://auth.example.invalid/application/o/ha/"),
+            ("issuer_url", "https://auth.example.invalid/application/o/ha/?"),
+            ("jwks_url", "https://auth.example.invalid/keys#"),
+            ("jwks_url", "https://auth.example.invalid:/keys"),
+            ("ha_url", "http://backend.example.invalid:08123"),
+            ("issuer_url", "https://auth.example.invalid/%61pplication/o/ha/"),
+            ("jwks_url", "https://auth.example.invalid/keys%2fextra"),
+        )
+        for field, invalid in cases:
+            with self.subTest(field=field, url=invalid):
+                value = fixture()
+                value["config"][field] = invalid
+                self.rejected(value)
+        value = fixture()
+        value["config"]["issuer_url"] = "https://auth.example.invalid:8443/application/o/ha/"
+        value["config"]["jwks_url"] = "https://auth.example.invalid/qualified%20keys"
+        contract.endpoint_contract(value)
+
     def test_control_and_registry_refusals(self):
         value = fixture()
         entity = value["config"]["entities"][0]
@@ -151,7 +207,8 @@ class PackagingTest(unittest.TestCase):
         template = (ROOT / "roles/web_mcp_route/templates/route.yml.j2").read_text()
         edge = contract.route_contract(route())
         dynamic = yaml.safe_load(env.from_string(template).render(
-            web_mcp_edge=edge, traefik_cert_resolver="letencrypt"))
+            web_mcp_edge=edge, **yaml.safe_load(
+                (ROOT / "roles/web_mcp_route/vars/main.yml").read_text())))
         router = dynamic["http"]["routers"]["web-mcp-ha-mcp"]
         self.assertIn("Path(`/mcp`)", router["rule"])
         self.assertIn("Path(`/.well-known/oauth-protected-resource/mcp`)", router["rule"])
@@ -238,6 +295,75 @@ class PackagingTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 guard.binary("ha-mcp", digest)
 
+    def test_enabled_route_role_without_inventory_traefik_variables(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            edge = base / "edge"
+            edge.mkdir()
+            fixed = yaml.safe_load((ROOT / "roles/web_mcp_route/vars/main.yml").read_text())
+            self.assertEqual(fixed, {
+                "_web_mcp_route_directory": str(load("fixed_guard",
+                    "playbooks/library/web_mcp_guard.py").EDGE),
+                "_web_mcp_route_resolver": "letencrypt"})
+            # Redirect only the fixed filesystem boundary for this local fixture.
+            # The actual role tasks, vars, template and guard implementation run.
+            library = base / "library"
+            library.mkdir()
+            wrapper = (
+                "import importlib.util\n"
+                "from pathlib import Path\n"
+                "from ansible.module_utils.basic import AnsibleModule\n"
+                f"spec = importlib.util.spec_from_file_location('guard', {str(ROOT / 'playbooks/library/web_mcp_guard.py')!r})\n"
+                "assert spec is not None and spec.loader is not None\n"
+                "guard = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(guard)\n"
+                f"guard.EDGE = Path({str(edge)!r})\n"
+                "guard.main()\n"
+            )
+            (library / "web_mcp_guard.py").write_text(wrapper)
+            inventory = base / "inventory.yml"
+            inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
+            selected = route()
+            selected["directory_uid"] = os.getuid()
+            playbook = base / "enabled-route.yml"
+            playbook.write_text(yaml.safe_dump([{
+                "hosts": "fixture", "gather_facts": False,
+                "vars": {"web_mcp_route_enabled": True, "web_mcp_route": selected},
+                "roles": ["web_mcp_route"],
+                "post_tasks": [{"name": "No inventory Traefik variables supplied",
+                    "ansible.builtin.assert": {"that": [
+                        "traefik_dynamic_dir is not defined",
+                        "traefik_cert_resolver is not defined"]}}]}]))
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                       ANSIBLE_LIBRARY=str(library),
+                       ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"),
+                       ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+            command = ["ansible-playbook", "-i", str(inventory), str(playbook),
+                       "-e", json.dumps({"_web_mcp_route_directory": str(edge)})]
+            first = checked_run(command, env=env, check=True, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+            second = checked_run(command, env=env, check=True, text=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+            self.assertIn("changed=1", first)
+            self.assertIn("changed=0", second)
+            routefile = edge / "web-mcp-ha-mcp.yml"
+            dynamic = yaml.safe_load(routefile.read_text())
+            self.assertEqual(dynamic["http"]["routers"]["web-mcp-ha-mcp"]["tls"]["certResolver"],
+                             "letencrypt")
+            for name, invalid in (("traefik_dynamic_dir", "/unapproved"),
+                                  ("traefik_cert_resolver", "unapproved")):
+                refused = subprocess.run(command + ["-e", json.dumps({name: invalid})],
+                    env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("Require the existing file-provider", refused.stdout)
+                self.assertNotIn("Guard the route directory", refused.stdout)
+            selected["state"] = "absent"
+            removed = checked_run(command + ["-e", json.dumps({"web_mcp_route": selected})],
+                env=env, check=True, text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT).stdout
+            self.assertIn("changed=1", removed)
+            self.assertFalse(routefile.exists())
+
     def test_ansible_syntax_and_template_idempotence(self):
         # The generated inventory and all outputs stay within the asserted scratch HOME.
         with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
@@ -266,7 +392,8 @@ class PackagingTest(unittest.TestCase):
                 "that": ["(web_mcp | web_mcp_endpoint_contract).service == 'ha-mcp'",
                          "(route_input | web_mcp_route_contract).host == 'ha.mcp.example.invalid'"]}}]
             values = {"route_input": route(), "web_mcp_edge": contract.route_contract(route()),
-                      "traefik_cert_resolver": "letencrypt", "web_mcp": fixture()}
+                      "web_mcp": fixture(), **yaml.safe_load(
+                          (ROOT / "roles/web_mcp_route/vars/main.yml").read_text())}
             for role, source, dest in (("web_mcp_route", "route.yml.j2", "route.yml"),
                                        ("web_mcp_endpoint", "endpoint.service.j2", "endpoint.service")):
                 tasks.append({"name": "Render " + role, "ansible.builtin.template": {

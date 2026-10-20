@@ -1,7 +1,7 @@
 """Bounded packaging contracts. Service authorization remains in each binary."""
 import ipaddress
 import re
-from urllib.parse import urlsplit
+from urllib.parse import quote_from_bytes, unquote_to_bytes, urlsplit
 
 from ansible.errors import AnsibleFilterError
 
@@ -82,22 +82,36 @@ def identifier(value):
     match(value, r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
-def trust(config, resource_key, issuer_key):
-    resource = url(config[resource_key])
+def ha_canonical_url(value, schemes=("https",), origin=False):
+    p = url(value, schemes, origin)
+    require(p.geturl() == value and not (p.hostname or "").endswith(".")
+            and not p.netloc.endswith(":"), "HA URL must round-trip canonically")
+    require(p.port != (443 if p.scheme == "https" else 80),
+            "HA URL must omit an explicit default port")
+    if p.port is not None:
+        require(p.netloc.endswith(":" + str(p.port)), "HA port must be canonical decimal")
+    # Match Go's canonical escaped path; alternate RawPath spellings are refused.
+    require(quote_from_bytes(unquote_to_bytes(p.path), safe="/$&+,:;=@-_.~") == p.path,
+            "HA URL path must use canonical escaping")
+    return p
+
+
+def trust(config, resource_key, issuer_key, check_url=url):
+    resource = check_url(config[resource_key])
     require(resource.path == "/mcp" and resource.port is None,
             "resource must use canonical HTTPS /mcp on port 443")
     match(resource.hostname, r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
-    issuer = url(config[issuer_key])
+    issuer = check_url(config[issuer_key])
     require(issuer.path.endswith("/"), "issuer must include its canonical trailing slash")
-    url(config["jwks_url"])
+    check_url(config["jwks_url"])
 
 
 def ha_config(config, listen):
     keys(config, ("listen", "resource_url", "issuer_url", "jwks_url",
                   "ha_url", "backend_token_file", "entities"))
-    trust(config, "resource_url", "issuer_url")
+    trust(config, "resource_url", "issuer_url", check_url=ha_canonical_url)
     require(config["listen"] == listen, "HA listen differs from the explicit bind")
-    url(config["ha_url"], ("http", "https"), origin=True)
+    ha_canonical_url(config["ha_url"], ("http", "https"), origin=True)
     require(config["backend_token_file"] == "/etc/ha-mcp/backend-token",
             "HA token path is fixed")
     ids = []
@@ -116,6 +130,9 @@ def ha_config(config, listen):
             if action in actions:
                 require(entity["id"].startswith(action.split(".")[0] + ".")
                         and entity.get("control_qualified") is True, "unqualified control")
+        require(not entity.get("control_qualified", False)
+                or any(a in actions for a in ("light.control", "switch.control")),
+                "control qualification requires a control action")
         if "brightness" in entity:
             require("light.control" in actions, "brightness requires light control")
             bounds = entity["brightness"]
