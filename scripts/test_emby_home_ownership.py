@@ -174,6 +174,49 @@ class OwnershipTests(unittest.TestCase):
         api.call = call
         self.assert_refused(api)
 
+    def test_edit_during_first_post_stops_before_next_owned_update(self):
+        self.rows[0]["CustomName"] = "requires update"
+        self.rows[1]["customUnownedField"] = "original"
+        api = Fake(self.rows)
+        original = api.call
+        def call(route, method="GET", body=None):
+            result = original(route, method, body)
+            if route == "Users/" + UID + "/HomeSections" and method == "POST":
+                api.rows[UID][1]["customUnownedField"] = "concurrent manual edit"
+            return result
+        api.call = call
+        with self.assertRaisesRegex(RuntimeError, "Unrelated home row changed"):
+            self.run_helper(api)
+        self.assertEqual(len(self.writes(api)), 1)
+        self.assertEqual(api.rows[UID][1]["customUnownedField"], "concurrent manual edit")
+
+    def test_existing_preference_and_library_writes_preserve_unrelated_fields(self):
+        self.desired["playback"] = {"ResumeRewindSeconds": 7}
+        self.desired["importMovieCollections"] = True
+        api = Fake(self.rows)
+        api.users[0]["Configuration"]["unownedPreference"] = "retain"
+        options = {"ImportCollections": False, "unownedLibraryOption": ["retain"]}
+        original = api.call
+        def call(route, method="GET", body=None):
+            if route == "Library/VirtualFolders":
+                api.calls.append((method, route, copy.deepcopy(body)))
+                return [{"Name": "Movies", "ItemId": "movies", "LibraryOptions": copy.deepcopy(options)}]
+            if route == "Users/" + UID + "/Configuration" and method == "POST":
+                api.calls.append((method, route, copy.deepcopy(body)))
+                api.users[0]["Configuration"] = copy.deepcopy(body)
+                return None
+            if route == "Library/VirtualFolders/LibraryOptions" and method == "POST":
+                assert body is not None
+                api.calls.append((method, route, copy.deepcopy(body)))
+                options.update(body["LibraryOptions"])
+                return None
+            return original(route, method, body)
+        api.call = call
+        self.assertEqual(self.run_helper(api)["changed"], 2)
+        self.assertEqual(api.users[0]["Configuration"], {"ResumeRewindSeconds": 7, "unownedPreference": "retain"})
+        self.assertEqual(options, {"ImportCollections": True, "unownedLibraryOption": ["retain"]})
+        self.assertEqual(self.run_helper(api)["changed"], 0)
+
     def test_playbook_consumes_tested_script_and_ownership_input(self):
         import yaml
         playbook = yaml.safe_load(Path(__file__).parents[1].joinpath("playbooks/emby-experience.yml").read_text())

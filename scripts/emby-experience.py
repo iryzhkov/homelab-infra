@@ -196,10 +196,16 @@ def main(api=None, desired=None, ownership=None, apply=None, backup_directory="/
                 if apply:
                     fresh()
                     api.call(endpoint, "POST", target)
-                    current = api.call(endpoint + "?isEditMode=true")
-                    check = [s for s in current if row_id(s["Id"]) == row_id(target["Id"])]
-                    if len(check) != 1 or not matches(check[0], target):
+                    readback = api.call(endpoint + "?isEditMode=true")
+                    check = [s for s in readback if row_id(s["Id"]) == row_id(target["Id"])]
+                    if len(check) != 1 or not matches(check[0], target) or not matches(target, check[0]):
                         raise RuntimeError("Owned home section did not round-trip")
+                    unchanged_order = [s["Id"] for s in readback] == [s["Id"] for s in current]
+                    other_before = [s for s in current if row_id(s["Id"]) != row_id(target["Id"])]
+                    other_after = [s for s in readback if row_id(s["Id"]) != row_id(target["Id"])]
+                    if not unchanged_order or other_after != other_before:
+                        raise RuntimeError("Unrelated home row changed during update")
+                    current = readback
         wanted_ids = [s["Id"] for s in final_rows]
         actual_ids = [s["Id"] for s in current]
         # First collect owned rows at the tail, then insert them into baseline
