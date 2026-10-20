@@ -1,0 +1,210 @@
+---
+- name: Manage only explicitly enabled OV packaging
+  when: ov_http_compose_enabled | bool
+  block:
+    - name: Validate fixed OV packaging inputs before writes
+      ansible.builtin.set_fact:
+        ov_http: "{{ ov_http_package | ov_http_contract }}"
+      no_log: true
+
+    - name: Require an explicit lifecycle choice
+      ansible.builtin.assert:
+        that:
+          - ov_http_state in ['staged', 'active', 'absent']
+          - ov_http_state != 'active' or ov_http_activate | bool
+          - ov_http_state != 'absent' or ov_http_route_removed | bool
+        quiet: true
+
+    - name: Select only the fixed versioned release path
+      ansible.builtin.set_fact:
+        ov_http_release_dir: "/opt/web-mcp/ov-http/releases/{{ ov_http.release }}"
+
+    - name: Guard all package ancestors and refuse unowned existing paths
+      web_mcp_guard:
+        kind: "{{ 'ov-files' if ov_http_state == 'absent' else 'ov-package' }}"
+        release: "{{ ov_http.release }}"
+
+    - name: Refuse unowned existing Compose projects and fixed names
+      web_mcp_guard:
+        kind: ov-runtime
+
+    - name: Stage and validate an immutable release
+      when: ov_http_state != 'absent'
+      block:
+        - name: Guard protected controller credential before writes
+          web_mcp_guard:
+            kind: credential
+            source: "{{ ov_http.credential.source }}"
+            uid: "{{ ov_http.credential.source_uid }}"
+          delegate_to: localhost
+          become: false
+          no_log: true
+
+        - name: Inspect the protected source checksum
+          ansible.builtin.stat:
+            path: "{{ ov_http.credential.source }}"
+            follow: false
+            checksum_algorithm: sha256
+          delegate_to: localhost
+          become: false
+          register: ov_http_source
+          no_log: true
+
+        - name: Create fixed root-owned package directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: "0"
+            group: "0"
+            mode: "0755"
+          loop:
+            - /opt/web-mcp
+            - /opt/web-mcp/ov-http
+            - /opt/web-mcp/ov-http/releases
+            - "{{ ov_http_release_dir }}"
+
+        - name: Mark only this package and selected release
+          ansible.builtin.copy:
+            content: "homelab-infra ov-http compose v1\n"
+            dest: "{{ item }}/.homelab-infra-owned"
+            owner: "0"
+            group: "0"
+            mode: "0644"
+            force: false
+          loop:
+            - /opt/web-mcp/ov-http
+            - "{{ ov_http_release_dir }}"
+
+        - name: Stage runtime TOML without overwriting a prior release
+          ansible.builtin.copy:
+            content: "{{ lookup('template', 'runtime.toml.j2') }}"
+            dest: "{{ ov_http_release_dir }}/runtime.toml"
+            owner: "8098"
+            group: "8098"
+            mode: "0600"
+            force: false
+          no_log: true
+          diff: false
+
+        - name: Stage the separately protected key without overwriting a prior release
+          ansible.builtin.copy:
+            src: "{{ ov_http.credential.source }}"
+            dest: "{{ ov_http_release_dir }}/backend-key"
+            owner: "8098"
+            group: "8098"
+            mode: "0600"
+            force: false
+          no_log: true
+          diff: false
+
+        - name: Stage the fixed Compose definition without overwriting a prior release
+          ansible.builtin.copy:
+            content: "{{ lookup('template', playbook_dir ~ '/../stacks/ov-http/compose.yml.j2') }}"
+            dest: "{{ ov_http_release_dir }}/compose.yml"
+            owner: "0"
+            group: "0"
+            mode: "0644"
+            force: false
+
+        - name: Inspect exact immutable release contents
+          ansible.builtin.stat:
+            path: "{{ ov_http_release_dir }}/{{ item }}"
+            follow: false
+            checksum_algorithm: sha256
+          loop: [runtime.toml, backend-key, compose.yml]
+          register: ov_http_staged
+          no_log: true
+          when: not ansible_check_mode
+
+        - name: Refuse changed inputs for an already staged release
+          ansible.builtin.assert:
+            that:
+              - ov_http_staged.results[0].stat.checksum == (lookup('template', 'runtime.toml.j2') | hash('sha256'))
+              - ov_http_staged.results[1].stat.checksum == ov_http_source.stat.checksum
+              - ov_http_staged.results[2].stat.checksum == (lookup('template', playbook_dir ~ '/../stacks/ov-http/compose.yml.j2') | hash('sha256'))
+            quiet: true
+          no_log: true
+          when: not ansible_check_mode
+
+        - name: Verify actual nonroot mount ownership and protected release files
+          web_mcp_guard:
+            kind: ov-files
+            release: "{{ ov_http.release }}"
+          when: not ansible_check_mode
+
+        - name: Pull only the reviewed immutable image for preactivation validation
+          community.docker.docker_compose_v2_pull:
+            docker_host: unix:///var/run/docker.sock
+            project_src: "{{ ov_http_release_dir }}"
+            project_name: ov-http
+            files: [compose.yml]
+            services: [ov-http]
+          when: not ansible_check_mode
+
+        - name: Validate actual mounted config and key offline before activation
+          ansible.builtin.command:
+            argv:
+              - docker
+              - --host=unix:///var/run/docker.sock
+              - run
+              - --rm
+              - --name=ov-http-check
+              - --label=homelab-infra.ov-http=v1
+              - --network=none
+              - --read-only
+              - --user=8098:8098
+              - --cap-drop=ALL
+              - --security-opt=no-new-privileges:true
+              - --pids-limit=128
+              - --memory=512m
+              - --cpus=1
+              - --log-driver=local
+              - --log-opt=max-size=1m
+              - --log-opt=max-file=1
+              - --log-opt=compress=false
+              - "--mount=type=bind,src={{ ov_http_release_dir }}/runtime.toml,dst=/etc/ov-http/runtime.toml,readonly"
+              - "--mount=type=bind,src={{ ov_http_release_dir }}/backend-key,dst=/etc/ov-http/backend-key,readonly"
+              - "{{ ov_http.image.reference }}"
+              - --check-config
+          changed_when: false
+          no_log: true
+          when: not ansible_check_mode
+
+    - name: Activate only the validated owned service
+      community.docker.docker_compose_v2:
+        docker_host: unix:///var/run/docker.sock
+        project_src: "{{ ov_http_release_dir }}"
+        project_name: ov-http
+        files: [compose.yml]
+        services: [ov-http]
+        state: present
+        pull: never
+        recreate: auto
+        remove_orphans: false
+      when: ov_http_state == 'active' and ov_http_activate | bool and not ansible_check_mode
+
+    - name: Inspect the selected prior Compose definition before removal
+      ansible.builtin.stat:
+        path: "{{ ov_http_release_dir }}/compose.yml"
+        follow: false
+        checksum_algorithm: sha256
+      register: ov_http_prior
+      when: ov_http_state == 'absent' and not ansible_check_mode
+
+    - name: Refuse removal through a changed or unrelated Compose definition
+      ansible.builtin.assert:
+        that:
+          - ov_http_prior.stat.checksum == (lookup('template', playbook_dir ~ '/../stacks/ov-http/compose.yml.j2') | hash('sha256'))
+        quiet: true
+      when: ov_http_state == 'absent' and not ansible_check_mode
+
+    - name: Retire only the owned project after confirmed route removal
+      community.docker.docker_compose_v2:
+        docker_host: unix:///var/run/docker.sock
+        project_src: "{{ ov_http_release_dir }}"
+        project_name: ov-http
+        files: [compose.yml]
+        state: absent
+        remove_volumes: false
+        remove_orphans: false
+      when: ov_http_state == 'absent' and ov_http_route_removed | bool and not ansible_check_mode

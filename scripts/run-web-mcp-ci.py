@@ -14,7 +14,10 @@ FILES = (
     "roles/web_mcp_endpoint/templates/endpoint.service.j2 "
     "roles/web_mcp_route/defaults/main.yml roles/web_mcp_route/tasks/main.yml "
     "roles/web_mcp_route/templates/route.yml.j2 roles/web_mcp_route/vars/main.yml "
-    "scripts/test-web-mcp-packaging.py"
+    "scripts/test-web-mcp-packaging.py scripts/test-ov-http-packaging.py "
+    "playbooks/ov-http.yml roles/ov_http_compose/defaults/main.yml "
+    "roles/ov_http_compose/tasks/main.yml roles/ov_http_compose/templates/runtime.toml.j2 "
+    "stacks/ov-http/compose.yml.j2"
 ).split()
 
 
@@ -42,7 +45,8 @@ def main():
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst, follow_symlinks=False)
     Path(os.environ["TMPDIR"]).mkdir(parents=True)
-    subprocess.run(["python3", "scripts/test-web-mcp-packaging.py"], cwd=root, check=True)
+    for script in ("test-web-mcp-packaging.py", "test-ov-http-packaging.py"):
+        subprocess.run(["python3", "scripts/" + script], cwd=root, check=True)
 
 
 if __name__ == "__main__":

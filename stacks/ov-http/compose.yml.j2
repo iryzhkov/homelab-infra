@@ -1,0 +1,40 @@
+# Managed by homelab-infra ov-http compose v1
+name: ov-http
+services:
+  ov-http:
+    image: {{ ov_http.image.reference | to_json }}
+    container_name: ov-http
+    user: "8098:8098"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    init: true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    ulimits:
+      nofile: {soft: 1024, hard: 1024}
+    labels:
+      homelab-infra.ov-http: v1
+      org.opencontainers.image.revision: {{ ov_http.image.source_revision | to_json }}
+    ports:
+      - {{ (ov_http.listen ~ ':8098') | to_json }}
+    volumes:
+      - type: bind
+        source: {{ (ov_http_release_dir ~ '/runtime.toml') | to_json }}
+        target: /etc/ov-http/runtime.toml
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (ov_http_release_dir ~ '/backend-key') | to_json }}
+        target: /etc/ov-http/backend-key
+        read_only: true
+        bind: {create_host_path: false}
+    logging:
+      driver: local
+      options: {max-size: "1m", max-file: "1", compress: "false"}
+networks:
+  default:
+    labels:
+      homelab-infra.ov-http: v1
