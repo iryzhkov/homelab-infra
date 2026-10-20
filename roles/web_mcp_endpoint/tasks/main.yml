@@ -35,6 +35,17 @@
       loop: "{{ web_mcp.credentials }}"
       no_log: true
 
+    - name: Validate protected local artifact bytes before managed writes
+      web_mcp_local_artifact:
+        path: "{{ web_mcp.artifact.local_source.path }}"
+        owner_uid: "{{ web_mcp.artifact.local_source.owner_uid }}"
+        sha256: "{{ web_mcp.artifact.sha256 }}"
+      delegate_to: localhost
+      become: false
+      when: web_mcp.artifact.local_source is defined
+      register: web_mcp_local_artifact
+      no_log: true
+
     - name: Inspect service state before staging
       ansible.builtin.service_facts:
       when: not (web_mcp_activate | bool)
@@ -96,7 +107,21 @@
         validate_certs: true
         use_proxy: false
         timeout: 30
-      register: web_mcp_binary
+      register: web_mcp_download
+      when: web_mcp.artifact.local_source is not defined
+
+    - name: Stage the prevalidated local executable with a pinned transfer checksum
+      ansible.builtin.copy:
+        src: "{{ web_mcp.artifact.local_source.path }}"
+        dest: "/opt/web-mcp/{{ web_mcp.service }}/releases/{{ web_mcp.artifact.sha256 }}/{{ web_mcp.service }}"
+        checksum: "{{ web_mcp_local_artifact.sha1 }}"
+        owner: root
+        group: root
+        mode: "0555"
+      when: web_mcp.artifact.local_source is defined
+      register: web_mcp_copy
+      no_log: true
+      diff: false
 
     - name: Verify the staged binary independently
       ansible.builtin.stat:
@@ -172,5 +197,5 @@
       ansible.builtin.systemd_service:
         name: "{{ web_mcp.service }}"
         enabled: true
-        state: "{{ 'restarted' if (web_mcp_binary is changed or web_mcp_config is changed or web_mcp_credentials is changed or web_mcp_unit is changed) else 'started' }}"
+        state: "{{ 'restarted' if (web_mcp_download is changed or web_mcp_copy is changed or web_mcp_config is changed or web_mcp_credentials is changed or web_mcp_unit is changed) else 'started' }}"
       when: web_mcp_activate | bool and not ansible_check_mode

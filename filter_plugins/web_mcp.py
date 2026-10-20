@@ -202,7 +202,7 @@ def endpoint_contract(value):
     integer(value["gid"], 100, 999)
     private_address(value["listen"])
     artifact = value["artifact"]
-    keys(artifact, ("url", "sha256", "source_revision", "contract_revision"))
+    keys(artifact, ("url", "sha256", "source_revision", "contract_revision"), ("local_source",))
     match(artifact["sha256"], r"[0-9a-f]{64}")
     match(artifact["source_revision"], r"[0-9a-f]{40}")
     _, contract = SERVICES[service]
@@ -210,6 +210,16 @@ def endpoint_contract(value):
     p = url(artifact["url"])
     require(p.path not in ("", "/") and "/latest/" not in p.path,
             "expected an explicit reviewed static binary URL")
+    if "local_source" in artifact:
+        source = artifact["local_source"]
+        keys(source, ("path", "owner_uid"))
+        path = source["path"]
+        require(isinstance(path, str) and len(path.encode("utf-8")) <= 4096,
+                "invalid local artifact path")
+        match(path, r"/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*")
+        require(all(part not in (".", "..") for part in path.split("/")),
+                "unsafe local artifact path")
+        integer(source["owner_uid"], 0, 2147483647)
     expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
                 else observer_config(value["config"]))
     names = []

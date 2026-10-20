@@ -12,6 +12,7 @@ FILES = (
     "playbooks/web-mcp-endpoint.yml playbooks/web-mcp-route.yml "
     "roles/web_mcp_endpoint/defaults/main.yml roles/web_mcp_endpoint/tasks/main.yml "
     "roles/web_mcp_endpoint/templates/endpoint.service.j2 "
+    "roles/web_mcp_endpoint/library/web_mcp_local_artifact.py "
     "roles/web_mcp_route/defaults/main.yml roles/web_mcp_route/tasks/main.yml "
     "roles/web_mcp_route/templates/route.yml.j2 roles/web_mcp_route/vars/main.yml "
     "scripts/test-web-mcp-packaging.py scripts/test-ov-http-packaging.py "
