@@ -10,4 +10,4 @@ mission_control_cache_file: /var/cache/mission-control/latest.json
 mission_control_reader_operations_enabled: false
 # Exact fleet source with the staged reader activation interface.
 mission_control_fleet_checkout: ""
-mission_control_fleet_revision: 609102a1d19df06dfc33f48f99dbdb63caa9ab45
+mission_control_fleet_revision: 9d23f3d04a9f5c11033c9c028cf1a2acf1db1d99
