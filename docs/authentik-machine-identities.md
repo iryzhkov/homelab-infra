@@ -131,6 +131,55 @@ and stores nothing. Every API task is `no_log`, so a failure shows the role's
 own message rather than a response. A second real run changes nothing (the
 apply call is repeated, as for the access blueprint, and reports no change).
 
+## A second service
+
+Only Jocasta is implemented. The role keeps the two halves apart so that a
+second web MCP service behind Authentik can be added without touching the
+account lifecycle:
+
+- Service-independent: account naming, app passwords, generations and expiry,
+  the ownership record and its refusals, destination checks, delivery and
+  removal (`machine_identity_spec`'s account part, `machine_identity_owned`,
+  `_queries`, `_refusals`, `_problems`, `tasks/main.yml`, `tasks/host.yml`, and
+  the account section of the template).
+- Jocasta-specific: the service profile at the top of
+  `filter_plugins/machine_identities.py` (`SERVICE`: scope `jocasta.read`, 300
+  seconds, the `resource` field, the per-account `project` grant stored as
+  `chaldea_jocasta`, and the mapping expression) and the provider section of
+  the template.
+
+Adding a service X is a separate reviewed change in these steps:
+
+1. Add X's profile beside Jocasta's: a fixed scope name and token lifetime,
+   X's application fields, a per-account grant validated against a closed
+   pattern and stored in its own attribute, and a mapping expression whose
+   `aud` is a literal operator value and whose other claims come only from that
+   attribute and group membership. Never a claim from the token request, a
+   wildcard grant, or an administrative or write scope that has not been
+   qualified for X.
+2. Make the application declaration a mapping keyed by service, each entry
+   with its own slug, name, group, client ID, resource and signing key, and
+   render one provider, application, mapping, group and binding per service.
+   Keep Jocasta's names as they are, so its objects keep matching the
+   ownership record and nothing is renamed.
+3. Give each identity a `service` naming exactly one service. An account
+   belongs to one service's group only: an app password authenticates its
+   account to every `client_credentials` provider whose application admits
+   the account, so one account in two groups would let one host credential
+   obtain tokens for both services. A host that needs both gets two
+   identities with two profiles (two presets): two accounts, two app passwords
+   and two files. Usernames and host paths keep their form, because a profile
+   names one preset and a preset enrols one service.
+4. The post-apply check already requires each account to pass `check_access`
+   for exactly one application; it becomes that account's own service's
+   application.
+5. Chaldea's policy parser and the fleet role's enrollment check accept only
+   `form: app_password` and `scope: jocasta.read` today. They gain X's scope,
+   audience and grant rule in the same change set, and X's verifier pins its
+   own issuer, resource and claims.
+6. Qualify X's gates as listed above, including that X refuses Jocasta's
+   tokens and Jocasta refuses X's (distinct `aud`).
+
 ## Tests
 
 `roles/authentik_machine_identities/tests` runs in CI. The plain-data tests

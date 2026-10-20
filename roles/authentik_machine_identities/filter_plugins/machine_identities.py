@@ -22,11 +22,6 @@ except ImportError:  # the unit tests import this file without Ansible
         pass
 
 OWNED_PREFIX = "# homelab-infra-owned: "
-SCOPE = "jocasta.read"
-TOKEN_SECONDS = 300
-# The attribute the scope mapping reads. Only an administrator can change a
-# service account's attributes.
-ATTRIBUTE = "chaldea_jocasta"
 MAX_LIFETIME = "goauthentik.io/user/token-maximum-lifetime"
 # A present identity whose app password expires sooner than this is refused:
 # renew it (a later expiry) or rotate it (a higher generation) first.
@@ -34,7 +29,6 @@ MIN_REMAINING = timedelta(days=1)
 
 HOST = re.compile(r"[a-z0-9][a-z0-9-]{0,62}\Z")
 PROFILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}\Z")
-PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,49}\Z")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}\Z")
 CLIENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}\Z")
@@ -42,9 +36,10 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 LOGIN = re.compile(r"[a-z_][a-z0-9_-]{0,31}\Z")
 HOME = re.compile(r"/[A-Za-z0-9._/-]{1,255}\Z")
 
-ACCESS_KEYS = {"state", "slug", "name", "client_id", "resource", "scope", "token_seconds",
-               "signing_key", "group"}
-IDENTITY_KEYS = {"host", "profile", "project", "generation", "expires", "state"}
+# Fields every service application and every account declaration has. The
+# service profile below adds its own.
+APPLICATION_KEYS = {"state", "slug", "name", "client_id", "signing_key", "group"}
+ACCOUNT_KEYS = {"host", "profile", "generation", "expires", "state"}
 STATES = ("present", "absent")
 
 # How each kind of object is looked up, and the field that names it.
@@ -102,6 +97,23 @@ def _resource(value):
     return value
 
 
+# --- The service profile ---------------------------------------------------
+# Everything specific to the one service this role enrols accounts into,
+# Jocasta: its fixed scope and token lifetime, the operator fields of its
+# application, the per-account grant, and the claims the scope mapping
+# issues. The account lifecycle and host delivery below reach it only
+# through SERVICE. Adding a second web MCP service is a second profile and is
+# described in docs/authentik-machine-identities.md, "A second service"; this
+# role implements only Jocasta.
+
+SCOPE = "jocasta.read"
+TOKEN_SECONDS = 300
+# The attribute the scope mapping reads. Only an administrator can change a
+# service account's attributes.
+ATTRIBUTE = "chaldea_jocasta"
+PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
 def expression(access):
     """The scope mapping's Python. The audience is fixed here, the project comes
     from the account's own attributes, and anything unexpected yields no claims
@@ -119,27 +131,49 @@ def expression(access):
     ])
 
 
+def _jocasta_application(access):
+    """Validate Jocasta's own application fields; add its mapping name and code."""
+    if access["scope"] != SCOPE:
+        _refuse(f"access scope must be {SCOPE}")
+    if access["token_seconds"] != TOKEN_SECONDS or isinstance(access["token_seconds"], bool):
+        _refuse(f"access token_seconds must be {TOKEN_SECONDS}")
+    _resource(access["resource"])
+    return {"mapping": f"{access['name']}: {SCOPE}", "expression": expression(access)}
+
+
+def _jocasta_grant(item, name):
+    """An account's Jocasta grant: its one project, stored as an attribute."""
+    project = _match(PROJECT, item["project"], name + " project")
+    return {"project": project}, {ATTRIBUTE: {"project": project}}
+
+
+SERVICE = {
+    "name": "jocasta",
+    "application_keys": {"resource", "scope", "token_seconds"},
+    "account_keys": {"project"},
+    "application": _jocasta_application,
+    "grant": _jocasta_grant,
+}
+
+
+# --- Accounts, app passwords and their host files: service-independent -----
+
 def machine_identity_spec(identities, access, hosts, max_days, now):
     """Validate the declared identities and derive every name the role uses.
 
     hosts maps each inventory host an identity names to its ssh_user, an
     optional home override and its connection.
     """
-    access = dict(_keys(access, ACCESS_KEYS, "authentik_jocasta_machine_access"))
+    access = dict(_keys(access, APPLICATION_KEYS | SERVICE["application_keys"],
+                        "authentik_jocasta_machine_access"))
     if access["state"] not in STATES:
         _refuse("access state must be present or absent")
-    if access["scope"] != SCOPE:
-        _refuse(f"access scope must be {SCOPE}")
-    if access["token_seconds"] != TOKEN_SECONDS or isinstance(access["token_seconds"], bool):
-        _refuse(f"access token_seconds must be {TOKEN_SECONDS}")
     _match(SLUG, access["slug"], "access slug")
     _match(NAME, access["name"], "access name")
     _match(NAME, access["group"], "access group")
     _match(CLIENT_ID, access["client_id"], "access client_id")
     _match(UUID, access["signing_key"], "access signing_key (an existing keypair's kp_uuid)")
-    _resource(access["resource"])
-    access["mapping"] = f"{access['name']}: {SCOPE}"
-    access["expression"] = expression(access)
+    access.update(SERVICE["application"](access))
 
     if not isinstance(max_days, int) or isinstance(max_days, bool) or not 1 <= max_days <= 365:
         _refuse("authentik_machine_identity_max_days must be 1..365")
@@ -152,11 +186,11 @@ def machine_identity_spec(identities, access, hosts, max_days, now):
     out, seen_users, seen_pairs = [], set(), set()
     for n, raw in enumerate(identities):
         name = f"identity {n}"
-        item = _keys(raw, IDENTITY_KEYS, name)
+        item = _keys(raw, ACCOUNT_KEYS | SERVICE["account_keys"], name)
         host = _match(HOST, item["host"], name + " host")
         profile = _match(PROFILE, item["profile"], name + " profile")
         name = f"identity {host}/{profile}"
-        project = _match(PROJECT, item["project"], name + " project")
+        grant, grant_attributes = SERVICE["grant"](item, name)
         state = item["state"]
         if state not in STATES:
             _refuse(name + " state must be present or absent")
@@ -188,15 +222,16 @@ def machine_identity_spec(identities, access, hosts, max_days, now):
         seen_users.add(username)
         directory = f"{home}/.config/chaldea/authentik"
         out.append({
-            "host": host, "profile": profile, "project": project, "state": state,
+            "host": host, "profile": profile, "service": SERVICE["name"], "grant": grant, "state": state,
             "generation": generation, "expires": item["expires"],
             "username": username, "token": f"{username}-g{generation}",
             "old_tokens": [f"{username}-g{g}" for g in range(1, generation)],
             "owner": owner, "connection": connection, "home": home,
             "ancestors": [home, f"{home}/.config", f"{home}/.config/chaldea", directory],
             "directory": directory, "secret_path": f"{directory}/{profile}.app-password",
-            "attributes": {ATTRIBUTE: {"project": project}, MAX_LIFETIME: f"days={max_days}",
-                           "homelab-infra": {"host": host, "profile": profile}},
+            "grant_attributes": grant_attributes,
+            "attributes": grant_attributes | {MAX_LIFETIME: f"days={max_days}",
+                                              "homelab-infra": {"host": host, "profile": profile}},
         })
 
     objects = []
@@ -388,12 +423,12 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
             problems.append(f"{label}: {field} is not as declared")
 
     mapping = need("scopemapping", access["mapping"])
-    expect(mapping, "scope_name", SCOPE, "scope mapping")
+    expect(mapping, "scope_name", access["scope"], "scope mapping")
     expect(mapping, "expression", access["expression"], "scope mapping")
     provider = need("provider", access["name"])
     for field, value in (("client_id", access["client_id"]), ("client_type", "confidential"),
                          ("grant_types", ["client_credentials"]),
-                         ("access_token_validity", f"seconds={TOKEN_SECONDS}"),
+                         ("access_token_validity", f"seconds={access['token_seconds']}"),
                          ("include_claims_in_id_token", True), ("issuer_mode", "per_provider"),
                          ("signing_key", access["signing_key"]),
                          ("property_mappings", [mapping.get("pk")])):
@@ -421,8 +456,9 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
         for field, value in (("type", "service_account"), ("is_active", True), ("is_superuser", False),
                              ("roles", []), ("groups", [group.get("pk")]), ("path", "homelab-infra/machine-identities")):
             expect(user, field, value, f"user {item['username']}")
-        if user and (user.get("attributes") or {}).get(ATTRIBUTE) != item["attributes"][ATTRIBUTE]:
-            problems.append(f"user {item['username']}: project attribute is not as declared")
+        attributes = (user.get("attributes") or {}) if user else {}
+        if user and any(attributes.get(k) != v for k, v in item["grant_attributes"].items()):
+            problems.append(f"user {item['username']}: {item['service']} grant attribute is not as declared")
         token = need("token", item["token"])
         if token:
             if (token.get("user_obj") or {}).get("username") != item["username"]:

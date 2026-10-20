@@ -16,6 +16,7 @@ metadata:
     blueprints.goauthentik.io/description: Managed by homelab-infra (playbooks/authentik.yml, machine identities)
 entries:
 {% if access.state == 'present' %}
+  # --- The service: Jocasta's provider, application and claims. ---
   # The only claims the tokens carry beyond Authentik's own: a fixed audience
   # and the one project from the account's attributes.
   - model: authentik_providers_oauth2.scopemapping
@@ -57,6 +58,7 @@ entries:
       # Kept out of every person's application library.
       meta_launch_url: blank://blank
 {% endif %}
+  # --- Service-independent: accounts, app passwords, membership. ---
 {% for item in spec.identities if item.state == 'present' %}
   # {{ item.host }} / {{ item.profile }}: an ordinary service account with no
   # roles; its only group is the one bound to the application below.

@@ -70,6 +70,10 @@ class DeclarationTest(unittest.TestCase):
         self.assertEqual(laptop["secret_path"],
                          f"/home/{USER}/.config/chaldea/authentik/jocasta-projectA-reporter.app-password")
         self.assertEqual(laptop["old_tokens"], [laptop["username"] + "-g1", laptop["username"] + "-g2"])
+        # The Jocasta grant is the service profile's; naming and paths are not.
+        self.assertEqual((agent["service"], agent["grant"], agent["grant_attributes"]),
+                         ("jocasta", {"project": "projectA"}, {"chaldea_jocasta": {"project": "projectA"}}))
+        self.assertNotIn("jocasta", agent["username"] + agent["secret_path"].replace("jocasta-projectA-reporter", ""))
         self.assertIn(f'"aud": "{RESOURCE}"', s["access"]["expression"])
         self.assertNotIn("request", s["access"]["expression"])
         self.assertEqual(mi.machine_identity_owned("version: 1\n" + s["marker"]), s["objects"])
