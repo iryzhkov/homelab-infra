@@ -40,13 +40,18 @@
       "holonet_actions",
       "holonet_namespace"
     ],
-    "id_grammar": "^[0-9a-f]{32}$",
     "namespace_grammar": "^[a-z][a-z0-9-]{0,31}$",
     "arrays": "explicit, duplicate-free, bounded arrays; no wildcard, coercion, sorting, truncation or silent deduplication; empty means no grant",
     "json": "reject duplicate object keys at every level and noninteger/bool time claims; reject unknown holonet_* fields",
     "time": "require integer iat and exp, 0 < exp-iat <= 300, iat <= now+30 and now < exp+30; optional nbf must be integer with iat <= nbf < exp and nbf <= now+30",
     "subject": "1..128 printable ASCII bytes, no whitespace or control characters",
-    "scopes": "space-delimited nonempty distinct known scope names, exactly one ASCII space between names; requested scope never substitutes for issued scope"
+    "scopes": "space-delimited nonempty distinct known scope names, exactly one ASCII space between names; requested scope never substitutes for issued scope",
+    "id_grammars": {
+      "server_id": "^[0-9a-f]{32}$",
+      "user_id": "^[0-9a-f]{32}$",
+      "library_or_media_id": "^[1-9][0-9]{0,18}$; canonical decimal string, numeric value <= 9223372036854775807; never coerce number to string",
+      "home_row_id": "^[A-Za-z0-9_-]{1,128}$; opaque per-server/per-user namespace; includes native resume"
+    }
   },
   "scopes": {
     "holonet.read": [
@@ -164,9 +169,25 @@
       "path": "/Items/{mediaId}/Refresh"
     },
     {
+      "method": "GET",
+      "path": "/user_usage_stats/user_manage/{Action}/{Id}"
+    },
+    {
+      "method": "GET",
+      "path": "/user_usage_stats/load_backup"
+    },
+    {
+      "method": "GET",
+      "path": "/user_usage_stats/save_backup"
+    },
+    {
+      "method": "POST",
+      "path": "/user_usage_stats/submit_custom_query"
+    },
+    {
       "method": "ANY",
       "path": "unregistered method/path or arbitrary URL, SQL, shell, filesystem path"
     }
   ],
-  "qualification": "Candidate contract data for enrollment/helper/service consumers. No consumer or runtime activation is claimed. Forbidden vectors apply to HoloNet service adapters; the preexisting Ansible preference/library reconciler is a separate operator path."
+  "qualification": "Candidate contract data for enrollment/helper/service consumers. No consumer or runtime activation is claimed. Forbidden vectors apply to HoloNet service adapters; the preexisting Ansible preference/library reconciler is a separate operator path. Installed Emby4.10.1.0 read-only preflight corrected library/media decimal ID grammar and native home resume identifier. Optional UserDataPlayCount/UserDataLastPlayedDate fields must be explicitly requested before interpreting those values. Plugin GET mutation routes are explicitly forbidden."
 }

@@ -12,21 +12,56 @@ The old playbook's full-list reconciliation deleted every HomeSections ID outsid
 the six-row recipe. This change requires explicit existing IDs and preserves all
 other rows. It installs no service and enables no HoloNet writes.
 
-Public GET /emby/System/Info/Public on homelab returned Emby 4.10.1.0 on
-2026-10-20. The public web app reports the same version. The available browser
-profile reaches sign-in, so authenticated rendering is unproved. No authenticated
-API sample, plugin version, TV device/app version or history cohort has been
-qualified. Existing protected Emby access is sourced by scripts/emby-favorite-upgrades.py
-from /srv/swarm/ombi/config/OmbiSettings.db. The ordinary SSH account cannot
-traverse /srv/swarm/ombi. No escalation or credential export was attempted.
-Historical /home/iryzhkov/app copies are not evidence of current credential custody.
+On 2026-10-20 Igor explicitly approved a homelab-only read-only operator
+preflight using the existing protected credential in place, at most 200 requests
+over two hours, limited to Igor/TV catalog/history/home/version evidence.
+The operation ran within that authority and is now closed. No credential,
+configuration, media or profile mutation occurred. Detailed sanitized receipts
+belong in the execution checkpoint's linked Jocasta research, not Git.
 
-The existing collector reads Jellystat api/getTaskSettings and logs/getLogs.
-These prove sync-job results, not individual viewing sessions. ActivityMonitor
-freshness is explicitly unknown. Native item UserData can support played/count/
-last-played/resume summaries after separate user authorization; it must not be
-described as a complete event ledger. The host-drain activity database query is a
-recent-activity heuristic, not a recommendation history contract.
+Installed Emby is 4.10.1.0, Playback Reporting 2.1.0.7 and TheIntroDB 1.1.0.0.
+Both profiles expose the same six expected home-row kinds. Populated row-item
+GETs return Movie, Series, Episode or CollectionFolder types. Both collection rows
+are empty and TV favorites are empty. These are API observations; authenticated
+web and physical-TV rendering remain unproved and need Igor.
+
+The source helper accepted at 419b96c was executed in check mode through a
+GET-only transport against both live profiles. A candidate explicit ownership
+map was resolved privately for preview only. It returned changed0; full before/
+after row contents and IDs were equal. No ownership adoption, apply, deployment
+or runtime installation was performed.
+
+Existing Emby credential custody remains the protected current Ombi database
+used by scripts/emby-favorite-upgrades.py. The bounded probe reads only that
+Emby setting, rather than opening unrelated arr credentials. The credential
+remains in process memory on homelab, and response bodies are projected there
+before sanitized output leaves the host. Public profile discovery can omit TV;
+an exact-name operator user-list lookup resolves hidden profiles without
+exporting any other profile's configuration. A prior sign-in image identifier
+failed current-name verification and was discarded before home/history reads.
+
+Installed library and media IDs are decimal strings. Home row IDs include
+server-issued hex strings and the native literal resume; IDs cannot share one
+hex-only grammar. The candidate contract now distinguishes these namespaces.
+
+Native item UserData needs explicit Fields=UserDataPlayCount,UserDataLastPlayedDate.
+The default projection returned zero counts and no dates even on played items.
+Explicit fields produced populated values in the bounded sample. Neither a
+zero default nor a missing observation proves unwatched/inactive status.
+
+Playback Reporting has an existing retained event store, separate from item
+state. A bounded read-only local SQLite sample and scoped native GET
+user_usage_stats/HourlyReport both returned authorized evidence. HourlyReport
+requires an explicit fixed filter=Movie,Episode: omitting it produced an all-zero
+report despite retained events. Use a fixed user_id/date/window and qualified
+media-type enum, never an agent-provided SQL/filter string. Collection start,
+client completeness and liveness are still unqualified.
+
+The plugin also has mutating GET routes for user management and backup import/
+export. Those are forbidden, alongside custom SQL and every unregistered route.
+HTTP GET alone is not a safe-read classification. The future service must use
+a closed typed adapter. The existing collector's Jellystat task/log metrics
+remain sync-job evidence, not a viewing-session ledger.
 
 ## Candidate service contract
 
@@ -103,68 +138,55 @@ the helper while mixed ownership remains active. Restore only exact owned row
 fields/order from a fresh private canary snapshot after checking for intervening
 changes; preserve all unknown rows. No generic item delete belongs in rollback.
 
-## Exact bounded operator packet, pending authority
+## Next client action and reduced canary packet
 
-No command below is authorization. Parent/user coordination must settle the
-profile names, client/device versions, audience and private evidence handling.
+The approved read-only preflight is complete. It does not authorize any action
+below that changes objects, credentials, policy or configuration.
 
-1. Authorize one homelab-only operator window, capped at two hours and 200 API
-   requests, with no service rollout, Authentik enrollment or scheduled task.
-   Pause competing home playbook runs. Do not disable playback or change media.
-2. Operator privately captures server/plugin versions, exact Igor/TV baseline
-   row IDs and contents, and the six recipe-key ownership mappings. Keep full
-   user settings, PINs, tokens and snapshots out of chat and job snapshots.
-   Supply the private ownership variable file only to this scoped playbook.
-   Approve which existing read-only credential path the operator may use.
-3. Observe the six baseline rows in an authenticated real web app and named
-   physical TV app. Record device/app/server versions and sanitized images.
-   Emulated TV browser mode is not physical TV acceptance. Empty rows need
-   explicit empty-state observation rather than a fabricated populated row.
-4. Proposed disposable non-admin owner is "HoloNet P0 canary"; proposed allowed
-   reader is the existing TV profile; proposed denied reader is a separate
-   "HoloNet P0 denied" disposable profile. New profiles/credentials/policy changes
-   require explicit approval. If existing profiles are chosen instead, name them
-   and grant that exact use. Do not create profiles under current authority.
-5. Operator prepares the exact installed-version request bodies and target IDs
-   from the native client, then reviews a private bounded mutation manifest.
-   Create at most one private Video playlist, one comparison collection and one
-   row on the disposable owner. At most five existing allowed items, including
-   one movie, two related episodes and one intentional repeat. Use the prefix
-   holonet-p0-20261020 and retain returned object/entry/row IDs privately.
-   No watch/favorite/rating, user-policy, media, artwork or library-option changes.
-   If proving selected sharing needs policy/user changes, stop for a revised
-   packet rather than broadening to global public.
-6. Prove mixed item support, entry order/repeats, rename/reorder/remove-by-entry,
-   private versus shared visibility and edit rights from owner/allowed/denied
-   contexts. Query a denied-library item without disclosing its title/artwork.
-   Treat collections as library-shared until stronger isolation is demonstrated.
-   Never put private-history-derived selections/explanations in this collection.
-7. Capture exact HomeSections fields for a playlist/collection-backed row from
-   the installed native client. Append only the named disposable row in the
-   agreed generated slot. Observe it in both agreed real clients. Run the new
-   playbook preview, apply only if authorized and reviewed, then preview again.
-   Require changed0 and unchanged manual/generated rows. Keep each request and
-   response effect in the private canary journal; retained public fixtures must
-   be synthetic equivalents, not redacted full user records.
-8. Inject one manual-row/order conflict and prove stop/preservation. Undo only
-   the canary-owned change after a fresh comparison. Remove row and disposable
-   objects through their specific qualified endpoints. Generic DELETE /Items
-   is forbidden. If object-only deletion cannot be distinguished from media
-   deletion, stop and ask the operator to remove the object in the native UI.
-9. Restore baseline-owned fields/order, preserve unrelated changes and verify
-   no canary objects remain, all original IDs/membership/settings survive, and
-   ownership-aware playbook apply/preview plus the host's existing drift checker
-   return no change. Do not run the old full-list reconciler as a rollback.
-   Resume any paused operator process. Produce sanitized per-client and
-   per-capability pass/fail receipts. Stop if audience isolation or scoped
-   restoration cannot be proved.
+First, Igor signs into the existing web client for Igor/TV and observes the six
+baseline rows. Record browser/app version and sanitized visual evidence.
+On a physical TV, record device/app version and observe the TV profile's same
+baseline, including empty favorites/collections states. Browser TV display mode
+is not physical-TV proof. No password, PIN or access token should be sent to an
+agent. The user drives login in the shared browser or provides observations.
 
-Before the operator window, a read-only paginated sample is separately useful:
-one user and allowed library, Limit 25, at most two pages, and no broad crawl.
-Record counts, response bytes, elapsed time, continuation behavior and evidence
-coverage only. No title or user history needs to leave the host. History action
-cohort/window and minimum credential reach remain unqualified, not inferred
-from a powerful existing key.
+After that baseline, prepare one separately approved native-home canary:
+
+1. Explicitly agree whether the existing TV profile may be the real canary
+   owner/target. This avoids creating new accounts, but use of a real profile
+   requires its own agreement. Name one allowed and one denied non-admin
+   audience context before isolation tests; an administrator is not a meaningful
+   denied observer. No other profile history is needed.
+2. Capture the exact installed native-client bodies and select at most four
+   existing visible members, one movie, two episodes and an intentional repeat.
+   Keep the IDs and complete before-state in the private action manifest.
+   Do not ask for write approval until that manifest and scoped restoration
+   steps are concrete. No private-history-derived selection is needed.
+3. The first mutation window contains only one private disposable Video playlist
+   and one playlist-backed home row on the agreed profile. Use a unique owned
+   namespace/title, the agreed slot after the final baseline row, and retain
+   returned playlist-entry/row IDs privately. Pause competing home playbooks.
+   Do not create a collection, account, recurring job or service in this first
+   UI-viability window.
+4. Prove member order/repeats, owner visibility and denied-user isolation, then
+   observe the disposable row in both real clients. Run the ownership-aware
+   preview and require changed0 with unknown rows preserved. Remove the row
+   and playlist using qualified object-specific native operations, never a
+   generic media-delete endpoint. Restore only canary-owned changes after a
+   fresh conflict check; verify original IDs/content/order and changed0.
+   If object-only removal or restoration cannot be proved, stop before creation.
+
+This is a smaller first canary, not a reduction of P0/P2 acceptance. Selected-user
+sharing versus edit rights, restricted-library behavior, collection grouping,
+manual conflicts and full scoped rollback still need qualification before
+dependent write-engine work. Keep collections shared within accessible libraries
+unless installed isolation proves stronger. Prepare the next bounded action
+only after the first UI premise survives.
+
+No live apply, disposable object, profile/credential change or source merge is
+authorized by the read-only approval. The old runtime full-list reconciler must
+not run over mixed ownership. The new source helper's check mode is qualified
+against today's six rows; apply/coexistence/reverse rollback remain canary gates.
 
 ## Synthetic verification
 
@@ -182,5 +204,12 @@ subdirectory there, assert the mapping and writability, and disable bytecode
 outside HOME. The first scratch attempt fell back after mkdir failed and is not
 accepted verification; only the corrected asserted run counts.
 
-No live mutation, deployment, enrollment, TV observation, authenticated API
-permission proof or full history proof is claimed by these synthetic checks.
+scripts/test_holonet_p0_readonly.py separately covers fixed GET dispatch, exact
+history-filter binding, redirect refusal, request/time/response bounds, hidden
+profile resolution and output privacy. Its fixtures contain no real user data.
+The one-shot probe is an operator evidence tool with a fixed expired-after-window
+deadline, not a deployed MCP service or reusable authority grant.
+
+Live read-only receipts establish only their named reads and projections. Neither
+synthetic checks nor API success establish a native-client render, least-privilege
+backend credential, denied-user isolation, live writes or complete history.

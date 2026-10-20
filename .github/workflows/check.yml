@@ -45,6 +45,7 @@ jobs:
           test "$HOME" = "$PWD/.cache/holonet-executor/p0-tests/home"
           mkdir -p "$HOME" "$TMPDIR"
           python3 scripts/test_emby_home_ownership.py
+          python3 scripts/test_holonet_p0_readonly.py
           ansible-playbook playbooks/emby-experience.yml --syntax-check
       - name: Install the Compose module for OV source syntax checks
         run: ansible-galaxy collection install community.docker:5.4.0
