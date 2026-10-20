@@ -6,6 +6,7 @@ app-password tokens, one OAuth2 provider kind, scope mappings, applications,
 policy bindings, keypairs, check_access and view_key. Every request is
 recorded, so a test can prove what a run did not do.
 """
+from base64 import b64encode, urlsafe_b64encode
 import hashlib
 import http.server
 import json
@@ -17,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import yaml
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
 ADMIN = "FAKE-ADMIN-TOKEN-NEVER-PRINT"
 KEY_PREFIX = "FAKEAPPPASSWORD"
@@ -33,6 +36,28 @@ Loader.add_constructor("!KeyOf", lambda loader, node: ("KeyOf", loader.construct
 
 def page(rows):
     return {"pagination": {"count": len(rows), "current": 1, "total_pages": 1}, "results": rows, "autocomplete": {}}
+
+
+def signing_jwk(private_key, certificate=None):
+    """2026.8.4 JWKSView: key/alg from PRIVATE KEY, optional x5c from cert."""
+    public = private_key.public_key()
+    def uint(value, minimum=0):
+        return urlsafe_b64encode(value.to_bytes(max(minimum, (value.bit_length() + 7) // 8), "big")).decode().rstrip("=")
+    key = {"kid": "synthetic-signing-key", "use": "sig"}
+    if isinstance(private_key, rsa.RSAPrivateKey):
+        numbers = public.public_numbers()
+        key |= {"kty": "RSA", "alg": "RS256", "n": uint(numbers.n), "e": uint(numbers.e)}
+    elif isinstance(private_key, ec.EllipticCurvePrivateKey):
+        numbers = public.public_numbers()
+        key |= {"kty": "EC", "alg": "ES256", "crv": "P-256", "x": uint(numbers.x, 32), "y": uint(numbers.y, 32)}
+    elif isinstance(private_key, ed25519.Ed25519PrivateKey):
+        key |= {"kty": "OKP", "alg": "EdDSA", "crv": "Ed25519",
+                "x": urlsafe_b64encode(public.public_bytes_raw()).decode().rstrip("=")}
+    else:
+        raise ValueError("unsupported synthetic private key")
+    if certificate is not None:
+        key["x5c"] = [b64encode(certificate.public_bytes(serialization.Encoding.DER)).decode()]
+    return key
 
 
 class ImportError_(Exception):
@@ -55,7 +80,10 @@ class Authentik:
                                 "policy_engine_mode": "any", "backchannel_providers": [], "bindings": []}}
         self.apps["budget"]["bindings"].append(self._binding(self.apps["budget"], self.groups["family"]["pk"]))
         self.keypairs = {KEYPAIR: {"pk": KEYPAIR, "name": "authentik Self-signed Certificate",
-                                   "private_key_available": True}}
+                                   "private_key_available": True, "key_type": "rsa"}}
+        self.jwks = {"keys": [signing_jwk(rsa.generate_private_key(public_exponent=65537, key_size=2048))]}
+        self.public_authorization = []
+        self.public_without_length = False
         self.next_pk = 100
         self.responses = {}
         self.redirects = {}
@@ -241,6 +269,16 @@ class Authentik:
         path = unquote(parts.path)
         query = {k: v[0] for k, v in parse_qs(parts.query).items()}
         self.requests.append((method, path, query))
+        if path.startswith("/application/o/"):
+            response = self.responses.get((method, path))
+            if response is not None:
+                return response() if callable(response) else response
+            slug = path.split("/")[3]
+            app = self.apps.get(slug)
+            if (method != "GET" or path != f"/application/o/{slug}/jwks/" or not app
+                    or not any(p["pk"] == app["provider"] for p in self.providers.values())):
+                return 404, {"detail": "Not found."}
+            return 200, self.jwks
         assert path.startswith("/api/v3/")
         path = path[len("/api/v3"):]
         bp = "/managed/blueprints/"
@@ -326,6 +364,9 @@ class Authentik:
 def serve(state, cert, key):
     class Handler(http.server.BaseHTTPRequestHandler):
         def _respond(self, method):
+            public = urlsplit(self.path).path.startswith("/application/o/")
+            if public:
+                state.public_authorization.append(self.headers.get("Authorization"))
             redirect = state.redirects.get((method, urlsplit(self.path).path))
             if redirect:
                 state.requests.append((method, urlsplit(self.path).path, {}))
@@ -334,7 +375,7 @@ def serve(state, cert, key):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if self.headers.get("Authorization") != "Bearer " + ADMIN:
+            if not public and self.headers.get("Authorization") != "Bearer " + ADMIN:
                 status, body = 403, {"detail": "denied"}
             else:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -344,9 +385,13 @@ def serve(state, cert, key):
             data = json.dumps(body).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
+            if not (public and state.public_without_length):
+                self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+                pass
 
         def do_GET(self):
             self._respond("GET")

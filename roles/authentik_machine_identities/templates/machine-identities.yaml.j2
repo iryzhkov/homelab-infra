@@ -1,5 +1,4 @@
 {% set spec = machine_identity_spec %}
-{% set access = spec.access %}
 # {{ ansible_managed }}
 #
 # Rendered by roles/authentik_machine_identities and stored in Authentik as the
@@ -15,23 +14,24 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: Managed by homelab-infra (playbooks/authentik.yml, machine identities)
 entries:
+{% for service, access in spec.services.items() %}
 {% if access.state == 'present' %}
-  # --- The service: Jocasta's provider, application and claims. ---
-  # The only claims the tokens carry beyond Authentik's own: a fixed audience
-  # and the one project from the account's attributes.
+  # Fixed {{ service }} audience and claims from its operator-owned grants.
+{% for scope, mapping in access.scope_mappings.items() %}
   - model: authentik_providers_oauth2.scopemapping
-    id: jocasta-scope
+    id: {{ service }}-scope{{ '' if loop.first else '-' ~ loop.index }}
     identifiers:
-      name: {{ access.mapping | to_json }}
+      name: {{ mapping | to_json }}
     attrs:
-      scope_name: {{ access.scope | to_json }}
+      scope_name: {{ scope | to_json }}
       description: ""
-      expression: {{ access.expression | to_json }}
+      expression: {{ access.scope_expressions[scope] | to_json }}
+{% endfor %}
   # Client credentials only, {{ access.token_seconds }}-second tokens signed by an
   # existing keypair. The provider's client secret is never read or delivered:
   # hosts authenticate with their own account's app password.
   - model: authentik_providers_oauth2.oauth2provider
-    id: jocasta-provider
+    id: {{ service }}-provider
     identifiers:
       name: {{ access.name | to_json }}
     attrs:
@@ -46,18 +46,21 @@ entries:
       issuer_mode: per_provider
       signing_key: !Find [authentik_crypto.certificatekeypair, [kp_uuid, {{ access.signing_key | to_json }}]]
       property_mappings:
-        - !KeyOf jocasta-scope
+{% for scope in access.scope_mappings %}
+        - !KeyOf {{ service }}-scope{{ '' if loop.first else '-' ~ loop.index }}
+{% endfor %}
   - model: authentik_core.application
-    id: jocasta-application
+    id: {{ service }}-application
     identifiers:
       slug: {{ access.slug | to_json }}
     attrs:
       name: {{ access.name | to_json }}
-      provider: !KeyOf jocasta-provider
+      provider: !KeyOf {{ service }}-provider
       policy_engine_mode: any
       # Kept out of every person's application library.
       meta_launch_url: blank://blank
 {% endif %}
+{% endfor %}
   # --- Service-independent: accounts, app passwords, membership. ---
 {% for item in spec.identities if item.state == 'present' %}
   # {{ item.host }} / {{ item.profile }}: an ordinary service account with no
@@ -83,12 +86,13 @@ entries:
       intent: app_password
       expiring: true
       expires: {{ item.expires | to_json }}
-      description: {{ ('Chaldea ' ~ item.host ~ ' ' ~ item.profile ~ ' Jocasta access, generation ' ~ item.generation) | to_json }}
+      description: {{ ('Chaldea ' ~ item.host ~ ' ' ~ item.profile ~ ' ' ~ ('Jocasta' if item.service == 'jocasta' else item.service) ~ ' access, generation ' ~ item.generation) | to_json }}
 {% endfor %}
+{% for service, access in spec.services.items() %}
 {% if access.state == 'present' %}
   # Preflight refuses foreign members; set membership to the present identities.
   - model: authentik_core.group
-    id: identities-group
+    id: {{ 'identities-group' if service == 'jocasta' else service ~ '-identities-group' }}
     identifiers:
       name: {{ access.group | to_json }}
     attrs:
@@ -96,20 +100,26 @@ entries:
       parents: []
       roles: []
       users:
+{% set members = spec.identities | selectattr('state', 'equalto', 'present') | selectattr('service', 'equalto', service) | list %}
+{% if members %}
 {% for item in spec.identities if item.state == 'present' %}
+{% if item.service == service %}
         - !KeyOf user-{{ loop.index }}
+{% endif %}
+{% endfor %}
 {% else %}
         []
-{% endfor %}
+{% endif %}
   - model: authentik_policies.policybinding
     identifiers:
-      target: !KeyOf jocasta-application
-      group: !KeyOf identities-group
+      target: !KeyOf {{ service }}-application
+      group: !KeyOf {{ 'identities-group' if service == 'jocasta' else service ~ '-identities-group' }}
     attrs:
       order: 0
       enabled: true
       negate: false
 {% endif %}
+{% endfor %}
 {% for item in spec.identities %}
 {% for token in item.old_tokens + ([item.token] if item.state == 'absent' else []) %}
   - model: authentik_core.token
@@ -124,6 +134,7 @@ entries:
       username: {{ item.username | to_json }}
 {% endif %}
 {% endfor %}
+{% for service, access in spec.services.items() %}
 {% if access.state == 'absent' %}
   # Deleting the application also deletes its policy bindings.
   - model: authentik_core.application
@@ -134,12 +145,15 @@ entries:
     state: absent
     identifiers:
       name: {{ access.name | to_json }}
+{% for mapping in access.scope_mappings.values() %}
   - model: authentik_providers_oauth2.scopemapping
     state: absent
     identifiers:
-      name: {{ access.mapping | to_json }}
+      name: {{ mapping | to_json }}
+{% endfor %}
   - model: authentik_core.group
     state: absent
     identifiers:
       name: {{ access.group | to_json }}
 {% endif %}
+{% endfor %}

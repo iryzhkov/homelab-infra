@@ -143,14 +143,8 @@ def _resource(value):
     return value
 
 
-# --- The service profile ---------------------------------------------------
-# Everything specific to the one service this role enrols accounts into,
-# Jocasta: its fixed scope and token lifetime, the operator fields of its
-# application, the per-account grant, and the claims the scope mapping
-# issues. The account lifecycle and host delivery below reach it only
-# through SERVICE. Adding a second web MCP service is a second profile and is
-# described in docs/authentik-machine-identities.md, "A second service"; this
-# role implements only Jocasta.
+# --- Closed service profiles ----------------------------------------------
+# No caller-selected scope, attribute, claim map or mapping code.
 
 SCOPE = "jocasta.read"
 TOKEN_SECONDS = 300
@@ -202,24 +196,163 @@ SERVICE = {
 }
 
 
+OV_ROOT = re.compile(r"viking://resources/(?:[A-Za-z0-9_@+.,=-]+/)*[A-Za-z0-9_@+.,=-]+\Z")
+OBSERVER_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\Z")
+HA_ENTITY = re.compile(r"(light|switch|sensor|binary_sensor)\.[a-z0-9_]{1,96}\Z")
+HA_ACTION = re.compile(r"(state\.read|light\.control|switch\.control)\Z")
+
+
+def _bounded_grants(value, name, pattern, maximum, minimum=0):
+    if not isinstance(value, list) or not minimum <= len(value) <= maximum:
+        _refuse(f"{name} must be an explicit list of {minimum}..{maximum} grants")
+    for grant in value:
+        _match(pattern, grant, name)
+    if len(set(value)) != len(value):
+        _refuse(f"{name} has duplicate grants")
+    return list(value)
+
+
+def _ov_grant(item, name):
+    roots = _bounded_grants(item["ov_namespaces"], name + " ov_namespaces", OV_ROOT, 16, 1)
+    if any(len(r) > 1024 or any(p in (".", "..") for p in r.split("/")) for r in roots):
+        _refuse(name + " ov_namespaces must be canonical roots")
+    if any(a == b or a.startswith(b + "/") or b.startswith(a + "/")
+           for n, a in enumerate(roots) for b in roots[n + 1:]):
+        _refuse(name + " ov_namespaces must not overlap")
+    grant = {"ov_namespaces": roots}
+    return grant, {"chaldea_ov": grant}
+
+
+def _homelab_grant(item, name):
+    grant = {key: _bounded_grants(item[key], name + " " + key, OBSERVER_ID, 128)
+             for key in ("homelab_services", "homelab_hosts")}
+    return grant, {"chaldea_homelab": grant}
+
+
+def _ha_grant(item, name):
+    grant = {"ha_entities": _bounded_grants(item["ha_entities"], name + " ha_entities", HA_ENTITY, 64, 1),
+             "ha_actions": _bounded_grants(item["ha_actions"], name + " ha_actions", HA_ACTION, 3, 1)}
+    # Also preserve validID's explicit length bound, independent of its regex.
+    if any(len(entity) > 112 for entity in grant["ha_entities"]):
+        _refuse(name + " ha_entities exceed the verifier ID bound")
+    return grant, {"chaldea_ha": grant}
+
+
+def _bounded_expression(access, service, scope=None):
+    # The allowlist is embedded from the validated operator declaration, never
+    # from request parameters. Require an exact account grant and group membership.
+    expected = access["account_grants"]
+    lines = [
+        "# Rendered by homelab-infra roles/authentik_machine_identities.",
+        f"expected = {expected!r}",
+        f"grant = user.attributes.get('chaldea_{service}') if user else None",
+        "if (not user or str(user.type) != 'service_account'",
+        f"        or not ak_is_group_member(user, name={access['group']!r})",
+        "        or user.username not in expected or grant != expected[user.username]):",
+        "    return {}",
+    ]
+    if service == "ha":
+        # Authentik 2026.8.4 get_claims evaluates requested mappings with token
+        # and deepmerge appends arrays. Elect one selected mapping to emit both
+        # arrays exactly once, even when both scopes are requested. token.scope
+        # is BaseGrantModel's list, not an untrusted HTTP request parameter.
+        lines += [
+            "requested = token.scope",
+            f"allowed = {list(access['scope_mappings'])!r}",
+            "if (not isinstance(requested, list) or not requested",
+            "        or any(s not in allowed for s in requested)",
+            "        or len(set(requested)) != len(requested)):",
+            "    return {}",
+            f"if {scope!r} != sorted(requested)[0]:",
+            "    return {}",
+            "actions = [a for a in grant['ha_actions']",
+            "           if ('ha.read' if a == 'state.read' else 'ha.control') in requested]",
+            "if not actions:",
+            "    return {}",
+            f"return {{'aud': {access['resource']!r}, 'ha_entities': grant['ha_entities'], 'ha_actions': actions}}",
+        ]
+    else:
+        lines.append(f"return dict(grant, aud={access['resource']!r})")
+    return "\n".join(lines)
+
+
+SERVICES = {
+    "jocasta": SERVICE,
+    "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "scope": "ov.read",
+           "resource": "https://ov.mcp.ryzhkov.dev/mcp", "grant": _ov_grant},
+    "ha": {"name": "ha", "account_keys": {"ha_entities", "ha_actions"}, "scope": "ha.read",
+           "resource": "https://ha.mcp.ryzhkov.dev/mcp", "grant": _ha_grant},
+    "homelab": {"name": "homelab", "account_keys": {"homelab_services", "homelab_hosts"},
+                "scope": "homelab.read", "resource": "https://homelab.mcp.ryzhkov.dev/mcp",
+                "grant": _homelab_grant},
+}
+
+
+def _application(raw, service):
+    profile = SERVICES[service]
+    extra = {"issuer", "jwks_url"} if service != "jocasta" else set()
+    access = dict(_keys(raw, APPLICATION_KEYS | SERVICE["application_keys"] | extra,
+                        f"{service} access"))
+    if access["state"] not in STATES:
+        _refuse("access state must be present or absent")
+    for field, pattern in (("slug", SLUG), ("name", NAME), ("group", NAME),
+                           ("client_id", CLIENT_ID), ("signing_key", UUID)):
+        _match(pattern, access[field], "access " + field + (" (an existing keypair's kp_uuid)" if field == "signing_key" else ""))
+    if service == "jocasta":
+        access.update(_jocasta_application(access))
+    else:
+        scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read") if service == "ha" else (profile["scope"],)
+        if access["scope"] not in scopes:
+            _refuse(f"access scope must be {' or '.join(scopes)}")
+        if (not isinstance(access["token_seconds"], int) or isinstance(access["token_seconds"], bool)
+                or access["token_seconds"] != TOKEN_SECONDS):
+            _refuse(f"access token_seconds must be {TOKEN_SECONDS}")
+        if access["resource"] != profile["resource"]:
+            _refuse(f"{service} resource must be {profile['resource']}")
+        issuer = _resource(access["issuer"])
+        parts = urlsplit(issuer)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        if issuer != f"{origin}/application/o/{access['slug']}/":
+            _refuse("issuer must be the explicit per-provider URL with trailing slash")
+        if access["jwks_url"] != issuer + "jwks/":
+            _refuse("jwks_url must be the explicit issuer URL plus jwks/ with trailing slash")
+        machine_identity_api_url(origin + "/api/v3")
+        access["mapping"] = f"{access['name']}: {profile['scope']}"
+    access["service"] = service
+    access["scope_mappings"] = {scope: f"{access['name']}: {scope}" for scope in access["scope"].split(" ")}
+    return access
+
+
+def _service_specs(spec):
+    """Project shared lifecycle data onto each service for exact verification."""
+    for service, access in spec["services"].items():
+        identities = [i for i in spec["identities"] if i["service"] == service]
+        names = {("scopemapping", name) for name in access["scope_mappings"].values()}
+        names.update({("provider", access["name"]), ("application", access["slug"]), ("group", access["group"])})
+        for i in identities:
+            names.add(("user", i["username"]))
+            names.update(("token", t) for t in [i["token"]] + i["old_tokens"])
+        yield {"access": access, "identities": identities,
+               "objects": [o for o in spec["objects"] if tuple(o[:2]) in names]}
+
+
 # --- Accounts, app passwords and their host files: service-independent -----
 
-def machine_identity_spec(identities, access, hosts, max_days, now):
+def machine_identity_spec(identities, access, hosts, max_days, now, services=None):
     """Validate the declared identities and derive every name the role uses.
 
     hosts maps each inventory host an identity names to its ssh_user, an
     optional home override and its connection.
     """
-    access = dict(_keys(access, APPLICATION_KEYS | SERVICE["application_keys"],
-                        "authentik_jocasta_machine_access"))
-    if access["state"] not in STATES:
-        _refuse("access state must be present or absent")
-    _match(SLUG, access["slug"], "access slug")
-    _match(NAME, access["name"], "access name")
-    _match(NAME, access["group"], "access group")
-    _match(CLIENT_ID, access["client_id"], "access client_id")
-    _match(UUID, access["signing_key"], "access signing_key (an existing keypair's kp_uuid)")
-    access.update(SERVICE["application"](access))
+    if services is None or services == {}:
+        services = {"jocasta": access}
+    if not isinstance(services, dict) or not services or set(services) - set(SERVICES):
+        _refuse("services must be a nonempty mapping of closed service profiles")
+    services = {name: _application(raw, name) for name, raw in services.items()}
+    for field in ("slug", "name", "group", "client_id", "resource"):
+        values = [a[field] for a in services.values()]
+        if len(set(values)) != len(values):
+            _refuse(f"services have colliding {field}")
 
     if not isinstance(max_days, int) or isinstance(max_days, bool) or not 1 <= max_days <= 365:
         _refuse("authentik_machine_identity_max_days must be 1..365")
@@ -232,11 +365,25 @@ def machine_identity_spec(identities, access, hosts, max_days, now):
     out, seen_users, seen_pairs = [], set(), set()
     for n, raw in enumerate(identities):
         name = f"identity {n}"
-        item = _keys(raw, ACCOUNT_KEYS | SERVICE["account_keys"], name)
+        if not isinstance(raw, dict):
+            _refuse(name + " must be a mapping")
+        service = raw.get("service", "jocasta")
+        if not isinstance(service, str) or service not in services:
+            _refuse(name + " service must name a declared closed service profile")
+        profile_spec = SERVICES[service]
+        access = services[service]
+        item = _keys(raw, ACCOUNT_KEYS | profile_spec["account_keys"] |
+                     ({"service"} if "service" in raw else set()), name)
         host = _match(HOST, item["host"], name + " host")
         profile = _match(PROFILE, item["profile"], name + " profile")
         name = f"identity {host}/{profile}"
-        grant, grant_attributes = SERVICE["grant"](item, name)
+        grant, grant_attributes = profile_spec["grant"](item, name)
+        if service == "ha":
+            scopes = access["scope"].split(" ")
+            for action in grant["ha_actions"]:
+                needed = "ha.read" if action == "state.read" else "ha.control"
+                if needed not in scopes:
+                    _refuse(name + " ha_actions require the corresponding explicit scope")
         state = item["state"]
         if state not in STATES:
             _refuse(name + " state must be present or absent")
@@ -268,7 +415,7 @@ def machine_identity_spec(identities, access, hosts, max_days, now):
         seen_users.add(username)
         directory = f"{home}/.config/chaldea/authentik"
         out.append({
-            "host": host, "profile": profile, "service": SERVICE["name"], "grant": grant, "state": state,
+            "host": host, "profile": profile, "service": service, "grant": grant, "state": state,
             "generation": generation, "expires": item["expires"],
             "username": username, "token": f"{username}-g{generation}",
             "old_tokens": [f"{username}-g{g}" for g in range(1, generation)],
@@ -281,16 +428,27 @@ def machine_identity_spec(identities, access, hosts, max_days, now):
         })
 
     objects = []
-    for kind, ident in (("scopemapping", access["mapping"]), ("provider", access["name"]),
-                        ("application", access["slug"]), ("group", access["group"])):
-        objects.append([kind, ident, access["state"]])
+    for service, access in services.items():
+        if service != "jocasta":
+            access["account_grants"] = {i["username"]: i["grant"] for i in out
+                                        if i["service"] == service and i["state"] == "present"}
+            access["expression"] = _bounded_expression(access, service, next(iter(access["scope_mappings"])))
+        access["scope_expressions"] = {
+            scope: _bounded_expression(access, service, scope) if service == "ha" else access["expression"]
+            for scope in access["scope_mappings"]}
+        for mapping in access["scope_mappings"].values():
+            objects.append(["scopemapping", mapping, access["state"]])
+        for kind, ident in (("provider", access["name"]), ("application", access["slug"]),
+                            ("group", access["group"])):
+            objects.append([kind, ident, access["state"]])
     for item in out:
         objects.append(["user", item["username"], item["state"]])
         objects.append(["token", item["token"], item["state"]])
         objects.extend(["token", old, "absent"] for old in item["old_tokens"])
     marker = OWNED_PREFIX + json.dumps({"version": 1, "objects": sorted(objects)},
                                        sort_keys=True, separators=(",", ":"))
-    return {"access": access, "identities": out, "objects": sorted(objects), "marker": marker}
+    return {"access": services.get("jocasta", next(iter(services.values()))),
+            "services": services, "identities": out, "objects": sorted(objects), "marker": marker}
 
 
 def machine_identity_owned(content):
@@ -311,18 +469,6 @@ def machine_identity_owned(content):
     except (ValueError, KeyError, TypeError, AssertionError):
         _refuse("the stored blueprint's ownership record is unreadable")
     return [list(o) for o in objects]
-
-
-def machine_identity_queries(spec, owned):
-    """The read-only lookups that show what exists under every name involved."""
-    wanted = {(k, i) for k, i, _ in spec["objects"]} | {(k, i) for k, i, _ in owned}
-    wanted.add(("client_id", spec["access"]["client_id"]))
-    queries = [{"kind": k, "id": i, "path": LOOKUPS[k][0].format(quote(i, safe=""))}
-               for k, i in sorted(wanted)]
-    if spec["access"]["state"] == "present":
-        key = spec["access"]["signing_key"]
-        queries.append({"kind": "keypair", "id": key, "path": f"/crypto/certificatekeypairs/{key}/"})
-    return queries
 
 
 def _found(results, problems):
@@ -426,6 +572,18 @@ def machine_identity_refusals(spec, owned, results, applications=None):
             problems.append(f"{kind} {ident} was created by this role; declare it absent before dropping it")
         elif found.get((kind, ident)) is not None:
             problems.append(f"{kind} {ident} still exists; keep it declared absent until it is gone")
+    for part in _service_specs(spec):
+        names = {tuple(o[:2]) for o in part["objects"]}
+        local_results = [r for r in results if (r["item"]["kind"], r["item"]["id"]) in names
+                         or r["item"]["kind"] in ("client_id", "keypair")]
+        problems.extend(_service_refusals(part, owned, local_results, applications))
+    return problems
+
+
+def _service_refusals(spec, owned, results, applications):
+    problems = []
+    found = _found(results, problems)
+    owned_state = {(k, i) for k, i, state in owned if state == "present"}
     access = spec["access"]
     clients = found.get(("client_id", access["client_id"]))
     if isinstance(clients, list) and any(row.get("name") != access["name"] for row in clients):
@@ -434,6 +592,8 @@ def machine_identity_refusals(spec, owned, results, applications=None):
         key = found.get(("keypair", access["signing_key"]))
         if not isinstance(key, dict) or key.get("private_key_available") is not True:
             problems.append(f"signing key {access['signing_key']} is missing or has no private key")
+        if access["service"] != "jocasta" and (not isinstance(key, dict) or key.get("key_type") != "rsa"):
+            problems.append(f"signing key {access['signing_key']} must have key_type rsa for {access['service']}")
     if access["state"] == "absent":
         provider = found.get(("provider", access["name"]))
         try:
@@ -461,7 +621,7 @@ def _same_time(a, b):
         return False
 
 
-def machine_identity_problems(spec, results, applications, bindings, checks):
+def _single_problems(spec, results, applications, bindings, checks):
     """Differences between Authentik after the apply and the declared state."""
     problems = []
     found = _found(results, problems)
@@ -473,6 +633,11 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
             problems.append(f"{kind} {ident} still exists")
     if access["state"] == "absent":
         return problems
+    if access["service"] != "jocasta":
+        key = found.get(("keypair", access["signing_key"]))
+        if (not isinstance(key, dict) or key.get("private_key_available") is not True
+                or key.get("key_type") != "rsa"):
+            problems.append(f"signing key {access['signing_key']} must retain private-key availability and RSA certificate metadata")
 
     def need(kind, ident):
         obj = found.get((kind, ident))
@@ -485,17 +650,23 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
         if obj and obj.get(field, MISSING) != value:
             problems.append(f"{label}: {field} is not as declared")
 
-    mapping = need("scopemapping", access["mapping"])
-    expect(mapping, "scope_name", access["scope"], "scope mapping")
-    expect(mapping, "expression", access["expression"], "scope mapping")
+    mapping_pks = []
+    for scope, name in access["scope_mappings"].items():
+        mapping = need("scopemapping", name)
+        expect(mapping, "scope_name", scope, "scope mapping")
+        expect(mapping, "expression", access["scope_expressions"][scope], "scope mapping")
+        mapping_pks.append(mapping.get("pk"))
     provider = need("provider", access["name"])
     for field, value in (("client_id", access["client_id"]), ("client_type", "confidential"),
                          ("grant_types", ["client_credentials"]),
                          ("access_token_validity", f"seconds={access['token_seconds']}"),
                          ("include_claims_in_id_token", True), ("issuer_mode", "per_provider"),
-                         ("signing_key", access["signing_key"]),
-                         ("property_mappings", [mapping.get("pk")])):
+                         ("signing_key", access["signing_key"])):
         expect(provider, field, value, "provider")
+    mappings = provider.get("property_mappings")
+    if provider and (not isinstance(mappings, list) or len(mappings) != len(mapping_pks)
+                     or set(mappings) != set(mapping_pks)):
+        problems.append("provider: property_mappings are not as declared")
     app = need("application", access["slug"])
     expect(app, "provider", provider.get("pk"), "application")
     expect(app, "policy_engine_mode", "any", "application")
@@ -551,6 +722,30 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
             answer = answers.get((item["username"], slug))
             if answer is not (slug == access["slug"]):
                 problems.append(f"user {item['username']}: Authentik's access answer for {slug} is {answer}")
+    return problems
+
+
+def machine_identity_queries(spec, owned):
+    """One complete lookup per owned/declared name, client ID and signing key."""
+    wanted = {(k, i) for k, i, _ in spec["objects"]} | {(k, i) for k, i, _ in owned}
+    wanted.update(("client_id", access["client_id"]) for access in spec["services"].values())
+    queries = [{"kind": k, "id": i, "path": LOOKUPS[k][0].format(quote(i, safe=""))}
+               for k, i in sorted(wanted)]
+    keys = {access["signing_key"] for access in spec["services"].values() if access["state"] == "present"}
+    queries.extend({"kind": "keypair", "id": key, "path": f"/crypto/certificatekeypairs/{key}/"}
+                   for key in sorted(keys))
+    return queries
+
+
+def machine_identity_problems(spec, results, applications, bindings, checks):
+    problems = []
+    # The old single-service public function accepted one binding response.
+    by_slug = bindings
+    if isinstance(bindings, dict) and "results" in bindings and "pagination" in bindings:
+        by_slug = {spec["access"]["slug"]: bindings}
+    for part in _service_specs(spec):
+        problems.extend(_single_problems(part, results, applications,
+                                        by_slug.get(part["access"]["slug"], {}), checks))
     return problems
 
 

@@ -83,7 +83,30 @@ jobs:
       - name: Install the deployment templating version
         run: pip install --disable-pip-version-check ansible-core==2.19.13
       - name: Test machine identities against the isolated HTTPS fixture
-        run: python3 -m unittest discover -s roles/authentik_machine_identities/tests -v
+        run: python3 -m unittest discover -s roles/authentik_machine_identities/tests -p test_machine_identities.py -v
+
+  machine-profiles:
+    # Keep the long real-role coexistence/cleanup matrix separate from legacy tests.
+    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    container:
+      options: --memory=512m --cpus=1
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    env:
+      TMPDIR: ${{ github.workspace }}/machine-profiles-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run synthetic web MCP identity profiles in a scratch home
+        run: |
+          export TMPDIR="$(realpath -m -- "$TMPDIR")"
+          export HOME="$TMPDIR/.scratch-home"
+          test "$HOME" = "$TMPDIR/.scratch-home"
+          mkdir -p "$HOME" "$TMPDIR"
+          pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+            -s roles/authentik_machine_identities/tests -p test_service_profiles.py -v
 
   akasha:
     runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]

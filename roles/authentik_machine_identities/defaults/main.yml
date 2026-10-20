@@ -1,6 +1,6 @@
 ---
 # Ordinary Authentik service accounts that let named Chaldea hosts obtain
-# short-lived Jocasta access tokens: docs/authentik-machine-identities.md.
+# short-lived web MCP access tokens: docs/authentik-machine-identities.md.
 # Off by default; playbooks/authentik.yml includes this role only when
 # authentik_machine_identities_enabled is true.
 authentik_machine_identities_enabled: false
@@ -28,6 +28,13 @@ authentik_jocasta_machine_access:
   # Fixed: the only scope and token lifetime this role supports.
   scope: jocasta.read
   token_seconds: 300
+
+# Optional replacement for authentik_jocasta_machine_access, keyed by the closed
+# service names jocasta, ov, homelab and ha. Empty preserves the legacy Jocasta
+# declaration exactly. Each identity defaults to service: jocasta; OV, homelab and
+# HA identities must explicitly select their service.
+# See docs/authentik-machine-identities.md for required fields and trust URLs.
+authentik_machine_services: {}
 
 # One service account per host and Chaldea preset (profile). For example:
 #   - host: laptop                       # inventory host that receives the secret

@@ -1,7 +1,7 @@
 ---
 # Ordinary Authentik service accounts for named Chaldea hosts
-# (docs/authentik-machine-identities.md): one shared Jocasta OAuth2
-# application, and per host and preset one service account, one app password
+# (docs/authentik-machine-identities.md): one OAuth2 application per service,
+# and per host and preset one service account, one app password
 # and one private file on that host. Runs in playbooks/authentik.yml after
 # authentik_config and reuses its API facts; the admin token never leaves the
 # controller.
@@ -36,7 +36,7 @@
       {{ authentik_machine_identities | machine_identity_spec(
            authentik_jocasta_machine_access, machine_identity_hosts,
            authentik_machine_identity_max_days | int,
-           now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ')) }}
+           now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), authentik_machine_services) }}
   vars:
     # Only what the inventory says about each named host: its user, an
     # optional home and its connection. A host missing here is refused.
@@ -50,6 +50,15 @@
               'connection': host.ansible_connection | default('ssh')}}) -%}
       {%- endfor -%}
       {{ found }}
+
+- name: Require service trust URLs to name this issuer
+  ansible.builtin.assert:
+    that: item.value.issuer == (machine_identity_api | regex_replace('/api/v3$', '')) ~ '/application/o/' ~ item.value.slug ~ '/'
+    fail_msg: Service issuer must name the controller Authentik origin and provider slug.
+    quiet: true
+  loop: "{{ machine_identity_spec.services | dict2items }}"
+  when: machine_identity_online and item.key != 'jocasta'
+  no_log: true
 
 - name: Render the blueprint
   ansible.builtin.set_fact:
@@ -101,7 +110,7 @@
       register: machine_identity_apps_before
       check_mode: false
       no_log: true
-      when: machine_identity_spec.access.state == 'absent'
+      when: machine_identity_spec.services.values() | selectattr('state', 'equalto', 'absent') | list | length > 0
 
     # No automatic adoption: an object with a colliding name that no stored
     # blueprint of this role created is neither changed nor deleted.
@@ -264,6 +273,15 @@
             machine_identity_content, machine_identity_pk, authentik_machine_identities_blueprint_name,
             machine_identity_baseline.json.last_applied) == 'successful'
         quiet: true
+      no_log: true
+
+    - name: Validate each new service's actual public signing evidence
+      authentik_machine_jwks:
+        jwks_url: "{{ item.value.jwks_url }}"
+      loop: "{{ machine_identity_spec.services | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: item.key != 'jocasta' and item.value.state == 'present'
       no_log: true
 
     # Only after the checks above passed: a host never receives a credential

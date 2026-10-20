@@ -255,7 +255,7 @@ class Scratch:
         return self.homes[host] / ".config/chaldea/authentik" / (profile + ".app-password")
 
     def run(self, identities, access=ACCESS, enabled=True, check=False, integrated=False,
-            offline=False, api_url=None):
+            offline=False, api_url=None, services=None):
         play = [{"name": "Machine identities against a fake Authentik", "hosts": "localhost",
                  "connection": "local", "gather_facts": False,
                  "module_defaults": {"ansible.builtin.uri": {"ca_path": str(self.cert)}},
@@ -268,6 +268,8 @@ class Scratch:
                  "tasks": [{"name": "Enrol Chaldea machine identities",
                              "ansible.builtin.include_role": {"name": "authentik_machine_identities"},
                              "when": "authentik_machine_identities_enabled | default(false) | bool"}]}]
+        if services is not None:
+            play[0]["vars"]["authentik_machine_services"] = services
         extra_path = self.base / "extra.yml"
         path = self.base / "play.yml"
         path.write_text(yaml.safe_dump(play))
