@@ -22,6 +22,7 @@ jobs:
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME" "$TMPDIR"
           printf 'HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'ANSIBLE_COLLECTIONS_PATH=%s\n' "$HOME/.ansible/collections" >>"$GITHUB_ENV"
       - name: Install ShellCheck in the disposable CI container
         run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck
       - run: python3 scripts/test-upkeeper-drift.py
