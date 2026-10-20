@@ -1,11 +1,15 @@
 """Closed web MCP profiles. All issuer/host operations use the synthetic real-role fixture."""
 import copy
+import importlib.util
+import time
+from unittest import mock
 from importlib.metadata import version
 from itertools import permutations
 import types
 import unittest
 
 from deepmerge import always_merger
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
 import test_machine_identities as base
 
@@ -302,7 +306,7 @@ class MultiServiceRoleTest(unittest.TestCase):
             self.x.state.keypairs[fake.KEYPAIR]["key_type"] = "ec"
         self.x.state.complete_apply = apply_then_change_key_type
         output = self.run_role([identity("ha")], {"ha": self.services["ha"]}, ok=False)
-        self.assertIn("must remain an available RSA private key", output)
+        self.assertIn("must retain private-key availability and RSA certificate metadata", output)
         self.assertEqual(len([p for m, p in self.x.writes() if p.endswith("/apply/")]), 1)
         self.assertFalse(self.x.key_reads())
         self.assertFalse(self.x.secret("agent-one", "ha-reader").exists())
@@ -335,3 +339,105 @@ class MultiServiceRoleTest(unittest.TestCase):
         self.assertFalse(self.x.key_reads())
         for item in self.items:
             self.assertFalse(self.x.secret("agent-one", item["profile"]).exists())
+
+
+# Native 2026.8.4 keeps certificate metadata separate from private-key JWKs.
+_jwks_spec = importlib.util.spec_from_file_location(
+    "authentik_machine_jwks", base.HERE.parent / "library/authentik_machine_jwks.py")
+jwks = importlib.util.module_from_spec(_jwks_spec)
+_jwks_spec.loader.exec_module(jwks)
+
+
+class SigningEvidenceDataTest(unittest.TestCase):
+    def test_unique_native_signer_selection_and_key_bounds(self):
+        key = fake.signing_jwk(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+        encryption = key | {"use": "enc", "alg": "RSA-OAEP-256"}
+        for keys in ([key], [key, encryption], [encryption, key]):
+            self.assertTrue(jwks.signing_evidence({"keys": keys}))
+        ec_key = fake.signing_jwk(ec.generate_private_key(ec.SECP256R1()))
+        for keys in ([], [None], [key] * 3, [key, key], [encryption], [ec_key, encryption],
+                     [key | {"use": "other"}], [key | {"alg": "ES256"}],
+                     [key | {"d": "private-must-not-be-returned"}],
+                     [key | {"n": ""}], [key | {"e": "A"}], [key | {"n": "AA"}]):
+            with self.subTest(keys=keys):
+                self.assertFalse(jwks.signing_evidence({"keys": keys}))
+
+    def test_whole_exchange_deadline_and_sanitized_failure(self):
+        class Refused(Exception):
+            pass
+        module = mock.Mock()
+        module.params = {"jwks_url": "https://auth.example.test/application/o/ha/jwks/"}
+        module.fail_json.side_effect = Refused
+        # A blocked read without a socket inactivity timeout must still lose to
+        # the whole-exchange alarm. No network or issuer is used here.
+        with mock.patch.object(jwks, "AnsibleModule", return_value=module), \
+                mock.patch.object(jwks, "DEADLINE_SECONDS", 0.05), \
+                mock.patch.object(jwks, "fetch_evidence", side_effect=lambda _: time.sleep(1)):
+            started = time.monotonic()
+            with self.assertRaises(Refused):
+                jwks.main()
+            self.assertLess(time.monotonic() - started, 0.5)
+        module.fail_json.assert_called_once_with(msg="Public provider signing evidence refused")
+        module.exit_json.assert_not_called()
+
+
+class SigningEvidenceRoleTest(unittest.TestCase):
+    def app(self, x, service):
+        return access(service, f"https://127.0.0.1:{x.server.server_port}")
+
+    def refuse(self, x, service):
+        code, output = x.run([identity(service)], services={service: self.app(x, service)})
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("Validate each new service's actual public signing evidence", output)
+        self.assertFalse(x.key_reads())
+        self.assertFalse(x.secret("agent-one", service + "-reader").exists())
+        self.assertFalse(any("/view_private_key/" in p for _, p, _ in x.state.requests))
+        self.assertTrue(x.state.public_authorization)
+        self.assertTrue(all(a is None for a in x.state.public_authorization))
+        return output
+
+    def test_public_rsa_signer_with_optional_encryption_key_allows_delivery(self):
+        x = base.Scratch(self)
+        signer = x.state.jwks["keys"][0]
+        x.state.jwks = {"keys": [signer | {"use": "enc", "alg": "RSA-OAEP-256"}, signer]}
+        code, output = x.run([identity("ha")], services={"ha": self.app(x, "ha")})
+        self.assertEqual(code, 0, output)
+        public = [i for i, (_, p, _) in enumerate(x.state.requests) if p.startswith("/application/o/")]
+        private = [i for i, (_, p, _) in enumerate(x.state.requests) if p.endswith("/view_key/")]
+        self.assertEqual(len(public), 1)
+        self.assertTrue(private and max(public) < min(private))
+        self.assertTrue(x.secret("agent-one", "ha-reader").exists())
+        self.assertEqual(x.state.public_authorization, [None])
+
+    def test_rsa_certificate_cannot_mask_ec_or_ed25519_private_signer_for_any_new_service(self):
+        # signals.py takes key_type from the cert; serializer accepts cert/key
+        # independently. JWKSView and jwt_key use the actual private key, even
+        # when x5c contains an RSA cert. No token or private-key API is used.
+        for service in ("ov", "homelab", "ha"):
+            x = base.Scratch(self)
+            certificate = base.x509.load_pem_x509_certificate(x.cert.read_bytes())
+            self.assertIsInstance(certificate.public_key(), rsa.RSAPublicKey)
+            for private in (ec.generate_private_key(ec.SECP256R1()), ed25519.Ed25519PrivateKey.generate()):
+                with self.subTest(service=service, private_type=type(private).__name__):
+                    self.assertEqual(x.state.keypairs[fake.KEYPAIR]["key_type"], "rsa")
+                    self.assertIs(x.state.keypairs[fake.KEYPAIR]["private_key_available"], True)
+                    signer = fake.signing_jwk(private, certificate)
+                    self.assertIn(signer["alg"], ("ES256", "EdDSA"))
+                    self.assertTrue(signer["x5c"])
+                    encryption = fake.signing_jwk(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+                    x.state.jwks = {"keys": [encryption | {"use": "enc", "alg": "RSA-OAEP-256"}, signer]}
+                    self.refuse(x, service)
+
+    def test_redirect_and_oversized_public_response_never_deliver_or_expose_errors(self):
+        x = base.Scratch(self)
+        path = "/application/o/chaldea-ha/jwks/"
+        x.state.redirects[("GET", path)] = "https://untrusted.invalid/MUST-NOT-PRINT"
+        output = self.refuse(x, "ha")
+        self.assertNotIn("MUST-NOT-PRINT", output)
+        self.assertEqual([p for _, p, _ in x.state.requests if p.startswith("/application/o/")], [path])
+        x.state.redirects.clear()
+        x.state.jwks["padding"] = "MUST-NOT-PRINT" * (jwks.MAX_BODY // 14 + 1)
+        for missing_length in (False, True):
+            x.state.public_without_length = missing_length
+            output = self.refuse(x, "ha")
+            self.assertNotIn("MUST-NOT-PRINT", output)

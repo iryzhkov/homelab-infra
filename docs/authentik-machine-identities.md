@@ -205,8 +205,19 @@ Both trailing slashes are required. Online runs require that origin to match
 the controller's canonical Authentik API origin. The existing operator-supplied
 `signing_key` remains mandatory. OV, homelab and HA require public keypair
 metadata `key_type: rsa` and `private_key_available: true`; missing or non-RSA
-metadata refuses enrollment before mutation or delivery. No key is created and
-no private key is read. Jocasta retains its existing signing-key check.
+metadata refuses enrollment before mutation or delivery. In Authentik 2026.8.4,
+`key_type` comes from the certificate and does not prove the private key's
+algorithm. After exact provider/application verification, and before any app
+password read or delivery, the role fetches only the validated provider's public
+JWKS over trusted HTTPS without credentials, proxies or redirects. The fetch
+has an 8-second deadline and 64 KiB response limit; errors are fixed and hidden
+by `no_log`. Native JWKS exposes the signing key and optional encryption key,
+so the gate permits 1–2 keys, requires exactly one `use: sig` key and checks
+that key's actual `kty: RSA`, `alg: RS256` and public modulus/exponent. An RSA
+encryption key or certificate cannot mask an EC/EdDSA signer. No private key
+is read and no token is requested. Jocasta retains its existing signing-key check.
+This is trusted public signing evidence, not proof from a newly issued token;
+live token acceptance remains a qualification step.
 
 | Profile | Fixed resource audience | Fixed scope | Required identity fields |
 | --- | --- | --- | --- |
@@ -331,8 +342,9 @@ client enrollment or host grant is enabled here.
 ## Tests
 
 `roles/authentik_machine_identities/tests` runs in CI. The existing Jocasta
-suite stays in the drift job with a 60-minute budget; the multi-service
-real-role matrix has a separate 40-minute job. Measured fixture runs exceed
+suite runs in the `authentik-machine-identities` job with a 60-minute budget;
+the multi-service real-role matrix runs in `machine-profiles` with a separate
+40-minute budget. Measured fixture runs exceed
 the former 15-minute ceiling. The plain-data tests
 cover the declaration and ownership refusals, closed profile selection, exact
 OV/homelab/HA claims and cross-service mapping refusal. The role tests play the real role

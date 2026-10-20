@@ -637,7 +637,7 @@ def _single_problems(spec, results, applications, bindings, checks):
         key = found.get(("keypair", access["signing_key"]))
         if (not isinstance(key, dict) or key.get("private_key_available") is not True
                 or key.get("key_type") != "rsa"):
-            problems.append(f"signing key {access['signing_key']} must remain an available RSA private key")
+            problems.append(f"signing key {access['signing_key']} must retain private-key availability and RSA certificate metadata")
 
     def need(kind, ident):
         obj = found.get((kind, ident))

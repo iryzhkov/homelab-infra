@@ -275,6 +275,15 @@
         quiet: true
       no_log: true
 
+    - name: Validate each new service's actual public signing evidence
+      authentik_machine_jwks:
+        jwks_url: "{{ item.value.jwks_url }}"
+      loop: "{{ machine_identity_spec.services | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: item.key != 'jocasta' and item.value.state == 'present'
+      no_log: true
+
     # Only after the checks above passed: a host never receives a credential
     # whose account does not look exactly as declared.
     - name: Deliver or remove each host's app password
