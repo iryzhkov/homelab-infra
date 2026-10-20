@@ -10,7 +10,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "https://github.com/iryzhkov/chaldea-fleet-config.git"
 # Exact preservation prerequisite; this commit must be public before CI or deployment.
-PIN = "d060a306eb93bfc7bb76f288b245f8426cd8872a"
+PIN = "7c84b8403b0d435377a5bb138352e26f23c95692"
 ROLES = ("roles/chaldea_access_trust", "roles/chaldea_host_artifact")
 HANDLER = "roles/chaldea_access_trust/handlers/main.yml"
 # Exact upstream bytes, with exactly one approved infra-only line appended.
