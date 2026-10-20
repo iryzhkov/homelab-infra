@@ -14,6 +14,13 @@ Actual download/native qualification: jocasta:cd2e425300544d65e90ba99c4d4bbc2e@1
 vars/akasha-runtime.yml supplies separate per-call preserve lists: the runtime call
 uses chaldea_host_artifact_preserve_versions and the shared-trust include uses
 akasha_trust_preserve_versions. Global vars/chaldea-runtime.yml/shared trust remain022.
+The artifact role accepts at most seven unique exact preserved versions. For the
+measured nine-release set 022/023/024/026/027/028/029/0210/0211, a future runtime0211
+call needs explicit 022/023/024/026/027/028/029 plus newest prior0210. A later shared022
+call separately needs explicit 023/024/026/027/028/029/0210 plus newest prior0211.
+Seven is the measured minimum for each call. This bound changes no runtime pin or
+preserve list and leaves default selected-plus-newest-prior retention unchanged.
+Fresh directory/mtime evidence and exact artifact qualification still gate each call.
 vars/mission-control-homelab.yml retains explicit existing permission and activation
 gates without duplicating the runtime pin or artifact preservation.
 
