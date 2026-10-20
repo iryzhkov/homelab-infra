@@ -4,8 +4,10 @@ Run `python3 -B scripts/check-installer-role-drift.py` from a checkout with
 Python 3 and Git. The existing Check workflow runs it alongside its focused
 unittest script, using a disposable scratch HOME and disk TMPDIR.
 
-The check fetches public `iryzhkov/chaldea-fleet-config` at reviewed commit
-`609102a1d19df06dfc33f48f99dbdb63caa9ab45`. It compares every file under
+The check fetches `iryzhkov/chaldea-fleet-config` at exact source commit
+`0438db0dd7ef99299a28519cc2b1de67fbf1ff70`. This pin is local-only until ROOT publishes
+that exact commit; ROOT must confirm public reachability before I CI or use.
+The check compares every file under
 `roles/chaldea_access_trust/` and `roles/chaldea_host_artifact/` with this
 repository. Missing files, extra files, unexpected bytes, symbolic links,
 invalid pins and fetch failures fail the check. No content is executed from

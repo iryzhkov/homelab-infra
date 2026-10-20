@@ -1,16 +1,14 @@
 ---
 # Homelab Akasha only; shared consumer trust remains on host-v0.2.2.
 # C67 rich.v5 candidate; ROOT must qualify publication before any artifact call.
-# HOLD deployment: source records actual022/023/024/026/027/028/029. Adding0210
-# needs eight retained releases. The unchanged installer allows only selected +
-# newest prior + five explicit preserves, so these lists cannot retain all eight.
-# A separately reviewed retention prerequisite must preserve every actual release
-# and cache through BOTH runtime0210 and shared022 calls before either call runs.
-# Fresh directory/mtime evidence is required before EACH call; STOP if it differs.
-# Never install missing versions, write mtimes, prune old releases or raise bounds here.
+# Eight-release retention: runtime0210 keeps old022/023/024/026/027/028 +
+# newest prior029; shared022 keeps old023/024/026/027/028/029 + newest prior0210.
+# Both calls preserve every actual release and cache within the six-entry bound.
+# Fresh directory/mtime evidence gates EACH call; STOP if the actual set or newest
+# prior differs. Never install missing versions or write target mtimes.
 # Use akasha_trust_preserve_versions for the trust call; never override the global
 # chaldea_host_artifact_preserve_versions through extra vars in the canonical full play.
-akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8]
-chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7]
+akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9]
+chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8]
 akasha_host_version: host-v0.2.10
 akasha_host_sha256: f57daeed3a9391ff076a0a893d14844a88da5d7f0ea3cb2860e56338d5873ad1

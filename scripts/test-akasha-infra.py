@@ -275,7 +275,7 @@ class SnapshotTest(unittest.TestCase):
             "chaldea_host_artifact": [
                 "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.10')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
-                "chaldea_host_artifact_preserve_versions == (['host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7', 'host-v0.2.8'] if fixture_artifact_calls | default([]) | length else ['host-v0.2.2', 'host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7'])",
+                "chaldea_host_artifact_preserve_versions == (['host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7', 'host-v0.2.8', 'host-v0.2.9'] if fixture_artifact_calls | default([]) | length else ['host-v0.2.2', 'host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7', 'host-v0.2.8'])",
                 "chaldea_host_artifact_root == '/opt/chaldea-host/releases/' ~ chaldea_host_version ~ '/host'"],
             "chaldea_access_trust": [
                 "chaldea_host_version == 'host-v0.2.2'",
@@ -292,11 +292,10 @@ class SnapshotTest(unittest.TestCase):
             releases, cache = root / "releases", root / "cache"
             releases.mkdir()
             cache.mkdir()
-            # Synthetic seven-release capacity fixture only, with explicit mtimes.
-            # It omits actual029; deployment with all eight releases is HELD by
-            # vars/akasha-runtime.yml until a reviewed retention prerequisite lands.
-            # These mtimes do not establish either target's required operator gate.
-            for index, version in enumerate(("host-v0.2.1", "host-v0.2.2", "host-v0.2.3", "host-v0.2.4", "host-v0.2.6", "host-v0.2.7", "host-v0.2.8", "host-v0.2.10")):
+            # Eight retained releases through runtime0210 THEN shared022.
+            # Controlled fixture mtimes make prior029 then prior0210 explicit;
+            # fresh actual target directory/mtime evidence remains an operator gate.
+            for index, version in enumerate(("host-v0.2.1", "host-v0.2.2", "host-v0.2.3", "host-v0.2.4", "host-v0.2.6", "host-v0.2.7", "host-v0.2.8", "host-v0.2.9", "host-v0.2.10")):
                 release = releases / version
                 release.mkdir()
                 os.utime(release, (index + 1, index + 1))
@@ -352,7 +351,7 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(new_root + "/akasha-service.mjs",
                           (root / "akasha.service").read_text())
-            for version in ("host-v0.2.2", "host-v0.2.3", "host-v0.2.4", "host-v0.2.6", "host-v0.2.7", "host-v0.2.8", "host-v0.2.10"):
+            for version in ("host-v0.2.2", "host-v0.2.3", "host-v0.2.4", "host-v0.2.6", "host-v0.2.7", "host-v0.2.8", "host-v0.2.9", "host-v0.2.10"):
                 self.assertTrue((releases / version).is_dir())
                 for suffix in (".tar.gz", ".json"):
                     self.assertEqual((cache / (version + suffix)).read_text(), version)
