@@ -8,6 +8,8 @@ import asyncio
 import base64
 import importlib.machinery
 import importlib.util
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -16,6 +18,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
@@ -260,6 +263,121 @@ class SnapshotTest(unittest.TestCase):
                     else:
                         self.assertEqual(actual, ["verify"])
                         self.assertNotIn("TASK [Start only", proc.stdout)
+
+    def test_nine_host_releases_survive_runtime_and_shared_artifact_calls(self):
+        scratch = Path(os.environ["TMPDIR"]).resolve()
+        self.assertEqual(Path.home().resolve(), scratch / ".scratch-home")
+        self.assertEqual(os.geteuid(), 0, "run the root-owned fixture in the disposable job")
+        versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10, 11)]
+        programs = ("chaldea-job-server", "chaldea-job-image", "chaldea-job-toolchains",
+                    "chaldea-retention", "chaldea-timer-report", "chaldea_outcome.py",
+                    "chaldea-access-trust-fetch", "exec-protocol.json",
+                    "access-maintenance.mjs", "akasha-collector.mjs")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases, cache = root / "releases", root / "cache"
+            releases.mkdir()
+            cache.mkdir()
+            releases.chmod(0o755)
+            cache.chmod(0o755)
+            for index, version in enumerate(versions):
+                release = releases / version
+                release.mkdir()
+                release.chmod(0o755)
+                archive = cache / (version + ".tar.gz")
+                with tarfile.open(archive, "w:gz") as bundle:
+                    member = tarfile.TarInfo("host")
+                    member.type, member.mode, member.mtime = tarfile.DIRTYPE, 0o755, 1
+                    bundle.addfile(member)
+                    for program in programs:
+                        payload = (version + "/" + program + "\n").encode()
+                        member = tarfile.TarInfo("host/" + program)
+                        member.mode, member.mtime, member.size = 0o755, 1, len(payload)
+                        bundle.addfile(member, io.BytesIO(payload))
+                with tarfile.open(archive) as bundle:
+                    bundle.extractall(release, filter="data")
+                (release / "host").chmod(0o755)
+                manifest = cache / (version + ".json")
+                manifest.write_text(json.dumps({
+                    "version": version, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}))
+                archive.chmod(0o644)
+                manifest.chmod(0o644)
+                # Fixture ordering only; never repair real target mtimes.
+                os.utime(release, (index + 1, index + 1))
+
+            def snapshot():
+                result = {}
+                # Compare persistent metadata; reads may advance filesystem access times.
+                paths = sorted([releases, cache, *releases.rglob("*"), *cache.iterdir()])
+                digests = {path: hashlib.sha256(path.read_bytes()).hexdigest()
+                           for path in paths if path.is_file()}
+                for path in paths:
+                    st = path.lstat()
+                    self.assertEqual((st.st_uid, st.st_gid), (0, 0))
+                    self.assertEqual(st.st_mode & 0o022, 0)
+                    result[str(path.relative_to(root))] = (
+                        st.st_mode, st.st_uid, st.st_gid, st.st_size, st.st_ino,
+                        st.st_nlink, st.st_mtime_ns, st.st_ctime_ns,
+                        digests.get(path), {key: os.getxattr(path, key)
+                                            for key in sorted(os.listxattr(path))})
+                return result
+
+            def run(selected, preserved, check=False):
+                path = root / "play.yml"
+                variables = {
+                    "ansible_python_interpreter": sys.executable,
+                    "chaldea_host_version": selected,
+                    "chaldea_host_sha256": hashlib.sha256(
+                        (cache / (selected + ".tar.gz")).read_bytes()).hexdigest(),
+                    "chaldea_host_artifact_release_root": str(releases),
+                    "chaldea_host_artifact_cache": str(cache),
+                    "chaldea_host_artifact_owner": "0",
+                    "chaldea_host_artifact_group": "0",
+                    "chaldea_host_artifact_archive_source": str(cache / (selected + ".tar.gz")),
+                    "chaldea_host_artifact_manifest_source": str(cache / (selected + ".json")),
+                    "chaldea_host_artifact_preserve_versions": preserved,
+                    "chaldea_host_artifact_become": False,
+                }
+                path.write_text(yaml.safe_dump([{
+                    "hosts": "fixture", "gather_facts": False, "vars": variables,
+                    "roles": ["chaldea_host_artifact"]}]))
+                return subprocess.run(
+                    ["ansible-playbook", "-i", "fixture,", "-c", "local", str(path)]
+                    + (["--check"] if check else []),
+                    env={**os.environ, "ANSIBLE_ROLES_PATH": str(ROOT / "roles"),
+                         "ANSIBLE_LOCAL_TEMP": str(root / "local"),
+                         "ANSIBLE_REMOTE_TEMP": str(root / "remote")},
+                    capture_output=True, text=True)
+
+            before = snapshot()
+            # Separate call lists: selected0211/newest0210, then selected022/newest0211.
+            calls = [(versions[-1], versions[:7], versions[-2]),
+                     (versions[0], versions[1:8], versions[-1])]
+            for selected, preserved, prior in calls:
+                for phase, check in (("CHECK", True), ("REAL", False), ("SECOND0", False)):
+                    with self.subTest(selected=selected, phase=phase):
+                        proc = run(selected, preserved, check)
+                        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                        self.assertRegex(proc.stdout, r"changed=0\s+unreachable=0\s+failed=0")
+                        self.assertEqual(snapshot(), before)
+                        self.assertEqual(sorted(p.name for p in releases.iterdir()), sorted(versions))
+                        self.assertEqual(len(list(cache.iterdir())), 18)
+                        print(f"{selected} {phase}: selected + newest {prior} + explicit 7; "
+                              "nine releases, 18 cache files, bytes and persistent metadata unchanged")
+            for label, preserved, failed_task in (
+                    ("eight", versions[:8], "Validate bounded explicit host release preservation"),
+                    ("duplicate", [versions[0], versions[0]],
+                     "Validate bounded explicit host release preservation"),
+                    ("invalid", ["host-v0.2.2\ninvalid"],
+                     "Validate every exact preserved host version before file changes")):
+                for check in (True, False):
+                    with self.subTest(rejected=label, check=check):
+                        proc = run(versions[-1], preserved, check)
+                        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                        self.assertIn(f"TASK [chaldea_host_artifact : {failed_task}]", proc.stdout)
+                        self.assertNotIn("TASK [chaldea_host_artifact : Create root-owned", proc.stdout)
+                        self.assertEqual(snapshot(), before)
+                        print(f"{label} explicit selector rejected before file changes; check={check}")
 
     def test_homelab_runtime_pin_is_role_local_and_keeps_trust_on_shared_release(self):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())

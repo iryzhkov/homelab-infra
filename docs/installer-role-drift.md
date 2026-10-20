@@ -5,7 +5,7 @@ Python 3 and Git. The existing Check workflow runs it alongside its focused
 unittest script, using a disposable scratch HOME and disk TMPDIR.
 
 The check fetches `iryzhkov/chaldea-fleet-config` at exact source commit
-`9d23f3d04a9f5c11033c9c028cf1a2acf1db1d99`, the preservation-only prerequisite.
+`7c84b8403b0d435377a5bb138352e26f23c95692`, the preservation-only prerequisite.
 This exact commit must be public before CI or deployment.
 The check compares every file under
 `roles/chaldea_access_trust/` and `roles/chaldea_host_artifact/` with this
