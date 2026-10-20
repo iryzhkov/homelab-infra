@@ -4,7 +4,9 @@ Completed canary evidence and limitations:
 jocasta:7809f6329c87f8a3c5390221ee4d0d2e@2.
 Source package qualification: jocasta:623f53e1c960b0383b2a44b3afcbb981@1.
 
-vars/akasha-runtime.yml selects published Homelab host-v0.2.9,
+Current Homelab version and archive SHA come from vars/akasha-runtime.yml.
+Use the current qualified publication packet and fresh preservation sets for any
+upgrade. The following immutable receipts describe the previous host-v0.2.9,
 SHA37a30cf6b3fb2a05180b2c288d07131a86da12ed35ab2dae19d9a32e87ae6bcc.
 Archive657522711/run39329948376; manifest657522709
 SHA79dc7a05d3e356968719335a987632a1956b2d698e5f632c783ac86a57bd3550.
@@ -33,7 +35,7 @@ For Normandy, follow mission-control-hosted.md. The composition requires the exa
 qualified fleet dependency selected by roles/mission_control/defaults/main.yml.
 The old live dependency
 remains valid for the deployed old composition until a reviewed source update.
-The qualified client-v0.4.9 archive SHA is
+The previous qualified client-v0.4.9 archive SHA was
 4029833d7b013571ff375a8bb58d355fcab3ab54e682038a2a65a598751a1535.
 Its explicit runtime selection remains independent of helper040/Node26.12 and user clients.
 Source fixtures do not substitute for actual target SYSTEM verification, namespace/DAC,
