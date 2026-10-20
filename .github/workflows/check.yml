@@ -54,13 +54,35 @@ jobs:
           python3 -m unittest discover -s roles/observability_hardware/tests -v
           python3 -m unittest discover -s roles/observability_native_gpu/tests -v
           python3 -m unittest discover -s roles/observability_grafana/tests -v
-          python3 -m unittest discover -s roles/authentik_machine_identities/tests -v
       - run: python3 -m py_compile roles/base/files/homelab-gpu-report roles/observability_pve/files/pve-exporter-launcher.py roles/observability_grafana/library/grafana_observability.py
       - run: python3 -m py_compile roles/backup/files/homelab-swarm-snapshot roles/backup/files/homelab-sqlite-backup
       - run: python3 -m py_compile stacks/jocasta/files/jocasta-backup scripts/jocasta-credentials.py
       - run: shellcheck -S warning stacks/jocasta/files/jocasta-firewall scripts/nats-jetstream-apply.sh
       - run: shellcheck -S warning roles/backup/files/homelab-bulk-backup roles/backup/files/homelab-backup-run roles/backup/files/homelab-restore-verify roles/offsite_phone/files/homelab-offsite-run roles/offsite_phone/files/homelab-offsite-bundle roles/fleet_helpers/files/zigbee-watchdog.sh
       - run: python3 -m py_compile roles/drift_check/files/homelab-drift-check
+
+  authentik-machine-identities:
+    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    container:
+      options: --memory=512m --cpus=1
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    env:
+      TMPDIR: ${{ github.workspace }}/../authentik-identities-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare the isolated fixture home
+        run: |
+          export HOME="$TMPDIR/.scratch-home"
+          test "$HOME" = "$TMPDIR/.scratch-home"
+          mkdir -p "$HOME" "$TMPDIR"
+          printf 'HOME=%s\\n' "$HOME" >>"$GITHUB_ENV"
+      - name: Install the deployment templating version
+        run: pip install --disable-pip-version-check ansible-core==2.19.13
+      - name: Test machine identities against the isolated HTTPS fixture
+        run: python3 -m unittest discover -s roles/authentik_machine_identities/tests -v
 
   akasha:
     runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
