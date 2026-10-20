@@ -1,19 +1,14 @@
 ---
 # Homelab Akasha only; shared consumer trust remains on host-v0.2.2.
-# Published C63 host029; actual downloads and all11 members verified in
-# jocasta:cd2e425300544d65e90ba99c4d4bbc2e@1, independent of shared022.
-# Actual homelab releases: 022/023/024/026/027/028. Each call names every actual
-# release other than its selection explicitly, so neither call depends on which
-# release is newest by mtime and none is deleted today:
-# runtime029 retains old022/023/024/026/027 + newest prior028 + selected029;
-# shared022 retains old023/024/026/027/028 + newest prior029 + selected022.
-# Both calls preserve all seven releases after029; fresh mtime gates still apply.
-# Fresh actual directory/mtime evidence is still required before EACH artifact call;
-# STOP and reconcile exact per-call lists if the actual set differs. Never install
-# missing versions, write mtimes or exceed the five-entry bound.
+# C67 rich.v5 candidate; ROOT must qualify publication before any artifact call.
+# Eight-release retention: runtime0210 keeps old022/023/024/026/027/028 +
+# newest prior029; shared022 keeps old023/024/026/027/028/029 + newest prior0210.
+# Both calls preserve every actual release and cache within the six-entry bound.
+# Fresh directory/mtime evidence gates EACH call; STOP if the actual set or newest
+# prior differs. Never install missing versions or write target mtimes.
 # Use akasha_trust_preserve_versions for the trust call; never override the global
 # chaldea_host_artifact_preserve_versions through extra vars in the canonical full play.
-akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8]
-chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7]
-akasha_host_version: host-v0.2.9
-akasha_host_sha256: 37a30cf6b3fb2a05180b2c288d07131a86da12ed35ab2dae19d9a32e87ae6bcc
+akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9]
+chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8]
+akasha_host_version: host-v0.2.10
+akasha_host_sha256: f57daeed3a9391ff076a0a893d14844a88da5d7f0ea3cb2860e56338d5873ad1
