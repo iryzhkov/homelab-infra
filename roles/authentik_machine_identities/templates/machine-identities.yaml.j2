@@ -86,7 +86,7 @@ entries:
       description: {{ ('Chaldea ' ~ item.host ~ ' ' ~ item.profile ~ ' Jocasta access, generation ' ~ item.generation) | to_json }}
 {% endfor %}
 {% if access.state == 'present' %}
-  # Membership is authoritative: an account added by hand is removed.
+  # Preflight refuses foreign members; set membership to the present identities.
   - model: authentik_core.group
     id: identities-group
     identifiers:

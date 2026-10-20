@@ -259,7 +259,8 @@ class Scratch:
             argv += ["-e", "@" + str(extra_path)]
         result = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
         output = result.stdout + result.stderr
-        assert not (self.base / "sops-called").exists(), "integrated check attempted SOPS decryption"
+        if enabled:
+            assert not (self.base / "sops-called").exists(), "enrollment check attempted SOPS decryption"
         assert fake.ADMIN not in output and fake.KEY_PREFIX not in output, "a credential reached the output"
         return result.returncode, output
 
@@ -452,14 +453,20 @@ class RoleTest(unittest.TestCase):
                 self.assertEqual(self.x.key_reads(), [])
                 self.assertFalse(self.x.secret("agent-one").exists())
 
-    def test_integrated_check_mode_never_decrypts_or_connects_to_hosts(self):
-        for enabled in (False, True):
-            with self.subTest(enabled=enabled):
-                output = self.ok([identity()], check=True, integrated=True, offline=True, enabled=enabled)
-                self.assertEqual(self.x.state.requests, [])
-                self.assertFalse((self.x.homes["agent-one"] / ".config").exists())
-                if enabled:
-                    self.assertIn("client_credentials", output)
+    def test_integrated_disabled_check_keeps_the_access_role_path(self):
+        code, output = self.x.run([identity()], check=True, integrated=True, offline=True, enabled=False)
+        # The sentinel stops at the old role's first task, without decrypting.
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("Load the Authentik API token", output)
+        self.assertTrue((self.x.base / "sops-called").exists())
+        self.assertEqual(self.x.state.requests, [])
+        self.assertFalse((self.x.homes["agent-one"] / ".config").exists())
+
+    def test_integrated_enabled_check_never_decrypts_or_connects_to_hosts(self):
+        output = self.ok([identity()], check=True, integrated=True, offline=True)
+        self.assertIn("client_credentials", output)
+        self.assertEqual(self.x.state.requests, [])
+        self.assertFalse((self.x.homes["agent-one"] / ".config").exists())
         # Explicit synthetic API facts retain the read-only preflight path.
         self.ok([identity()], check=True, integrated=True)
         self.assertTrue(self.x.state.requests)
@@ -487,6 +494,71 @@ class RoleTest(unittest.TestCase):
         self.refused("applications: lookup did not return every candidate",
                      [identity(state="absent")], access=ACCESS | {"state": "absent"})
         self.assertEqual(self.x.writes(), [])
+
+    def test_provider_removal_requires_explicit_valid_consumer_fields(self):
+        self.ok([identity()])
+        provider = self.x.state.providers[ACCESS["name"]]["pk"]
+        self.x.state.apps["budget"]["backchannel_providers"] = [provider]
+        rows = [self.x.state._app_view(app) for app in self.x.state.apps.values()]
+        stored = {pk: bp["content"] for pk, bp in self.x.state.blueprints.items()}
+        before = self.x.secret("agent-one").read_bytes()
+        for field, value in (("backchannel_providers", mi.MISSING),
+                             ("backchannel_providers", None), ("backchannel_providers", {}),
+                             ("backchannel_providers", [str(provider)]),
+                             ("backchannel_providers", [True]), ("provider", mi.MISSING),
+                             ("provider", "unknown")):
+            with self.subTest(field=field, value=value):
+                foreign = dict(rows[0])
+                if value is mi.MISSING:
+                    foreign.pop(field)
+                else:
+                    foreign[field] = value
+                self.x.state.responses[("GET", "/core/applications/")] = (200, fake.page([foreign] + rows[1:]))
+                self.refused("applications: lookup answered in an unexpected shape",
+                             [identity(state="absent")], access=ACCESS | {"state": "absent"})
+                self.assertEqual(self.x.writes(), [])
+                self.assertEqual(self.x.key_reads(), [])
+                self.assertEqual({pk: bp["content"] for pk, bp in self.x.state.blueprints.items()}, stored)
+                self.assertIn(ACCESS["name"], self.x.state.providers)
+                self.assertIn(spec([identity()])["identities"][0]["username"], self.x.state.users)
+                self.assertEqual(self.x.secret("agent-one").read_bytes(), before)
+
+    def test_binding_verification_requires_complete_collection_before_delivery(self):
+        self.ok([])
+        app = self.x.state.apps[ACCESS["slug"]]
+        expected = app["bindings"][0]
+        app["bindings"].append(fake.Authentik._binding(app, self.x.state.groups["family"]["pk"]))
+        page = fake.page([expected])
+        bad = [{}, fake.page([None]), fake.page([{}]),
+               page | {"pagination": {"count": 2, "total_pages": 2}},
+               page | {"pagination": {"count": 0}},
+               page | {"pagination": {"count": True}},
+               page | {"next": "https://auth.example.test/page2"},
+               page | {"pagination": {"count": 1, "next": 2}},
+               page | {"pagination": {"count": 1, "current": 2}},
+               page | {"pagination": {"count": 1, "total_pages": 2}}]
+        for body in bad:
+            with self.subTest(body=body):
+                self.x.state.responses[("GET", "/policies/bindings/")] = (200, body)
+                self.refused("application bindings: lookup", [identity()])
+                self.assertEqual(self.x.key_reads(), [])
+                self.assertFalse(self.x.secret("agent-one").exists())
+
+    def test_postapply_applications_require_complete_collection(self):
+        row = {"slug": ACCESS["slug"]}
+        page = fake.page([row])
+        bad = [{}, fake.page([None]), fake.page([{}]),
+               page | {"pagination": {"count": 2}},
+               page | {"pagination": {"count": 0}},
+               page | {"pagination": {"count": True}},
+               page | {"next": "https://auth.example.test/page2"},
+               page | {"pagination": {"count": 1, "next": 2}},
+               page | {"pagination": {"count": 1, "current": 2}},
+               page | {"pagination": {"count": 1, "total_pages": 2}}]
+        for body in bad:
+            with self.subTest(body=body):
+                problems = mi.machine_identity_problems(spec([identity()]), [], body, fake.page([]), [])
+                self.assertTrue(any("applications: lookup" in p for p in problems), problems)
 
     def test_invalid_api_origins_fail_before_credentials_are_sent(self):
         for url in ("http://127.0.0.1/api/v3", "https://user:pass@example.test/api/v3",

@@ -51,7 +51,7 @@ class Authentik:
         self.mappings = {}
         self.providers = {}
         self.apps = {"budget": {"pk": str(uuid.uuid4()), "slug": "budget", "name": "Budget", "provider": None,
-                                "policy_engine_mode": "any", "bindings": []}}
+                                "policy_engine_mode": "any", "backchannel_providers": [], "bindings": []}}
         self.apps["budget"]["bindings"].append(self._binding(self.apps["budget"], self.groups["family"]["pk"]))
         self.keypairs = {KEYPAIR: {"pk": KEYPAIR, "name": "authentik Self-signed Certificate",
                                    "private_key_available": True}}
@@ -160,7 +160,8 @@ class Authentik:
             if state == "absent":
                 self.apps.pop(slug, None)
                 return None
-            a = self.apps.setdefault(slug, {"pk": str(uuid.uuid4()), "slug": slug, "bindings": []})
+            a = self.apps.setdefault(slug, {"pk": str(uuid.uuid4()), "slug": slug,
+                                             "backchannel_providers": [], "bindings": []})
             a.update({k: v for k, v in attrs.items() if k != "meta_launch_url"})
             return a["pk"]
         if model == "authentik_core.user":

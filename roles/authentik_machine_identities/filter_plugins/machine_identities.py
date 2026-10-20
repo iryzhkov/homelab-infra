@@ -441,7 +441,7 @@ def machine_identity_refusals(spec, owned, results, applications=None):
             problems.append(str(exc))
             apps = []
         for app in apps:
-            consumers = app.get("backchannel_providers", [])
+            consumers = app.get("backchannel_providers")
             if ("provider" not in app or not isinstance(consumers, list)
                     or any(type(pk) is not int for pk in consumers)
                     or (app["provider"] is not None and type(app["provider"]) is not int)):
@@ -504,8 +504,12 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
     if group and _usernames(group) != sorted(i["username"] for i in present):
         problems.append("group: members are not exactly the present identities")
 
-    rows = bindings.get("results") if isinstance(bindings, dict) else None
-    if not isinstance(rows, list) or len(rows) != 1:
+    try:
+        rows = _complete_rows(bindings, "application bindings", "pk")
+    except AnsibleFilterError as exc:
+        problems.append(str(exc))
+        rows = []
+    if len(rows) != 1:
         problems.append("application: expected exactly one policy binding")
     else:
         b = rows[0]
@@ -530,10 +534,10 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
             if not _same_time(token.get("expires"), item["expires"]):
                 problems.append(f"token {item['token']}: expiry is not as declared")
 
-    apps = applications.get("results") if isinstance(applications, dict) else None
-    count = ((applications or {}).get("pagination") or {}).get("count") if isinstance(applications, dict) else None
-    if not isinstance(apps, list) or not isinstance(count, int) or count > len(apps):
-        problems.append("applications: the full list could not be read")
+    try:
+        apps = _complete_rows(applications, "applications", "slug")
+    except AnsibleFilterError as exc:
+        problems.append(str(exc))
         return problems
     answers = {}
     for result in checks:

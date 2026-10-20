@@ -5,6 +5,8 @@
 #
 #   ansible-playbook playbooks/authentik.yml --check --diff
 #   ansible-playbook playbooks/authentik.yml
+# With machine identities enabled, --check skips the access configuration
+# preview and SOPS loading; it plans only machine identities.
 
 - name: Configure Authentik
   hosts: localhost
@@ -19,8 +21,8 @@
     - vars/authentik.yml
   roles:
     - role: authentik_config
-      # Check mode must not load the controller's SOPS credentials.
-      when: not ansible_check_mode
+      # Enrollment check mode must not load the controller's SOPS credentials.
+      when: not (ansible_check_mode and (authentik_machine_identities_enabled | default(false) | bool))
   tasks:
     # Off unless enabled in vars/authentik.yml; docs/authentik-machine-identities.md.
     - name: Enrol Chaldea machine identities

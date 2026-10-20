@@ -131,16 +131,29 @@ valid until they expire, at most 300 seconds.
    `no_log`, no diff) and check the result; for each absent identity remove
    the file.
 
-The integrated playbook skips `authentik_config` in check mode, so it never
-decrypts SOPS. Without explicit controller API facts it validates and shows an
-offline blueprint and file plan; it cannot check live ownership or collisions.
-When API facts are explicitly supplied, check mode also performs the read-only
-preflight in steps 2 and 3. It reads no key, connects to no host and stores nothing.
+With machine identities disabled, the integrated playbook keeps the existing
+`authentik_config` check and diff preview of groups, application access and MFA,
+including its controller SOPS loading and assertions. With machine identities
+enabled, check mode skips that role and does not preview access configuration
+or decrypt SOPS. Without explicit controller API facts it validates and shows
+an offline machine identity blueprint and file plan; it cannot check live
+ownership or collisions. When API facts are explicitly supplied, enabled check
+mode also performs the read-only preflight in steps 2 and 3. It reads no key,
+connects to no host and stores nothing.
 Before the new role sends credentials, it requires a canonical HTTPS origin
 followed by the fixed `/api/v3` path, without userinfo, query or fragment. Every
 credential-bearing request in this role refuses redirects. Every API task is `no_log`, so a failure shows the role's
 own message rather than a response. A second real run changes nothing (the
 apply call is repeated, as for the access blueprint, and reports no change).
+
+If an apply fails, stop and inspect the blueprint logs and the objects changed
+so far. Storing the blueprint updates the ownership record before the import
+succeeds, and an import can leave partial changes. A retry may therefore refuse
+objects whose former `present` record is now `absent`. Keep the last successful
+blueprint content and compare it with both the failed content and actual objects.
+An operator must reconcile partial changes and restore only a verified ownership
+record before retrying. Do not bypass a refusal by marking uncertain objects as
+owned. No automatic rollback or recovery is provided.
 
 ## A second service
 
@@ -198,8 +211,10 @@ cover the declaration and ownership refusals. The role tests play the real role
 with `ansible-playbook` against an in-memory fake of the Authentik API (only
 what the role uses, applying the blueprint entry by entry), with the destination
 hosts as local scratch directories: default off, check mode without writes or
-key reads, integrated check mode with a decryption sentinel, trusted TLS,
-redirect refusal, complete blueprint lookup, foreign provider consumers, delivery and an unchanged second run, refusal to take over an
+key reads, enabled and disabled integrated check paths with a decryption
+sentinel, trusted TLS, redirect refusal, complete blueprint and binding lookups,
+explicit provider consumer data, foreign provider consumers, delivery and an
+unchanged second run, refusal to take over an
 existing account, refusal of a symlinked destination before Authentik changes,
 rotation, absent identities, full removal, owner drift, dropping a declared
 identity, and an application open to every account. Every run asserts that

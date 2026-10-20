@@ -18,8 +18,8 @@
     fail_msg: Run playbooks/authentik.yml with authentik_machine_identities_enabled set.
     quiet: true
 
-# The integrated entrypoint never decrypts in check mode. Without explicit API
-# facts, show an offline plan; applying still requires the controller's facts.
+# With enrollment enabled, the integrated entrypoint skips the access role and
+# never decrypts in check mode. Without explicit API facts, show an offline plan.
 - name: Decide whether controller API facts are available
   ansible.builtin.set_fact:
     machine_identity_online: "{{ authentik_url is defined and authentik_headers is defined }}"
@@ -194,6 +194,8 @@
         fail_msg: >-
           Blueprint "{{ authentik_machine_identities_blueprint_name }}" is {{ machine_identity_status.json.status }};
           its logs are under System > Blueprints in the admin interface.
+          The stored ownership record was already updated; inspect partial changes before retrying.
+          See docs/authentik-machine-identities.md for recovery.
         quiet: true
 
     - name: Look up the result
