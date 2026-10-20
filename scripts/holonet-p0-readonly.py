@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """One-shot, fixed-GET Emby P0 inventory. Credentials never leave this process."""
 import argparse
+import contextlib
+import signal
 import datetime as dt
 import hashlib
 import json
@@ -19,6 +21,7 @@ BASE = "http://127.0.0.1:8096/emby/"
 SERVER = "3c86e6d7ff6c4a3296522cdf03d22bb0"
 DEADLINE = "2026-10-20T22:52:34+00:00"
 MAX_REQUESTS = 200
+REQUEST_SECONDS = 15
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_BYTES = 16 * 1024 * 1024
 LIBRARY_NAMES = {"Movies", "Anime", "TV", "TV Shows"}
@@ -61,7 +64,7 @@ def items(payload):
     return payload["Items"]
 
 
-def summarize(payload):
+def summarize(payload, enhanced_userdata=False):
     rows = items(payload)
     if any(not isinstance(row, dict) for row in rows):
         raise Refused("invalid_item_shape")
@@ -77,13 +80,34 @@ def summarize(payload):
         "userdata_records": len(user_data),
         "userdata_field_presence": {k: sum(k in d for d in user_data) for k in ("Played", "PlayCount", "LastPlayedDate", "PlaybackPositionTicks", "IsFavorite")},
         "played_true": sum(d.get("Played") is True for d in user_data),
-        "playcount_positive": sum(type(d.get("PlayCount")) is int and d["PlayCount"] > 0 for d in user_data),
-        "lastplayed_present": sum(bool(d.get("LastPlayedDate")) for d in user_data),
+        "playcount_positive": sum(type(d.get("PlayCount")) is int and d["PlayCount"] > 0 for d in user_data) if enhanced_userdata else None,
+        "lastplayed_present": sum(bool(d.get("LastPlayedDate")) for d in user_data) if enhanced_userdata else None,
+        "enhanced_userdata_qualified": enhanced_userdata,
         "resume_positive": sum(type(d.get("PlaybackPositionTicks")) is int and d["PlaybackPositionTicks"] > 0 for d in user_data),
         "favorite_true": sum(d.get("IsFavorite") is True for d in user_data),
         "provider_ids_present": sum(isinstance(r.get("ProviderIds"), dict) and bool(r["ProviderIds"]) for r in rows),
         "playlist_entry_ids_present": sum(bool(r.get("PlaylistItemId")) for r in rows),
     }
+
+
+@contextlib.contextmanager
+def absolute_read_deadline(deadline):
+    # This one-shot Linux operator tool runs on the main thread. Do not replace
+    # an existing process timer or claim socket inactivity as elapsed time.
+    if any(signal.getitimer(signal.ITIMER_REAL)):
+        raise Refused("existing_process_timer")
+    remaining = min(REQUEST_SECONDS, deadline - time.time())
+    if remaining <= 0:
+        raise Refused("preflight_budget_exhausted")
+    def expired(signum, frame):
+        raise Refused("absolute_read_deadline")
+    previous = signal.signal(signal.SIGALRM, expired)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 class Reader:
@@ -123,16 +147,20 @@ class Reader:
         status = None
         size = 0
         try:
-            with self.opener.open(request, timeout=min(15, max(0.1, self.deadline-time.time()))) as response:
-                status = response.status
-                content = response.read(MAX_RESPONSE + 1)
-                size = len(content)
-                self.bytes += size
-                if size > MAX_RESPONSE or self.bytes > MAX_BYTES:
-                    raise Refused("response_budget_exhausted")
-                if status != 200:
-                    return None
-                return json.loads(content)
+            with absolute_read_deadline(self.deadline):
+                with self.opener.open(request, timeout=min(REQUEST_SECONDS, max(0.001, self.deadline-time.time()))) as response:
+                    status = response.status
+                    allowance = min(MAX_RESPONSE, MAX_BYTES - self.bytes)
+                    content = response.read(allowance)
+                    size = len(content)
+                    self.bytes += size
+                    # Conservatively refuse a body that fills the remaining
+                    # allowance; never consume an extra byte to probe for EOF.
+                    if size >= allowance:
+                        raise Refused("response_budget_exhausted")
+                    if status != 200:
+                        return None
+                    return json.loads(content)
         except urllib.error.HTTPError as error:
             status = error.code
             return None
@@ -238,7 +266,7 @@ def probe(reader, report=None):
                 if payload is None:
                     library["pages"].append({"unavailable": True})
                     break
-                summary = summarize(payload)
+                summary = summarize(payload, enhanced_userdata=True)
                 ids = {str(r["Id"]) for r in items(payload)}
                 summary["overlap_previous_page"] = len(ids & previous)
                 previous = ids

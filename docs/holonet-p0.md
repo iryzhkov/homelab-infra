@@ -46,8 +46,10 @@ hex-only grammar. The candidate contract now distinguishes these namespaces.
 
 Native item UserData needs explicit Fields=UserDataPlayCount,UserDataLastPlayedDate.
 The default projection returned zero counts and no dates even on played items.
-Explicit fields produced populated values in the bounded sample. Neither a
-zero default nor a missing observation proves unwatched/inactive status.
+Explicit fields produced populated values in the bounded library sample. Home-row
+count/date aggregates remain explicitly unavailable until that projection is
+qualified; presence of a default zero is insufficient. Neither a zero default nor
+a missing observation proves unwatched/inactive status.
 
 Playback Reporting has an existing retained event store, separate from item
 state. A bounded read-only local SQLite sample and scoped native GET

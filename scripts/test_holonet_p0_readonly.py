@@ -6,6 +6,8 @@ import io
 import json
 from pathlib import Path
 import unittest
+import signal
+import time
 import urllib.error
 import urllib.parse
 from unittest.mock import patch
@@ -82,6 +84,36 @@ class ProbeTests(unittest.TestCase):
         with patch.object(probe, "MAX_RESPONSE", 16), self.assertRaisesRegex(probe.Refused, "response_budget"):
             reader.get("Plugins", "size")
 
+    def test_elapsed_request_and_approval_deadline_stop_progressing_read(self):
+        class SlowResponse(Response):
+            def read(self, size: int | None = -1):
+                # Keep making progress, so a socket inactivity timeout would
+                # not bound the duration of this entire response.
+                for _ in range(100):
+                    time.sleep(0.005)
+                return b"{}"
+        class SlowOpener:
+            def open(self, request, timeout):
+                return SlowResponse()
+        previous = signal.getsignal(signal.SIGALRM)
+        reader = probe.Reader("SYNTHETIC_SECRET", SlowOpener(), FUTURE)
+        with patch.object(probe, "REQUEST_SECONDS", 0.03), self.assertRaisesRegex(probe.Refused, "absolute_read_deadline"):
+            reader.get("Plugins", "slow-progress")
+        self.assertEqual(signal.getsignal(signal.SIGALRM), previous)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+        reader = probe.Reader("SYNTHETIC_SECRET", SlowOpener(), FUTURE)
+        reader.deadline = time.time() + 0.03
+        with self.assertRaisesRegex(probe.Refused, "absolute_read_deadline|preflight_budget_exhausted"):
+            reader.get("Plugins", "approval-deadline")
+
+    def test_cumulative_remaining_bytes_are_never_exceeded(self):
+        opener = Opener({"blob": "x" * 100})
+        reader = probe.Reader("SYNTHETIC_SECRET", opener, FUTURE)
+        reader.bytes = probe.MAX_BYTES - 10
+        with self.assertRaisesRegex(probe.Refused, "response_budget_exhausted"):
+            reader.get("Plugins", "remaining-bytes")
+        self.assertEqual(reader.bytes, probe.MAX_BYTES)
+
     def test_summary_excludes_titles_paths_configuration_and_history_values(self):
         marker = "PRIVATE_MARKER"
         payload = {"TotalRecordCount": 1, "Items": [{"Id": "123", "Name": marker, "Path": marker,
@@ -91,6 +123,12 @@ class ProbeTests(unittest.TestCase):
         result = probe.summarize(payload)
         self.assertNotIn(marker, json.dumps(result))
         self.assertEqual(result["played_true"], 1)
+        self.assertIsNone(result["playcount_positive"])
+        self.assertIsNone(result["lastplayed_present"])
+        self.assertFalse(result["enhanced_userdata_qualified"])
+        enriched = probe.summarize(payload, enhanced_userdata=True)
+        self.assertEqual(enriched["playcount_positive"], 1)
+        self.assertEqual(enriched["lastplayed_present"], 1)
         self.assertEqual(result["id_shapes"], ["decimal-string"])
 
     def test_complete_probe_uses_authorized_user_context_and_sanitizes(self):
