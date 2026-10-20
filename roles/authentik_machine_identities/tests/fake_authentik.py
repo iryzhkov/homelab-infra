@@ -6,6 +6,7 @@ app-password tokens, one OAuth2 provider kind, scope mappings, applications,
 policy bindings, keypairs, check_access and view_key. Every request is
 recorded, so a test can prove what a run did not do.
 """
+import hashlib
 import http.server
 import json
 import secrets
@@ -58,6 +59,11 @@ class Authentik:
         self.next_pk = 100
         self.responses = {}
         self.redirects = {}
+        self.apply_reads = 0
+        self.pending = None
+        self.apply_failure = False
+        self.on_pending = lambda: None
+        self.detail_reads = 0
 
     # -- model ---------------------------------------------------------------
     def _pk(self):
@@ -215,6 +221,20 @@ class Authentik:
             return None
         raise ImportError_("unsupported model " + model)
 
+    def complete_apply(self):
+        instance = self.pending
+        self.pending = None
+        try:
+            if self.apply_failure:
+                raise ImportError_("synthetic worker failure")
+            self.apply(instance["content"])
+            instance["status"] = "successful"
+            instance["last_applied_hash"] = hashlib.sha512(instance["content"].encode()).hexdigest()
+        except (ImportError_, KeyError, StopIteration) as exc:
+            instance["status"] = "error"
+            instance["error"] = str(exc)
+        instance["last_applied"] = datetime.now(timezone.utc).isoformat()
+
     # -- HTTP ----------------------------------------------------------------
     def handle(self, method, raw_path, body):
         parts = urlsplit(raw_path)
@@ -225,7 +245,10 @@ class Authentik:
         path = path[len("/api/v3"):]
         bp = "/managed/blueprints/"
         if (method, path) in self.responses:
-            return self.responses[(method, path)]
+            response = self.responses[(method, path)]
+            response = response() if callable(response) else response
+            if response is not None:
+                return response
         if path == bp and method == "GET":
             return 200, page([b for b in self.blueprints.values() if query.get("name", "") in b["name"]])
         if path == bp and method == "POST":
@@ -235,7 +258,9 @@ class Authentik:
                 return 400, {"content": [str(exc)]}
             pk = str(uuid.uuid4())
             self.blueprints[pk] = {"pk": pk, "name": body["name"], "content": body["content"].strip(),
-                                   "status": "unknown", "enabled": True}
+                                   "status": "unknown", "enabled": True, "path": "", "context": {},
+                                   "last_applied": datetime.now(timezone.utc).isoformat(),
+                                   "last_applied_hash": ""}
             return 201, self.blueprints[pk]
         if path.startswith(bp) and path.count("/") == 4:
             pk = path.split("/")[3]
@@ -245,17 +270,24 @@ class Authentik:
                 except ImportError_ as exc:
                     return 400, {"content": [str(exc)]}
                 self.blueprints[pk]["content"] = body["content"].strip()
+                # auto_now updates on ordinary saves, without clearing old success/hash.
+                self.blueprints[pk]["last_applied"] = datetime.now(timezone.utc).isoformat()
                 return 200, self.blueprints[pk]
+            self.detail_reads += 1
+            if self.pending is not None:
+                self.on_pending()
+                if self.apply_reads == 0:
+                    self.complete_apply()
+                else:
+                    self.apply_reads -= 1
             return 200, self.blueprints[pk]
         if path.startswith(bp) and path.endswith("/apply/") and method == "POST":
             instance = self.blueprints[path.split("/")[3]]
-            try:
-                self.apply(instance["content"])
-                instance["status"] = "successful"
-            except (ImportError_, KeyError, StopIteration) as exc:
-                instance["status"] = "error"
-                instance["error"] = str(exc)
-            return 200, {}
+            self.pending = instance
+            if self.apply_reads == 0:
+                self.complete_apply()
+            # The real endpoint returns the current instance, no task ID/reset.
+            return 200, dict(instance)
         if method != "GET":
             return 405, {}
         if path == "/propertymappings/provider/scope/":

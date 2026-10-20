@@ -8,6 +8,7 @@ line lists every object and its desired state. Only a stored present entry
 confers ownership; absent entries are deletion requests. Other colliding names
 are refused, never adopted or deleted.
 """
+from hashlib import sha512
 import json
 import posixpath
 import re
@@ -553,9 +554,39 @@ def machine_identity_problems(spec, results, applications, bindings, checks):
     return problems
 
 
+def machine_identity_apply_state(instance, content, pk, name, since):
+    """2026.8.4 has no apply request ID: bind a fresh save to the exact content.
+
+    PATCH also advances last_applied but leaves the old status/hash intact.
+    The baseline must therefore be read after storage, immediately before POST.
+    A successful worker saves the SHA-512 of the UTF-8 blueprint it applied.
+    """
+    if not isinstance(instance, dict) or instance.get("enabled") is not True or any(
+            instance.get(field, MISSING) != expected for field, expected in (
+                ("pk", pk), ("name", name), ("content", content), ("path", ""),
+                ("context", {}), ("enabled", True))):
+        _refuse("blueprint apply: stored request changed or answered in an unexpected shape")
+    status = instance.get("status")
+    digest = instance.get("last_applied_hash")
+    if (status not in ("unknown", "successful", "warning", "error", "orphaned")
+            or not isinstance(digest, str)
+            or (digest != "" and re.fullmatch(r"[0-9a-f]{128}", digest) is None)):
+        _refuse("blueprint apply: invalid status or content hash")
+    applied = _time(instance.get("last_applied"), "blueprint last_applied")
+    baseline = _time(since, "blueprint apply baseline")
+    if applied <= baseline:
+        return "pending"
+    if status in ("warning", "error", "orphaned"):
+        return "failed"
+    if status == "successful" and digest == sha512(content.encode("utf-8")).hexdigest():
+        return "successful"
+    return "pending"
+
+
 class FilterModule:
     def filters(self):
         return {
+            "machine_identity_apply_state": machine_identity_apply_state,
             "machine_identity_api_url": machine_identity_api_url,
             "machine_identity_blueprint": machine_identity_blueprint,
             "machine_identity_spec": machine_identity_spec,
