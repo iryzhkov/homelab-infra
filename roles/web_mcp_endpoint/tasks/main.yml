@@ -1,0 +1,176 @@
+---
+- name: Configure only an explicitly enabled endpoint
+  when: web_mcp_endpoint_enabled | bool
+  block:
+    - name: Validate the complete bounded service contract before writes
+      ansible.builtin.set_fact:
+        web_mcp: "{{ web_mcp_endpoint | web_mcp_endpoint_contract }}"
+      no_log: true
+
+    - name: Require the reviewed static Linux amd64 platform
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.system == 'Linux'
+          - ansible_facts.os_family == 'Debian'
+          - ansible_facts.architecture == 'x86_64'
+          - ansible_facts.service_mgr == 'systemd'
+        quiet: true
+
+    - name: Guard fixed paths and dedicated identities without reading secrets
+      web_mcp_guard:
+        kind: endpoint
+        service: "{{ web_mcp.service }}"
+        uid: "{{ web_mcp.uid }}"
+        gid: "{{ web_mcp.gid }}"
+        sha256: "{{ web_mcp.artifact.sha256 }}"
+        credential_names: "{{ web_mcp.credentials | map(attribute='name') | list }}"
+
+    - name: Validate protected controller sources before managed writes
+      web_mcp_guard:
+        kind: credential
+        source: "{{ item.source }}"
+        uid: "{{ item.source_uid }}"
+      delegate_to: localhost
+      become: false
+      loop: "{{ web_mcp.credentials }}"
+      no_log: true
+
+    - name: Inspect service state before staging
+      ansible.builtin.service_facts:
+      when: not (web_mcp_activate | bool)
+
+    - name: Refuse staging over a running or enabled endpoint
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services.get(web_mcp.service ~ '.service', {}).get('state', 'stopped') != 'running'
+          - ansible_facts.services.get(web_mcp.service ~ '.service', {}).get('status', 'disabled') not in ['enabled', 'enabled-runtime']
+        quiet: true
+      when: not (web_mcp_activate | bool)
+
+    - name: Create the dedicated system group
+      ansible.builtin.group:
+        name: "{{ web_mcp.service }}"
+        gid: "{{ web_mcp.gid }}"
+        system: true
+
+    - name: Create the dedicated nonroot system identity
+      ansible.builtin.user:
+        name: "{{ web_mcp.service }}"
+        uid: "{{ web_mcp.uid }}"
+        group: "{{ web_mcp.service }}"
+        system: true
+        home: /nonexistent
+        create_home: false
+        shell: /usr/sbin/nologin
+        password_lock: true
+
+    - name: Create root-owned release directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /opt/web-mcp
+        - "/opt/web-mcp/{{ web_mcp.service }}"
+        - "/opt/web-mcp/{{ web_mcp.service }}/releases"
+        - "/opt/web-mcp/{{ web_mcp.service }}/releases/{{ web_mcp.artifact.sha256 }}"
+
+    - name: Mark this bounded endpoint as managed
+      ansible.builtin.copy:
+        content: "homelab-infra web-mcp {{ web_mcp.service }}\n"
+        dest: "/opt/web-mcp/{{ web_mcp.service }}/.homelab-infra-owned"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Stage the checksum-pinned static executable before activation
+      ansible.builtin.get_url:
+        url: "{{ web_mcp.artifact.url }}"
+        dest: "/opt/web-mcp/{{ web_mcp.service }}/releases/{{ web_mcp.artifact.sha256 }}/{{ web_mcp.service }}"
+        checksum: "sha256:{{ web_mcp.artifact.sha256 }}"
+        owner: root
+        group: root
+        mode: "0555"
+        validate_certs: true
+        use_proxy: false
+        timeout: 30
+      register: web_mcp_binary
+
+    - name: Verify the staged binary independently
+      ansible.builtin.stat:
+        path: "/opt/web-mcp/{{ web_mcp.service }}/releases/{{ web_mcp.artifact.sha256 }}/{{ web_mcp.service }}"
+        follow: false
+        checksum_algorithm: sha256
+      register: web_mcp_staged
+
+    - name: Refuse activation without the exact executable
+      ansible.builtin.assert:
+        that:
+          - web_mcp_staged.stat.isreg | default(false)
+          - not (web_mcp_staged.stat.islnk | default(false))
+          - web_mcp_staged.stat.uid == 0
+          - web_mcp_staged.stat.mode == '0555'
+          - web_mcp_staged.stat.checksum == web_mcp.artifact.sha256
+        quiet: true
+      when: not ansible_check_mode
+
+    - name: Require a checksum-matching static amd64 ELF before activation
+      web_mcp_guard:
+        kind: binary
+        service: "{{ web_mcp.service }}"
+        sha256: "{{ web_mcp.artifact.sha256 }}"
+      when: not ansible_check_mode
+
+    - name: Create a root-owned protected configuration directory
+      ansible.builtin.file:
+        path: "/etc/{{ web_mcp.service }}"
+        state: directory
+        owner: root
+        group: "{{ web_mcp.service }}"
+        mode: "0750"
+
+    - name: Install the runtime-owned configuration
+      ansible.builtin.copy:
+        content: "{{ web_mcp.config | to_nice_json }}\n"
+        dest: "/etc/{{ web_mcp.service }}/config.json"
+        owner: "{{ web_mcp.uid }}"
+        group: "{{ web_mcp.gid }}"
+        mode: "0600"
+      no_log: true
+      diff: false
+      register: web_mcp_config
+
+    - name: Install separately supplied protected backend credentials
+      ansible.builtin.copy:
+        src: "{{ item.source }}"
+        dest: "/etc/{{ web_mcp.service }}/{{ item.name }}"
+        owner: "{{ web_mcp.uid }}"
+        group: "{{ web_mcp.gid }}"
+        mode: "0600"
+      loop: "{{ web_mcp.credentials }}"
+      no_log: true
+      diff: false
+      register: web_mcp_credentials
+
+    - name: Install the root-owned hardened endpoint unit
+      ansible.builtin.template:
+        src: endpoint.service.j2
+        dest: "/etc/systemd/system/{{ web_mcp.service }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+      register: web_mcp_unit
+
+    - name: Reload only when the unit changed
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: web_mcp_unit is changed and not ansible_check_mode
+
+    - name: Activate only the explicitly selected endpoint
+      ansible.builtin.systemd_service:
+        name: "{{ web_mcp.service }}"
+        enabled: true
+        state: "{{ 'restarted' if (web_mcp_binary is changed or web_mcp_config is changed or web_mcp_credentials is changed or web_mcp_unit is changed) else 'started' }}"
+      when: web_mcp_activate | bool and not ansible_check_mode

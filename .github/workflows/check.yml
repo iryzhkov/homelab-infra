@@ -37,6 +37,8 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p test_seedpool_policy.py
       - name: Install the deployment templating version for guarded role tests
         run: pip install --disable-pip-version-check ansible-core==2.19.13
+      - name: Test bounded web MCP packaging
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/run-web-mcp-ci.py
       - name: Validate the NATS stack
         run: |
           python3 scripts/stack-lint.py stacks/nats/stack.yml
