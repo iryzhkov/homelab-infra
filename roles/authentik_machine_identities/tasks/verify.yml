@@ -28,17 +28,29 @@
       register: machine_identity_apps
       no_log: true
 
-    - name: Read the shared application's policy bindings
+    - name: Read each service application's policy bindings
       ansible.builtin.uri:
         url: "{{ machine_identity_api }}/policies/bindings/?target={{ machine_identity_app.pk }}&page_size=500"
         headers: "{{ authentik_headers }}"
         follow_redirects: none
       vars:
         machine_identity_app: >-
-          {{ machine_identity_result.results | machine_identity_lookup('application', machine_identity_spec.access.slug) }}
+          {{ machine_identity_result.results | machine_identity_lookup('application', item.value.slug) }}
       register: machine_identity_bindings
-      when: machine_identity_spec.access.state == 'present' and machine_identity_app | length > 0
+      loop: "{{ machine_identity_spec.services | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: item.value.state == 'present' and machine_identity_app | length > 0
       no_log: true
+
+    - name: Index each complete binding response by application
+      ansible.builtin.set_fact:
+        machine_identity_bindings_by_slug: >-
+          {%- set found = {} -%}
+          {%- for result in machine_identity_bindings.results | default([]) if result.json is defined -%}
+          {%- set _ = found.update({result.item.value.slug: result.json}) -%}
+          {%- endfor -%}
+          {{ found }}
 
     # check_access honours for_user only for a superuser, which the access
     # role's account is. Every application, not only the shared one: an
@@ -67,4 +79,4 @@
         machine_identity_problems: >-
           {{ machine_identity_spec | machine_identity_problems(
                machine_identity_result.results, machine_identity_apps.json,
-               machine_identity_bindings.json | default({}), machine_identity_access.results | default([])) }}
+               machine_identity_bindings_by_slug, machine_identity_access.results | default([])) }}

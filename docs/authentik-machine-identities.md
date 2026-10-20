@@ -1,7 +1,7 @@
 # Authentik machine identities for Chaldea hosts
 
 `roles/authentik_machine_identities` lets a named Chaldea host obtain short-lived
-Jocasta access tokens from Authentik without holding any administrative
+web MCP access tokens from Authentik without holding any administrative
 credential. It is off: `playbooks/vars/authentik.yml` sets
 `authentik_machine_identities_enabled: false`, and `playbooks/authentik.yml`
 includes the role only when that is true. Nothing in this repository enables it,
@@ -10,17 +10,17 @@ identity creation and host credential delivery before enabling the fleet enrollm
 
 ## What it manages
 
-One shared OAuth2 provider and application for Jocasta, and for each declared
+One OAuth2 provider and application per declared service, and for each declared
 host and Chaldea preset (profile):
 
 - an ordinary service account, `chaldea-<host>-<profile>`, with no roles, whose
-  only group is the one bound to the Jocasta application;
+  only group is the one bound to its service's application;
 - one app password for that account, with an explicit owner, intent and expiry;
 - one private file on the host, `~/.config/chaldea/authentik/<profile>.app-password`
   of the host's inventory `ssh_user`, mode 0600 in a 0700 directory, holding the
   exact key without a newline.
 
-The provider grants only `client_credentials`, issues 300-second tokens signed by
+The default Jocasta provider grants only `client_credentials`, issues 300-second tokens signed by
 an existing keypair named by its `kp_uuid`, and carries one scope mapping,
 `jocasta.read`. The mapping fixes `aud` to the configured Jocasta resource and
 sets `jocasta_projects` to the one project in the account's `chaldea_jocasta`
@@ -97,8 +97,8 @@ involved, read-only, and refuses when:
 
 `state: absent` on an identity deletes its tokens and account (which also
 removes its group membership) and then its host file; other identities and the
-shared application are untouched. The shared application can be removed only
-once every identity is absent; deleting the application deletes its binding.
+shared application are untouched. Each service's application can be removed only once all of that service's
+identities are absent; deleting the application deletes its binding.
 A host named by an absent identity must stay in the inventory until the run
 that removes its file has succeeded.
 
@@ -106,7 +106,7 @@ Rotation is a higher `generation`: Authentik creates a new app password under a
 new identifier, the old generations are declared absent and deleted, and the
 host file is replaced. A later `expires` on the same generation only extends the
 existing key; it is not rotation. Deleting an app password stops new token
-issuance with it. Tokens already issued are verified offline by Jocasta and stay
+issuance with it. Tokens already issued are verified offline by the MCP services and stay
 valid until they expire, at most 300 seconds.
 
 ## Order of a run, and check mode
@@ -127,7 +127,7 @@ valid until they expire, at most 300 seconds.
 6. Look everything up again and compare: provider settings, mapping expression,
    application, the single group binding, the group's members, each account and
    each token. Ask `check_access` for every account and every application
-   (`superuser_full_list`); each account must pass for the Jocasta application
+   (`superuser_full_list`); each account must pass for its service's application
    and fail for every other one. An application without bindings that admits
    every account therefore stops the run. Repeat this complete read-only
    observation at most six times, three seconds apart, then fail if any
@@ -179,59 +179,154 @@ An operator must reconcile partial changes and restore only a verified ownership
 record before retrying. Do not bypass a refusal by marking uncertain objects as
 owned. No automatic rollback or recovery is provided.
 
-## A second service
+## Closed service profiles
 
-Only Jocasta is implemented. The role keeps the two halves apart so that a
-second web MCP service behind Authentik can be added without touching the
-account lifecycle:
+The role supports exactly `jocasta`, `ov`, `homelab` and `ha`. The default
+`authentik_machine_services: {}` keeps the existing
+`authentik_jocasta_machine_access` declaration and implicit Jocasta identities.
+Jocasta's object names, ownership record version, account names, host paths,
+scope mapping and lifecycle remain compatible.
 
-- Service-independent: account naming, app passwords, generations and expiry,
-  the ownership record and its refusals, destination checks, delivery and
-  removal (`machine_identity_spec`'s account part, `machine_identity_owned`,
-  `_queries`, `_refusals`, `_problems`, `tasks/main.yml`, `tasks/host.yml`, and
-  the account section of the template).
-- Jocasta-specific: the service profile at the top of
-  `filter_plugins/machine_identities.py` (`SERVICE`: scope `jocasta.read`, 300
-  seconds, the `resource` field, the per-account `project` grant stored as
-  `chaldea_jocasta`, and the mapping expression) and the provider section of
-  the template.
+A nonempty `authentik_machine_services` replaces the legacy application input.
+It is keyed by service, with a complete application declaration per entry.
+Include `jocasta: <the existing mapping>` to keep an existing Jocasta enrollment.
+Declare a removed service and its identities absent before dropping them.
+Each identity selects one declared `service`; omitted means `jocasta`.
+A host/profile pair is unique across services. Reusing a profile for a second
+service is refused because it would share an account and secret path.
+Use separate presets, accounts, app passwords and files for each service.
 
-Adding a service X is a separate reviewed change in these steps:
+OV, homelab and HA applications require the same fields as Jocasta, plus explicit
+`issuer` and `jwks_url`. For slug `chaldea-ov` on an example issuer origin
+`https://auth.example.test`, these are exactly
+`https://auth.example.test/application/o/chaldea-ov/` and
+`https://auth.example.test/application/o/chaldea-ov/jwks/`.
+Both trailing slashes are required. Online runs require that origin to match
+the controller's canonical Authentik API origin. The existing operator-supplied
+`signing_key` remains mandatory; no key is created or read.
 
-1. Add X's profile beside Jocasta's: a fixed scope name and token lifetime,
-   X's application fields, a per-account grant validated against a closed
-   pattern and stored in its own attribute, and a mapping expression whose
-   `aud` is a literal operator value and whose other claims come only from that
-   attribute and group membership. Never a claim from the token request, a
-   wildcard grant, or an administrative or write scope that has not been
-   qualified for X.
-2. Make the application declaration a mapping keyed by service, each entry
-   with its own slug, name, group, client ID, resource and signing key, and
-   render one provider, application, mapping, group and binding per service.
-   Keep Jocasta's names as they are, so its objects keep matching the
-   ownership record and nothing is renamed.
-3. Give each identity a `service` naming exactly one service. An account
-   belongs to one service's group only: an app password authenticates its
-   account to every `client_credentials` provider whose application admits
-   the account, so one account in two groups would let one host credential
-   obtain tokens for both services. A host that needs both gets two
-   identities with two profiles (two presets): two accounts, two app passwords
-   and two files. Usernames and host paths keep their form, because a profile
-   names one preset and a preset enrols one service.
-4. The post-apply check already requires each account to pass `check_access`
-   for exactly one application; it becomes that account's own service's
-   application.
-5. Chaldea's policy parser and the fleet role's enrollment check accept only
-   `form: app_password` and `scope: jocasta.read` today. They gain X's scope,
-   audience and grant rule in the same change set, and X's verifier pins its
-   own issuer, resource and claims.
-6. Qualify X's gates as listed above, including that X refuses Jocasta's
-   tokens and Jocasta refuses X's (distinct `aud`).
+| Profile | Fixed resource audience | Fixed scope | Required identity fields |
+| --- | --- | --- | --- |
+| Jocasta | Existing operator resource | `jocasta.read` | `project` |
+| OV | `https://ov.mcp.ryzhkov.dev/mcp` | `ov.read` | `ov_namespaces` |
+| Homelab | `https://homelab.mcp.ryzhkov.dev/mcp` | `homelab.read` | `homelab_services`, `homelab_hosts` |
+| HA | `https://ha.mcp.ryzhkov.dev/mcp` | `ha.read` initially; explicit `ha.control` allowed | `ha_entities`, `ha_actions` |
+
+All profiles issue 300-second access tokens. OV stores its grant in
+`chaldea_ov`, homelab in `chaldea_homelab` and HA in `chaldea_ha`.
+Their scope mappings emit only
+the fixed `aud` and the service's named grant arrays. They require an ordinary
+service account, membership in the service's group, the exact declared
+username and the exact operator-owned attribute grant. Missing, modified or
+cross-service attributes yield no resource claims. No request parameter selects
+claims. The provider attaches only that service's declared scope mappings.
+
+OV requires 1–16 distinct, non-overlapping canonical roots under
+`viking://resources/`, each at most 1024 ASCII characters. Segments admit
+letters, digits, underscore, hyphen, period, @, +, comma and equals.
+Dot segments, wildcards, percent encoding and repeated/trailing slashes are
+refused. Roots authorize descendants, matching the merged reader verifier at
+`ov-mcp@599fdda83074c419a3d8170a5217aabb3b92745b`, `ov_http/auth.py`.
+
+Homelab requires both explicit lists, each containing 0–128 unique IDs matching
+`[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}`. An empty list grants nothing in that category;
+omitted, null or wildcard lists are refused by enrollment. The merged observer
+at `homelab-cli@db6f9ead377cded2a7229443c9daecf2c057c3b9`,
+`mcp-observer/auth.go` and `config.go`, requires both a service ID and its
+configured host ID for service access. Enrollment does not expand a missing
+list to inventory or infer hosts from services. These grants name observer
+configuration IDs, not the credential destination's inventory host.
+
+HA requires 1–64 distinct entity IDs matching
+`(light|switch|sensor|binary_sensor)\.[a-z0-9_]{1,96}`, also bounded to
+112 characters, and 1–3 distinct actions chosen exactly from `state.read`,
+`light.control` and `switch.control`. These are the merged
+`homeassistant-mcp@9b296c6ab56432be34856f733e25843f0ca097ef` rules in
+`http-mcp/internal/endpoint/config.go` and `oidc.go`.
+No scene, script, area or other selector is supported.
+
+The initial HA enrollment must use `scope: ha.read` and
+`ha_actions: [state.read]` until the live entity registry and control paths
+are qualified. Only an explicit operator declaration may select `ha.control`
+or both `ha.read ha.control`. Each selected scope has a separately named
+Authentik scope mapping, and the provider attaches exactly those mappings.
+Enrollment refuses an action whose corresponding scope is absent.
+The verifier intersects entities, actions and scopes with its operator registry,
+including domain and control qualification; enrollment cannot replace those gates.
+Removing a scope mapping from an existing application requires declaring that
+service and its identities absent with the old scope set first, completing
+cleanup, then enrolling the narrower profile. Undeclared owned mappings are
+never silently dropped.
+
+For example, identities for one host could be declared as follows, with complete
+operator-owned application mappings supplied separately:
+
+```yaml
+authentik_machine_identities:
+  - host: laptop
+    profile: ov-namespaceA-reader
+    service: ov
+    ov_namespaces: [viking://resources/namespaceA]
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: homelab-dns-reader
+    service: homelab
+    homelab_services: [dns]
+    homelab_hosts: [host-a]
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+```
+
+A read-only HA identity uses the same lifecycle fields, `service: ha`,
+a separate `profile: ha-state-reader`, `ha_entities: [sensor.qualified_example]`
+and `ha_actions: [state.read]`. This example is synthetic and enables nothing.
+
+The role verifies each provider, mapping, group and binding, then asks
+`check_access` for every present account against the complete application list.
+Exactly its service's application must pass. Foreign provider consumers and
+incomplete collections still refuse removal. Destination inspection, protected
+delivery, rotation, ownership refusals and cleanup use the existing lifecycle.
+The PR55 asynchronous apply correlation and bounded postconditions remain in
+force for the whole blueprint.
+
+### Client enrollment contract still required
+
+The installed Chaldea credential helper and fleet enrollment are Jocasta-only.
+This source change does not make those clients support OV, homelab or HA. Before
+integration, extend their closed enrollment parser, fleet renderer and private
+helper together. They must accept a fixed named preset with `form: app_password`,
+`issuer`, `tokenUrl`, `jwksUrl`, `clientId`, `username`, `secretFile`,
+`scope`, `resource` and `maxTokenSeconds: 300`; replace the Jocasta
+`project` field with exactly `ov_namespaces`, or with both
+`homelab_services` and `homelab_hosts`, or with `ha_entities` and
+`ha_actions` for HA. Preserve the exact lists and URLs above. `tokenUrl` is the issuer origin plus `/application/o/token/`.
+The helper must request only the fixed service scope, verify the signed
+audience, issuer, lifetime and exact grant arrays before private header delivery,
+and refuse arbitrary claim maps, unqualified scopes and unsupported reductions.
+HA control support must require its explicit scopes and action grants; it must
+never be inferred from a read-only preset. No profile accepts an admin scope.
+Use a separate credential file and ordinary account per host/preset/service.
+Do not reinterpret a new service's grant as a Jocasta project.
+
+Production admission also needs the actual protected-policy UID/ownership gate,
+native client acquisition/renewal/refusal checks, signed-token acceptance by
+the merged verifier, cross-service token denial, alternate API denial,
+idempotent enrollment and independent cleanup. The source fixture proves role
+logic only. Large grant lists must also fit the verifier's token-size bound in
+the issued JWT; count and ID limits alone do not prove that. No inventory entry,
+client enrollment or host grant is enabled here.
 
 ## Tests
 
-`roles/authentik_machine_identities/tests` runs in CI. The plain-data tests
-cover the declaration and ownership refusals. The role tests play the real role
+`roles/authentik_machine_identities/tests` runs in CI. The existing Jocasta
+suite stays in the drift job with a 60-minute budget; the multi-service
+real-role matrix has a separate 40-minute job. Measured fixture runs exceed
+the former 15-minute ceiling. The plain-data tests
+cover the declaration and ownership refusals, closed profile selection, exact
+OV/homelab/HA claims and cross-service mapping refusal. The role tests play the real role
 with `ansible-playbook` against an in-memory fake of the Authentik API (only
 what the role uses, applying the blueprint entry by entry), with the destination
 hosts as local scratch directories: default off, check mode without writes or
@@ -281,6 +376,6 @@ run, against the installed version:
 - Delivery, a second converge and cleanup on the named host.
 
 The nightly drift check compares only the access blueprint's applications, so
-once enabled it will report the Jocasta application as not managed by the
+once enabled it will report these machine applications as not managed by the
 repository. Extending the drift manifest is a separate change, needed before
 enabling.
