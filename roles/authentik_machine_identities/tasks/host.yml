@@ -1,0 +1,133 @@
+---
+# One identity's private file on its host. Host tasks run as the host's
+# ssh_user over the inventory's own connection, never with become. Phase
+# `inspect` only reads; phase `deliver` writes or removes the file. Never runs
+# in check mode.
+
+- name: Inspect {{ machine_identity.host }} as its configured user
+  delegate_to: "{{ machine_identity.host }}"
+  # The play's `connection: local` would otherwise apply to delegated tasks.
+  connection: "{{ machine_identity.connection }}"
+  become: false
+  vars:
+    ansible_user: "{{ machine_identity.owner }}"
+  block:
+    - name: Inspect the secret's directories without following links
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+        get_mime: false
+      loop: "{{ machine_identity.ancestors }}"
+      register: machine_identity_dirs
+
+    - name: Refuse linked, foreign or shared-writable directories
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists or item.item != machine_identity.home
+          - not item.stat.exists or (item.stat.isdir and not item.stat.islnk)
+          - not item.stat.exists or item.stat.pw_name == machine_identity.owner
+          - not item.stat.exists or item.stat.mode[-2] not in ['2', '3', '6', '7']
+          - not item.stat.exists or item.stat.mode[-1] not in ['2', '3', '6', '7']
+        fail_msg: >-
+          {{ item.item }} on {{ machine_identity.host }} must be a directory owned by
+          {{ machine_identity.owner }}, writable by no one else, and not a link.
+        quiet: true
+      loop: "{{ machine_identity_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Inspect the secret file without reading it
+      ansible.builtin.stat:
+        path: "{{ machine_identity.secret_path }}"
+        follow: false
+        get_checksum: false
+        get_mime: false
+      register: machine_identity_file
+
+    - name: Refuse anything but the owner's own regular file
+      ansible.builtin.assert:
+        that:
+          - not machine_identity_file.stat.exists or (machine_identity_file.stat.isreg and not machine_identity_file.stat.islnk)
+          - not machine_identity_file.stat.exists or machine_identity_file.stat.pw_name == machine_identity.owner
+          - not machine_identity_file.stat.exists or machine_identity_file.stat.nlink == 1
+        fail_msg: >-
+          {{ machine_identity.secret_path }} on {{ machine_identity.host }} exists but is not
+          {{ machine_identity.owner }}'s own single-link regular file; inspect it.
+        quiet: true
+
+# Read on the controller, never logged, and forgotten once written.
+- name: Read the app password from Authentik
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/core/tokens/{{ machine_identity.token | urlencode }}/view_key/"
+    headers: "{{ authentik_headers }}"
+  register: machine_identity_key
+  when: machine_identity_phase == 'deliver' and machine_identity.state == 'present'
+  no_log: true
+
+- name: Require a usable key without showing it
+  ansible.builtin.assert:
+    that:
+      - machine_identity_key.json.key is string
+      - machine_identity_key.json.key is match('^[\x21-\x7e]{16,256}$')
+    fail_msg: Authentik returned no usable app password.
+    quiet: true
+  when: machine_identity_phase == 'deliver' and machine_identity.state == 'present'
+  no_log: true
+
+- name: Change {{ machine_identity.host }} as its configured user
+  when: machine_identity_phase == 'deliver'
+  delegate_to: "{{ machine_identity.host }}"
+  connection: "{{ machine_identity.connection }}"
+  become: false
+  vars:
+    ansible_user: "{{ machine_identity.owner }}"
+  block:
+    - name: Create the private directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: "{{ machine_identity.ancestors[2:] }}"
+      when: machine_identity.state == 'present'
+
+    # The exact key, no newline.
+    - name: Write the app password, readable only by its owner
+      ansible.builtin.copy:
+        content: "{{ machine_identity_key.json.key }}"
+        dest: "{{ machine_identity.secret_path }}"
+        mode: "0600"
+        follow: false
+      diff: false
+      no_log: true
+      when: machine_identity.state == 'present'
+
+    - name: Remove the copy held for a deleted account
+      ansible.builtin.file:
+        path: "{{ machine_identity.secret_path }}"
+        state: absent
+      when: machine_identity.state == 'absent'
+
+    - name: Inspect the result
+      ansible.builtin.stat:
+        path: "{{ machine_identity.secret_path }}"
+        follow: false
+        get_checksum: false
+        get_mime: false
+      register: machine_identity_written
+
+    - name: Require the owner's private file, or none for a deleted account
+      ansible.builtin.assert:
+        that: >-
+          (machine_identity.state == 'absent' and not machine_identity_written.stat.exists) or
+          (machine_identity.state == 'present' and machine_identity_written.stat.isreg
+           and not machine_identity_written.stat.islnk and machine_identity_written.stat.mode == '0600'
+           and machine_identity_written.stat.pw_name == machine_identity.owner
+           and machine_identity_written.stat.size > 0)
+        fail_msg: "{{ machine_identity.secret_path }} on {{ machine_identity.host }} is not as declared."
+        quiet: true
+
+- name: Forget the app password
+  ansible.builtin.set_fact:
+    machine_identity_key: {}
+  when: machine_identity_phase == 'deliver'

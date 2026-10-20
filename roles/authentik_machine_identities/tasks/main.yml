@@ -1,0 +1,239 @@
+---
+# Ordinary Authentik service accounts for named Chaldea hosts
+# (docs/authentik-machine-identities.md): one shared Jocasta OAuth2
+# application, and per host and preset one service account, one app password
+# and one private file on that host. Runs in playbooks/authentik.yml after
+# authentik_config and reuses its API facts; the admin token never leaves the
+# controller.
+#
+# Check mode stays on the controller and only reads: it renders the
+# blueprint and shows the plan and any refusal. It never reads a key, writes a
+# file or changes Authentik.
+
+- name: Require an explicit opt-in and the access role's API facts
+  ansible.builtin.assert:
+    that:
+      - authentik_machine_identities_enabled | bool
+      - authentik_url is defined
+      - authentik_headers is defined
+    fail_msg: Run playbooks/authentik.yml with authentik_machine_identities_enabled set.
+    quiet: true
+
+- name: Validate the declared identities against the inventory
+  ansible.builtin.set_fact:
+    machine_identity_spec: >-
+      {{ authentik_machine_identities | machine_identity_spec(
+           authentik_jocasta_machine_access, machine_identity_hosts,
+           authentik_machine_identity_max_days | int,
+           now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ')) }}
+  vars:
+    # Only what the inventory says about each named host: its user, an
+    # optional home and its connection. A host missing here is refused.
+    machine_identity_hosts: >-
+      {%- set found = {} -%}
+      {%- for item in authentik_machine_identities if item.host | default('') in groups['all'] -%}
+      {%-   set host = hostvars[item.host] -%}
+      {%-   set _ = found.update({item.host: {
+              'ssh_user': host.ssh_user | default(''),
+              'home': host.authentik_machine_identity_home | default(''),
+              'connection': host.ansible_connection | default('ssh')}}) -%}
+      {%- endfor -%}
+      {{ found }}
+
+- name: Render the blueprint
+  ansible.builtin.set_fact:
+    # Trimmed, because the API stores content with surrounding whitespace
+    # stripped, and the comparison below would otherwise never match.
+    machine_identity_content: "{{ lookup('ansible.builtin.template', 'machine-identities.yaml.j2') | trim }}"
+
+- name: Find the stored blueprint
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}/managed/blueprints/?name={{ authentik_machine_identities_blueprint_name | urlencode }}"
+    headers: "{{ authentik_headers }}"
+  register: machine_identity_found
+  check_mode: false
+  no_log: true
+
+- name: Read this role's ownership record from it
+  ansible.builtin.set_fact:
+    machine_identity_instance: >-
+      {{ machine_identity_found.json.results | default([])
+         | selectattr('name', 'equalto', authentik_machine_identities_blueprint_name) | first | default({}) }}
+
+- name: Compare it with the rendered one
+  ansible.builtin.set_fact:
+    machine_identity_owned: "{{ machine_identity_instance.content | default('') | machine_identity_owned }}"
+    machine_identity_changed: "{{ machine_identity_instance.content | default('') != machine_identity_content }}"
+
+- name: Look up everything this blueprint names or once created
+  ansible.builtin.uri:
+    url: "{{ authentik_url }}{{ item.path }}"
+    headers: "{{ authentik_headers }}"
+    status_code: [200, 404]
+  loop: "{{ machine_identity_spec | machine_identity_queries(machine_identity_owned) }}"
+  loop_control:
+    label: "{{ item.kind }} {{ item.id }}"
+  register: machine_identity_seen
+  check_mode: false
+  no_log: true
+
+# No automatic adoption: an object with a colliding name that no stored
+# blueprint of this role created is neither changed nor deleted.
+- name: Refuse to take over, delete or drop what this role does not own
+  ansible.builtin.assert:
+    that: machine_identity_refusals | length == 0
+    fail_msg: "{{ machine_identity_refusals }}"
+    quiet: true
+  vars:
+    machine_identity_refusals: >-
+      {{ machine_identity_spec | machine_identity_refusals(machine_identity_owned, machine_identity_seen.results) }}
+
+- name: Show the plan
+  ansible.builtin.debug:
+    msg:
+      blueprint: "{{ machine_identity_content.splitlines() if machine_identity_changed else 'unchanged' }}"
+      hosts: >-
+        {{ machine_identity_spec.identities
+           | map(attribute='state') | zip(machine_identity_spec.identities | map(attribute='host'),
+                                          machine_identity_spec.identities | map(attribute='secret_path'))
+           | map('join', ' ') | list }}
+  when: ansible_check_mode or ansible_diff_mode
+
+# Before Authentik changes: an unreachable host or an unsafe destination
+# stops the run while nothing has been issued or deleted yet.
+- name: Inspect every destination
+  ansible.builtin.include_tasks: host.yml
+  loop: "{{ machine_identity_spec.identities }}"
+  loop_control:
+    loop_var: machine_identity
+    label: "{{ machine_identity.host }} {{ machine_identity.profile }}"
+  vars:
+    machine_identity_phase: inspect
+  when: not ansible_check_mode
+
+# The API validates the content on create and update and refuses a blueprint
+# that does not import.
+- name: Store the blueprint
+  ansible.builtin.uri:
+    url: >-
+      {{ authentik_url }}/managed/blueprints/{{
+         (machine_identity_instance.pk ~ '/') if machine_identity_instance else '' }}
+    method: "{{ 'PATCH' if machine_identity_instance else 'POST' }}"
+    headers: "{{ authentik_headers }}"
+    body_format: json
+    body:
+      name: "{{ authentik_machine_identities_blueprint_name }}"
+      path: ""
+      content: "{{ machine_identity_content }}"
+      enabled: true
+    status_code: [200, 201]
+  register: machine_identity_stored
+  when: machine_identity_changed
+  changed_when: true
+  no_log: true
+
+- name: Apply, verify and deliver
+  when: not ansible_check_mode
+  block:
+    - name: Remember the blueprint's instance
+      ansible.builtin.set_fact:
+        machine_identity_pk: >-
+          {{ machine_identity_stored.json.pk if machine_identity_stored is changed else machine_identity_instance.pk }}
+
+    - name: Apply it
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/managed/blueprints/{{ machine_identity_pk }}/apply/"
+        method: POST
+        headers: "{{ authentik_headers }}"
+      changed_when: machine_identity_changed
+      no_log: true
+
+    - name: Wait for the result
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/managed/blueprints/{{ machine_identity_pk }}/"
+        headers: "{{ authentik_headers }}"
+      register: machine_identity_status
+      until: machine_identity_status.json.status != 'unknown'
+      retries: 10
+      delay: 3
+      no_log: true
+
+    - name: Require a clean import
+      ansible.builtin.assert:
+        that: machine_identity_status.json.status == 'successful'
+        fail_msg: >-
+          Blueprint "{{ authentik_machine_identities_blueprint_name }}" is {{ machine_identity_status.json.status }};
+          its logs are under System > Blueprints in the admin interface.
+        quiet: true
+
+    - name: Look up the result
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}{{ item.path }}"
+        headers: "{{ authentik_headers }}"
+        status_code: [200, 404]
+      loop: "{{ machine_identity_spec | machine_identity_queries(machine_identity_owned) }}"
+      loop_control:
+        label: "{{ item.kind }} {{ item.id }}"
+      register: machine_identity_result
+      no_log: true
+
+    - name: List every application
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/core/applications/?superuser_full_list=true&page_size=500"
+        headers: "{{ authentik_headers }}"
+      register: machine_identity_apps
+      no_log: true
+
+    - name: Read the shared application's policy bindings
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/policies/bindings/?target={{ machine_identity_app.pk }}&page_size=500"
+        headers: "{{ authentik_headers }}"
+      vars:
+        machine_identity_app: >-
+          {{ machine_identity_result.results | machine_identity_lookup('application', machine_identity_spec.access.slug) }}
+      register: machine_identity_bindings
+      when: machine_identity_spec.access.state == 'present'
+      no_log: true
+
+    # check_access honours for_user only for a superuser, which the access
+    # role's account is. Every application, not only the shared one: an
+    # application without bindings may admit any account.
+    - name: Ask Authentik which applications each account may open
+      ansible.builtin.uri:
+        url: "{{ authentik_url }}/core/applications/{{ item.slug }}/check_access/?for_user={{ item.pk }}"
+        headers: "{{ authentik_headers }}"
+      loop: >-
+        {%- set checks = [] -%}
+        {%- for identity in machine_identity_spec.identities if identity.state == 'present' -%}
+        {%-   set user = machine_identity_result.results | machine_identity_lookup('user', identity.username) -%}
+        {%-   for app in machine_identity_apps.json.results | default([]) -%}
+        {%-     set _ = checks.append({'username': identity.username, 'pk': user.pk | default(''), 'slug': app.slug}) -%}
+        {%-   endfor -%}
+        {%- endfor -%}
+        {{ checks }}
+      loop_control:
+        label: "{{ item.username }} / {{ item.slug }}"
+      register: machine_identity_access
+      no_log: true
+
+    - name: Compare Authentik with the declared state
+      ansible.builtin.assert:
+        that: machine_identity_problems | length == 0
+        fail_msg: "{{ machine_identity_problems }}"
+        quiet: true
+      vars:
+        machine_identity_problems: >-
+          {{ machine_identity_spec | machine_identity_problems(
+               machine_identity_result.results, machine_identity_apps.json,
+               machine_identity_bindings.json | default({}), machine_identity_access.results | default([])) }}
+
+    # Only after the checks above passed: a host never receives a credential
+    # whose account does not look exactly as declared.
+    - name: Deliver or remove each host's app password
+      ansible.builtin.include_tasks: host.yml
+      loop: "{{ machine_identity_spec.identities }}"
+      loop_control:
+        loop_var: machine_identity
+        label: "{{ machine_identity.host }} {{ machine_identity.profile }}"
+      vars:
+        machine_identity_phase: deliver

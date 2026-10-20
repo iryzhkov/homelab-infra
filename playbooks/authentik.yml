@@ -19,3 +19,9 @@
     - vars/authentik.yml
   roles:
     - authentik_config
+  tasks:
+    # Off unless enabled in vars/authentik.yml; docs/authentik-machine-identities.md.
+    - name: Enrol Chaldea machine identities
+      ansible.builtin.include_role:
+        name: authentik_machine_identities
+      when: authentik_machine_identities_enabled | default(false) | bool
