@@ -33,13 +33,12 @@ def render(values):
 
 
 class EnrollmentTest(unittest.TestCase):
-    def test_real_ordered_guards_refuse_before_host_effects(self):
-        tasks = yaml.safe_load((ROOT / "stacks/nats/swarm-prepare.yml").read_text())
-        start = next(i for i, task in enumerate(tasks)
-                     if task.get("name") == "Validate explicit messaging enrollment before host effects")
-        stop = next(i for i, task in enumerate(tasks)
-                    if task.get("name") == "Preserve maintenance guard before NATS deployment")
-        guards = tasks[start:stop]
+    def test_actual_stack_wrapper_refuses_before_deployment_effects(self):
+        tasks = yaml.safe_load((ROOT / "roles/swarm/tasks/stack.yml").read_text())
+        stop = next(i for i, task in enumerate(tasks) if task.get("name") == "Install the stack file")
+        # Run the actual wrapper through its first real deployment writes.
+        # Only relocate repository/controller paths and host destinations.
+        prefix = json.loads(json.dumps(tasks[:stop + 1]).replace("{{ playbook_dir }}/..", str(ROOT)))
         keys = {name: identity()[1] for name in ("admin", "pc", "agent-a")}
         cases = [
             ({}, True),
@@ -58,13 +57,13 @@ class EnrollmentTest(unittest.TestCase):
             directory = Path(directory)
             for index, (values, accepted) in enumerate(cases):
                 with self.subTest(index=index):
-                    marker = directory / ("effect-" + str(index))
+                    effects = directory / ("effects-" + str(index))
                     play = directory / "guard.yml"
                     play.write_text(yaml.safe_dump([{
                         "hosts": "localhost", "gather_facts": False,
-                        "vars": {**INVENTORY, **values},
-                        "tasks": guards + [{"ansible.builtin.copy": {
-                            "content": "effect", "dest": str(marker), "mode": "0600"}}],
+                        "vars": {**INVENTORY, **values, "swarm_stack": {"name": "nats"},
+                                 "swarm_deploy_root": str(effects)},
+                        "tasks": prefix,
                     }]))
                     result = subprocess.run(
                         ["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)],
@@ -72,7 +71,8 @@ class EnrollmentTest(unittest.TestCase):
                              "ANSIBLE_REMOTE_TEMP": str(directory / "remote")},
                         capture_output=True, text=True, timeout=30)
                     self.assertEqual(result.returncode, 0 if accepted else 2, result.stdout + result.stderr)
-                    self.assertEqual(marker.exists(), accepted)
+                    self.assertEqual(effects.exists(), accepted)
+                    self.assertEqual((effects / 'nats/stack.yml').exists(), accepted)
 
     def test_default_does_not_enroll_or_expand_existing_apply_selection(self):
         self.assertIs(INVENTORY["nats_messages_enabled"], False)

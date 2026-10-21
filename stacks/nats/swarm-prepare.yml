@@ -10,30 +10,6 @@
       Future host work/quota users need account isolation and new review.
     quiet: true
 
-- name: Validate explicit messaging enrollment before host effects
-  ansible.builtin.assert:
-    that:
-      - nats_messages_enabled | default(false) is boolean
-      - nats_messages_nkeys | default({}) is mapping
-      - (nats_messages_enabled | default(false)) or (nats_messages_nkeys | default({}) | length == 0)
-    quiet: true
-
-- name: Refuse incomplete or reused messaging identities
-  ansible.builtin.assert:
-    that:
-      - nats_messages_nkeys.keys() | sort == ['admin', 'agent-a', 'pc']
-      - nats_messages_nkeys.values() | unique | length == 3
-      - nats_messages_nkeys.values() | intersect(nats_nkeys.values()) | length == 0
-      - nats_messages_nkeys['admin'] | default('') is match('^U[A-Z2-7]{55}$')
-      - nats_messages_nkeys['pc'] | default('') is match('^U[A-Z2-7]{55}$')
-      - nats_messages_nkeys['agent-a'] | default('') is match('^U[A-Z2-7]{55}$')
-    fail_msg: >-
-      MESSAGES requires three distinct public user NKeys, separate from SYS
-      and CHALDEA. Generate and retain each seed only in its supported local
-      custody context; public enrollment and broker application need approval.
-    quiet: true
-  when: nats_messages_enabled | default(false)
-
 - name: Preserve maintenance guard before NATS deployment
   ansible.builtin.include_role:
     name: maintenance_guard

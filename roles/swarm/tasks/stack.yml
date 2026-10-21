@@ -61,6 +61,13 @@
 # create cannot exist in a check run; a render that fails for that reason is
 # reported, not fatal.
 
+# NATS public enrollment must fail before the wrapper writes files or labels.
+# Keep this scoped to the NATS source, including a renamed stack using it.
+- name: Validate NATS messaging enrollment before deployment effects
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/../stacks/nats/messaging-validate.yml"
+  when: (swarm_stack.source | default(swarm_stack.name)) == 'nats'
+
 - name: Lint {{ swarm_stack.name }}
   ansible.builtin.command:
     argv:

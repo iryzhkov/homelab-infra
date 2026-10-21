@@ -18,9 +18,10 @@ manage broker resources or use generic reply permissions.
 
 - Account template: stacks/nats/templates/nats.conf.j2.
 - Default inventory: nats_messages_enabled=false and nats_messages_nkeys={}.
-- Guarded enrollment: stacks/nats/swarm-prepare.yml validates boolean selection,
-  complete public keys and separation from every SYS/CHALDEA identity before
-  host effects.
+- Guarded enrollment: roles/swarm/tasks/stack.yml includes
+  stacks/nats/messaging-validate.yml before lint, deployment directories,
+  stack/secrets writes or pin labels. Validation requires boolean selection,
+  complete public keys and separation from every SYS/CHALDEA identity.
 - Streams and consumers: stacks/nats/messaging/, separate from the existing
   Akasha jetstream/ directory. scripts/nats-jetstream-apply.sh, including --all,
   continues to select only AKASHA_EVENTS. It cannot provision MESSAGES.
@@ -75,8 +76,9 @@ binding, never reset to resolve uncertainty.
 
 ## Verification and rollback
 
-scripts/test-nats-messaging.py executes the real ordered Ansible enrollment
-guards and scratch effect sentinel, renders the actual template and provisions
+scripts/test-nats-messaging.py executes the actual Swarm wrapper through its
+first deployment directory and stack-file writes in scratch. Invalid enrollment
+must fail before those effects. It renders the actual template and provisions
 the actual JSON definitions against checksum-pinned disposable NATS 2.15.1.
 It checks command/receipt delivery and ACK, separate CHALDEA account state,
 forbidden subjects/pulls/ACKs/inboxes/management/direct reads, actual server
