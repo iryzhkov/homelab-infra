@@ -76,6 +76,48 @@ accounts {
       }
     ]
   }
+{% if nats_messages_enabled | default(false) %}
+  # Separate from CHALDEA: pull API replies cannot bridge into Akasha events.
+  # Seeds remain on their enrolled hosts. No imports, exports or reply grants.
+  MESSAGES {
+    jetstream {
+      max_mem: 1MB
+      max_file: 4MB
+      max_streams: 2
+      max_consumers: 16
+      max_bytes_required: true
+      store_max_stream_bytes: 1MB
+    }
+    users: [
+      {
+        nkey: "{{ nats_messages_nkeys['admin'] }}"
+        permissions: {publish: ">", subscribe: ">"}
+      }
+      {
+        nkey: "{{ nats_messages_nkeys['pc'] }}"
+        permissions: {
+          publish: {allow: [
+            "chaldea.message.command.pc.agent_a",
+            "$JS.API.CONSUMER.MSG.NEXT.MESSAGE_RECEIPTS.source_pc_agent_a",
+            "$JS.ACK.MESSAGE_RECEIPTS.source_pc_agent_a.>"
+          ]}
+          subscribe: {allow: ["_INBOX_message.pc.>"]}
+        }
+      }
+      {
+        nkey: "{{ nats_messages_nkeys['agent-a'] }}"
+        permissions: {
+          publish: {allow: [
+            "chaldea.message.receipt.pc.agent_a",
+            "$JS.API.CONSUMER.MSG.NEXT.MESSAGE_COMMANDS.receive_pc_agent_a",
+            "$JS.ACK.MESSAGE_COMMANDS.receive_pc_agent_a.>"
+          ]}
+          subscribe: {allow: ["_INBOX_message.agent_a.>"]}
+        }
+      }
+    ]
+  }
+{% endif %}
 }
 
 websocket {
