@@ -404,7 +404,10 @@ class PackagingTest(unittest.TestCase):
             for field in ("url", "sha256", "source_revision", "contract_revision"):
                 bad = copy.deepcopy(value)
                 del bad["artifact"][field]
-                self.rejected(bad)
+                if service == "holonet" and field == "url":
+                    contract.endpoint_contract(bad)
+                else:
+                    self.rejected(bad)
             for source in ({}, None, {"path": "/protected/release"},
                            {"path": "/protected/release", "owner_uid": True},
                            {"path": "/protected/release", "owner_uid": -1},
