@@ -226,6 +226,27 @@ live token acceptance remains a qualification step.
 | Homelab | `https://homelab.mcp.ryzhkov.dev/mcp` | `homelab.read` | `homelab_services`, `homelab_hosts` |
 | HA | `https://ha.mcp.ryzhkov.dev/mcp` | `ha.read` initially; explicit `ha.control` allowed | `ha_entities`, `ha_actions` |
 
+The catalog-only HoloNet profile uses fixed resource
+https://media.mcp.ryzhkov.dev/mcp and scope holonet.read. Its seven explicit
+holonet_* fields match the accepted HoloNet server contract: one hex32 server,
+one canonical decimal library ID (positive int64), one hex32 catalog user,
+empty history/target user arrays, [catalog.read] actions and an explicit
+[a-z][a-z0-9-]{0,31} namespace. Private operator inventory must establish TV
+and Movies; names are not inferred from IDs. No UserData, history, curate,
+home or combined scopes can be enrolled through this initial profile.
+Missing fields, nulls, duplicates, multiple users/libraries or broader actions
+are refused before any issuer lookup or secret read.
+
+The existing owned blueprint/account, signer check, delivery and cleanup path
+is reused. chaldea_holonet is a separate ordinary service-account attribute.
+The scope mapping emits claims only for token.scope exactly [holonet.read],
+exact declared user/group/grant equality and the fixed media audience.
+Extra scope combinations emit no HoloNet resource claims; no array deepmerge
+can widen this one-mapping profile. The synthetic fixture holonet-catalog.json
+is shared byte-for-byte with Chaldea's helper tests. The actual-role fixture
+proves protected fake-secret delivery, second convergence changed0 and owned
+cleanup; no real enrollment or native renewal is established.
+
 All profiles issue 300-second access tokens. OV stores its grant in
 `chaldea_ov`, homelab in `chaldea_homelab` and HA in `chaldea_ha`.
 Their scope mappings emit only

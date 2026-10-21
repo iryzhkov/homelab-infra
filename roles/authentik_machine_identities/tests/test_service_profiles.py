@@ -1,10 +1,12 @@
 """Closed web MCP profiles. All issuer/host operations use the synthetic real-role fixture."""
 import copy
+import json
+from pathlib import Path
 import importlib.util
 import time
 from unittest import mock
 from importlib.metadata import version
-from itertools import permutations
+from itertools import combinations, permutations
 import types
 import unittest
 
@@ -21,7 +23,7 @@ def access(service, origin="https://auth.example.test"):
     return base.ACCESS | {
         "slug": "chaldea-" + service, "name": "Chaldea " + service + " machine access",
         "group": "chaldea-" + service + "-machine-identities", "client_id": "chaldea-" + service + "-machine",
-        "resource": "https://" + service + ".mcp.ryzhkov.dev/mcp", "scope": service + ".read",
+        "resource": "https://" + ("media" if service == "holonet" else service) + ".mcp.ryzhkov.dev/mcp", "scope": service + ".read",
         "issuer": origin + "/application/o/chaldea-" + service + "/",
         "jwks_url": origin + "/application/o/chaldea-" + service + "/jwks/",
     }
@@ -33,6 +35,9 @@ def identity(service):
     grants = {"ov": {"ov_namespaces": ["viking://resources/namespaceA"]},
               "homelab": {"homelab_services": ["dns"], "homelab_hosts": ["host-a"]},
               "ha": {"ha_entities": ["sensor.a"], "ha_actions": ["state.read"]}}
+    if service == "holonet":
+        golden = json.loads((Path(__file__).parent / "holonet-catalog.json").read_text())
+        return item | {key: golden[key] for key in mi.HOLONET_FIELDS}
     return item | grants[service]
 
 
@@ -65,6 +70,50 @@ def merged_claims(mappings, user, group, requested):
 
 
 class ProfileTest(unittest.TestCase):
+    def test_holonet_catalog_contract_and_composed_scope_denials(self):
+        item = identity("holonet")
+        s = spec([item], {"holonet": access("holonet")})
+        app = s["services"]["holonet"]
+        user = types.SimpleNamespace(username=s["identities"][0]["username"], type="service_account",
+                                     attributes=copy.deepcopy(s["identities"][0]["grant_attributes"]))
+        mappings = [{"scope_name": key, "expression": value}
+                    for key, value in app["scope_expressions"].items()]
+        expected = {"aud": app["resource"]} | s["identities"][0]["grant"]
+        self.assertEqual(merged_claims(mappings, user, app["group"], ["holonet.read"]), expected)
+        self.assertEqual(set(expected), mi.HOLONET_FIELDS | {"aud"})
+        # No combined scope can append/widen claims or turn another application's token into HoloNet.
+        scopes = ("holonet.read", "holonet.curate", "holonet.home")
+        requests = [list(order) for size in range(1, 4) for selected in combinations(scopes, size)
+                    for order in permutations(selected)]
+        for requested in requests + [[], ["ha.read"], ["holonet.read", "holonet.read"]]:
+            self.assertEqual(merged_claims(mappings, user, app["group"], requested),
+                             expected if requested == ["holonet.read"] else {})
+        for key, value in (("holonet_server", "c" * 32), ("holonet_libraries", ["456"]),
+                           ("holonet_catalog_users", ["c" * 32]), ("holonet_namespace", "other")):
+            changed = copy.deepcopy(user)
+            changed.attributes["chaldea_holonet"][key] = value
+            self.assertEqual(merged_claims(mappings, changed, app["group"], ["holonet.read"]), {})
+        for foreign in ("ha", "ov", "homelab"):
+            other = spec([identity(foreign)], {foreign: access(foreign)})["services"][foreign]
+            self.assertEqual(evaluate(other["expression"], user, other["group"]), {})
+        self.assertEqual(evaluate(app["expression"], user, "foreign", ["holonet.read"]), {})
+        for key, bad in (("holonet_libraries", ["0"]), ("holonet_libraries", ["01"]),
+                         ("holonet_libraries", [str(2**63)]), ("holonet_libraries", ["123", "456"]),
+                         ("holonet_catalog_users", []), ("holonet_catalog_users", ["B" * 32]),
+                         ("holonet_server", "a" * 31), ("holonet_namespace", "Bad"),
+                         ("holonet_history_users", ["b" * 32]), ("holonet_target_users", ["b" * 32]),
+                         ("holonet_actions", ["catalog.read", "userdata.read"])):
+            with self.subTest(key=key, bad=bad), self.assertRaises(mi.AnsibleFilterError):
+                spec([item | {key: bad}], {"holonet": access("holonet")})
+        for scope in ("holonet.curate", "holonet.read holonet.home", "holonet.read holonet.read"):
+            with self.assertRaises(mi.AnsibleFilterError):
+                spec([], {"holonet": access("holonet") | {"scope": scope}})
+        for key in mi.HOLONET_FIELDS:
+            missing = dict(item)
+            del missing[key]
+            with self.assertRaises(mi.AnsibleFilterError):
+                spec([missing], {"holonet": access("holonet")})
+
     def test_legacy_shape_names_and_ownership_remain_compatible(self):
         old = base.spec([base.identity()])
         explicit = spec([base.identity() | {"service": "jocasta"}], {"jocasta": base.ACCESS})
@@ -197,6 +246,33 @@ class ProfileTest(unittest.TestCase):
             # The same account/subject cannot reuse a previous grant or widen it.
             user.attributes["chaldea_" + item["service"]] = {"ov_namespaces": ["viking://resources/other"]}
             self.assertEqual(evaluate(own["expression"], user, own["group"]), {})
+
+
+class HolonetRoleTest(unittest.TestCase):
+    def test_catalog_profile_actual_role_custody_noop_and_owned_cleanup(self):
+        x = base.Scratch(self)
+        origin = f"https://127.0.0.1:{x.server.server_port}"
+        app = access("holonet", origin)
+        item = identity("holonet")
+        code, output = x.run([item], services={"holonet": app})
+        self.assertEqual(code, 0, output)
+        username = "chaldea-agent-one-" + item["profile"]
+        user = types.SimpleNamespace(**x.state.users[username])
+        mapping = x.state.mappings[app["name"] + ": holonet.read"]["expression"]
+        self.assertEqual(evaluate(mapping, user, app["group"], ["holonet.read"]),
+                         {"aud": app["resource"]} | {key: item[key] for key in mi.HOLONET_FIELDS})
+        secret = x.secret("agent-one", item["profile"])
+        self.assertEqual(secret.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(secret.stat().st_nlink, 1)
+        code, output = x.run([item], services={"holonet": app})
+        self.assertEqual(code, 0, output)
+        self.assertEqual(x.changed(output), 0)
+        code, output = x.run([item | {"state": "absent"}],
+                             services={"holonet": app | {"state": "absent"}})
+        self.assertEqual(code, 0, output)
+        self.assertFalse(secret.exists())
+        self.assertNotIn(username, x.state.users)
+        self.assertEqual(set(x.state.apps), {"budget"})
 
 
 class MultiServiceRoleTest(unittest.TestCase):

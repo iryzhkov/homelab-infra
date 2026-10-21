@@ -238,6 +238,27 @@ def _ha_grant(item, name):
     return grant, {"chaldea_ha": grant}
 
 
+HOLONET_FIELDS = {"holonet_server", "holonet_libraries", "holonet_catalog_users",
+                  "holonet_history_users", "holonet_target_users", "holonet_actions", "holonet_namespace"}
+
+
+def _holonet_grant(item, name):
+    # Initial catalog-only profile deliberately cannot enroll broader roadmap actions.
+    grant = {key: item[key] for key in sorted(HOLONET_FIELDS)}
+    _match(re.compile(r"[0-9a-f]{32}\Z"), grant["holonet_server"], name + " server")
+    _match(re.compile(r"[a-z][a-z0-9-]{0,31}\Z"), grant["holonet_namespace"], name + " namespace")
+    grant["holonet_libraries"] = _bounded_grants(grant["holonet_libraries"], name + " libraries",
+                                                re.compile(r"[1-9][0-9]{0,18}\Z"), 1, 1)
+    if int(grant["holonet_libraries"][0]) > 9223372036854775807:
+        _refuse(name + " library ID exceeds int64")
+    grant["holonet_catalog_users"] = _bounded_grants(grant["holonet_catalog_users"], name + " users",
+                                                    re.compile(r"[0-9a-f]{32}\Z"), 1, 1)
+    if (grant["holonet_history_users"] != [] or grant["holonet_target_users"] != []
+            or grant["holonet_actions"] != ["catalog.read"]):
+        _refuse(name + " requires catalog.read only and empty history/target grants")
+    return grant, {"chaldea_holonet": grant}
+
+
 def _bounded_expression(access, service, scope=None):
     # The allowlist is embedded from the validated operator declaration, never
     # from request parameters. Require an exact account grant and group membership.
@@ -251,7 +272,13 @@ def _bounded_expression(access, service, scope=None):
         "        or user.username not in expected or grant != expected[user.username]):",
         "    return {}",
     ]
-    if service == "ha":
+    if service == "holonet":
+        lines += [
+            "if token.scope != ['holonet.read']:",
+            "    return {}",
+            f"return dict(grant, aud={access['resource']!r})",
+        ]
+    elif service == "ha":
         # Authentik 2026.8.4 get_claims evaluates requested mappings with token
         # and deepmerge appends arrays. Elect one selected mapping to emit both
         # arrays exactly once, even when both scopes are requested. token.scope
@@ -277,6 +304,8 @@ def _bounded_expression(access, service, scope=None):
 
 
 SERVICES = {
+    "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS, "scope": "holonet.read",
+                "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},
     "jocasta": SERVICE,
     "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "scope": "ov.read",
            "resource": "https://ov.mcp.ryzhkov.dev/mcp", "grant": _ov_grant},
