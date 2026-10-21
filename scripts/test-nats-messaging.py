@@ -172,6 +172,19 @@ class MessagingBrokerTest(unittest.IsolatedAsyncioTestCase):
         self.clients.append(client)
         return client, errors
 
+    async def pull(self, client, stream, consumer):
+        # Pull delivery retains the stored original subject. A general request
+        # multiplexer routes by response subject and cannot correlate that.
+        inbox = client.new_inbox()
+        subscription = await client.subscribe(inbox)
+        try:
+            await client.flush()
+            await client.publish("$JS.API.CONSUMER.MSG.NEXT." + stream + "." + consumer,
+                                 b'{"batch":1,"expires":1000000000}', reply=inbox)
+            return await subscription.next_msg(timeout=2)
+        finally:
+            await subscription.unsubscribe()
+
     async def denied(self, client, errors, subject, subscribe=False):
         if subscribe:
             await client.subscribe(subject)
@@ -186,15 +199,11 @@ class MessagingBrokerTest(unittest.IsolatedAsyncioTestCase):
         target, target_errors = await self.connect("agent-a")
         ack = await pc.jetstream().publish(COMMAND, b"fixed-harmless-command")
         self.assertEqual(ack.stream, "MESSAGE_COMMANDS")
-        message = await target.request(
-            "$JS.API.CONSUMER.MSG.NEXT.MESSAGE_COMMANDS.receive_pc_agent_a",
-            b'{"batch":1,"expires":1000000000}', timeout=2)
+        message = await self.pull(target, "MESSAGE_COMMANDS", "receive_pc_agent_a")
         self.assertEqual(message.data, b"fixed-harmless-command")
         await target.publish(message.reply)
         await target.jetstream().publish(RECEIPT, b"accepted")
-        receipt = await pc.request(
-            "$JS.API.CONSUMER.MSG.NEXT.MESSAGE_RECEIPTS.source_pc_agent_a",
-            b'{"batch":1,"expires":1000000000}', timeout=2)
+        receipt = await self.pull(pc, "MESSAGE_RECEIPTS", "source_pc_agent_a")
         self.assertEqual(receipt.data, b"accepted")
         await pc.publish(receipt.reply)
         await pc.flush()
