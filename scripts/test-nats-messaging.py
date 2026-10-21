@@ -242,13 +242,14 @@ class MessagingBrokerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stream.config.discard, "new")
             self.assertTrue(stream.config.discard_new_per_subject)
             self.assertFalse(stream.config.allow_direct)
-            config = (await self.js.consumer_info(name, consumer)).config
-            self.assertEqual(config.ack_wait, 60)
-            self.assertEqual(config.max_deliver, 5)
-            self.assertEqual(config.max_ack_pending, 32)
-            self.assertEqual(config.max_waiting, 32)
-            self.assertEqual(config.max_batch, 1)
-            self.assertEqual(config.max_expires, 1)
+            response = await self.admin.request("$JS.API.CONSUMER.INFO." + name + "." + consumer, timeout=2)
+            config = json.loads(response.data)["config"]
+            self.assertEqual(config["ack_wait"], 60000000000)
+            self.assertEqual(config["max_deliver"], 5)
+            self.assertEqual(config["max_ack_pending"], 32)
+            self.assertEqual(config["max_waiting"], 32)
+            self.assertEqual(config["max_batch"], 1)
+            self.assertEqual(config["max_expires"], 1000000000)
         with self.assertRaises(nats.js.errors.APIError):
             await pc.jetstream().publish(COMMAND, b"x" * 8193)
         for _ in range(32):
