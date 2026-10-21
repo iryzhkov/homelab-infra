@@ -1,7 +1,7 @@
-# HA and homelab observer packaging source
+# Guarded web MCP endpoint packaging source
 
-This slice packages two reviewed service interfaces as static Linux amd64
-binaries. It does not enroll identities, publish releases, obtain credentials,
+This slice packages reviewed HA, observer and catalog-only HoloNet interfaces
+as static Linux amd64 binaries. It does not enroll identities, publish releases, obtain credentials,
 activate production inventory, or establish runtime acceptance. Deploy and config
 source belongs in homelab-infra. These playbooks are not imported by site.yml.
 
@@ -22,7 +22,7 @@ The required `web_mcp_endpoint` object has exactly these fields:
 
 | Field | Meaning |
 | --- | --- |
-| service | Only `ha-mcp` or `homelab-observer` |
+| service | Only `ha-mcp`, `homelab-observer` or `holonet` |
 | uid, gid | Explicit unused dedicated system UID/GID, integers 100..999 |
 | listen | Explicit private/loopback IPv4 and unprivileged port, no wildcard |
 | artifact | Required `url`, `sha256`, `source_revision`, `contract_revision`; optional `local_source` |
@@ -106,6 +106,45 @@ module `mcp-observer/`. The integration owner reported PR20 merged after
 push39377683292 and PR39377687338 succeeded at exact e713583. The observer
 interface remains accepted at 8af2460. This also establishes source publication
 only; no binary release asset or deployment is claimed.
+
+## HoloNet catalog-only boundary
+
+The accepted HoloNet command/package interface is homelab-cli
+4aceab9770f0098b4369e37657f6b64051884baf (PR23 on PR22).
+Both artifact source_revision and contract_revision must equal that pin.
+For HoloNet with local_source, url may be omitted: an unpublished exact Chaldea
+artifact does not have a release URL. If supplied it is still validated; no URL
+fetch occurs. All descriptor, static-byte, transfer-binding and target gates
+above are reused unchanged, not reimplemented. The artifact is not a secret;
+backend credentials remain separate protected operator inputs.
+
+Config requires exactly resource, issuer, jwks_url, server_id, backend_url,
+credential_file, policy_revision, policy, library_guids. Resource is fixed
+https://media.mcp.ryzhkov.dev/mcp. Canonical HTTPS issuer/JWKS; trusted HTTPS
+backend /emby or exact http://127.0.0.1:8096/emby only. Server is hex32;
+policy revision40..64hex. Policy has exact Server/Actions/Libraries/CatalogUsers/
+HistoryUsers keys, server equal to configured server, Actions [catalog.read],
+HistoryUsers empty, exactly one decimal library and one hex32 user. Private
+operator inventory must establish those refer to Movies and TV; source validates
+IDs, not human names. library_guids maps that decimal ItemId to hex32 virtual-folder
+Guid, a distinct installed UserPolicy namespace. No UserData/history, playlist,
+collection, home or mutation capability is enabled.
+
+Credential path is fixed /etc/holonet/backend.json with the accepted binary's
+strict single api_key string object, supplied out of band. No operator/admin
+credential fallback is authorized. A least-privilege backend identity and actual
+disabled/folder/tag/subfolder ACL qualification remain separate live gates.
+The exact binary --check-config runs as dedicated holonet identity after config
+installation and before credential copying or unit installation/activation;
+it opens no runtime secret or network. Existing unit hardening/private bind and
+owned exact MCP/discovery route are reused; health stays private.
+
+Igor adopted catalog-only qualification first in plan
+jocasta:3d249002623f32471f6b6bc617526f20@6. No runtime action follows from source.
+P0 playlist/client/audience/cleanup gates remain unwaived. Actual target host,
+UID/GID/port, protected backend identity, Authentik enrollment, helper/trust,
+ingress/network/TLS and native renewal require separate concrete operator scope.
+Activation packet jocasta:722e6f93b96e74c6291c3e741eab4641 owns those remaining gates.
 
 ## Service config and custody
 
@@ -257,7 +296,7 @@ credentials, release directories or other owners' files.
 
 OV now has separate bounded Compose packaging source in [ov-http-compose.md](ov-http-compose.md).
 It shares only the route role and guarded Compose seam. The static endpoint
-profile remains limited to HA and the observer. OV image/runtime qualification
+profile includes HA, the observer and catalog-only HoloNet. OV image/runtime qualification
 and deployment remain later operator gates.
 
 ## Isolated validation

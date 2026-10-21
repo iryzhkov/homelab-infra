@@ -13,7 +13,7 @@ Group={{ web_mcp.gid }}
 WorkingDirectory=/
 Environment=HOME=/nonexistent
 Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-ExecStart=/opt/web-mcp/{{ web_mcp.service }}/releases/{{ web_mcp.artifact.sha256 }}/{{ web_mcp.service }}{% if web_mcp.service == 'ha-mcp' %} -config /etc/ha-mcp/config.json{% else %} --config /etc/homelab-observer/config.json --listen {{ web_mcp.listen }}{% endif %}
+ExecStart=/opt/web-mcp/{{ web_mcp.service }}/releases/{{ web_mcp.artifact.sha256 }}/{{ web_mcp.service }}{% if web_mcp.service == 'ha-mcp' %} -config /etc/ha-mcp/config.json{% else %} --config /etc/{{ web_mcp.service }}/config.json --listen {{ web_mcp.listen }}{% endif %}
 
 Restart=on-failure
 RestartSec=5s

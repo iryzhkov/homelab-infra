@@ -1,5 +1,5 @@
 #!/usr/bin/python
-"""Read-only preflight for the two fixed web MCP packages and route files."""
+"""Read-only preflight for fixed web MCP packages and owned route files."""
 import grp
 import hashlib
 import os
@@ -11,7 +11,7 @@ import subprocess
 
 from ansible.module_utils.basic import AnsibleModule
 
-SERVICES = ("ha-mcp", "homelab-observer")
+SERVICES = ("ha-mcp", "homelab-observer", "holonet")
 EDGE = Path("/home/igor/apps/traefik/file_provider")
 PACKAGE_ROOT = Path("/opt/web-mcp")
 
@@ -85,8 +85,8 @@ def endpoint(service, uid, gid, sha256, credential_names):
     inspect(unit, {0}, exact_mode=0o644)
     inspect(config / "config.json", {0, uid}, exact_mode=0o600)
     for name in credential_names:
-        need(name == "backend-token" if service == "ha-mcp"
-             else name.startswith("gatus-") and name.endswith(".json") and "/" not in name)
+        need(name == "backend-token" if service == "ha-mcp" else
+             name == "backend.json" if service == "holonet" else name.startswith("gatus-") and name.endswith(".json") and "/" not in name)
         inspect(config / name, {0, uid}, exact_mode=0o600)
     inspect(root / "releases" / sha256 / service, {0}, exact_mode=0o555)
 

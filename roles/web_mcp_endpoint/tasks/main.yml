@@ -167,6 +167,19 @@
       diff: false
       register: web_mcp_config
 
+    - name: Validate HoloNet config as the runtime identity without opening credentials
+      ansible.builtin.command:
+        argv:
+          - "/opt/web-mcp/holonet/releases/{{ web_mcp.artifact.sha256 }}/holonet"
+          - --config
+          - /etc/holonet/config.json
+          - --check-config
+      become: true
+      become_user: "{{ web_mcp.service }}"
+      changed_when: false
+      no_log: true
+      when: web_mcp.service == 'holonet' and not ansible_check_mode
+
     - name: Install separately supplied protected backend credentials
       ansible.builtin.copy:
         src: "{{ item.source }}"
