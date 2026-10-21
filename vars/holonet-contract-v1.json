@@ -1,0 +1,193 @@
+{
+  "contract": "holonet.emby.v1",
+  "status": "candidate-p0-not-activated",
+  "resource": "https://media.mcp.ryzhkov.dev/mcp",
+  "discovery": "https://media.mcp.ryzhkov.dev/.well-known/oauth-protected-resource/mcp",
+  "issuer": "https://auth.ryzhkov.dev/application/o/chaldea-holonet/",
+  "jwks_url": "https://auth.ryzhkov.dev/application/o/chaldea-holonet/jwks/",
+  "trust_status": "proposed fixed provider spelling; actual issuer/provider/signer must be qualified before enrollment",
+  "algorithm": "RS256",
+  "audience_form": "exact scalar string only",
+  "limits": {
+    "token_bytes": 8192,
+    "decoded_payload_bytes": 4096,
+    "url_bytes": 2048,
+    "lifetime_seconds": 300,
+    "clock_skew_seconds": 30,
+    "subject_bytes": 128,
+    "scope_bytes": 256,
+    "library_ids": 32,
+    "user_ids_per_field": 16,
+    "actions": 16,
+    "namespace_bytes": 32,
+    "jwks_bytes": 65536,
+    "jwks_keys": 8,
+    "jwks_timeout_seconds": 5
+  },
+  "claims": {
+    "required": [
+      "iss",
+      "aud",
+      "sub",
+      "iat",
+      "exp",
+      "scope",
+      "holonet_server",
+      "holonet_libraries",
+      "holonet_catalog_users",
+      "holonet_history_users",
+      "holonet_target_users",
+      "holonet_actions",
+      "holonet_namespace"
+    ],
+    "namespace_grammar": "^[a-z][a-z0-9-]{0,31}$",
+    "arrays": "explicit, duplicate-free, bounded arrays; no wildcard, coercion, sorting, truncation or silent deduplication; empty means no grant",
+    "json": "reject duplicate object keys at every level and noninteger/bool time claims; reject unknown holonet_* fields",
+    "time": "require integer iat and exp, 0 < exp-iat <= 300, iat <= now+30 and now < exp+30; optional nbf must be integer with iat <= nbf < exp and nbf <= now+30",
+    "subject": "1..128 printable ASCII bytes, no whitespace or control characters",
+    "scopes": "space-delimited nonempty distinct known scope names, exactly one ASCII space between names; requested scope never substitutes for issued scope",
+    "id_grammars": {
+      "server_id": "^[0-9a-f]{32}$",
+      "user_id": "^[0-9a-f]{32}$",
+      "library_or_media_id": "^[1-9][0-9]{0,18}$; canonical decimal string, numeric value <= 9223372036854775807; never coerce number to string",
+      "home_row_id": "^[A-Za-z0-9_-]{1,128}$; opaque per-server/per-user namespace; includes native resume"
+    }
+  },
+  "scopes": {
+    "holonet.read": [
+      "catalog.read",
+      "userdata.read",
+      "history.read",
+      "playlist.read",
+      "collection.read",
+      "home.read"
+    ],
+    "holonet.curate": [
+      "playlist.manage",
+      "collection.manage",
+      "object.share",
+      "object.delete"
+    ],
+    "holonet.home": [
+      "home.manage"
+    ]
+  },
+  "actions": {
+    "catalog.read": {
+      "users": "holonet_catalog_users",
+      "libraries": true
+    },
+    "userdata.read": {
+      "users": "holonet_history_users",
+      "libraries": true
+    },
+    "history.read": {
+      "users": "holonet_history_users",
+      "libraries": true
+    },
+    "playlist.read": {
+      "users": "holonet_catalog_users",
+      "libraries": true
+    },
+    "collection.read": {
+      "users": "holonet_catalog_users",
+      "libraries": true
+    },
+    "home.read": {
+      "users": "holonet_catalog_users",
+      "libraries": true
+    },
+    "playlist.manage": {
+      "users": "holonet_target_users",
+      "libraries": true,
+      "owned": true
+    },
+    "collection.manage": {
+      "users": "holonet_target_users",
+      "libraries": true,
+      "owned": true
+    },
+    "object.share": {
+      "users": "holonet_target_users",
+      "libraries": true,
+      "owned": true,
+      "qualification": "complete explicit audience and private-history release policy required"
+    },
+    "object.delete": {
+      "users": "holonet_target_users",
+      "libraries": true,
+      "owned": true,
+      "qualification": "managed object only; never media item delete"
+    },
+    "home.manage": {
+      "users": "holonet_target_users",
+      "libraries": true,
+      "owned": true,
+      "qualification": "stable ID ownership and client rendering proof required"
+    }
+  },
+  "enforcement": [
+    "valid JWT intersect signed grants intersect current operator policy intersect backend user restrictions intersect ownership intersect action",
+    "all grants bind one configured holonet_server; no request chooses a broader backend/user",
+    "catalog user context does not grant userdata/history disclosure; strip UserData unless separately authorized",
+    "cache/cursor/journal bind complete effective authority, policy revision and request/run context",
+    "sharing must not widen playback, publish private explanations or substitute global public for selected audience",
+    "no mutation enabled until qualified installed API and named operator authority",
+    "scope combinations emit each claim once; test all 7 nonempty combinations and every ordering against final merged issuer output"
+  ],
+  "forbidden_dispatch": [
+    {
+      "method": "DELETE",
+      "path": "/Items/{mediaId}"
+    },
+    {
+      "method": "POST",
+      "path": "/Items/Delete"
+    },
+    {
+      "method": "POST",
+      "path": "/Users/{userId}/Policy"
+    },
+    {
+      "method": "POST",
+      "path": "/Users/{userId}/Configuration"
+    },
+    {
+      "method": "POST",
+      "path": "/Library/VirtualFolders/LibraryOptions"
+    },
+    {
+      "method": "POST",
+      "path": "/Users/{userId}/PlayedItems/{itemId}"
+    },
+    {
+      "method": "POST",
+      "path": "/Users/{userId}/FavoriteItems/{itemId}"
+    },
+    {
+      "method": "POST",
+      "path": "/Items/{mediaId}/Refresh"
+    },
+    {
+      "method": "GET",
+      "path": "/user_usage_stats/user_manage/{Action}/{Id}"
+    },
+    {
+      "method": "GET",
+      "path": "/user_usage_stats/load_backup"
+    },
+    {
+      "method": "GET",
+      "path": "/user_usage_stats/save_backup"
+    },
+    {
+      "method": "POST",
+      "path": "/user_usage_stats/submit_custom_query"
+    },
+    {
+      "method": "ANY",
+      "path": "unregistered method/path or arbitrary URL, SQL, shell, filesystem path"
+    }
+  ],
+  "qualification": "Candidate contract data for enrollment/helper/service consumers. No consumer or runtime activation is claimed. Forbidden vectors apply to HoloNet service adapters; the preexisting Ansible preference/library reconciler is a separate operator path. Installed Emby4.10.1.0 read-only preflight corrected library/media decimal ID grammar and native home resume identifier. Optional UserDataPlayCount/UserDataLastPlayedDate fields must be explicitly requested before interpreting those values. Plugin GET mutation routes are explicitly forbidden."
+}
