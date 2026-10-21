@@ -1,0 +1,15 @@
+{
+  "durable_name": "receive_pc_agent_a",
+  "name": "receive_pc_agent_a",
+  "filter_subject": "chaldea.message.command.pc.agent_a",
+  "deliver_policy": "all",
+  "ack_policy": "explicit",
+  "ack_wait": 60000000000,
+  "max_deliver": 5,
+  "max_ack_pending": 32,
+  "max_waiting": 32,
+  "max_batch": 1,
+  "max_expires": 1000000000,
+  "replay_policy": "instant",
+  "metadata": {}
+}

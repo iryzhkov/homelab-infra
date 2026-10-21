@@ -21,6 +21,12 @@
 nats_chaldea_hosts: []
 nats_optional_hosts: []
 
+# Disabled canonical first messaging route, omarchy-pc -> agent-a.
+# Enrollment is a separately approved operation, not implied by this source.
+# Only public user keys named admin, pc and agent-a may be supplied.
+nats_messages_enabled: false
+nats_messages_nkeys: {}
+
 nats_nkeys:
   # SYS account: server monitoring. Seed on omarchy-pc (operator).
   sys-admin: UCXIVLDXTUCTS4L27OVV7OEFJXATRC2GQGFAD24NAQHUEDXI3A7R4AUY

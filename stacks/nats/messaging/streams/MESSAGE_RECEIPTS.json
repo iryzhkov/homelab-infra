@@ -1,0 +1,25 @@
+{
+  "name": "MESSAGE_RECEIPTS",
+  "description": "Disabled first messaging route; provision only under approved MESSAGES enrollment.",
+  "subjects": [
+    "chaldea.message.receipt.pc.agent_a"
+  ],
+  "retention": "workqueue",
+  "storage": "file",
+  "num_replicas": 1,
+  "discard": "new",
+  "max_consumers": 8,
+  "max_msgs": 256,
+  "max_bytes": 1048576,
+  "max_age": 120000000000,
+  "max_msg_size": 8192,
+  "max_msgs_per_subject": 32,
+  "discard_new_per_subject": true,
+  "duplicate_window": 60000000000,
+  "allow_direct": false,
+  "allow_rollup_hdrs": false,
+  "deny_delete": true,
+  "deny_purge": false,
+  "compression": "none",
+  "metadata": {}
+}
