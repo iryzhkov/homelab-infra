@@ -1,0 +1,17 @@
+{
+  "audience": "holonet",
+  "scope": "holonet.read",
+  "holonet_server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "holonet_libraries": [
+    "123"
+  ],
+  "holonet_catalog_users": [
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ],
+  "holonet_history_users": [],
+  "holonet_target_users": [],
+  "holonet_actions": [
+    "catalog.read"
+  ],
+  "holonet_namespace": "synthetic"
+}
