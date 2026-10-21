@@ -70,6 +70,20 @@ def fixture(service="ha-mcp"):
         }
         value["credentials"] = [{"name": "backend-token",
                                  "source": "/protected/synthetic-input", "source_uid": 1000}]
+    elif service == "holonet":
+        value["artifact"]["source_revision"] = contract.SERVICES[service][1]
+        value["config"] = {
+            "resource": "https://media.mcp.ryzhkov.dev/mcp",
+            "issuer": "https://auth.example.invalid/application/o/holonet/",
+            "jwks_url": "https://auth.example.invalid/application/o/holonet/jwks/",
+            "server_id": "a" * 32, "backend_url": "http://127.0.0.1:8096/emby",
+            "credential_file": "/etc/holonet/backend.json", "policy_revision": "b" * 40,
+            "policy": {"Server": "a" * 32, "Actions": ["catalog.read"],
+                       "Libraries": ["1"], "CatalogUsers": ["c" * 32], "HistoryUsers": []},
+            "library_guids": {"1": "d" * 32},
+        }
+        value["credentials"] = [{"name": "backend.json",
+                                 "source": "/protected/holonet-backend", "source_uid": 1000}]
     else:
         value["config"] = {
             "resource": "https://homelab.mcp.example.invalid/mcp",
@@ -116,6 +130,52 @@ class PackagingTest(unittest.TestCase):
         contract.endpoint_contract(value)
         value["config"]["gatus"][0]["token_file"] = "/legacy"
         self.rejected(value)
+
+    def test_holonet_catalog_only_contract_and_protected_artifact(self):
+        value = fixture("holonet")
+        artifact = value["artifact"]
+        del artifact["url"]
+        artifact["local_source"] = {"path": "/protected/holonet-binary", "owner_uid": 1000}
+        self.assertEqual(contract.endpoint_contract(value), value)
+        for field, bad in (("local_source", {"path": "/protected/../binary", "owner_uid": 1000}),
+                           ("source_revision", "a" * 40), ("source", "/unregistered")):
+            broken = copy.deepcopy(value)
+            broken["artifact"][field] = bad
+            self.rejected(broken)
+        for field, bad in (("resource", "https://other.mcp.ryzhkov.dev/mcp"),
+                           ("credential_file", "/root/operator-key"),
+                           ("backend_url", "http://192.168.70.240:8096/emby"),
+                           ("backend_url", "https://example.invalid/emby?key=unsafe"),
+                           ("server_id", "a" * 31), ("library_guids", {"1": "1"})):
+            broken = copy.deepcopy(value)
+            broken["config"][field] = bad
+            self.rejected(broken)
+        for field, bad in (("Actions", ["catalog.read", "userdata.read"]),
+                           ("Actions", ["playlist.manage"]), ("HistoryUsers", ["e" * 32]),
+                           ("Libraries", ["1", "2"]), ("Libraries", ["01"]),
+                           ("Libraries", [str(2**63)]), ("CatalogUsers", []),
+                           ("CatalogUsers", ["c" * 32, "e" * 32]), ("Server", "f" * 32)):
+            broken = copy.deepcopy(value)
+            broken["config"]["policy"][field] = bad
+            self.rejected(broken)
+        edge = route()
+        edge.update(service="holonet", resource=value["config"]["resource"])
+        self.assertEqual(contract.route_contract(edge)["host"], "media.mcp.ryzhkov.dev")
+        edge["resource"] = "https://wrong.example.invalid/mcp"
+        with self.assertRaises(AnsibleFilterError):
+            contract.route_contract(edge)
+        # Protected binary transport reuses the existing no-follow single-link source gate.
+        tasks = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text())[0]["block"]
+        names = [task["name"] for task in tasks]
+        self.assertLess(names.index("Validate protected local artifact bytes before managed writes"),
+                        names.index("Create the dedicated system group"))
+        self.assertLess(names.index("Validate HoloNet config as the runtime identity without opening credentials"),
+                        names.index("Install separately supplied protected backend credentials"))
+        check = next(task for task in tasks if task["name"].startswith("Validate HoloNet config"))
+        self.assertIn("--check-config", check["ansible.builtin.command"]["argv"])
+        self.assertTrue(check["no_log"])
+        self.assertFalse(check["changed_when"])
+        self.assertEqual(check["become_user"], "{{ web_mcp.service }}")
 
     def test_observer_url_byte_limits_and_escaped_paths(self):
         for field in ("issuer", "jwks_url"):
@@ -271,8 +331,9 @@ class PackagingTest(unittest.TestCase):
             self.assertIn("CapabilityBoundingSet=\n", unit)
             self.assertIn("/releases/" + "a" * 64 + "/" + service, unit)
             self.assertNotIn("ReadWritePaths", unit)
-            if service == "homelab-observer":
+            if service in ("homelab-observer", "holonet"):
                 self.assertIn("--listen 192.168.70.240:8787", unit)
+                self.assertIn("--config /etc/" + service + "/config.json", unit)
 
     def test_protected_paths_reject_links_modes_and_unowned_route(self):
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as scratch:

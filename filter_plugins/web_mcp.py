@@ -8,6 +8,7 @@ from ansible.errors import AnsibleFilterError
 SERVICES = {
     "ha-mcp": ("homeassistant-mcp", "027505484cf33947e64f5232cf17a1ff0d96d522"),
     "homelab-observer": ("homelab-cli", "8af24606b7cf5cd89e727660266104699313e993"),
+    "holonet": ("homelab-cli", "4aceab9770f0098b4369e37657f6b64051884baf"),
 }
 
 
@@ -194,22 +195,58 @@ def observer_config(config):
     return credentials
 
 
+def holonet_config(config):
+    keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
+                  "credential_file", "policy_revision", "policy", "library_guids"))
+    require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
+            "HoloNet resource is fixed")
+    trust(config, "resource", "issuer", ha_canonical_url)
+    match(config["server_id"], r"[0-9a-f]{32}")
+    match(config["policy_revision"], r"[0-9a-f]{40,64}")
+    backend = ha_canonical_url(config["backend_url"], ("https", "http"))
+    require(backend.path == "/emby" and
+            (backend.scheme == "https" or config["backend_url"] == "http://127.0.0.1:8096/emby"),
+            "HoloNet backend must be trusted HTTPS /emby or exact host-local Emby")
+    require(config["credential_file"] == "/etc/holonet/backend.json",
+            "HoloNet runtime credential path is fixed")
+    policy = config["policy"]
+    keys(policy, ("Server", "Actions", "Libraries", "CatalogUsers", "HistoryUsers"))
+    require(policy["Server"] == config["server_id"] and policy["Actions"] == ["catalog.read"]
+            and policy["HistoryUsers"] == [], "initial HoloNet release is catalog-only")
+    libraries = records(policy["Libraries"], 1, 1)
+    users = records(policy["CatalogUsers"], 1, 1)
+    for library in libraries:
+        match(library, r"[1-9][0-9]{0,18}")
+        require(int(library) <= 9223372036854775807, "catalog ID outside int64")
+    for user in users:
+        match(user, r"[0-9a-f]{32}")
+    mapping = config["library_guids"]
+    require(isinstance(mapping, dict) and set(mapping) == set(libraries),
+            "exact catalog-to-policy folder mapping required")
+    for guid in mapping.values():
+        match(guid, r"[0-9a-f]{32}")
+    return {"backend.json"}
+
+
 def endpoint_contract(value):
     keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"))
     service = value["service"]
-    require(service in SERVICES, "only HA and homelab observer are packaged")
+    require(service in SERVICES, "unregistered fixed service package")
     integer(value["uid"], 100, 999)
     integer(value["gid"], 100, 999)
     private_address(value["listen"])
     artifact = value["artifact"]
-    keys(artifact, ("url", "sha256", "source_revision", "contract_revision"), ("local_source",))
+    local_holonet = service == "holonet" and "local_source" in artifact
+    keys(artifact, ("sha256", "source_revision", "contract_revision") +
+         (() if local_holonet else ("url",)), ("local_source", "url") if local_holonet else ("local_source",))
     match(artifact["sha256"], r"[0-9a-f]{64}")
     match(artifact["source_revision"], r"[0-9a-f]{40}")
     _, contract = SERVICES[service]
     require(artifact["contract_revision"] == contract, "unaccepted source interface")
-    p = url(artifact["url"])
-    require(p.path not in ("", "/") and "/latest/" not in p.path,
-            "expected an explicit reviewed static binary URL")
+    if "url" in artifact:
+        p = url(artifact["url"])
+        require(p.path not in ("", "/") and "/latest/" not in p.path,
+                "expected an explicit reviewed static binary URL")
     if "local_source" in artifact:
         source = artifact["local_source"]
         keys(source, ("path", "owner_uid"))
@@ -220,8 +257,12 @@ def endpoint_contract(value):
         require(all(part not in (".", "..") for part in path.split("/")),
                 "unsafe local artifact path")
         integer(source["owner_uid"], 0, 2147483647)
-    expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
-                else observer_config(value["config"]))
+    if service == "holonet":
+        require(artifact["source_revision"] == contract, "initial HoloNet source pin is fixed")
+        expected = holonet_config(value["config"])
+    else:
+        expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
+                    else observer_config(value["config"]))
     names = []
     for credential in records(value["credentials"], 0, 16):
         keys(credential, ("name", "source", "source_uid"))
@@ -239,6 +280,8 @@ def route_contract(value):
     require(value["service"] in (*SERVICES, "ov-http") and value["state"] in ("present", "absent"),
             "invalid route selection")
     integer(value["directory_uid"], 0, 2147483647)
+    if value["service"] == "holonet" and value["state"] == "present":
+        require(value.get("resource") == "https://media.mcp.ryzhkov.dev/mcp", "HoloNet route resource is fixed")
     if value["state"] == "absent":
         return value
     require("resource" in value and "upstream" in value, "explicit route addresses required")
