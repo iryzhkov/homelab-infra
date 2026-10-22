@@ -1,0 +1,25 @@
+# Garage, one node, for the objectstore stack (docs/objectstore-storage.md).
+# Rendered only by the prepare file, after the storage preflight passed. No
+# secret here: the RPC secret is a Docker secret file.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+# Configured from objectstore_storage. The settings are not evidence that
+# the storage below honours fsync; that stays a live qualification.
+metadata_fsync = {{ objectstore_storage.metadata_fsync | to_json }}
+data_fsync = {{ objectstore_storage.data_fsync | to_json }}
+# One node, one copy: no redundancy and no last-copy durability.
+replication_factor = 1
+consistency_mode = "consistent"
+compression_level = 1
+rpc_bind_addr = "127.0.0.1:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret_file = "/run/secrets/garage_rpc_secret"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "0.0.0.0:3900"
+
+# Health and metrics on loopback only; no admin token is configured.
+[admin]
+api_bind_addr = "127.0.0.1:3903"

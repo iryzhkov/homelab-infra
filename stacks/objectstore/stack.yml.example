@@ -1,0 +1,69 @@
+# Inert example of the Garage object store stack (docs/objectstore-storage.md).
+# Not named stack.yml, so neither the stack wrapper nor stack-lint's usual
+# stacks/*/stack.yml glob picks it up, and no swarm_stacks_* entry names it.
+# An approved activation renames it and supplies env_extra from
+# objectstore_storage: OBJECTSTORE_HOST, OBJECTSTORE_UID, OBJECTSTORE_GID,
+# OBJECTSTORE_DATA_PATH, OBJECTSTORE_METADATA_PATH, and the name of an RPC secret created by a
+# separate approved operation. The validation guard requires those five
+# storage values to match objectstore_storage before any deployment effects.
+# Paths and host must contain no $ to survive Docker's second interpolation.
+# No port is published and no route exists.
+#
+# Binds use the preflight's canonical paths (no symlink such as /srv/swarm).
+# The data path sits below the NFS mount target, so a restart after an unmount
+# fails on a missing bind source instead of writing to the local directory
+# underneath, provided nobody creates that directory there.
+services:
+  garage:
+    image: dxflrs/garage:v2.4.1@sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020
+    user: "${OBJECTSTORE_UID:?set by env_extra}:${OBJECTSTORE_GID:?set by env_extra}"
+    read_only: true
+    volumes:
+      - type: bind
+        source: ${OBJECTSTORE_METADATA_PATH:?set by env_extra}/meta
+        target: /var/lib/garage/meta
+      - type: bind
+        source: ${OBJECTSTORE_DATA_PATH:?set by env_extra}
+        target: /var/lib/garage/data
+      - type: bind
+        source: ${OBJECTSTORE_METADATA_PATH:?set by env_extra}/config/garage.toml
+        target: /etc/garage.toml
+        read_only: true
+    secrets:
+      - source: garage_rpc_secret
+        target: garage_rpc_secret
+        uid: "${OBJECTSTORE_UID:?set by env_extra}"
+        gid: "${OBJECTSTORE_GID:?set by env_extra}"
+        mode: 0400
+    # `garage status` answers once the node serves RPC; `garage health` fails
+    # until a layout is assigned, and Swarm would replace the task first.
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${OBJECTSTORE_HOST:?set by env_extra}
+          - node.labels.pin.objectstore == true
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          memory: 128M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+secrets:
+  garage_rpc_secret:
+    external: true
+    name: ${OBJECTSTORE_RPC_SECRET:?set by env_extra}

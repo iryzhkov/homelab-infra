@@ -1,0 +1,19 @@
+---
+# Inert example; nothing includes it. An approved activation renames it to
+# swarm-prepare.yml and names it as prepare_tasks. It creates no directory or
+# secret: the preflight requires them to exist already.
+# The wrapper validated storage before its own effects; validate again here,
+# right before the render, to narrow (not close) the check-to-use window.
+# Swarm task restarts and rescheduling never rerun either check.
+- name: Validate objectstore storage again before rendering
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/storage-validate.yml"
+  vars:
+    objectstore_preflight: "{{ playbook_dir }}/../scripts/garage-storage-preflight.py"
+
+- name: Render Garage configuration on the storage host
+  ansible.builtin.template:
+    src: "{{ swarm_stack_src }}/templates/garage.toml.j2"
+    dest: "{{ objectstore_storage.metadata.path }}/config/garage.toml"
+    mode: "0644"
+  delegate_to: "{{ objectstore_storage.host }}"
