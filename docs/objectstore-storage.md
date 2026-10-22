@@ -11,7 +11,8 @@ fresh-client round trip remain unqualified.
 
 - Canonical configuration: `objectstore_storage` in
   `inventory/group_vars/swarm/objectstore.yml`, with `enabled: false` and every
-  live fact null. No `swarm_stacks_*` entry names the objectstore source, so
+  measured live fact null. The approved data budget is 2 TB decimal; its
+  quota mechanism and evidence remain unknown. No `swarm_stacks_*` entry names the objectstore source, so
   the stack wrapper never selects it.
 - Guard: `roles/swarm/tasks/stack.yml` includes
   `stacks/objectstore/storage-validate.yml` for the objectstore source (also
@@ -78,6 +79,14 @@ ancestor conservatively refuses too. A missing directory refuses; the
 preflight never creates one.
 
 ## Capacity
+
+The approved blob data budget is **2 TB decimal (2,000,000,000,000 bytes)
+combined across artifacts and results**. This is a total storage budget, not
+an allocation for each bucket. It supersedes the historical 1 TiB / 400 GiB
+proposal. Local metadata needs its own bounded allocation; that value is
+still unselected. The data byte value records intent, not a measured or
+enforced NAS quota. Inode limits, mechanism, scope and evidence remain null,
+and the source stays disabled until the remaining gates are qualified.
 
 A physical cap with positive bytes and inodes, an evidence reference and a
 mechanism that bounds physical allocation is required for data and metadata:

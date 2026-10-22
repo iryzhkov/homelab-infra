@@ -156,7 +156,9 @@ class DefaultTest(Scratch):
             self.assertIsNone(CANONICAL[key])
         for label in ("data", "metadata"):
             self.assertIsNone(CANONICAL[label]["path"])
-            self.assertEqual(set(CANONICAL[label]["physical_cap"].values()), {None})
+            cap = CANONICAL[label]["physical_cap"]
+            self.assertEqual(cap["bytes"], 2_000_000_000_000 if label == "data" else None)
+            self.assertEqual({value for key, value in cap.items() if key != "bytes"}, {None})
         self.assertEqual(set(CANONICAL["qualifications"].values()), {None})
         self.assertIs(CANONICAL["data_fsync"], True)
         self.assertIs(CANONICAL["metadata_fsync"], True)

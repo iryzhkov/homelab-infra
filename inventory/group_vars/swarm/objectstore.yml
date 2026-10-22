@@ -30,7 +30,9 @@ objectstore_storage:
     # or nas_directory_hard_quota or
     # filesystem_project_hard_quota (scope = path). Free space, bucket quotas
     # and cleanup are not physical caps.
-    physical_cap: {bytes: null, inodes: null, mechanism: null, scope: null, evidence: null}
+    # Approved budget: 2 TB decimal total across artifacts and results.
+    # A requested size is not evidence of an installed or enforced quota.
+    physical_cap: {bytes: 2000000000000, inodes: null, mechanism: null, scope: null, evidence: null}
   # LMDB metadata and garage.toml on a local filesystem, path/meta and
   # path/config existing beforehand. Same cap rules.
   metadata:
