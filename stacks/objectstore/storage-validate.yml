@@ -1,0 +1,33 @@
+---
+# Called by roles/swarm/tasks/stack.yml for the objectstore source before
+# lint, deployment directories, stack/secrets writes or pin labels, and again by
+# the prepare file just before it renders configuration. It changes nothing.
+# Success is a point-in-time startup check, not runtime fencing; see
+# docs/objectstore-storage.md for what stays unqualified.
+- name: Refuse disabled or unselected objectstore storage
+  ansible.builtin.assert:
+    that:
+      - objectstore_storage | default({}) is mapping
+      - (objectstore_storage | default({})).enabled | default(false) is sameas true
+      - objectstore_storage.host is string
+      - objectstore_storage.host | length > 0
+      - swarm_stack.pin | default('') == objectstore_storage.host
+    fail_msg: >-
+      objectstore storage is disabled, or names no explicit host equal to the
+      stack pin. Enabling it is a separately approved change that supplies
+      every live fact and qualification in objectstore_storage.
+    quiet: true
+
+- name: Run the read-only storage preflight on the storage host
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -B
+      - -c
+      - "{{ lookup('file', objectstore_preflight) }}"
+      - --config
+      - "-"
+    stdin: "{{ objectstore_storage | to_json }}"
+  delegate_to: "{{ objectstore_storage.host }}"
+  changed_when: false
+  check_mode: false

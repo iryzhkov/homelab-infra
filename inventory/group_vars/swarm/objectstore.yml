@@ -1,0 +1,46 @@
+---
+# Disabled canonical storage for the Garage object store
+# (docs/objectstore-storage.md). No swarm_stacks_* entry names the objectstore
+# source, so nothing deploys it. If one is added, roles/swarm/tasks/stack.yml
+# runs stacks/objectstore/storage-validate.yml before any deployment effect,
+# and it refuses while enabled is false or any live fact below is unknown.
+# This source creates no directory, mount, service, bucket, secret or pin.
+#
+# Enabling is a separately approved change that fills every null with
+# measured facts and evidence references, then records the digest printed by
+#   scripts/garage-storage-preflight.py --config <json> --digest
+# as qualifications.configuration.
+objectstore_storage:
+  enabled: false
+  host: null
+  uid: null
+  gid: null
+  # Garage settings rendered into garage.toml. Configuration, not evidence
+  # that the storage honours fsync; durability stays a live gate.
+  data_fsync: true
+  metadata_fsync: true
+  # Blob blocks on NFS. path is a dedicated top-level directory of the mount,
+  # owned by uid with no group or other access. mount.options must list rw and
+  # exactly one of hard or soft.
+  data:
+    path: null
+    mount: {target: null, source: null, fstype: null, fsroot: null, options: []}
+    # mechanism: dedicated_volume or dedicated_filesystem (scope = mount
+    # target, which holds nothing else), or nas_directory_hard_quota or
+    # filesystem_project_hard_quota (scope = path). Free space, bucket quotas
+    # and cleanup are not physical caps.
+    physical_cap: {bytes: null, inodes: null, mechanism: null, scope: null, evidence: null}
+  # LMDB metadata and garage.toml on a local filesystem, path/meta and
+  # path/config existing beforehand. Same cap rules.
+  metadata:
+    path: null
+    mount: {target: null, source: null, fstype: null, fsroot: null, options: []}
+    physical_cap: {bytes: null, inodes: null, mechanism: null, scope: null, evidence: null}
+  # Evidence references for live gates this source cannot qualify.
+  qualifications:
+    configuration: null
+    full_volume: null
+    mount_loss: null
+    consistent_restore: null
+    fresh_client_roundtrip: null
+    last_copy_policy: null

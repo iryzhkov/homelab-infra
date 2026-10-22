@@ -68,6 +68,15 @@
     file: "{{ playbook_dir }}/../stacks/nats/messaging-validate.yml"
   when: (swarm_stack.source | default(swarm_stack.name)) == 'nats'
 
+# Garage storage must pass its read-only preflight on the storage host before
+# the wrapper writes files or labels; disabled by default, so this refuses.
+- name: Validate objectstore storage before deployment effects
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/../stacks/objectstore/storage-validate.yml"
+  vars:
+    objectstore_preflight: "{{ playbook_dir }}/../scripts/garage-storage-preflight.py"
+  when: (swarm_stack.source | default(swarm_stack.name)) == 'objectstore'
+
 - name: Lint {{ swarm_stack.name }}
   ansible.builtin.command:
     argv:
