@@ -4,7 +4,10 @@
 # An approved activation renames it and supplies env_extra from
 # objectstore_storage: OBJECTSTORE_HOST, OBJECTSTORE_UID, OBJECTSTORE_GID,
 # OBJECTSTORE_DATA_PATH, OBJECTSTORE_METADATA_PATH, and the name of an RPC secret created by a
-# separate approved operation. No port is published and no route exists.
+# separate approved operation. The validation guard requires those five
+# storage values to match objectstore_storage before any deployment effects.
+# Paths and host must contain no $ to survive Docker's second interpolation.
+# No port is published and no route exists.
 #
 # Binds use the preflight's canonical paths (no symlink such as /srv/swarm).
 # The data path sits below the NFS mount target, so a restart after an unmount

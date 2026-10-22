@@ -212,6 +212,56 @@ class PreflightTest(Scratch):
         self.assertEqual(result["status"], "passed-startup-preflight")
         self.assertFalse(any("soft NFS" in item for item in result["limitations"]))
 
+    def test_literal_interpolation_paths_refuse_before_host_inspection(self):
+        for label in ("data", "metadata"):
+            for index, token in enumerate(("${BLOB_DIR}", "$BLOB_DIR", "$$")):
+                with self.subTest(label=label, token=token):
+                    fixture = Fixture(self.base / (label + str(index)))
+                    config = fixture.config()
+                    path = (fixture.nas if label == "data" else fixture.local) / token
+                    path.mkdir(mode=0o700)
+                    if label == "metadata":
+                        (path / "meta").mkdir(mode=0o700)
+                        (path / "config").mkdir(mode=0o755)
+                    config[label]["path"] = str(path)
+                    config[label]["physical_cap"]["scope"] = str(path)
+                    self.assertTrue(path.is_dir())  # The literal path really exists.
+                    self.assert_refused(fixture, qualify(config), Exploding(),
+                                        "must not contain Docker interpolation")
+        fixture = Fixture(self.base / "host")
+        config = dict(fixture.config(), host="$STORAGE_HOST")
+        self.assert_refused(fixture, qualify(config), Exploding(),
+                            "storage host must not contain Docker interpolation")
+
+    def test_nested_metadata_cannot_claim_a_whole_mount_cap(self):
+        fixture = Fixture(self.base / "shared-parent")
+        # The mount root contains only swarm, but swarm holds another consumer.
+        (fixture.local / "swarm/other-stack").mkdir()
+        self.assertEqual(os.listdir(fixture.local), ["swarm"])
+        config = fixture.config()
+        for mechanism in preflight.WHOLE_MOUNT_CAPS:
+            with self.subTest(mechanism=mechanism):
+                config["metadata"]["physical_cap"].update(
+                    mechanism=mechanism, scope=str(fixture.local))
+                self.assert_refused(fixture, qualify(config), Exploding(),
+                                    "metadata whole-mount cap requires a top-level")
+        # A hard quota scoped to objectstore still permits nested metadata.
+        config["metadata"]["physical_cap"].update(
+            mechanism="filesystem_project_hard_quota", scope=str(fixture.objectstore))
+        self.assertEqual(preflight.validate(qualify(config), fixture.probe())["status"],
+                         "passed-startup-preflight")
+
+        # A dedicated metadata mount whose store is an immediate child passes.
+        fixture = Fixture(self.base / "dedicated-parent")
+        config = fixture.config()
+        root = str(fixture.local / "swarm")
+        fixture.mounts[root] = fixture.mounts[str(fixture.local)]
+        config["metadata"]["mount"]["target"] = root
+        config["metadata"]["physical_cap"].update(
+            mechanism="dedicated_filesystem", scope=root)
+        self.assertEqual(preflight.validate(qualify(config), fixture.probe())["status"],
+                         "passed-startup-preflight")
+
     def test_refusals_before_any_side_effect(self):
         def data(config):
             return config["data"]
@@ -408,6 +458,14 @@ class SourceTest(Scratch):
         fixture = Fixture(self.base / "tree")
         qualified = dict(fixture.config(), host="localhost")
         qualify(qualified)
+        env = {
+            "OBJECTSTORE_HOST": qualified["host"],
+            "OBJECTSTORE_UID": str(qualified["uid"]),
+            "OBJECTSTORE_GID": str(qualified["gid"]),
+            "OBJECTSTORE_DATA_PATH": qualified["data"]["path"],
+            "OBJECTSTORE_METADATA_PATH": qualified["metadata"]["path"],
+        }
+        matched = {"name": "objectstore", "pin": "localhost", "env_extra": env}
         cases = [
             ("canonical default", {"name": "objectstore", "pin": "localhost"}, CANONICAL,
              None, "objectstore storage is disabled"),
@@ -417,13 +475,26 @@ class SourceTest(Scratch):
              dict(CANONICAL, enabled=True), None, "objectstore storage is disabled"),
             ("no pin", {"name": "objectstore"}, qualified, None,
              "objectstore storage is disabled"),
-            ("real probe", {"name": "objectstore", "pin": "localhost"}, qualified, None,
-             "storage preflight refused"),
+            ("real probe", matched, qualified, None, "storage preflight refused"),
             # A passing preflight reaches lint, which still refuses the inert
             # source: there is no stacks/objectstore/stack.yml to deploy.
-            ("inert after pass", {"name": "objectstore", "pin": "localhost"}, qualified,
-             passing, "Lint objectstore"),
+            ("inert after pass", matched, qualified, passing, "Lint objectstore"),
         ]
+        # Run the actual wrapper with a qualified config and otherwise-passing
+        # probe. An independent deployment override must fail before that probe,
+        # lint, or any deployment write. Include both paths and every identity.
+        for key, wrong in (
+                ("OBJECTSTORE_DATA_PATH", str(fixture.nas)),
+                ("OBJECTSTORE_METADATA_PATH", str(fixture.local / "swarm/other-stack")),
+                ("OBJECTSTORE_UID", "988"),
+                ("OBJECTSTORE_GID", "1000"),
+                ("OBJECTSTORE_HOST", "other-host")):
+            cases.append((key, dict(matched, env_extra={**env, key: wrong}),
+                          qualified, passing, "objectstore env_extra " + key + " must match"))
+        for key in env:
+            cases.append(("missing " + key,
+                          dict(matched, env_extra={k: v for k, v in env.items() if k != key}),
+                          qualified, passing, "objectstore env_extra " + key + " must match"))
         for index, (name, stack, storage, script, message) in enumerate(cases):
             with self.subTest(name):
                 raw = json.dumps(tasks[:stop + 1])
@@ -449,6 +520,9 @@ class SourceTest(Scratch):
                 output = result.stdout + result.stderr
                 self.assertEqual(result.returncode, 2, output)
                 self.assertIn(message, output)
+                if message.startswith("objectstore env_extra"):
+                    self.assertNotIn("TASK [Run the read-only storage preflight", output)
+                    self.assertNotIn("TASK [Lint", output)
                 self.assertFalse(effects.exists(), output)
                 self.assertEqual(snapshot(fixture.base), before)
 

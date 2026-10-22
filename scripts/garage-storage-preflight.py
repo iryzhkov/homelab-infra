@@ -88,6 +88,9 @@ def canonical(value, what):
     require(isinstance(value, str) and value.startswith("/") and value != "/"
             and "//" not in value and os.path.normpath(value) == value,
             what + " must be an absolute canonical path other than /")
+    # Docker interpolates once in stack config and again in stack deploy.
+    # Even a literal existing directory containing $ can change on that path.
+    require("$" not in value, what + " must not contain Docker interpolation ($)")
     return value
 
 
@@ -135,6 +138,8 @@ def expected_store(config, label):
         require(cap.get("scope") == path,
                 label + " directory hard quota must be scoped to exactly " + path)
     elif cap.get("mechanism") in WHOLE_MOUNT_CAPS:
+        require("/" not in path[len(root) + 1:],
+                label + " whole-mount cap requires a top-level store directory")
         require(cap.get("scope") == root,
                 label + " whole-mount cap must be scoped to exactly " + root)
     else:
@@ -221,6 +226,7 @@ def validate(config, probe=None):
         return {"status": "disabled"}
     # Every declared fact is checked before the host is touched.
     require(text(config.get("host")), "explicit storage host is required")
+    require("$" not in config["host"], "storage host must not contain Docker interpolation ($)")
     require(positive(config.get("uid")) and positive(config.get("gid")),
             "explicit non-root uid and gid are required")
     for key in ("data_fsync", "metadata_fsync"):

@@ -26,7 +26,8 @@ objectstore_storage:
     path: null
     mount: {target: null, source: null, fstype: null, fsroot: null, options: []}
     # mechanism: dedicated_volume or dedicated_filesystem (scope = mount
-    # target, which holds nothing else), or nas_directory_hard_quota or
+    # target, which holds nothing else; path must be its immediate child),
+    # or nas_directory_hard_quota or
     # filesystem_project_hard_quota (scope = path). Free space, bucket quotas
     # and cleanup are not physical caps.
     physical_cap: {bytes: null, inodes: null, mechanism: null, scope: null, evidence: null}

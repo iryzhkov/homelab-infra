@@ -18,6 +18,29 @@
       every live fact and qualification in objectstore_storage.
     quiet: true
 
+# These are the values Docker actually interpolates. The qualification digest
+# covers objectstore_storage, so independent env_extra overrides must match it.
+- name: Bind objectstore deployment inputs to the qualified storage
+  ansible.builtin.assert:
+    that:
+      - swarm_stack.env_extra | default({}) is mapping
+      - item.key in (swarm_stack.env_extra | default({}))
+      - (swarm_stack.env_extra[item.key] | string) == (item.value | string)
+    fail_msg: >-
+      objectstore env_extra {{ item.key }} must match objectstore_storage;
+      deployment inputs cannot override the qualified storage.
+    quiet: true
+  loop: "{{ objectstore_expected_env | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    objectstore_expected_env:
+      OBJECTSTORE_HOST: "{{ objectstore_storage.host }}"
+      OBJECTSTORE_UID: "{{ objectstore_storage.uid }}"
+      OBJECTSTORE_GID: "{{ objectstore_storage.gid }}"
+      OBJECTSTORE_DATA_PATH: "{{ objectstore_storage.data.path }}"
+      OBJECTSTORE_METADATA_PATH: "{{ objectstore_storage.metadata.path }}"
+
 - name: Run the read-only storage preflight on the storage host
   ansible.builtin.command:
     argv:

@@ -17,8 +17,12 @@ fresh-client round trip remain unqualified.
   `stacks/objectstore/storage-validate.yml` for the objectstore source (also
   under another stack name) before lint, deployment directories, stack or
   secret writes and pin labels, as it does for NATS messaging. The guard
-  refuses unless storage is enabled and names a host equal to the stack pin,
-  then runs the preflight on that host.
+  refuses unless storage is enabled and names a host equal to the stack pin.
+  Before probing or deployment effects, it also requires the five storage
+  values in `env_extra` (host, uid, gid, data path and metadata path) to match
+  `objectstore_storage` exactly as strings. It then runs the preflight on
+  that host. The qualification digest alone does not bind independent
+  deployment overrides.
 - Preflight: `scripts/garage-storage-preflight.py`. Exit 0 passed, 2 refused,
   3 disabled. `--digest` prints the configuration digest and inspects nothing.
 - Inert examples: `stacks/objectstore/stack.yml.example` (Garage v2.4.1 pinned
@@ -41,7 +45,9 @@ For each store it requires an explicit mount identity (target, source, fstype,
 fsroot `/`, expected options including `rw`). Data must be NFS with a
 `server:/export` source and exactly one of `hard` or `soft` declared. Metadata
 and journals must be on local ext4, xfs or btrfs. Paths must be absolute and
-canonical, strictly below their mount target, and disjoint. Data and metadata
+canonical, strictly below their mount target, and disjoint. Paths and the
+host must contain no `$`: Docker interpolates again at deployment, so even
+an existing literal directory named `${BLOB_DIR}` is unsafe. Data and metadata
 must be on separate mounts. The data path must be a top-level directory of its
 mount, a sibling of other consumers' folders rather than nested inside one.
 
@@ -61,8 +67,12 @@ A physical cap with positive bytes and inodes, an evidence reference and a
 mechanism that bounds physical allocation is required for data and metadata:
 
 - `dedicated_volume` or `dedicated_filesystem`, scoped to the mount target.
-  The preflight lists the mount root and refuses if it holds anything except
-  the store directory and `lost+found`. Claiming a whole shared mount refuses.
+  The store must be an immediate child of the mount target. The preflight
+  lists the mount root and refuses if it holds anything except the store
+  directory and `lost+found`. This prevents a nested metadata path such as
+  `/disk/swarm/objectstore` from claiming all of `/disk` while another stack
+  uses `/disk/swarm/other-stack`. Nested metadata needs a directory-scoped
+  hard quota. Claiming a whole shared mount refuses.
 - `nas_directory_hard_quota` or `filesystem_project_hard_quota`, scoped to
   exactly the store path.
 
