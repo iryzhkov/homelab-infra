@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -52,14 +53,17 @@ def snapshot(base):
 class Probe(preflight.HostProbe):
     """Real lstat/listdir; declared mounts, owners and devices."""
 
-    def __init__(self, mounts, uid, owners=None, devices=None):
+    def __init__(self, mounts, uid, owners=None, devices=None, modes=None):
         self.mounts, self.uid = mounts, uid
         self.owners, self.devices = owners or {}, devices or {}
-        self.asked = []
+        self.modes = modes or {}
+        self.asked, self.inspected = [], []
 
     def lstat(self, path):
+        self.inspected.append(path)
         real = os.lstat(path)
-        return types.SimpleNamespace(st_mode=real.st_mode,
+        mode = self.modes.get(path)
+        return types.SimpleNamespace(st_mode=real.st_mode if mode is None else stat.S_IFDIR | mode,
                                      st_uid=self.owners.get(path, self.uid),
                                      st_dev=self.devices.get(path, real.st_dev))
 
@@ -200,6 +204,68 @@ class PreflightTest(Scratch):
         self.assertIn(str(fixture.blobs), probe.asked)
         self.assertIn(str(fixture.objectstore / "meta"), probe.asked)
         self.assertEqual(snapshot(self.base), before)
+
+    def test_metadata_parent_and_config_require_trusted_custodians(self):
+        fixture = Fixture(self.base)
+        for directory in (fixture.objectstore, fixture.objectstore / "config"):
+            path = str(directory)
+            for mode in (0o755, 0o1777):
+                with self.subTest(path=path, owner=2001, mode=oct(mode)):
+                    self.assert_refused(
+                        fixture, fixture.config(),
+                        fixture.probe(owners={path: 2001}, modes={path: mode}),
+                        "must be owned by root or uid 1000")
+            for owner in (0, 1000):
+                for mode in (0o775, 0o757, 0o1777):
+                    with self.subTest(path=path, owner=owner, mode=oct(mode)):
+                        self.assert_refused(
+                            fixture, fixture.config(),
+                            fixture.probe(owners={path: owner}, modes={path: mode}),
+                            "must not be group or other writable")
+
+    def test_every_metadata_ancestor_requires_custody(self):
+        fixture = Fixture(self.base)
+        # Include /, ancestors above the mount, the mount and the Swarm root.
+        for directory in fixture.objectstore.parents:
+            path = str(directory)
+            for owner, mode, message in (
+                    (2001, 0o755, "must be owned by root or uid 1000"),
+                    (2001, 0o1777, "must be owned by root or uid 1000"),
+                    (0, 0o775, "must not be group or other writable"),
+                    (0, 0o757, "must not be group or other writable"),
+                    (1000, 0o1777, "must not be group or other writable")):
+                with self.subTest(path=path, owner=owner, mode=oct(mode)):
+                    self.assert_refused(
+                        fixture, fixture.config(),
+                        fixture.probe(owners={path: owner}, modes={path: mode}),
+                        "metadata: " + path + " " + message)
+
+    def test_root_and_selected_uid_custody_preserve_shared_nfs_traversal(self):
+        fixture = Fixture(self.base)
+        ancestors = [str(path) for path in fixture.objectstore.parents]
+        custody = ancestors + [str(fixture.objectstore), str(fixture.objectstore / "config")]
+        # The known ML root stays 988:988 mode 0770; local custody rules must
+        # not turn this into a blanket refusal of the shared export.
+        fixture.nas.chmod(0o770)
+        for owner in (0, 1000):
+            with self.subTest(owner=owner):
+                owners = dict.fromkeys(custody, owner)
+                owners[str(fixture.nas)] = 988
+                probe = fixture.probe(owners=owners, modes=dict.fromkeys(custody, 0o755))
+                before = snapshot(self.base)
+                result = preflight.validate(fixture.config(), probe)
+                self.assertEqual(result["status"], "passed-startup-preflight")
+                self.assertTrue(set(custody) <= set(probe.inspected))
+                self.assertEqual(snapshot(self.base), before)
+        # Root-owned sticky strict ancestors protect the next trusted-owned
+        # component, including above the mount and at filesystem roots.
+        for path in ancestors:
+            with self.subTest(sticky_ancestor=path):
+                probe = fixture.probe(owners={path: 0}, modes={path: 0o1777})
+                before = snapshot(self.base)
+                self.assertEqual(preflight.validate(fixture.config(), probe)["status"],
+                                 "passed-startup-preflight")
+                self.assertEqual(snapshot(self.base), before)
 
     def test_whole_mount_cap_passes_only_on_a_dedicated_mount(self):
         fixture = Fixture(self.base, dedicated=True)

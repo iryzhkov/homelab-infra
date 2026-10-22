@@ -50,6 +50,8 @@ host must contain no `$`: Docker interpolates again at deployment, so even
 an existing literal directory named `${BLOB_DIR}` is unsafe. Data and metadata
 must be on separate mounts. The data path must be a top-level directory of its
 mount, a sibling of other consumers' folders rather than nested inside one.
+This is a conservative repository policy for namespace isolation, not a user
+requirement that all blob storage layouts use a top-level directory.
 
 On the host it reads only. Every component of every path is `lstat`ed, so a
 symlink anywhere refuses. This includes `/srv/swarm`, so metadata must be named
@@ -58,8 +60,22 @@ path and the `meta` and `config` children must match the expected findmnt
 identity and options, and sit on the mount root's device, so a missing mount
 or an overmount refuses instead of falling back to the underlying directory.
 The data directory and `meta` must be owned by the Garage uid with no group or
-other access. The metadata parent and `config` must not be group- or
-other-writable. A missing directory refuses; the preflight never creates one.
+other access. Before privileged configuration rendering, the metadata parent,
+`meta`, `config` and every ancestor back through `/` must be directories
+owned by root or the selected Garage uid. An unrelated owner refuses even at
+0755 because it can chmod the directory and replace its children. The Garage
+uid is explicitly trusted for this custody policy; `meta` still requires that
+uid alone and no group or other access.
+
+These local directories must not be group- or other-writable. Only strict
+ancestors of the metadata parent may use a root-owned sticky directory, such
+as a filesystem root at 01777. Sticky unlink/rename restrictions protect the
+next component, whose owner is also checked, from replacement by untrusted
+users. This exception never applies to the metadata parent, `meta` or
+`config`: outsiders could plant entries such as `garage.toml` there even
+without replacing the directory. A selected-uid-owned writable sticky
+ancestor conservatively refuses too. A missing directory refuses; the
+preflight never creates one.
 
 ## Capacity
 
@@ -99,7 +115,11 @@ are unknown and must be qualified live.
 With 0770 at the export root, the Garage gid and the identity running the
 preflight need traverse permission there. Under root squash, a root preflight
 may get permission denied; that refuses, which is the intended outcome until
-the run identity is qualified.
+the run identity is qualified. Data ancestry does not inherit the local
+metadata custody policy, so the known 0770 shared ML root is not refused
+solely for its ownership or mode. NFS ancestor write access, server ACLs,
+identity mapping and squash behaviour require separate live qualification
+before activation. Passing the synthetic layout is not that evidence.
 
 ## Limitations
 
@@ -107,6 +127,11 @@ the run identity is qualified.
   The wrapper runs it at converge time and the prepare example runs it again
   before rendering. Swarm task restarts and rescheduling run neither, and a
   mount lost or replaced after the check is not detected.
+- Custody checks use pathname-based `lstat`, numeric owners and mode bits.
+  They do not hold directory descriptors through the later privileged render
+  and cannot close check-to-use races. They trust root and the selected Garage
+  uid, and do not qualify arbitrary filesystem ACL models or NFS server
+  permissions. Custody is a startup refusal policy, not a race-free guarantee.
 - Keeping the data path below the mount target means a restart after an
   unmount meets a missing bind source and fails, rather than writing to the
   local directory underneath, as long as nobody creates that directory on the
@@ -129,4 +154,9 @@ rename the examples, and add a `swarm_stacks_*` entry with `pin` equal to the
 storage host, `prepare_tasks: swarm-prepare.yml` and `env_extra` for
 `OBJECTSTORE_HOST`, `OBJECTSTORE_UID`, `OBJECTSTORE_GID`,
 `OBJECTSTORE_DATA_PATH`, `OBJECTSTORE_METADATA_PATH` and
-`OBJECTSTORE_RPC_SECRET`. Routes, buckets and keys are later work.
+`OBJECTSTORE_RPC_SECRET`. Before activation, resolve two placement details:
+the example's `node.labels.pin.objectstore` constraint must agree with the
+wrapper's stack-name label if the stack is renamed, and the inventory name
+used for delegation must identify the same node as its Docker hostname used
+for placement. The current examples supply no generic name mapping. Routes,
+buckets and keys are later work.

@@ -168,6 +168,30 @@ def existing_directory(probe, path, what):
     return info
 
 
+def metadata_custody(probe, path, uid):
+    """Check local directory custody, including /, before privileged rendering."""
+    parts = path.split("/")[1:]
+    directories = ["/"] + ["/" + "/".join(parts[:index])
+                            for index in range(1, len(parts) + 1)]
+    directories += [path + "/meta", path + "/config"]
+    for index, directory in enumerate(directories):
+        info = inspect(probe, directory, "metadata")
+        require(not stat.S_ISLNK(info.st_mode),
+                "metadata passes through a symlink at " + directory)
+        require(stat.S_ISDIR(info.st_mode),
+                "metadata must be an existing directory: " + directory)
+        require(info.st_uid in (0, uid), "metadata: " + directory
+                + " must be owned by root or uid " + str(uid))
+        # A root-owned sticky strict ancestor protects its next trusted-owned
+        # component from unlink/rename by other users. Never allow this at the
+        # metadata parent or children: outsiders could plant garage.toml there.
+        sticky_ancestor = (index < len(parts) and info.st_uid == 0
+                           and info.st_mode & stat.S_ISVTX)
+        require(not info.st_mode & 0o022 or sticky_ancestor,
+                "metadata: " + directory + " must not be group or other writable"
+                + " except at a root-owned sticky strict ancestor")
+
+
 def check_mount(probe, path, mount, what):
     observed = probe.mount(path)
     require(isinstance(observed, dict), "invalid mount record for " + path)
@@ -184,9 +208,11 @@ def probe_store(probe, store, uid):
     label, mount, root, path = store["label"], store["mount"], store["root"], store["path"]
     root_info = existing_directory(probe, root, label + " mount target")
     options = check_mount(probe, root, mount, label)
-    # Garage's own directories belong to its uid alone; the metadata parent
-    # (root-owned under the Swarm state root) and config need only be closed
-    # to writes by others.
+    # Data ancestry has separate NFS traversal/ACL/squash qualifications.
+    # Privileged local metadata/config writes require trusted directory custody.
+    if label == "metadata":
+        metadata_custody(probe, path, uid)
+    # Garage's own directories still belong to its uid alone.
     if label == "data":
         checks = [(path, True)]
     else:
@@ -202,9 +228,6 @@ def probe_store(probe, store, uid):
             require(info.st_uid == uid and not info.st_mode & 0o077,
                     label + ": " + directory + " must be owned by uid " + str(uid)
                     + " with no group or other access")
-        else:
-            require(not info.st_mode & 0o022, label + ": " + directory
-                    + " must not be group or other writable")
     if store["cap"]["mechanism"] in WHOLE_MOUNT_CAPS:
         top = path[len(root) + 1:].split("/")[0]
         try:
