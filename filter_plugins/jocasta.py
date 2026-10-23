@@ -17,16 +17,20 @@ MCP_KEYS = (
 )
 KNOWN_KEYS = ("JOCASTA_IMAGE",) + MCP_KEYS
 
-# Full Jocasta source commits whose images are accepted to serve HTTP MCP.
-# Empty until a reviewed, published MCP-capable commit is recorded here, so
-# enabling refuses every image built so far, including the deployed 37ce657
-# pin, which has no MCP support.
-MCP_IMAGE_REVISIONS = frozenset()
+# Full Jocasta source commits whose images are accepted to serve HTTP MCP:
+# the reviewed, published a3e83c5, whose application tree equals the
+# qualified 232c5e3. Every other image is refused, including the deployed
+# 37ce657 pin, which has no MCP support.
+MCP_IMAGE_REVISIONS = frozenset({"a3e83c55e73661fc50d92a9ca328236a86f291fd"})
+
+# The canonical MCP resource. Its HTTPS route is the separately managed
+# web_mcp_route service "jocasta" (filter_plugins/web_mcp.py JOCASTA_ROUTE),
+# not this stack's browser route.
+MCP_RESOURCE = "https://jocasta.mcp.ryzhkov.dev/mcp"
 
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _HOST = _LABEL + r"(?:\." + _LABEL + r")*"
 _SEGMENT = r"/[A-Za-z0-9._~-]+"
-RESOURCE = re.compile(r"https://(" + _HOST + r")/mcp")
 ISSUER = re.compile(r"https://(" + _HOST + r")((?:" + _SEGMENT + r")*/)")
 JWKS = re.compile(r"https://(" + _HOST + r")((?:" + _SEGMENT + r")+/?)")
 # Plain token characters only: the value lands unquoted in a Compose .env,
@@ -52,7 +56,7 @@ def _url(pattern, value, what):
     return found.group(1)
 
 
-def jocasta_mcp_env(env_extra, route_hosts):
+def jocasta_mcp_env(env_extra):
     """Return the four MCP variables for the .env, or {} when MCP is off."""
     _require(isinstance(env_extra, dict), "env_extra must be a mapping")
     unknown = sorted(set(env_extra) - set(KNOWN_KEYS))
@@ -63,9 +67,8 @@ def jocasta_mcp_env(env_extra, route_hosts):
     _require(len(present) == len(MCP_KEYS),
              "set all of " + ", ".join(MCP_KEYS) + " or none of them")
 
-    resource_host = _url(RESOURCE, env_extra["JOCASTA_MCP_RESOURCE_URL"], "MCP resource")
-    _require(isinstance(route_hosts, list) and resource_host in route_hosts,
-             "MCP resource host must be one of this stack's existing route hosts")
+    _require(env_extra["JOCASTA_MCP_RESOURCE_URL"] == MCP_RESOURCE,
+             "MCP resource must be exactly " + MCP_RESOURCE)
     issuer_host = _url(ISSUER, env_extra["JOCASTA_OIDC_ISSUER"], "OIDC issuer (with trailing slash)")
     jwks_host = _url(JWKS, env_extra["JOCASTA_OIDC_JWKS_URL"], "OIDC JWKS URL")
     _require(jwks_host == issuer_host, "OIDC JWKS URL must be on the issuer's host")

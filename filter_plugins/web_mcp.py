@@ -275,13 +275,25 @@ def endpoint_contract(value):
     return value
 
 
+# Route-only services: packaged elsewhere, routed by this contract.
+ROUTE_ONLY = ("ov-http", "jocasta")
+# Jocasta's canonical resource and its existing Compose backend on homelab's
+# mesh address (stacks/jocasta). Both are fixed so a route cannot send
+# Jocasta-audience bearer tokens anywhere else.
+JOCASTA_ROUTE = {"resource": "https://jocasta.mcp.ryzhkov.dev/mcp",
+                 "upstream": "http://10.42.0.2:1935"}
+
+
 def route_contract(value):
     keys(value, ("service", "state", "directory_uid"), ("resource", "upstream"))
-    require(value["service"] in (*SERVICES, "ov-http") and value["state"] in ("present", "absent"),
+    require(value["service"] in (*SERVICES, *ROUTE_ONLY) and value["state"] in ("present", "absent"),
             "invalid route selection")
     integer(value["directory_uid"], 0, 2147483647)
     if value["service"] == "holonet" and value["state"] == "present":
         require(value.get("resource") == "https://media.mcp.ryzhkov.dev/mcp", "HoloNet route resource is fixed")
+    if value["service"] == "jocasta" and value["state"] == "present":
+        require(all(value.get(key) == fixed for key, fixed in JOCASTA_ROUTE.items()),
+                "Jocasta route resource and upstream are fixed")
     if value["state"] == "absent":
         return value
     require("resource" in value and "upstream" in value, "explicit route addresses required")
@@ -295,7 +307,12 @@ def route_contract(value):
     # Loopback only works when Traefik actually shares the backend network namespace.
     require(not ipaddress.ip_address(backend_host).is_loopback,
             "edge upstream must be a reachable private address")
-    return dict(value, host=resource.hostname)
+    edge = dict(value, host=resource.hostname)
+    if value["service"] == "jocasta":
+        # As qualified by the Jocasta HTTPS canary: send the backend authority as
+        # Host for the MCP SDK's host protection, and leave Origin untouched.
+        edge["host_rewrite"] = upstream.netloc
+    return edge
 
 
 

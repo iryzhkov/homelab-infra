@@ -9,7 +9,7 @@
 # None renders the .env below exactly as before.
 - name: Validate opt-in HTTP MCP settings before writes
   ansible.builtin.set_fact:
-    jocasta_mcp_settings: "{{ stack.env_extra | jocasta_mcp_env(stack.routes | default([]) | map(attribute='host') | list) }}"
+    jocasta_mcp_settings: "{{ stack.env_extra | jocasta_mcp_env }}"
 
 - name: Verify the database filesystem supports SQLite WAL
   ansible.builtin.command:

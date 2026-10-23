@@ -238,10 +238,18 @@ file without the exact management marker. It never starts/reconfigures Traefik.
 Upstream must be an explicit reachable private IPv4 origin with port.
 HTTP carries these services' private backend traffic. If an independently
 qualified HTTPS backend is supplied, Traefik's default CA verification stays
-enabled; there is no insecureSkipVerify or Host rewrite. Route only exact /mcp
+enabled; there is no insecureSkipVerify. Route only exact /mcp
 and /.well-known/oauth-protected-resource/mcp under the resource Host on
 websecure. Preserve Host and Origin. There is no ForwardAuth or custom-header
-middleware. Cf-Ray exclusion follows the existing private-ingress convention;
+middleware, with one service-specific exception below.
+
+Route-only service `jocasta` serves the existing Jocasta Compose stack
+(docs/jocasta.md). Its resource is fixed to
+https://jocasta.mcp.ryzhkov.dev/mcp and its upstream to
+http://10.42.0.2:1935, homelab's mesh address. As its HTTPS canary qualified,
+that route alone adds a headers middleware that sets Host to the upstream
+authority for the MCP SDK's host protection; Origin is preserved. Every other
+service renders exactly as before, without middleware. Cf-Ray exclusion follows the existing private-ingress convention;
 it is not a network allowlist. Firewall/private-network reachability still
 needs runtime qualification.
 
