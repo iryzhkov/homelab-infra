@@ -9,8 +9,8 @@
   ansible.builtin.include_role:
     name: chaldea_host_artifact
   vars:
-    chaldea_host_version: "{{ chaldea_clock_host_version }}"
-    chaldea_host_sha256: "{{ chaldea_clock_host_sha256 }}"
+    chaldea_host_version: "{{ chaldea_clock_host_version }}"  # noqa var-naming[no-role-prefix] -- shared installer public input
+    chaldea_host_sha256: "{{ chaldea_clock_host_sha256 }}"  # noqa var-naming[no-role-prefix] -- shared installer public input
     chaldea_host_artifact_release_root: /opt/chaldea-clock-host/releases
     chaldea_host_artifact_cache: /var/cache/chaldea-clock-host
     chaldea_host_artifact_preserve_versions: []
