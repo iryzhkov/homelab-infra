@@ -4,6 +4,18 @@
     name: chaldea_host_artifact
     public: true
 
+# Separate installation roots keep clock updates out of other consumers' GC.
+- name: Install the independently pinned clock runtime artifact
+  ansible.builtin.include_role:
+    name: chaldea_host_artifact
+  vars:
+    chaldea_host_version: "{{ chaldea_clock_host_version }}"
+    chaldea_host_sha256: "{{ chaldea_clock_host_sha256 }}"
+    chaldea_host_artifact_release_root: /opt/chaldea-clock-host/releases
+    chaldea_host_artifact_cache: /var/cache/chaldea-clock-host
+    chaldea_host_artifact_preserve_versions: []
+  when: chaldea_clock_host_version is defined
+
 - name: Validate explicit trust enrollment
   ansible.builtin.assert:
     that:

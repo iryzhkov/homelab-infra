@@ -3,6 +3,10 @@
 # Keep this version and digest identical in fleet-config and homelab-infra.
 chaldea_host_version: host-v0.2.2
 chaldea_host_sha256: "ebaf896b2b4552002f00ad9b83855ff2364abe02f57ec667d7c9fcafb308c357"
+# Clock repair is independent of Akasha, job and publisher runtime pins.
+chaldea_clock_host_version: host-v0.2.12
+chaldea_clock_host_sha256: "375af0c5f4e37955ae6a6b61e11cbbac6c581ea67b2875384eb7c4d3d44948ff"
+chaldea_access_trust_runtime: "/opt/chaldea-clock-host/releases/{{ chaldea_clock_host_version }}/host/access-maintenance.mjs"
 chaldea_node_version: "26.10.0"
 chaldea_node_sha256: ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022
 # Signed data lives apart from root-executed fleet configuration.
