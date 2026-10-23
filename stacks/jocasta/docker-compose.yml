@@ -18,6 +18,12 @@ services:
       JOCASTA_TOKENS_FILE: /run/secrets/jocasta-tokens.json
       JOCASTA_MAX_STORAGE_BYTES: "10737418240"
       JOCASTA_MIN_FREE_BYTES: "5368709120"
+      # Opt-in HTTP MCP, set together by prepare.yml or not at all
+      # (docs/jocasta.md). Jocasta treats an empty value as unset.
+      JOCASTA_OIDC_ISSUER: ${JOCASTA_OIDC_ISSUER:-}
+      JOCASTA_OIDC_AUDIENCE: ${JOCASTA_OIDC_AUDIENCE:-}
+      JOCASTA_OIDC_JWKS_URL: ${JOCASTA_OIDC_JWKS_URL:-}
+      JOCASTA_MCP_RESOURCE_URL: ${JOCASTA_MCP_RESOURCE_URL:-}
     volumes:
       - type: bind
         source: ./data
