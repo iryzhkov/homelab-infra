@@ -5,7 +5,8 @@ Exit 0 means every check below passed at the moment it ran. It is a startup
 assertion, not fencing: nothing watches the mounts afterwards, so a mount
 lost or replaced after this returns is not detected (time of check to time
 of use). Physical caps and the live durability gates are operator evidence
-references that this script requires but cannot measure.
+references that this script requires but cannot measure. Explicit data budget
+acceptance permits unquotaed data; it enforces no physical allocation limit.
 
 The script never creates, mounts, chowns or writes anything. It reads the
 configuration, lstat()s path components, lists a mount root when a
@@ -129,6 +130,28 @@ def expected_store(config, label):
                 "data path must be a top-level directory of its mount")
     else:
         require(mount["fstype"] in LOCAL, "metadata and journals require a local filesystem")
+    # Omitted mode preserves the original hard-cap contract and its digest.
+    # Budget acceptance is an explicit data-only opt-in, never a cap fallback.
+    mode = store.get("acceptance_mode", "physical_cap")
+    require(mode in ("physical_cap", "operational_budget"),
+            label + " acceptance_mode must be physical_cap or operational_budget")
+    if label != "data":
+        require("acceptance_mode" not in store and "operational_budget" not in store,
+                "metadata requires physical caps; data acceptance fields are not allowed")
+    if mode == "operational_budget":
+        require(store.get("physical_cap") is None,
+                "data operational budget must not claim a physical cap")
+        budget = store.get("operational_budget")
+        require(isinstance(budget, dict) and set(budget) == {"bytes", "risk_acceptance"},
+                "data operational_budget requires exactly bytes and risk_acceptance")
+        require(positive(budget["bytes"]),
+                "data operational budget needs positive aggregate bytes")
+        require(text(budget["risk_acceptance"]),
+                "data operational budget risk_acceptance evidence reference is required")
+        return {"label": label, "mount": mount, "root": root, "path": path,
+                "cap": None, "mode": mode, "budget": budget}
+    require("operational_budget" not in store,
+            label + " physical_cap mode must not declare an operational_budget")
     cap = store.get("physical_cap")
     require(isinstance(cap, dict), label + " physical cap is unqualified")
     require(positive(cap.get("bytes")) and positive(cap.get("inodes")),
@@ -146,7 +169,8 @@ def expected_store(config, label):
         raise Refusal(label + " cap mechanism must bound physical allocation ("
                       + ", ".join(WHOLE_MOUNT_CAPS + DIRECTORY_CAPS) + "); free space, "
                       "logical or bucket quotas and cleanup are not physical caps")
-    return {"label": label, "mount": mount, "root": root, "path": path, "cap": cap}
+    return {"label": label, "mount": mount, "root": root, "path": path, "cap": cap,
+            "mode": mode}
 
 
 def inspect(probe, path, what):
@@ -228,7 +252,7 @@ def probe_store(probe, store, uid):
             require(info.st_uid == uid and not info.st_mode & 0o077,
                     label + ": " + directory + " must be owned by uid " + str(uid)
                     + " with no group or other access")
-    if store["cap"]["mechanism"] in WHOLE_MOUNT_CAPS:
+    if store["cap"] is not None and store["cap"]["mechanism"] in WHOLE_MOUNT_CAPS:
         top = path[len(root) + 1:].split("/")[0]
         try:
             entries = set(probe.listdir(root))
@@ -268,6 +292,12 @@ def validate(config, probe=None):
     options = probe_store(probe, data, config["uid"])
     probe_store(probe, metadata, config["uid"])
     limitations = [LIMITATION]
+    acceptance = {"mode": data["mode"]}
+    if data["mode"] == "operational_budget":
+        acceptance["aggregate_budget_bytes"] = data["budget"]["bytes"]
+        limitations.append("operational data budget only, aggregate across artifacts and results: "
+                           "no physical byte or inode enforcement, no reserved space, and no "
+                           "multipart constraint; shared NAS exhaustion remains possible")
     if "soft" in options:
         limitations.append("soft NFS data mount: timeouts surface as I/O errors; "
                            "not last-copy durability evidence")
@@ -276,6 +306,7 @@ def validate(config, probe=None):
         "configuration": digest(config),
         "host": config["host"],
         "data_path": data["path"],
+        "data_acceptance": acceptance,
         "metadata_path": metadata["path"] + "/meta",
         "config_path": metadata["path"] + "/config",
         "limitations": limitations,

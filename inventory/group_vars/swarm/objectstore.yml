@@ -6,8 +6,8 @@
 # and it refuses while enabled is false or any live fact below is unknown.
 # This source creates no directory, mount, service, bucket, secret or pin.
 #
-# Enabling is a separately approved change that fills every null with
-# measured facts and evidence references, then records the digest printed by
+# Enabling is a separately approved change that supplies the selected mode's
+# required measured facts and evidence, then records the digest printed by
 #   scripts/garage-storage-preflight.py --config <json> --digest
 # as qualifications.configuration.
 objectstore_storage:
@@ -25,16 +25,16 @@ objectstore_storage:
   data:
     path: null
     mount: {target: null, source: null, fstype: null, fsroot: null, options: []}
-    # mechanism: dedicated_volume or dedicated_filesystem (scope = mount
-    # target, which holds nothing else; path must be its immediate child),
-    # or nas_directory_hard_quota or
-    # filesystem_project_hard_quota (scope = path). Free space, bucket quotas
-    # and cleanup are not physical caps.
-    # Approved budget: 2 TB decimal total across artifacts and results.
-    # A requested size is not evidence of an installed or enforced quota.
-    physical_cap: {bytes: 2000000000000, inodes: null, mechanism: null, scope: null, evidence: null}
+    # Explicit acceptance for the existing unquotaed NAS. This budget is
+    # aggregate across artifacts + results, not an allocation per bucket.
+    # It enforces no physical bytes/inodes, reserves no space and does not
+    # constrain multipart. Risk-acceptance evidence remains pending.
+    acceptance_mode: operational_budget
+    operational_budget: {bytes: 2000000000000, risk_acceptance: null}
+    physical_cap: null
   # LMDB metadata and garage.toml on a local filesystem, path/meta and
-  # path/config existing beforehand. Same cap rules.
+  # path/config existing beforehand. Positive physical bytes + inodes and
+  # hard-cap mechanism/scope/evidence remain mandatory; no budget mode here.
   metadata:
     path: null
     mount: {target: null, source: null, fstype: null, fsroot: null, options: []}

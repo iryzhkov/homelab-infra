@@ -132,6 +132,14 @@ class Fixture:
             config["qualifications"][gate] = "evidence:" + gate
         return qualify(config)
 
+    def budget_config(self):
+        config = self.config()  # Keep the legacy hard-cap fixtures independent.
+        config["data"].update(
+            acceptance_mode="operational_budget", physical_cap=None,
+            operational_budget={"bytes": 2_000_000_000_000,
+                                "risk_acceptance": "evidence:unquotaed-data-risk-acceptance"})
+        return qualify(config)
+
     def probe(self, **kwargs):
         return Probe(copy.deepcopy(self.mounts), 1000, **kwargs)
 
@@ -156,9 +164,11 @@ class DefaultTest(Scratch):
             self.assertIsNone(CANONICAL[key])
         for label in ("data", "metadata"):
             self.assertIsNone(CANONICAL[label]["path"])
-            cap = CANONICAL[label]["physical_cap"]
-            self.assertEqual(cap["bytes"], 2_000_000_000_000 if label == "data" else None)
-            self.assertEqual({value for key, value in cap.items() if key != "bytes"}, {None})
+        self.assertEqual(CANONICAL["data"]["acceptance_mode"], "operational_budget")
+        self.assertEqual(CANONICAL["data"]["operational_budget"],
+                         {"bytes": 2_000_000_000_000, "risk_acceptance": None})
+        self.assertIsNone(CANONICAL["data"]["physical_cap"])
+        self.assertEqual(set(CANONICAL["metadata"]["physical_cap"].values()), {None})
         self.assertEqual(set(CANONICAL["qualifications"].values()), {None})
         self.assertIs(CANONICAL["data_fsync"], True)
         self.assertIs(CANONICAL["metadata_fsync"], True)
@@ -470,6 +480,191 @@ class PreflightTest(Scratch):
         self.assertEqual(snapshot(self.base), before)
 
 
+class BudgetTest(Scratch):
+    assert_refused = PreflightTest.assert_refused
+
+    def test_unquotaed_data_with_bounded_metadata_passes_without_writes(self):
+        fixture = Fixture(self.base)
+        for declared_null in (True, False):
+            with self.subTest(declared_null=declared_null):
+                config = fixture.budget_config()
+                if not declared_null:
+                    del config["data"]["physical_cap"]
+                probe, before = fixture.probe(), snapshot(self.base)
+                result = preflight.validate(qualify(config), probe)
+                self.assertEqual(result["status"], "passed-startup-preflight")
+                self.assertEqual(result["data_acceptance"],
+                                 {"mode": "operational_budget",
+                                  "aggregate_budget_bytes": 2_000_000_000_000})
+                self.assertEqual(result["configuration"], preflight.digest(config))
+                self.assertIn(str(fixture.blobs), probe.asked)
+                self.assertIn(str(fixture.objectstore / "meta"), probe.asked)
+                warning = next(item for item in result["limitations"]
+                               if "operational data budget only" in item)
+                for phrase in ("artifacts and results", "no physical byte or inode enforcement",
+                               "no reserved space", "no multipart constraint", "NAS exhaustion"):
+                    self.assertIn(phrase, warning)
+                self.assertEqual(snapshot(self.base), before)
+
+    def test_malformed_budget_declarations_refuse_without_probing(self):
+        fixture = Fixture(self.base)
+        cases = []
+        for value in (None, "", "budget", "operational_buget", True, {}, []):
+            cases.append(("mode " + repr(value),
+                          lambda c, v=value: c["data"].update(acceptance_mode=v),
+                          "acceptance_mode must be"))
+        for value in (None, 0, -1, True, 2.5, "2000000000000"):
+            cases.append(("bytes " + repr(value),
+                          lambda c, v=value: c["data"]["operational_budget"].update(bytes=v),
+                          "positive aggregate bytes"))
+        for value in (None, "", "  ", False, 1, {}, []):
+            cases.append(("ack " + repr(value),
+                          lambda c, v=value: c["data"]["operational_budget"].update(
+                              risk_acceptance=v),
+                          "risk_acceptance evidence reference"))
+        for value in (None, True, "accepted", {}, {"bytes": 2_000_000_000_000},
+                      {"risk_acceptance": "evidence:accepted"},
+                      {"bytes": 2_000_000_000_000, "risk_acceptance": "evidence:accepted",
+                       "acknowledged": True}):
+            cases.append(("budget " + repr(value),
+                          lambda c, v=value: c["data"].update(operational_budget=v),
+                          "requires exactly bytes and risk_acceptance"))
+        for value in ({}, {"bytes": None, "inodes": None, "mechanism": None,
+                           "scope": None, "evidence": None},
+                      fixture.config()["data"]["physical_cap"], False, "unquotaed"):
+            cases.append(("contradictory cap " + repr(value),
+                          lambda c, v=value: c["data"].update(physical_cap=v),
+                          "must not claim a physical cap"))
+        for name, change, message in cases:
+            with self.subTest(name):
+                config = fixture.budget_config()
+                change(config)
+                self.assert_refused(fixture, qualify(config), Exploding(), message)
+        config = fixture.budget_config()
+        config["enabled"] = False
+        config["data"]["acceptance_mode"] = "typo"
+        self.assertEqual(preflight.validate(config, Exploding()), {"status": "disabled"})
+
+    def test_metadata_still_requires_hard_byte_and_inode_bounds(self):
+        fixture = Fixture(self.base)
+        changes = [
+            (lambda c: c["metadata"].update(physical_cap=None), "physical cap is unqualified"),
+            (lambda c: c["metadata"]["physical_cap"].update(bytes=None), "bytes and inodes"),
+            (lambda c: c["metadata"]["physical_cap"].update(inodes=0), "bytes and inodes"),
+            (lambda c: c["metadata"]["physical_cap"].update(bytes=True), "bytes and inodes"),
+            (lambda c: c["metadata"]["physical_cap"].update(evidence=None), "evidence is required"),
+            (lambda c: c["metadata"]["physical_cap"].update(mechanism="operational_budget"),
+             "must bound physical allocation"),
+            (lambda c: c["metadata"].update(acceptance_mode="operational_budget"),
+             "metadata requires physical caps"),
+            (lambda c: c["metadata"].update(operational_budget={"bytes": 100}),
+             "metadata requires physical caps"),
+        ]
+        for change, message in changes:
+            with self.subTest(message=message, change=change):
+                config = fixture.budget_config()
+                change(config)
+                self.assert_refused(fixture, qualify(config), Exploding(), message)
+
+    def test_budget_mode_value_and_acknowledgment_are_digest_bound(self):
+        fixture = Fixture(self.base)
+        for change in (
+                lambda c: c["data"].update(acceptance_mode="physical_cap"),
+                lambda c: c["data"]["operational_budget"].update(bytes=1),
+                lambda c: c["data"]["operational_budget"].update(risk_acceptance="evidence:other")):
+            config = fixture.budget_config()
+            change(config)
+            self.assert_refused(fixture, config, Exploding(), "exact configuration digest")
+        for gate in preflight.DURABILITY_GATES:
+            config = fixture.budget_config()
+            config["qualifications"][gate] = None
+            self.assert_refused(fixture, qualify(config), Exploding(), "unqualified live gate")
+
+    def test_mode_transitions_preserve_legacy_physical_cap_semantics(self):
+        fixture = Fixture(self.base)
+        legacy = fixture.config()
+        original_digest = preflight.digest(legacy)
+        result = preflight.validate(legacy, fixture.probe())
+        self.assertEqual(result["data_acceptance"], {"mode": "physical_cap"})
+        self.assertNotIn("acceptance_mode", legacy["data"])
+        explicit = copy.deepcopy(legacy)
+        explicit["data"]["acceptance_mode"] = "physical_cap"
+        self.assertNotEqual(preflight.digest(explicit), original_digest)
+        self.assert_refused(fixture, explicit, Exploding(), "exact configuration digest")
+        preflight.validate(qualify(explicit), fixture.probe())
+        # Losing physical evidence never opts into the budget path.
+        legacy["data"]["physical_cap"] = None
+        self.assert_refused(fixture, qualify(legacy), Exploding(), "physical cap is unqualified")
+        budget = fixture.budget_config()
+        del budget["data"]["acceptance_mode"]
+        self.assert_refused(fixture, qualify(budget), Exploding(),
+                            "physical_cap mode must not declare an operational_budget")
+        # Both transitions require removing the incompatible declaration.
+        explicit["data"]["acceptance_mode"] = "operational_budget"
+        explicit["data"]["operational_budget"] = fixture.budget_config()["data"]["operational_budget"]
+        self.assert_refused(fixture, qualify(explicit), Exploding(), "must not claim a physical cap")
+        explicit["data"]["physical_cap"] = None
+        preflight.validate(qualify(explicit), fixture.probe())
+        explicit["data"]["acceptance_mode"] = "physical_cap"
+        explicit["data"]["physical_cap"] = fixture.config()["data"]["physical_cap"]
+        self.assert_refused(fixture, qualify(explicit), Exploding(),
+                            "must not declare an operational_budget")
+        del explicit["data"]["operational_budget"]
+        preflight.validate(qualify(explicit), fixture.probe())
+
+    def test_namespace_mount_and_custody_invariants_apply_in_budget_mode(self):
+        fixture = Fixture(self.base)
+        declarations = [
+            (lambda c: c["data"].update(path=str(fixture.nas)), "strictly below"),
+            (lambda c: c["data"].update(path=str(fixture.nas / "datasets/garage")),
+             "top-level directory"),
+            (lambda c: c["data"].update(path=str(fixture.nas / "${BLOB_DIR}")),
+             "Docker interpolation"),
+            (lambda c: c["data"]["mount"].update(fsroot="/subtree"), "bind or subtree"),
+            (lambda c: c["data"]["mount"].update(fstype="ext4"), "explicit NFS"),
+            (lambda c: c["data"]["mount"].update(options=["rw"]), "exactly one of hard or soft"),
+            (lambda c: c["metadata"]["mount"].update(fstype="nfs"), "local filesystem"),
+            (lambda c: (c["metadata"]["mount"].update(target=str(fixture.nas)),
+                        c["metadata"].update(path=str(fixture.nas / "garage-meta")),
+                        c["metadata"]["physical_cap"].update(
+                            scope=str(fixture.nas / "garage-meta"))), "separate mounts"),
+            (lambda c: c.update(uid=0), "non-root uid"),
+        ]
+        for change, message in declarations:
+            with self.subTest(message):
+                config = fixture.budget_config()
+                change(config)
+                self.assert_refused(fixture, qualify(config), Exploding(), message)
+        for key, value, message in (("source", "nas:/wrong", "mount source"),
+                                    ("target", "/", "mount target"),
+                                    ("options", "ro,soft", "lacks rw")):
+            probe = fixture.probe()
+            record = probe.mounts[str(fixture.nas)]
+            if key == "target":
+                del probe.mounts[str(fixture.nas)]
+            else:
+                record[key] = value
+            self.assert_refused(fixture, fixture.budget_config(), probe, message)
+        probes = [
+            (fixture.probe(owners={str(fixture.blobs): 988}), "must be owned by uid"),
+            (fixture.probe(owners={str(fixture.objectstore): 988}), "owned by root or uid"),
+            (fixture.probe(devices={str(fixture.blobs): -1}), "on another device"),
+            (fixture.probe(modes={str(fixture.objectstore / "config"): 0o777}),
+             "not be group or other writable"),
+        ]
+        overmount = fixture.probe()
+        overmount.mounts[str(fixture.blobs)] = dict(overmount.mounts[str(fixture.nas)])
+        probes.append((overmount, "mount target"))
+        for probe, message in probes:
+            with self.subTest(message):
+                self.assert_refused(fixture, fixture.budget_config(), probe, message)
+        target = fixture.nas / "elsewhere"
+        target.mkdir(mode=0o700)
+        fixture.blobs.rmdir()
+        fixture.blobs.symlink_to(target)
+        self.assert_refused(fixture, fixture.budget_config(), fixture.probe(), "symlink at")
+
+
 class SourceTest(Scratch):
     def test_garage_configuration_renders_configured_fsync(self):
         env = jinja2.Environment(undefined=jinja2.StrictUndefined)
@@ -563,6 +758,10 @@ class SourceTest(Scratch):
             cases.append(("missing " + key,
                           dict(matched, env_extra={k: v for k, v in env.items() if k != key}),
                           qualified, passing, "objectstore env_extra " + key + " must match"))
+        budget = dict(fixture.budget_config(), host="localhost")
+        qualify(budget)
+        cases += [("budget " + name, stack, budget, script, message)
+                  for name, stack, storage, script, message in cases if storage is qualified]
         for index, (name, stack, storage, script, message) in enumerate(cases):
             with self.subTest(name):
                 raw = json.dumps(tasks[:stop + 1])
