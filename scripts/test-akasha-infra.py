@@ -399,7 +399,7 @@ class SnapshotTest(unittest.TestCase):
                 "chaldea_host_version == 'host-v0.2.2'",
                 "chaldea_host_sha256 == '" + shared["chaldea_host_sha256"] + "'",
                 "chaldea_host_artifact_root == '" + old_root + "'",
-                "chaldea_access_trust_runtime == '" + old_root + "/access-maintenance.mjs'"],
+                "chaldea_access_trust_runtime == '/opt/chaldea-clock-host/releases/" + shared["chaldea_clock_host_version"] + "/host/access-maintenance.mjs'"],
             "akasha": [
                 "chaldea_host_version == 'host-v0.2.10'",
                 "chaldea_host_artifact_root == '" + new_root + "'",
