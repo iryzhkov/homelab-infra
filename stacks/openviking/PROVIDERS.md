@@ -1,8 +1,9 @@
 # OV 0.5.2 provider integration
 
-Source only. Baseline `stack.yml` still pins OV 0.2.6. Do not merge the provider
-fragment into production until the upgrade, reindex and acceptance gates owned
-by the root have passed. This directory contains no server or tenant keys.
+The release defaults to the tested OV 0.5.2 image. Production deployment requires
+completed index migration, fresh tenant credentials and client rollover under the
+root's controlled cutover. Provider-only preparation must explicitly retain the
+old OV image with the override below. This directory contains no server or tenant keys.
 
 ## Routes and deployment
 
@@ -33,9 +34,11 @@ Root rollout commands, after its own deployment approval, from this checkout:
 ```sh
 # Starts only CPU provider projects and installs adapter source. No OV config/data writes.
 ansible-playbook playbooks/ov-inference.yml
-# Installs the adapter Swarm service and preserves the pinned baseline OV image.
+# Installs the adapter while explicitly preserving the original OV image.
 ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
-  -e swarm_lint_via_chaldea=true
+  -e swarm_lint_via_chaldea=true \
+  -e openviking_image=git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f
+# At controlled cutover, omit openviking_image to select the pinned 0.5.2 release.
 # Existing candidate container must join the provider overlay before provider tests.
 ssh homelab sudo docker network connect openviking-providers ov-upgrade-052
 # Explicit PC-only restart window, after game/operator approval:

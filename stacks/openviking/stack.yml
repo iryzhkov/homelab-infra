@@ -1,9 +1,9 @@
-# Baseline OV stays at 0.2.6 until the separately controlled upgrade cutover.
+# OV 0.5.2 release. Provider-only preparation must explicitly retain the old image.
 # CPU providers are scoped Compose projects because Swarm has no memory-swap cap.
 # All inference endpoints are overlay-only. ov.conf remains private and untouched.
 services:
   openviking:
-    image: git.ryzhkov.dev/igor/openviking:latest@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f
+    image: ${OPENVIKING_IMAGE:-ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f}
     networks: [default, providers]
     ports:
       - "1933:1933"

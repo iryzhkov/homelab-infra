@@ -459,7 +459,9 @@ class SourceContracts(unittest.TestCase):
         for credential in CONFIG["embedding"]["dense"]["credentials"]:
             self.assertEqual(credential["api_base"],
                              "http://embedding-adapter:8000/" + credential["id"] + "/v1")
-        self.assertIn("e9a7222f", stack["services"]["openviking"]["image"])
+        self.assertEqual(stack["services"]["openviking"]["image"],
+                         "${OPENVIKING_IMAGE:-ghcr.io/volcengine/openviking@sha256:"
+                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f}")
 
     def test_pc_preflight_preserves_game_and_generation(self):
         local = {"name": "local:latest", "size_vram": 6_000_000_000, "digest": "stable"}
