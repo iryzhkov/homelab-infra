@@ -35,7 +35,10 @@ web_mcp = load("web_mcp_filter", "filter_plugins/web_mcp.py")
 ACCEPTED = "a3e83c55e73661fc50d92a9ca328236a86f291fd"
 OLD_PIN = "git.ryzhkov.dev/igor/jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63"
 IMAGE = "git.ryzhkov.dev/igor/jocasta:" + ACCEPTED
-OPERATOR_SOURCE = "acd4ba57001559ef0e795ccf47f34413c9420c59"
+# Synthetic source only, installed in the in-process filter for rendering tests.
+# Production has no accepted operator image until root qualifies a replacement.
+OPERATOR_SOURCE = "b" * 40
+BLOCKED_OPERATOR_SOURCE = "acd4ba57001559ef0e795ccf47f34413c9420c59"
 OPERATOR_IMAGE = "git.ryzhkov.dev/igor/jocasta:" + OPERATOR_SOURCE
 OPERATOR = {
     "JOCASTA_OPERATOR_OIDC_ISSUER": "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/",
@@ -133,6 +136,12 @@ class FilterTest(unittest.TestCase):
 
 
 class OperatorFilterTest(unittest.TestCase):
+    def setUp(self):
+        self.production_sources = jocasta.OPERATOR_IMAGE_REVISIONS
+        self.assertEqual(self.production_sources, frozenset())
+        self.addCleanup(setattr, jocasta, "OPERATOR_IMAGE_REVISIONS", self.production_sources)
+        jocasta.OPERATOR_IMAGE_REVISIONS = frozenset({OPERATOR_SOURCE})
+
     def test_separate_source_gate_and_off_defaults(self):
         self.assertEqual(jocasta.OPERATOR_IMAGE_REVISIONS, frozenset({OPERATOR_SOURCE}))
         self.assertNotIn(ACCEPTED, jocasta.OPERATOR_IMAGE_REVISIONS)
@@ -205,7 +214,7 @@ class StackTest(unittest.TestCase):
             **{key: "${%s:-}" % key for key in jocasta.MCP_KEYS + jocasta.OPERATOR_KEYS},
         })
 
-    def run_prepare(self, env_extra, check=False):
+    def run_prepare(self, env_extra, check=False, synthetic_operator=False):
         """Run the actual image, MCP and .env tasks of prepare.yml; return the .env."""
         tasks = yaml.safe_load((REPO / "stacks/jocasta/prepare.yml").read_text())
         names = ("Require an immutable Jocasta image reference",
@@ -216,9 +225,20 @@ class StackTest(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="jocasta-mcp-"))
         self.assertTrue(root.resolve().is_relative_to(Path(HOME).resolve()))
         (root / "stack").mkdir()
-        # The actual, unmodified repository filter.
+        # Actual repository filter in production tests. Rendering a future
+        # operator config uses a scratch copy with only a synthetic source added;
+        # it does not accept a production image or alter the real source gate.
+        filter_dir = REPO / "filter_plugins"
+        if synthetic_operator:
+            filter_dir = root / "filters"
+            filter_dir.mkdir()
+            source = (REPO / "filter_plugins/jocasta.py").read_text()
+            marker = "OPERATOR_IMAGE_REVISIONS = frozenset()"
+            self.assertEqual(source.count(marker), 1)
+            (filter_dir / "jocasta.py").write_text(source.replace(
+                marker, "OPERATOR_IMAGE_REVISIONS = frozenset({" + repr(OPERATOR_SOURCE) + "})"))
         (root / "ansible.cfg").write_text("[defaults]\nfilter_plugins = %s\n"
-                                          "retry_files_enabled = False\n" % (REPO / "filter_plugins"))
+                                          "retry_files_enabled = False\n" % filter_dir)
         play = [{"hosts": "localhost", "gather_facts": False, "tasks": selected, "vars": {
             "stack": {"name": "jocasta", "env_extra": env_extra,
                       "routes": [{"host": "jocasta.ryzhkov.dev"}]},
@@ -246,14 +266,23 @@ class StackTest(unittest.TestCase):
         self.assertEqual(dotenv, "\n".join(expected) + "\n")
 
     def test_operator_renders_exact_public_trio_with_existing_limited_values(self):
-        result, dotenv = self.run_prepare(operator_enabled())
+        result, dotenv = self.run_prepare(operator_enabled(), synthetic_operator=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         expected = ["HOST_IP=10.42.0.2", "JOCASTA_IMAGE=" + OPERATOR_IMAGE]
         expected += ["%s=%s" % item for item in sorted((MCP | OPERATOR).items())]
         self.assertEqual(dotenv, "\n".join(expected) + "\n")
 
+    def test_production_operator_gate_remains_closed(self):
+        self.assertEqual(jocasta.OPERATOR_IMAGE_REVISIONS, frozenset())
+        for revision in (BLOCKED_OPERATOR_SOURCE, OPERATOR_SOURCE, ACCEPTED):
+            result, dotenv = self.run_prepare(operator_enabled(
+                JOCASTA_IMAGE="git.ryzhkov.dev/igor/jocasta:" + revision))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("accepted", result.stdout + result.stderr)
+            self.assertIsNone(dotenv)
+
     def test_operator_check_mode_has_no_env_write(self):
-        result, dotenv = self.run_prepare(operator_enabled(), check=True)
+        result, dotenv = self.run_prepare(operator_enabled(), check=True, synthetic_operator=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIsNone(dotenv)
 
@@ -282,7 +311,7 @@ class StackTest(unittest.TestCase):
                  (operator_enabled(JOCASTA_OPERATOR_CLIENT_SECRET="synthetic"), "unknown"))
         for env_extra, message in cases:
             with self.subTest(message=message):
-                result, dotenv = self.run_prepare(env_extra)
+                result, dotenv = self.run_prepare(env_extra, synthetic_operator=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stdout + result.stderr)
                 self.assertIsNone(dotenv)

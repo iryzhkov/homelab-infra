@@ -162,9 +162,10 @@ acceptance sooner.
 Jocasta operator trust stays disabled in inventory. The matching deployment
 source now validates the exact JOCASTA_OPERATOR_OIDC_ISSUER,
 JOCASTA_OPERATOR_OIDC_JWKS_URL and JOCASTA_OPERATOR_OIDC_CLIENT_ID trio,
-as documented in [jocasta.md](jocasta.md). Its intended exact image source
-remains subject to root's final review/CI, checked image publication and
-Auth readiness gates before convergence.
+as documented in [jocasta.md](jocasta.md). No operator image source is accepted:
+the allowlist is empty while root fixes the blocked initial server candidate.
+Root must supply the replacement reviewed source, checked image publication
+and Auth readiness gates before convergence.
 
 After source deployment, Igor performs each client's supported native one-time
 MCP OAuth login as a user action. Ansible does not launch a browser or native

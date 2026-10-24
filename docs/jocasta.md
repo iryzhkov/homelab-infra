@@ -180,32 +180,30 @@ settings. Operator trust is OFF. No inventory pin, route, port, service unit,
 data path, runtime UID, mount, REST credential or filesystem protection changes
 are included in this integration.
 
-The intended operator image source is
-`acd4ba57001559ef0e795ccf47f34413c9420c59`, source tree
-`f0976cafe974d39ebbc287020fe0424d2727b69a`. The planned immutable tag is
-`git.ryzhkov.dev/igor/jocasta:acd4ba57001559ef0e795ccf47f34413c9420c59`.
-Its separate `OPERATOR_IMAGE_REVISIONS` allowlist permits preparing this exact
-source's configuration, also in limited-only mode. Operator mode additionally
-requires the exact `git.ryzhkov.dev/igor/jocasta` repository, optionally with
-a verified digest. Another source, the old limited-only image, a mutable tag
-or a digest without its admitted full source tag cannot enable operator mode.
+No operator image is currently accepted. The separate
+`OPERATOR_IMAGE_REVISIONS` source allowlist is empty, so operator settings
+refuse before writes even with otherwise valid configuration. The initial
+`acd4ba57001559ef0e795ccf47f34413c9420c59` server candidate is BLOCKED by
+peer review and is not accepted for publication or deployment. Its earlier
+unit/race/cross PASS does not override those blockers. Root owns the replacement
+clean server head and final review/CI/image qualification; this integration
+qualifies configuration readiness independently with a synthetic test image.
 
-Root reports source unit/race/cross checks PASS on agent-a job
-`66f97fa7`. Final source reviews, hosted CI, checked image artifact publication,
-private Authentik issuance/refresh checks and native qualification are PENDING.
-This source pin does not claim that its image exists in the registry. Root
-must reconcile the final reviewed head/tree and checked archive before CI
-publication or convergence. If reviews change the source, repin this allowlist
-and documentation to the exact final source before publishing. Do not deploy
-merely because the filter accepts a candidate configuration.
+After root supplies the replacement reviewed head/tree, a bounded source update
+must add that exact full source revision to the operator allowlist and bind the
+checked image archive and immutable registry tag. Operator mode additionally
+requires the exact `git.ryzhkov.dev/igor/jocasta` repository, optionally with
+a verified digest. The old limited-only image, a mutable tag, or a digest without
+its admitted full source tag cannot enable operator mode. No temporary source
+pin should be published or deployed while the server review is unresolved.
 
 After those gates, root can update only the existing Jocasta stack's image
 and append these public values to its existing `env_extra`. Preserve its
 current limited issuer, JWKS, REST audience and MCP resource:
 
 ```yaml
-# Planned source only; not a deployed or published image receipt.
-jocasta_image: git.ryzhkov.dev/igor/jocasta:acd4ba57001559ef0e795ccf47f34413c9420c59
+# Template only. No operator source is accepted yet; this placeholder refuses.
+jocasta_image: git.ryzhkov.dev/igor/jocasta:<root-qualified-full-source-revision>
 # Add to the existing Jocasta stack's env_extra:
 JOCASTA_OPERATOR_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
 JOCASTA_OPERATOR_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/

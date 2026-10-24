@@ -29,11 +29,11 @@ KNOWN_KEYS = ("JOCASTA_IMAGE",) + MCP_KEYS + OPERATOR_KEYS
 # 37ce657 has no MCP support and is still refused.
 MCP_IMAGE_REVISIONS = frozenset({"a3e83c55e73661fc50d92a9ca328236a86f291fd"})
 
-# Intended operator source pin. Unit/race/cross checks passed at this source;
-# final reviews, hosted CI, checked image publication and deployment are PENDING.
-# Root must reconcile the final reviewed source and image artifact before applying.
-# Inventory remains on the existing limited-only image with no operator settings.
-OPERATOR_IMAGE_REVISIONS = frozenset({"acd4ba57001559ef0e795ccf47f34413c9420c59"})
+# No operator image source is accepted yet. Review blocked the initial acd4ba5
+# candidate; root must supply the replacement clean reviewed source and reconcile
+# hosted CI / checked image publication before deployment. Keep this set empty
+# while that gate is pending. Existing limited-only inventory is unchanged.
+OPERATOR_IMAGE_REVISIONS = frozenset()
 OPERATOR_IMAGE_REPOSITORY = "git.ryzhkov.dev/igor/jocasta"
 OPERATOR_ISSUER = "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/"
 OPERATOR_JWKS = OPERATOR_ISSUER + "jwks/"
