@@ -166,9 +166,13 @@ Already-prefixed queries are rejected. Documents remain plain. Responses require
 one finite normalized vector of exactly 1024 floats and valid native usage.
 Oversize is HTTP 400, with no retry or silent truncation; endpoint errors become
 502/503/504 and surface to OV. Busy is 429.
-Embeddings and chat share one inference permit and eight HTTP handlers. Request body
-is at most 64 KiB, upstream response 128 KiB, input read timeout 10 seconds,
-upstream connect timeout 2 seconds and embedding CPU read 180 seconds. Chat read
+Embeddings and chat each have one independent inference permit; both PC and CPU
+chat routes share the chat permit. The measured Normandy embedding runtime is
+independent of both the PC and homelab generation runtimes, so embedding work must
+not reject concurrent chat. Same-kind contention still returns 429 without queuing.
+The adapter keeps eight HTTP handlers. Request body is at most 64 KiB, upstream
+response 128 KiB, input read timeout 10 seconds, upstream connect timeout 2 seconds
+and embedding CPU read 180 seconds. Chat read
 budgets are specified below.
 Health stays responsive during inference.
 
