@@ -124,6 +124,13 @@ jobs:
         run: pip install --disable-pip-version-check openviking==0.5.2 ansible-core==2.19.13 tokenizers==0.22.2
       - name: Exercise native provider failover and recovery
         run: python3 scripts/test-openviking-inference.py NativeOV -v
+      - name: Test lossless physical vector migration with the pinned SDK
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/test-home"
+          export TMPDIR="$HOME/scratch" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/test-home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test-ov-vector-migration.py -v
       - name: Check scoped inference playbooks
         run: |
           ansible-playbook playbooks/ov-inference.yml --syntax-check

@@ -79,10 +79,14 @@
 
 - name: Lint {{ swarm_stack.name }}
   ansible.builtin.command:
-    argv:
-      - python3
-      - "{{ playbook_dir }}/../scripts/stack-lint.py"
-      - "{{ playbook_dir }}/../stacks/{{ swarm_stack.source | default(swarm_stack.name) }}/stack.yml"
+    argv: >-
+      {{ ['chaldea', 'exec', '--host', 'agent-a', '--', 'python3',
+          'scripts/stack-lint.py',
+          'stacks/' ~ (swarm_stack.source | default(swarm_stack.name)) ~ '/stack.yml']
+         if swarm_lint_via_chaldea | default(false) | bool
+         else ['python3', playbook_dir ~ '/../scripts/stack-lint.py',
+               playbook_dir ~ '/../stacks/' ~ (swarm_stack.source | default(swarm_stack.name)) ~ '/stack.yml'] }}
+    chdir: "{{ playbook_dir }}/.."
   delegate_to: localhost
   changed_when: false
   check_mode: false

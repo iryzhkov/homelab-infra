@@ -34,7 +34,8 @@ Root rollout commands, after its own deployment approval, from this checkout:
 # Starts only CPU provider projects and installs adapter source. No OV config/data writes.
 ansible-playbook playbooks/ov-inference.yml
 # Installs the adapter Swarm service and preserves the pinned baseline OV image.
-ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking
+ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
+  -e swarm_lint_via_chaldea=true
 # Existing candidate container must join the provider overlay before provider tests.
 ssh homelab sudo docker network connect openviking-providers ov-upgrade-052
 # Explicit PC-only restart window, after game/operator approval:
