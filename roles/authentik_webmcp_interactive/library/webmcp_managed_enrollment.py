@@ -27,7 +27,8 @@ SIGNING_KEY = "8bbd6516-af33-4e64-a73b-caa39e692c29"
 HOSTS = {"laptop", "agent-a", "agent-b", "omarchy-pc"}
 PATHS = {
     "user": "/core/users/", "mapping": "/propertymappings/provider/scope/",
-    "provider": "/providers/oauth2/", "policy": "/policies/expression/",
+    "provider": "/providers/oauth2/", "all_provider": "/providers/all/",
+    "policy": "/policies/expression/",
     "application": "/core/applications/", "binding": "/policies/bindings/",
     "token": "/core/tokens/",
 }
@@ -300,7 +301,16 @@ class Enrollment:
             require(all(a.get("provider") != provider or a["pk"] in app_ids for a in apps))
         mapping_ids = {v["pk"] for v in owned.values() if v["kind"] == "mapping"}
         provider_ids = {v["pk"] for v in owned.values() if v["kind"] == "provider"}
-        require(all(not (set(p.get("property_mappings", [])) & mapping_ids) or p["pk"] in provider_ids for p in self.rows["provider"]))
+        # Scope mappings belong to the common Provider model, including proxy
+        # providers. Keep mutations OAuth2-only, but require complete cross-type
+        # reference evidence before every convergence and credential retrieval.
+        providers = self.rows["all_provider"]
+        require(all(isinstance(p, dict) and type(p.get("pk")) is int
+                    and isinstance(p.get("property_mappings"), list)
+                    and all(isinstance(value, str) for value in p["property_mappings"])
+                    for p in providers))
+        require(all(not (set(p["property_mappings"]) & mapping_ids)
+                    or p["pk"] in provider_ids for p in providers))
         policy_ids = {v["pk"] for v in owned.values() if v["kind"] == "policy"}
         binding_ids = {v["pk"] for v in owned.values() if v["kind"] == "binding"}
         require(all(b.get("policy") not in policy_ids or b["pk"] in binding_ids for b in bindings))

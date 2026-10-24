@@ -55,7 +55,9 @@ returned client secrets.
 
 No name-only adoption occurs. Matching names without receipts refuse; existing
 objects must match original IDs/attributes. Privilege and foreign-reference drift
-refuse. An uncertain write leaves pending set. Further runs refuse before API
+refuse. Mapping references are inspected through the complete bounded common
+provider collection, including proxy/backchannel types; mutations remain confined
+to the recorded OAuth2 provider. Missing reference fields or pagination refuse. An uncertain write leaves pending set. Further runs refuse before API
 requests. Root must reconcile that original operation separately. Never delete
 the receipt, invent an acknowledgement or replay a POST. No automatic adoption
 or recovery command is provided.

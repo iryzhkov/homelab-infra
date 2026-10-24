@@ -29,6 +29,9 @@ class FakeAPI:
         self.fail_next = False
 
     def rows(self, kind):
+        if kind == "all_provider":
+            # The common endpoint includes OAuth2 and other provider subclasses.
+            return copy.deepcopy(self.data["provider"] + self.data[kind])
         return copy.deepcopy(self.data[kind])
 
     def request(self, method, path, body=None, public=False):
@@ -146,6 +149,50 @@ class Tests(unittest.TestCase):
         self.api.data["provider"].append({"pk": 999, "property_mappings": [self.api.data["mapping"][0]["pk"]]})
         with self.assertRaises(m.Refused):
             self.enroll().converge(hosts(), "present")
+
+    def test_proxy_mapping_reference_refuses_present_and_global_revocation(self):
+        self.enroll().converge(hosts(), "present")
+        self.api.data["all_provider"].append({
+            "pk": 999, "name": "unrelated-proxy",
+            "meta_model_name": "authentik_providers_proxy.proxyprovider",
+            "property_mappings": [self.api.data["mapping"][0]["pk"]],
+        })
+        receipt = (self.path / "receipt.json").read_bytes()
+        credential = (self.path / "laptop.json").read_bytes()
+        for state in ("present", "absent"):
+            with self.subTest(state=state):
+                before = len(self.api.calls)
+                with self.assertRaises(m.Refused):
+                    self.enroll().converge(hosts(state=state), state)
+                self.assertFalse(any(method != "GET" or path.endswith("/view_key/")
+                                     for method, path, _, _ in self.api.calls[before:]))
+                self.assertEqual((self.path / "receipt.json").read_bytes(), receipt)
+                self.assertEqual((self.path / "laptop.json").read_bytes(), credential)
+        self.assertTrue(self.api.data["mapping"])
+
+    def test_incomplete_common_provider_reference_evidence_refuses(self):
+        self.enroll().converge(hosts(), "present")
+        self.api.data["all_provider"].append({"pk": 999})
+        before = len(self.api.calls)
+        with self.assertRaises(m.Refused):
+            self.enroll().converge(hosts(), "present")
+        self.assertFalse(any(method != "GET" or path.endswith("/view_key/")
+                             for method, path, _, _ in self.api.calls[before:]))
+
+    def test_common_provider_collection_requires_complete_bounded_results(self):
+        api = m.APIClient("synthetic-admin-token")
+        called = []
+        response = {"results": [], "pagination": {"count": 0, "next": 0}}
+        def request(method, path):
+            called.append((method, path))
+            return response
+        api.request = request
+        self.assertEqual(api.rows("all_provider"), [])
+        self.assertEqual(called, [("GET", "/providers/all/?page_size=500")])
+        for pagination in ({"count": 1, "next": 0}, {"count": 0, "next": 2}, {}):
+            response["pagination"] = pagination
+            with self.assertRaises(m.Refused):
+                api.rows("all_provider")
 
     def test_uncertain_operation_never_replayed(self):
         enrollment = self.enroll()
