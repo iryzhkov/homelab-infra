@@ -1,7 +1,17 @@
 ---
-- name: Configure the private homelab infrastructure CI runner
+- name: Retire the homelab infrastructure self-hosted CI runner
   hosts: agent-a
-  gather_facts: true
+  gather_facts: false
   become: true
-  roles:
-    - ci_runner
+  tasks:
+    - name: Check for the repository-specific runner unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/actions-runner-homelab-infra-1.service
+      register: retired_ci_runner_unit
+
+    - name: Stop and disable only the retired repository runner
+      ansible.builtin.systemd_service:
+        name: actions-runner-homelab-infra-1.service
+        enabled: false
+        state: stopped
+      when: retired_ci_runner_unit.stat.exists
