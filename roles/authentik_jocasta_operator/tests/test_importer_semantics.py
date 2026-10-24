@@ -66,6 +66,48 @@ class ChildSerializer(ModelSerializer):
         fields = ["pk", "name", "scope_name"]
 
 
+class PolicyParent(models.Model):
+    policy_uuid = models.UUIDField(primary_key=True, editable=False, default=uuid4)
+    name = models.TextField(unique=True)
+    class Meta:
+        app_label = "isolated"
+
+
+class PolicyChild(PolicyParent):
+    class Meta:
+        app_label = "isolated"
+    @property
+    def serializer(self):
+        return PolicySerializer
+
+
+class PolicySerializer(ModelSerializer):
+    class Meta:
+        model = PolicyChild
+        fields = ["pk", "name"]
+
+
+class ApplicationParent(models.Model):
+    pbm_uuid = models.UUIDField(primary_key=True, editable=False, default=uuid4)
+    name = models.TextField(unique=True)
+    class Meta:
+        app_label = "isolated"
+
+
+class ApplicationChild(ApplicationParent):
+    class Meta:
+        app_label = "isolated"
+    @property
+    def serializer(self):
+        return ApplicationSerializer
+
+
+class ApplicationSerializer(ModelSerializer):
+    class Meta:
+        model = ApplicationChild
+        fields = ["pk", "pbm_uuid", "name"]
+
+
 class BaseMetaModel:
     pass
 
@@ -100,6 +142,7 @@ tree = ast.parse(source.read_text())
 original = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Importer")
 methods = [n for n in original.body if isinstance(n, ast.FunctionDef) and n.name in {
     "__update_pks_for_attrs", "__query_from_identifier", "_validate_single"}]
+assert len(methods) == 3
 namespace = dict(Q=Q, Any=object, BaseSerializer=object, Serializer=Serializer,
     BlueprintEntry=Entry, Model=models.Model, SerializerModel=models.Model,
     BaseMetaModel=BaseMetaModel, BlueprintEntryDesiredState=State,
@@ -115,13 +158,16 @@ exec(compile(compiled, str(source), "exec"), namespace)
 Importer = namespace["Importer"]
 
 
-def create(pk, attrs=None, model=Child):
+def create(pk, attrs=None, model=Child, identifiers=None):
     namespace["registry"].get_model = lambda *_: model
     importer = Importer()
     importer._import = None
     importer._Importer__pk_map = {}
     importer.logger = SimpleNamespace(debug=lambda *a, **kw: None)
-    serializer = importer._validate_single(Entry(pk, attrs))
+    entry = Entry(pk, attrs)
+    if identifiers is not None:
+        entry.identifiers = identifiers
+    serializer = importer._validate_single(entry)
     return serializer.save()
 
 
@@ -131,15 +177,25 @@ class ImporterSemanticsTest(unittest.TestCase):
         with connection.schema_editor() as editor:
             editor.create_model(Parent)
             editor.create_model(Child)
+            editor.create_model(PolicyParent)
+            editor.create_model(PolicyChild)
+            editor.create_model(ApplicationParent)
+            editor.create_model(ApplicationChild)
 
     @classmethod
     def tearDownClass(cls):
         with connection.schema_editor() as editor:
+            editor.delete_model(ApplicationChild)
+            editor.delete_model(ApplicationParent)
+            editor.delete_model(PolicyChild)
+            editor.delete_model(PolicyParent)
             editor.delete_model(Child)
             editor.delete_model(Parent)
 
     def tearDown(self):
         with connection.cursor() as cursor:
+            for table in ('applicationchild', 'applicationparent', 'policychild', 'policyparent'):
+                cursor.execute('DELETE FROM isolated_' + table)
             cursor.execute('DELETE FROM isolated_child')
             cursor.execute('DELETE FROM isolated_parent')
 
@@ -147,16 +203,48 @@ class ImporterSemanticsTest(unittest.TestCase):
         wanted = UUID("eab3de97-d783-511d-8477-6b4a904ec17c")
         self.assertEqual(create(str(wanted), model=Parent).pk, wanted)
 
-    def test_current_contract_creation_preserves_declared_uuid(self):
+    def test_current_contract_allocates_inherited_uuid(self):
         wanted = UUID("eab3de97-d783-511d-8477-6b4a904ec17c")
         obj = create(str(wanted))
-        self.assertEqual(obj.pk, wanted, "Pinned importer creation replaced declared mapping UUID")
+        self.assertNotEqual(obj.pk, wanted)
+        self.assertEqual(obj.pk, obj.pm_uuid)
+
+    def test_parent_field_creation_probe(self):
+        for model, field in ((Child, "pm_uuid"), (PolicyChild, "policy_uuid"),
+                             (ApplicationChild, "pbm_uuid")):
+            wanted = str(uuid4())
+            obj = create(wanted, {field: wanted}, model,
+                         {"pk": wanted, field: wanted})
+            with self.subTest(field=field):
+                self.assertNotEqual(str(obj.pk), wanted)
+                self.assertEqual(obj.pk, getattr(obj, field))
 
     def test_attrs_pk_does_not_fix_inherited_uuid_allocation(self):
         wanted = UUID("eab3de97-d783-511d-8477-6b4a904ec17c")
         obj = create(str(wanted), {"pk": str(wanted)})
         self.assertNotEqual(obj.pk, wanted)
         self.assertEqual(obj.pk, obj.pm_uuid)
+
+    def test_migration_targets_existing_inherited_rows_without_replacement(self):
+        # Preexisting root-custodied parent identities; this never creates through
+        # a corrected/forked importer. Ordinary native creation stays allocated.
+        cases = ((Child, Parent, "pm_uuid", "7da2a648-fbd8-43bc-8517-3101b7b9b0d9"),
+                 (PolicyChild, PolicyParent, "policy_uuid", "dc6e5831-77bb-4592-b57e-f160580ce466"),
+                 (ApplicationChild, ApplicationParent, "pbm_uuid", "a3586abb-8f76-40b3-a6ca-dea7c8df0a02"))
+        for model, parent, field, pk in cases:
+            values = {field: UUID(pk), "name": "synthetic mapping"}
+            if model is Child:
+                values["scope_name"] = "jocasta.read"
+            original = model.objects.create(**values)
+            before = (model.objects.count(), parent.objects.count())
+            for _ in range(2):
+                updated = create(pk, model=model)
+                self.assertEqual(updated.pk, original.pk)
+                self.assertEqual(getattr(updated, field), original.pk)
+                self.assertEqual(updated.name, original.name)
+                if model is Child:
+                    self.assertEqual(updated.scope_name, original.scope_name)
+                self.assertEqual((model.objects.count(), parent.objects.count()), before)
 
     def test_allocated_identity_selects_existing_instance_without_replacement(self):
         obj = create(str(uuid4()))

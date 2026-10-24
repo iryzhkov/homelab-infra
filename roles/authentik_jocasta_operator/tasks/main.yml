@@ -35,8 +35,17 @@
 
     - name: Validate exact ownership and prior terminal completion
       ansible.builtin.set_fact:
-        operator_instance: "{{ operator_blueprints.json | jocasta_operator_instance(operator_spec) }}"
+        operator_instance: "{{ operator_blueprints.json | jocasta_operator_instance(operator_spec, jocasta_operator_recovery) }}"
       no_log: true
+
+    - name: Bind only an explicit original recovery or an owned migrated generation
+      ansible.builtin.set_fact:
+        operator_spec: "{{ operator_spec | jocasta_operator_owned_spec(operator_instance, jocasta_operator_recovery) }}"
+      no_log: true
+
+    - name: Render exact owned identities
+      ansible.builtin.set_fact:
+        operator_content: "{{ operator_spec | jocasta_operator_blueprint }}"
 
     - name: Inspect objects and references
       ansible.builtin.include_tasks: read.yml
@@ -56,7 +65,7 @@
       user_pk: "{{ operator_spec.user_pk }}"
       issuer: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
       client_id: jocasta-laptop-interactive
-      note: Offline plans do not establish collision absence or signer verification.
+      note: Fresh bootstrap is unavailable. Online use requires an existing receipt-bound generation.
   when: ansible_check_mode or ansible_diff_mode
 
 - name: Apply only changed content and verify exact state
@@ -65,10 +74,63 @@
     - name: Store and apply one changed request
       when: operator_instance.content | default('') != operator_content
       block:
+        - name: Validate the private durable receipt destination
+          ansible.builtin.set_fact:
+            operator_receipt_dir: "{{ jocasta_operator_receipt_dir | jocasta_operator_receipt_dir }}"
+
+        - name: Inspect receipt directory without following links
+          ansible.builtin.stat:
+            path: "{{ operator_receipt_dir }}"
+            follow: false
+          register: operator_receipt_stat
+
+        - name: Require an existing private controller-owned directory
+          ansible.builtin.assert:
+            that:
+              - operator_receipt_stat.stat.isdir | default(false)
+              - not (operator_receipt_stat.stat.islnk | default(true))
+              - operator_receipt_stat.stat.mode == '0700'
+              - operator_receipt_stat.stat.uid == lookup('ansible.builtin.pipe', 'id -u') | int
+            quiet: true
+
+        - name: Refuse reuse of prior operation receipts
+          ansible.builtin.find:
+            paths: "{{ operator_receipt_dir }}"
+            hidden: true
+            file_type: any
+          register: operator_receipt_files
+
+        - name: Require a fresh receipt directory
+          ansible.builtin.assert:
+            that: operator_receipt_files.matched == 0
+            quiet: true
+
+        - name: Read original generation immediately before storage
+          ansible.builtin.uri:
+            url: "{{ operator_api }}/managed/blueprints/{{ operator_instance.pk }}/"
+            headers: "{{ authentik_headers }}"
+            follow_redirects: none
+            use_proxy: false
+          register: operator_before
+          no_log: true
+
+        - name: Refuse a changed original generation
+          ansible.builtin.assert:
+            that: operator_before.json | jocasta_operator_terminal(operator_instance.content, operator_instance)
+            quiet: true
+          no_log: true
+
+        - name: Retain the original terminal generation before any mutation
+          ansible.builtin.copy:
+            dest: "{{ operator_receipt_dir }}/before.json"
+            content: "{{ operator_before.json | to_nice_json }}"
+            mode: '0600'
+          no_log: true
+
         - name: Store the isolated blueprint
           ansible.builtin.uri:
-            url: "{{ operator_api }}/managed/blueprints/{{ (operator_instance.pk ~ '/') if operator_instance else '' }}"
-            method: "{{ 'PATCH' if operator_instance else 'POST' }}"
+            url: "{{ operator_api }}/managed/blueprints/{{ operator_instance.pk }}/"
+            method: PATCH
             headers: "{{ authentik_headers }}"
             follow_redirects: none
             use_proxy: false
@@ -79,32 +141,55 @@
               context: {}
               content: "{{ operator_content }}"
               enabled: true
-            status_code: [200, 201]
+            status_code: 200
           register: operator_stored
           changed_when: true
           no_log: true
 
+        - name: Retain the mutation response before further requests
+          ansible.builtin.copy:
+            dest: "{{ operator_receipt_dir }}/stored.json"
+            content: "{{ operator_stored.json | to_nice_json }}"
+            mode: '0600'
+          no_log: true
+
+        - name: Bind the retained mutation response to the original record
+          ansible.builtin.assert:
+            that: >-
+              operator_stored.json | jocasta_operator_apply_state(operator_content,
+                operator_instance.pk, 'homelab-infra Jocasta laptop interactive operator',
+                operator_stored.json.last_applied) == 'pending'
+            quiet: true
+          no_log: true
+
         - name: Read baseline after storage
           ansible.builtin.uri:
-            url: "{{ operator_api }}/managed/blueprints/{{ operator_stored.json.pk }}/"
+            url: "{{ operator_api }}/managed/blueprints/{{ operator_instance.pk }}/"
             headers: "{{ authentik_headers }}"
             follow_redirects: none
             use_proxy: false
           register: operator_baseline
           no_log: true
 
+        - name: Retain the post-store baseline before apply and await
+          ansible.builtin.copy:
+            dest: "{{ operator_receipt_dir }}/baseline.json"
+            content: "{{ operator_baseline.json | to_nice_json }}"
+            mode: '0600'
+          no_log: true
+
         - name: Bind the baseline to the exact stored request
           ansible.builtin.assert:
             that: >-
               operator_baseline.json | jocasta_operator_apply_state(operator_content,
-                operator_stored.json.pk, 'homelab-infra Jocasta laptop interactive operator',
+                operator_instance.pk, 'homelab-infra Jocasta laptop interactive operator',
                 operator_baseline.json.last_applied) == 'pending'
             quiet: true
           no_log: true
 
         - name: Apply once without replay
           ansible.builtin.uri:
-            url: "{{ operator_api }}/managed/blueprints/{{ operator_stored.json.pk }}/apply/"
+            url: "{{ operator_api }}/managed/blueprints/{{ operator_instance.pk }}/apply/"
             method: POST
             headers: "{{ authentik_headers }}"
             follow_redirects: none
@@ -114,17 +199,24 @@
 
         - name: Await a fresh exact content receipt without reapplying
           ansible.builtin.uri:
-            url: "{{ operator_api }}/managed/blueprints/{{ operator_stored.json.pk }}/"
+            url: "{{ operator_api }}/managed/blueprints/{{ operator_instance.pk }}/"
             headers: "{{ authentik_headers }}"
             follow_redirects: none
             use_proxy: false
           register: operator_applied
           until: >-
             operator_applied.json | jocasta_operator_apply_state(operator_content,
-              operator_stored.json.pk, 'homelab-infra Jocasta laptop interactive operator',
+              operator_instance.pk, 'homelab-infra Jocasta laptop interactive operator',
               operator_baseline.json.last_applied) != 'pending'
           retries: 10
           delay: 3
+          no_log: true
+
+        - name: Retain the completed apply observation
+          ansible.builtin.copy:
+            dest: "{{ operator_receipt_dir }}/applied.json"
+            content: "{{ operator_applied.json | to_nice_json }}"
+            mode: '0600'
           no_log: true
 
         - name: Require successful exact import
@@ -151,19 +243,37 @@
       no_log: true
     - name: Read the final ownership receipt
       ansible.builtin.uri:
-        url: "{{ operator_api }}/managed/blueprints/{{ operator_stored.json.pk if operator_stored is changed else operator_instance.pk }}/"
+        url: "{{ operator_api }}/managed/blueprints/{{ operator_instance.pk }}/"
         headers: "{{ authentik_headers }}"
         follow_redirects: none
         use_proxy: false
       register: operator_final
       no_log: true
 
+    - name: Retain the final terminal observation
+      ansible.builtin.copy:
+        dest: "{{ operator_receipt_dir }}/final.json"
+        content: "{{ operator_final.json | to_nice_json }}"
+        mode: '0600'
+      when: operator_stored is changed
+      no_log: true
+
     - name: Refuse changed content or an uncertain final generation
       ansible.builtin.assert:
-        that: operator_final.json | jocasta_operator_terminal(operator_content)
+        that: >-
+          operator_final.json | jocasta_operator_terminal(operator_content,
+            operator_applied.json if operator_stored is changed else operator_instance)
         quiet: true
       no_log: true
   rescue:
+    - name: Retain the last apply observation on refusal
+      ansible.builtin.copy:
+        dest: "{{ operator_receipt_dir }}/refused-apply.json"
+        content: "{{ operator_applied.json | to_nice_json }}"
+        mode: '0600'
+      when: operator_applied is defined and operator_applied.json is defined
+      no_log: true
+
     - name: Stop for reconciliation of the original operation
       ansible.builtin.fail:
         msg: >-

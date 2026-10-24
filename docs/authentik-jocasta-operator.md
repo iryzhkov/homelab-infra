@@ -1,6 +1,6 @@
 # Jocasta interactive operator OAuth
 
-This source adds a separate opt-in Authentik application for Igor's laptop.
+This source manages the separate opt-in Authentik application for Igor's laptop.
 It does not activate Jocasta trust, change a backend or route, deliver client
 credentials, enroll a native client, or log anyone in. The ordinary machine
 identity declarations, grants, providers and private paths are unchanged.
@@ -14,6 +14,9 @@ The default is disabled. The operator supplies both
 in an operator-owned input file. There is no production default PK, username
 lookup, guessed account, or test-fixture fallback. Confirm that PK belongs to
 Igor through the existing controlled administration path before deployment.
+Fresh bootstrap is refused before API writes. The supported transition is the
+explicit receipt-bound recovery of the reconciled 2026-10-24 original generation.
+An existing migrated record is required for ordinary convergence or retirement.
 
 The only credential pointer is the existing
 `secrets/authentik-api.sops.yaml`, consumed by `community.sops.load_vars`
@@ -100,23 +103,55 @@ receipt. Unknown, pending, failed, edited or foreign records stop before writes.
 Future source changes that alter rendering need an explicit compatible ownership
 migration; do not replace the ownership check with automatic adoption.
 
-UUID-backed objects have deterministic role-specific UUIDs. Provider identity
-uses the fixed name/client ID and the owned application's exact live provider
-reference. Any discovered provider requires that owned application to exist and
-still reference its exact PK, including before retirement writes. A missing,
-detached or different reference requires explicit reconciliation; a successful
-old blueprint receipt does not authorize adoption or deletion of a replacement
-with the same name/client ID.
+Authentik 2026.8.4 allocates different UUIDs for concrete inherited mappings,
+policies and applications. Its importer sets the child's PK; Django saves the
+default parent UUID and copies it back to the child link. Adding parent fields
+or attrs.pk does not fix creation through the pinned serializers. The isolated
+test executes exact upstream importer methods with pinned Django/DRF; it does
+not qualify a fresh production bootstrap.
+
+For the one original operation, root supplies `jocasta_operator_recovery` through
+the existing public operator input path. Its closed schema pins blueprint PK,
+human PK4, exact v1 content SHA512, successful last_applied/hash and all eight
+actual identities. The filter accepts only the source-known reconciled values
+in `ORIGINAL_GENERATION`. The exact v1 marker and full content remain validated.
+Absent input, changed receipt, missing/replaced object, field/reference drift,
+unknown/failed import or incomplete collection refuses before API writes.
+
+The v2 marker retains that origin receipt and identity map in the same blueprint
+record. Every identifier, including the integer provider PK, then targets its
+exact already-created object. The transition changes only identifiers and the
+ownership marker, preserving every declared field and reference. It performs
+one PATCH to the existing blueprint and one semantically identical importer
+apply. No object is recreated or assigned a new UUID. The recovery input is
+refused after transition; omit it on subsequent runs. A retired generation
+cannot be recreated without separately qualified allocation enrollment.
+
+Both provider PK ownership and the owned application's exact live provider
+reference are required, including before retirement. A missing, detached or
+different reference refuses before writes. Names locate collisions and never
+authorize adoption or deletion of a replacement.
 Complete bounded collections establish name/UUID collisions and cross-object
 references. Pagination, missing reference fields, foreign bindings, a shared
 provider/mapping, or group privilege/member drift stop the run. Collections
 larger than 500 require a separately qualified bounded pagination change.
 The role creates no user or Authentik API token.
 
-A changed request is stored once. Its post-store last_applied baseline,
+A changed request requires `jocasta_operator_receipt_dir`, an existing empty,
+controller-owned directory with mode0700 on disk, outside /tmp. The role refuses
+directory reuse or a symlink. It re-reads and compares the original terminal
+generation immediately before storage, then retains private0600 before.json,
+stored.json and baseline.json before apply/await. Completed and final responses
+are also retained; a refusal retains the last available apply observation.
+A response lost before the controller can retain it remains a reconciliation
+gap and never permits replay.
+
+The changed request is stored once. Its post-store last_applied baseline,
 exact content and fresh worker SHA512 receipt bind completion. Only reads are
 retried while awaiting the worker. Exact object fields and references, public
-signer and a final terminal ownership receipt are checked. Identical content
+signer and a final terminal ownership receipt are checked. Final PK/content/
+status/hash/timestamp must match the exact successful apply observation, or the
+initial terminal observation on a no-op. Identical content
 with exact state performs no write or apply. Actual object drift is a refusal
 on a no-op run, not a claim of convergence. Serialize administration of these
 fixed objects because Authentik's blueprint API has no compare-and-swap write.
@@ -211,10 +246,14 @@ The adopted design is the source-only laptop interactive design at
   They are source evidence, not a successful laptop login.
 
 Use the repository's pinned ansible-core 2.19.13 and deepmerge 2.1.0. Focused
-checks run only on agent-a with an asserted scratch HOME and short disk TMPDIR:
+checks run only on agent-a with an asserted scratch HOME and short disk TMPDIR.
+The dedicated CI job installs Django5.2.17, DRF3.17.1, cryptography46.0.3,
+ansible-core2.19.13 and deepmerge2.1.0 for the same focused checks:
 
 ```sh
-python -B -m unittest discover -s roles/authentik_jocasta_operator/tests -p test_operator.py -v
+python -B roles/authentik_jocasta_operator/tests/test_importer_semantics.py -v
+python -B roles/authentik_jocasta_operator/tests/test_operator.py -v
+python -B scripts/test-jocasta-mcp-config.py -v
 ```
 
 The tests reuse the existing HTTPS/blueprint fixture. They cover composed
