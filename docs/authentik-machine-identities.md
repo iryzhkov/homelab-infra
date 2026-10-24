@@ -372,7 +372,9 @@ read-only Jocasta tooling accounts, `chaldea-laptop-jocasta-tooling-codex` and
 ("Chaldea Jocasta tooling access"), client ID `chaldea-jocasta-tooling`, group
 `chaldea-jocasta-tooling-identities`, the existing RSA signing key
 `8bbd6516-af33-4e64-a73b-caa39e692c29`, scope `jocasta.read` and 300-second
-tokens. Each account's only project is `tooling`.
+tokens. Each account's only project is `tooling`. The Codex account is retained
+inactive: the laptop's session policy admits only the Claude preset until the
+Codex profile qualifies natively.
 
 The entrypoint loads the existing controller SOPS API credential the way
 `authentik_config` does, refuses any origin other than

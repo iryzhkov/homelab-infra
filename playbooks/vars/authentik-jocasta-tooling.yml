@@ -29,9 +29,10 @@ authentik_jocasta_machine_access:
   scope: jocasta.read
   token_seconds: 300
 
-# GATE: the Codex profile is not native-qualified on the laptop; its account is
-# enrolled but the live session policy admits only the Claude preset. Keep or
-# declare it absent together with the fleet-side decision.
+# The Codex account is retained inactive: enrolled and delivered, but the
+# laptop's session policy admits only the Claude preset until the Codex profile
+# qualifies natively. Keep it present; absent would delete the account and its
+# host file.
 # One account per laptop profile, matching chaldea-fleet-config's
 # inventory/host_vars/laptop/chaldea-jocasta-tooling.yml presets. Raise
 # generation to rotate; extend expires before it is less than a day away, or
