@@ -68,11 +68,15 @@ jobs:
           python3 scripts/test-ov-provider-migration.py
           ansible-playbook playbooks/ov-provider-migration.yml --syntax-check
       - name: Test guarded OpenViking client credential rollover
+        # The helper refuses parents owned by another user and sources inside a
+        # repository, so the synthetic HOME stays outside the host-owned checkout.
         run: |
-          export HOME="$PWD/.cache/ov-selfhost-20261024/client-home"
+          export HOME=/home/job/.cache/ov-selfhost-20261024/client-home
           export TMPDIR="$HOME/tmp" OV_CLIENT_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
-          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/client-home"
-          mkdir -p "$TMPDIR"
+          test "$HOME" = /home/job/.cache/ov-selfhost-20261024/client-home
+          install -d -m 0700 /home/job /home/job/.cache /home/job/.cache/ov-selfhost-20261024 "$HOME" "$TMPDIR"
+          test "$(realpath -e -- "$HOME")" = "$HOME"
+          test "$(stat -c '%u %a' -- /home/job "$HOME" | sort -u)" = "$(id -u) 700"
           python3 scripts/test-ov-client-credentials.py
           ansible-playbook playbooks/ov-client-credentials.yml --syntax-check
       - name: Test bounded OpenViking inference provisioning
