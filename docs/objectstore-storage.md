@@ -40,6 +40,67 @@ No native bootstrap or grant-making convergence is part of startup, restart or
 maintenance. The trusted operator exclusively owns RPC and grant administration.
 No publisher receives the RPC secret or owner permission.
 
+### Unknown NFS filecount proposal
+
+The native guard still requires at least 1 GiB available data bytes and 2 GiB
+available metadata bytes. Normally both stores also need at least 4096 available
+file slots. It now validates the complete nonnegative integer
+`f_files/f_ffree/f_favail` tuple and `f_favail <= f_ffree <= f_files`.
+Missing, malformed, negative, mixed or inconsistent values refuse. An I/O error
+still refuses; it is never converted to unknown telemetry.
+
+An optional data-only field, absent from canonical configuration, proposes one
+explicit exception:
+
+```json
+"unknown_filecount_risk_acceptance": "evidence:separately-reviewed-unknown-filecount-risk"
+```
+
+Only explicitly selected `nfs` or `nfs4` data in `operational_budget` mode may
+declare this nonblank evidence reference. It permits only the exact
+`0/0/0` tuple, reported as `UNKNOWN`, with `available_inodes: null` in
+`startup_headroom` from native `check` and a stderr warning that no free-inode
+capacity was established. Known counts still need 4096 available slots,
+including when the field is present. Metadata, ext4 and local backup destination
+inode requirements have no exception. Omitting the field retains refusal.
+The preflight reports the selected policy as a limitation without measuring
+headroom. Its digest already covers every configuration field except
+qualifications, so adding, removing or changing this reference invalidates
+existing qualification binding. All five normal startup live gates remain
+required, as do exact mount identity, custody, fsync and native TOML checks.
+
+This addresses the observed all-zero NAS filecounts with ample byte headroom.
+[RFC 1813 section 3.3.18](https://www.rfc-editor.org/rfc/rfc1813.html#section-3.3.18)
+defines file-slot telemetry separately from bytes; it does not define zero as a
+pass. Treating this tuple as unavailable telemetry is a narrowly accepted risk,
+not proof of available file slots or supported capacity. A deterministic exception
+for every NFS operational budget would silently change accepted configurations.
+A separate policy framework would add machinery for a single evidence decision;
+the optional reference keeps the default strict and the exact change digest-bound.
+
+The frozen first-deployment annex duplicates the old threshold and is unchanged.
+A separately reviewed candidate bootstrap must replace only its headroom loop
+with `native.check_headroom(storage)`, after its existing exact store probes.
+It must retain trusted-source checks, exact storage SHA256 and digest, UID/GID1000,
+custody, pinned binary/TOML, and the requirement that all five live gates are null.
+It cannot substitute for the qualified normal guard.
+
+Consumer boundaries: `storage-validate.yml`, the Swarm wrapper and inert render
+example consume preflight schema/digests and still require all live gates.
+Chaldea's separate `src/exec/blob-maintenance.ts` headroom check still requires
+NAS free inodes and can refuse this same observation. Its `src/exec/blob_pair.py`
+checks current bytes and available inodes only at the local ext4 backup destination.
+Neither consumer changes here. This proposal clears only native/bootstrap
+admission with explicit risk evidence, not maintenance or deployment acceptance.
+
+Using this proposal on a host requires separately reviewed replacement guard,
+preflight, candidate annex and storage bytes, new hashes/digest and explicit
+acceptance of unknown NAS filecount headroom. Existing packet authorization does
+not cover them. The 2e12-byte aggregate unquotaed NAS budget, 16 GiB metadata budget,
+local backups, manual cleanup/publication, 14-day retention and 1-day multipart
+expiry remain unchanged. Fullness, mount-loss, restore and other live gates are
+neither supplied nor waived by this source change.
+
 ### Inert installation and credential mutations
 
 This is an exact proposal to review after filling remaining facts, not a script

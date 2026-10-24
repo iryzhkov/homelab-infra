@@ -145,6 +145,11 @@ def expected_store(config, label):
     mode = store.get("acceptance_mode", "physical_cap")
     require(mode in ("physical_cap", "operational_budget"),
             label + " acceptance_mode must be physical_cap or operational_budget")
+    if "unknown_filecount_risk_acceptance" in store:
+        require(label == "data" and mount["fstype"] in NFS and mode == "operational_budget",
+                "unknown filecounts may be accepted only for operational-budget NFS data")
+        require(text(store["unknown_filecount_risk_acceptance"]),
+                "unknown_filecount_risk_acceptance must be a nonblank evidence reference")
     if mode == "operational_budget":
         require(store.get("physical_cap") is None,
                 label + " operational budget must not claim a physical cap")
@@ -319,6 +324,10 @@ def validate(config, probe=None):
         limitations.append("operational data budget only, aggregate across artifacts and results: "
                            "no physical byte or inode enforcement, no reserved space, and no "
                            "multipart constraint; shared NAS exhaustion remains possible")
+    if "unknown_filecount_risk_acceptance" in config["data"]:
+        limitations.append("NFS data all-zero filecounts may be accepted as UNKNOWN by the native "
+                           "headroom check: no free-inode capacity established; risk evidence: "
+                           + config["data"]["unknown_filecount_risk_acceptance"])
     if metadata["mode"] == "operational_budget":
         limitations.append("operational metadata budget only: no physical byte or inode "
                            "enforcement, no reserved space; other services and metadata can "
