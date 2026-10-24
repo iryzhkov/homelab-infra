@@ -2,11 +2,13 @@
 
 `roles/authentik_machine_identities` lets a named Chaldea host obtain short-lived
 web MCP access tokens from Authentik without holding any administrative
-credential. It is off: `playbooks/vars/authentik.yml` sets
-`authentik_machine_identities_enabled: false`, and `playbooks/authentik.yml`
-includes the role only when that is true. Nothing in this repository enables it,
-and no host or Authentik object has been changed by adding it. Complete infra
-identity creation and host credential delivery before enabling the fleet enrollment.
+credential. It is off in the integrated playbook: `playbooks/vars/authentik.yml`
+sets `authentik_machine_identities_enabled: false`, and `playbooks/authentik.yml`
+includes the role only when that is true. The one enabled declaration is the
+laptop's Jocasta tooling enrollment, run only by its own entrypoint; see
+[Isolated Jocasta tooling enrollment](#isolated-jocasta-tooling-enrollment).
+Complete infra identity creation and host credential delivery before enabling the
+fleet enrollment.
 
 ## What it manages
 
@@ -359,6 +361,44 @@ idempotent enrollment and independent cleanup. The source fixture proves role
 logic only. Large grant lists must also fit the verifier's token-size bound in
 the issued JWT; count and ID limits alone do not prove that. No inventory entry,
 client enrollment or host grant is enabled here.
+
+## Isolated Jocasta tooling enrollment
+
+`playbooks/authentik-jocasta-tooling.yml` enrolls the laptop's two persistent
+read-only Jocasta tooling accounts, `chaldea-laptop-jocasta-tooling-codex` and
+`chaldea-laptop-jocasta-tooling-claude`, declared in
+`playbooks/vars/authentik-jocasta-tooling.yml`. It owns its own blueprint,
+"homelab-infra Jocasta tooling laptop", with the application `chaldea-jocasta`
+("Chaldea Jocasta tooling access"), client ID `chaldea-jocasta-tooling`, group
+`chaldea-jocasta-tooling-identities`, the existing RSA signing key
+`8bbd6516-af33-4e64-a73b-caa39e692c29`, scope `jocasta.read` and 300-second
+tokens. Each account's only project is `tooling`.
+
+The entrypoint loads the existing controller SOPS API credential the way
+`authentik_config` does, refuses any origin other than
+https://auth.ryzhkov.dev, and runs only this role. It never converges the
+access blueprint, the shared "homelab-infra machine identities" blueprint or
+anything else, and grants nothing fleet-wide. Run it on the laptop, which is
+the inventory host receiving the files:
+
+```sh
+ansible-playbook playbooks/authentik-jocasta-tooling.yml --check --diff
+ansible-playbook playbooks/authentik-jocasta-tooling.yml
+```
+
+Check mode is the offline plan; add `-e jocasta_tooling_online_check=true` for
+the read-only ownership and collision preflight. A second real run changes
+nothing. The ownership, refusal and recovery rules above apply unchanged: never
+replay an uncertain apply. Both app passwords expire 2026-11-23T00:00:00Z.
+Extend `expires` or raise `generation` before then; within a day of expiry the
+role refuses to run. To remove the enrollment, set both identities and
+`authentik_jocasta_machine_access` to `state: absent` in that file and run the
+same entrypoint; keep the blueprint name. Offline tokens stay valid for up to
+300 seconds after removal.
+
+The nightly drift check compares applications only with the access
+blueprint's manifest, so it reports `chaldea-jocasta` as not managed by the
+repository until that manifest is extended (see the end of this document).
 
 ## Tests
 

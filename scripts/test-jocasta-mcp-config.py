@@ -188,5 +188,83 @@ class StackTest(unittest.TestCase):
                 self.assertIsNone(dotenv)
 
 
+class PersistentToolingTest(unittest.TestCase):
+    """The repository's desired state for the laptop's persistent Jocasta tooling."""
+
+    run_prepare = StackTest.run_prepare
+
+    def jocasta_stack(self):
+        values = yaml.safe_load((REPO / "inventory/host_vars/homelab.yml").read_text())
+        stacks = [stack for stack in values["host_stacks"] if stack["name"] == "jocasta"]
+        self.assertEqual(len(stacks), 1)
+        return values, stacks[0]
+
+    def test_homelab_enables_mcp_on_the_existing_stack(self):
+        values, stack = self.jocasta_stack()
+        self.assertEqual(values["jocasta_image"], IMAGE)
+        self.assertEqual(set(stack), {"name", "prepare_tasks", "secrets", "write_env", "env_extra", "routes"})
+        self.assertEqual((stack["prepare_tasks"], stack["secrets"], stack["write_env"]),
+                         ("prepare.yml", "homelab-jocasta", False))
+        # The browser route is unchanged; MCP has its own web_mcp_route.
+        self.assertEqual(stack["routes"], [{
+            "host": "jocasta.ryzhkov.dev", "url": "http://{{ mesh_host }}:1935",
+            "monitor_url": "https://jocasta.ryzhkov.dev/healthz", "health_check": {"path": "/healthz"}}])
+        self.assertEqual(stack["env_extra"]["JOCASTA_IMAGE"], "{{ jocasta_image }}")
+        env_extra = dict(stack["env_extra"], JOCASTA_IMAGE=values["jocasta_image"])
+        expected = dict(MCP, JOCASTA_OIDC_AUDIENCE="jocasta-rest-persistent-tooling")
+        self.assertEqual(jocasta.jocasta_mcp_env(env_extra), expected)
+        result, dotenv = self.run_prepare(env_extra)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = ["HOST_IP=10.42.0.2", "JOCASTA_IMAGE=" + IMAGE] + ["%s=%s" % i for i in sorted(expected.items())]
+        self.assertEqual(dotenv, "\n".join(lines) + "\n")
+
+    def test_route_vars_select_only_the_fixed_jocasta_route(self):
+        values = yaml.safe_load((REPO / "playbooks/vars/web-mcp-route-jocasta.yml").read_text())
+        self.assertEqual(set(values), {"web_mcp_route_enabled", "web_mcp_route"})
+        self.assertIs(values["web_mcp_route_enabled"], True)
+        self.assertEqual(values["web_mcp_route"], {
+            "service": "jocasta", "state": "present", "directory_uid": 1000,
+            **web_mcp.JOCASTA_ROUTE})
+        edge = web_mcp.route_contract(values["web_mcp_route"])
+        self.assertEqual((edge["host"], edge["host_rewrite"]), ("jocasta.mcp.ryzhkov.dev", "10.42.0.2:1935"))
+
+    def test_identity_declaration_is_isolated_and_valid(self):
+        identities = load("machine_identities", "roles/authentik_machine_identities/filter_plugins/machine_identities.py")
+        values = yaml.safe_load((REPO / "playbooks/vars/authentik-jocasta-tooling.yml").read_text())
+        shared = yaml.safe_load((REPO / "roles/authentik_machine_identities/defaults/main.yml").read_text())
+        integrated = yaml.safe_load((REPO / "playbooks/vars/authentik.yml").read_text())
+        self.assertIs(integrated["authentik_machine_identities_enabled"], False)
+        self.assertEqual(values["authentik_machine_identities_blueprint_name"], "homelab-infra Jocasta tooling laptop")
+        self.assertNotEqual(values["authentik_machine_identities_blueprint_name"],
+                            shared["authentik_machine_identities_blueprint_name"])
+        self.assertEqual(values["authentik_machine_services"], {})
+        access = values["authentik_jocasta_machine_access"]
+        self.assertEqual(access, {
+            "state": "present", "slug": "chaldea-jocasta", "name": "Chaldea Jocasta tooling access",
+            "group": "chaldea-jocasta-tooling-identities", "client_id": "chaldea-jocasta-tooling",
+            "resource": MCP["JOCASTA_MCP_RESOURCE_URL"], "signing_key": "8bbd6516-af33-4e64-a73b-caa39e692c29",
+            "scope": "jocasta.read", "token_seconds": 300})
+        self.assertEqual(values["authentik_machine_identities"], [
+            {"host": "laptop", "profile": "jocasta-tooling-" + driver, "project": "tooling", "generation": 1,
+             "expires": "2026-11-23T00:00:00Z", "state": "present"} for driver in ("codex", "claude")])
+        inventory = yaml.safe_load((REPO / "inventory/hosts.yml").read_text())
+        laptop = inventory["all"]["children"]["observability_clients"]["hosts"]["laptop"]
+        hosts = {"laptop": {"ssh_user": laptop["ssh_user"], "home": "", "connection": laptop["ansible_connection"]}}
+        spec = identities.machine_identity_spec(
+            values["authentik_machine_identities"], access, hosts, shared["authentik_machine_identity_max_days"],
+            "2026-10-24T00:00:00Z", values["authentik_machine_services"])
+        self.assertTrue(spec)
+        # The entrypoint runs only the identities role, never authentik_config.
+        play = yaml.safe_load((REPO / "playbooks/authentik-jocasta-tooling.yml").read_text())
+        self.assertEqual(len(play), 1)
+        self.assertNotIn("roles", play[0])
+        self.assertEqual(play[0]["vars_files"], ["vars/authentik-jocasta-tooling.yml"])
+        self.assertEqual([t["ansible.builtin.include_role"]["name"] for t in play[0]["tasks"]],
+                         ["authentik_machine_identities"])
+        roles = [task[key]["name"] for task in play[0]["pre_tasks"] + play[0]["tasks"] for key in task
+                 if key.endswith(("include_role", "import_role"))]
+        self.assertEqual(roles, ["authentik_machine_identities"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

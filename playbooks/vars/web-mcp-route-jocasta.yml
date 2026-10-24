@@ -1,0 +1,22 @@
+---
+# The dedicated Jocasta MCP route on the public-api edge, installed with the
+# maintained playbooks/web-mcp-route.yml (docs/web-mcp-endpoints.md, Separate
+# ingress contract). That playbook refuses this repository's inventory, so the
+# operator supplies a protected one-host scope inventory naming the edge alias:
+#
+#   ansible-playbook -i /protected/scope.yml playbooks/web-mcp-route.yml \
+#     -e web_mcp_edge_target=public-api -e @playbooks/vars/web-mcp-route-jocasta.yml
+#
+# Only web-mcp-jocasta.yml changes; the browser route, other MCP routes and
+# Traefik itself are untouched. To withdraw it before turning MCP off
+# (docs/jocasta.md), rerun with a later extra-vars file that sets
+# web_mcp_route to {service: jocasta, state: absent, directory_uid: 1000}.
+
+web_mcp_route_enabled: true
+web_mcp_route:
+  service: jocasta
+  state: present
+  # Measured owner UID of the public-api file-provider directory.
+  directory_uid: 1000
+  resource: https://jocasta.mcp.ryzhkov.dev/mcp
+  upstream: http://10.42.0.2:1935
