@@ -9,10 +9,23 @@
 # which holds the API keys and is not in this repository. The health check
 # reads the root API key from ov.conf instead of carrying it as a literal, as
 # the Compose file does.
+#
+# The OpenViking image is pinned to the digest running before the self-hosted
+# providers work (0.2.6), so deploying the embeddings service below cannot pick
+# up a newer :latest. The upgrade changes this line at its own cutover.
+#
+# embeddings: OpenAI-compatible embeddings for OpenViking from OpenVINO Model
+# Server on normandy's CPU (inventory/group_vars/swarm/openviking-inference.yml
+# holds the pinned model and the measurements). It publishes no port: only
+# services on this stack's overlay reach it, as http://embeddings:8000/v3
+# (model qwen3-embedding, 1024 dimensions). embeddings-prepare.yml installs
+# the model and the graph under ${SWARM_STATE_ROOT}/openviking-embeddings on
+# normandy and supplies the OPENVIKING_EMBEDDINGS_* values. Adding it does not
+# change what OpenViking uses: ov.conf names the embedding provider.
 
 services:
   openviking:
-    image: git.ryzhkov.dev/igor/openviking:latest
+    image: git.ryzhkov.dev/igor/openviking:latest@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f
     ports:
       - "1933:1933"
     volumes:
@@ -48,6 +61,75 @@ services:
           cpus: "2"
         reservations:
           memory: 256M
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+  embeddings:
+    # The image the 2026-10-24 measurements used (OVMS 2026.4.1). The -gpu
+    # variant carries the CPU plugin too; no device is mapped.
+    image: openvino/model_server:2026.4.1-gpu@sha256:a928903fe429f1e3e27107cc45932d30d95febfd2d1159dc50869c3eac76fc58
+    command:
+      - --rest_port
+      - "8000"
+      - --rest_workers
+      - "2"
+      - --config_path
+      - /workspace/config.json
+    read_only: true
+    environment:
+      OMP_NUM_THREADS: "2"
+      # Changes when the rendered configuration does, so a new graph redeploys.
+      OPENVIKING_EMBEDDINGS_CONFIG_SHA256: ${OPENVIKING_EMBEDDINGS_CONFIG_SHA256:?set by embeddings-prepare.yml}
+    volumes:
+      - type: bind
+        source: ${OPENVIKING_EMBEDDINGS_CONFIG_DIR:?set by embeddings-prepare.yml}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${OPENVIKING_EMBEDDINGS_MODEL_DIR:?set by embeddings-prepare.yml}
+        target: /model
+        read_only: true
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 67108864
+    # Readiness of the model, not an inference: a long document can hold the
+    # single inference stream for minutes, and a health check queued behind it
+    # would time out and restart the service in the middle of a reindex.
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - -o
+        - /dev/null
+        - http://127.0.0.1:8000/v2/models/qwen3-embedding/ready
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+      start_interval: 5s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.host == normandy
+      resources:
+        # Qualified on normandy under exactly these limits: a 6000-token
+        # input peaks at 1.75 GB; 8000 tokens, or four 2000-token inputs in
+        # one request, are OOM-killed. The graph's max_length (6144) refuses
+        # anything longer. Idle with the model loaded: about 0.7 GB.
+        limits:
+          memory: 2048M
+          cpus: "2"
+          pids: 128
+        reservations:
+          memory: 1536M
       update_config:
         order: stop-first
       rollback_config:

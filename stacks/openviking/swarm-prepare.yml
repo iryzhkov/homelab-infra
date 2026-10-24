@@ -19,6 +19,13 @@
 # never overwrites what the Swarm service wrote with older Compose data. The
 # Compose directory is left as it was: it is the rollback copy.
 
+# The self-hosted embedding service's model and configuration, on its own
+# node and under its own state directory. Runs on every deploy; it does not
+# touch the OpenViking service or the Compose project.
+- name: Prepare the embedding service
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/embeddings-prepare.yml"
+
 # ov.conf holds the root API key and the OpenAI keys. It is not in this
 # repository (it never was); it moves into the state directory, mode 0600,
 # and travels with the data on a move.
