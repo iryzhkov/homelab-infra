@@ -81,7 +81,9 @@ confirm that the old image
 `git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f`
 is still present on homelab.
 
-1. Stop OV 0.5.2 and stop writes, under root's outage procedure.
+1. Stop OV 0.5.2 and stop writes, under root's outage procedure. Block every
+   other OpenViking convergence until the matched data, configuration and source
+   image default have been restored and the old backend has passed verification.
 2. Restore the cold OV 0.2.6 data and configuration captured for this cutover,
    unchanged. Retain the 0.5.2-mutated data for diagnosis. Never open it with
    the 0.2.6 server.
