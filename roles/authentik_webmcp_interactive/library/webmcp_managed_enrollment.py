@@ -27,7 +27,7 @@ SIGNING_KEY = "8bbd6516-af33-4e64-a73b-caa39e692c29"
 HOSTS = {"laptop", "agent-a", "agent-b", "omarchy-pc"}
 PATHS = {
     "user": "/core/users/", "mapping": "/propertymappings/provider/scope/",
-    "provider": "/providers/oauth2/", "all_provider": "/providers/all/",
+    "provider": "/providers/oauth2/",
     "policy": "/policies/expression/",
     "application": "/core/applications/", "binding": "/policies/bindings/",
     "token": "/core/tokens/",
@@ -155,15 +155,31 @@ class APIClient:
         except Exception:
             raise Refused() from None
 
+    def require_superuser(self):
+        # Both collection and used_by views can silently filter non-admin reads.
+        actor = self.request("GET", "/core/users/me/")
+        require(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
+                and actor["user"].get("is_superuser") is True)
+
+    def mapping_uses(self, pk):
+        require(isinstance(pk, str) and str(uuid.UUID(pk)) == pk)
+        # Check authority here, independent of any previous application load.
+        self.require_superuser()
+        result = self.request("GET", "/propertymappings/all/" + pk + "/used_by/")
+        require(isinstance(result, list) and len(result) <= 500)
+        fields = {"app", "model_name", "pk", "name", "action"}
+        require(all(isinstance(row, dict) and set(row) == fields
+                    and all(isinstance(value, str) and 1 <= len(value) <= 1024
+                            for value in row.values()) for row in result))
+        return result
+
     def rows(self, kind):
         # Complete bounded lists are required; no silent pagination or omissions.
         path = PATHS[kind] + "?page_size=500"
         if kind == "application":
             # A matching pagination count is not completeness evidence when
             # Authentik silently filters applications for a non-superuser.
-            actor = self.request("GET", "/core/users/me/")
-            require(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
-                    and actor["user"].get("is_superuser") is True)
+            self.require_superuser()
             path += "&superuser_full_list=true"
         result = self.request("GET", path)
         require(isinstance(result, dict) and isinstance(result.get("results"), list))
@@ -304,18 +320,38 @@ class Enrollment:
             provider = owned["provider"]["pk"]
             app_ids = {v["pk"] for v in owned.values() if v["kind"] == "application"}
             require(all(a.get("provider") != provider or a["pk"] in app_ids for a in apps))
-        mapping_ids = {v["pk"] for v in owned.values() if v["kind"] == "mapping"}
-        provider_ids = {v["pk"] for v in owned.values() if v["kind"] == "provider"}
-        # Scope mappings belong to the common Provider model, including proxy
-        # providers. Keep mutations OAuth2-only, but require complete cross-type
-        # reference evidence before every convergence and credential retrieval.
-        providers = self.rows["all_provider"]
-        require(all(isinstance(p, dict) and type(p.get("pk")) is int
-                    and isinstance(p.get("property_mappings"), list)
-                    and all(isinstance(value, str) for value in p["property_mappings"])
-                    for p in providers))
-        require(all(not (set(p["property_mappings"]) & mapping_ids)
-                    or p["pk"] in provider_ids for p in providers))
+        # Pinned UsedByMixin on the concrete ScopeMapping enumerates reverse
+        # managers, including direct subclass relations (DCR) and base relations
+        # (Sources, provider group fields, RAC). Only the owned pair is allowed.
+        provider = owned.get("provider")
+        for record in owned.values():
+            if record["kind"] != "mapping":
+                continue
+            pk = record["pk"]
+            uses = self.api.mapping_uses(pk)
+            attached = provider is not None and pk in provider["body"]["property_mappings"]
+            if not attached:
+                require(uses == [])
+                continue
+            provider_pk = provider["pk"]
+            require(type(provider_pk) is int and provider_pk > 0 and len(uses) == 2)
+            common = [row for row in uses if row["model_name"] == "provider"]
+            through = [row for row in uses if row["model_name"] == "providerpropertymapping"]
+            require(len(common) == len(through) == 1)
+            require(common[0] == {
+                "app": "authentik_core", "model_name": "provider",
+                "pk": str(provider_pk), "name": provider["body"]["name"],
+                "action": "cascade_many",
+            })
+            # This is the pinned model's fixed __str__, containing only FK IDs,
+            # not a user-editable display name or name-based object adoption.
+            relation = through[0]
+            require(relation["app"] == "authentik_core"
+                    and re.fullmatch(r"[1-9][0-9]{0,18}", relation["pk"]) is not None
+                    and relation["name"] == (
+                        f"ProviderPropertyMapping for Provider {provider_pk} "
+                        f"and PropertyMapping {pk}.")
+                    and relation["action"] == "cascade")
         policy_ids = {v["pk"] for v in owned.values() if v["kind"] == "policy"}
         binding_ids = {v["pk"] for v in owned.values() if v["kind"] == "binding"}
         require(all(b.get("policy") not in policy_ids or b["pk"] in binding_ids for b in bindings))

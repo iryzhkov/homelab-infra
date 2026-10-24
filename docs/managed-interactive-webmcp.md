@@ -53,15 +53,34 @@ with an API-returned PK is accepted. No blueprint or UUID importer is used.
 Receipt fields are declared public attributes and IDs, never app passwords or
 returned client secrets.
 
-The API actor must report is_superuser=true before the module accepts an
-application collection as complete. A matching filtered pagination count is not
-sufficient. This is checked again for each application collection read.
+The API actor must report user.is_superuser as the JSON boolean true through
+/core/users/me/ before each application collection and each mapping used_by read.
+A matching filtered pagination count is not sufficient. Reference authority is
+checked directly, independently of any previous application collection load.
 
 No name-only adoption occurs. Matching names without receipts refuse; existing
 objects must match original IDs/attributes. Privilege and foreign-reference drift
-refuse. Mapping references are inspected through the complete bounded common
-provider collection, including proxy/backchannel types; mutations remain confined
-to the recorded OAuth2 provider. Missing reference fields or pagination refuse. An uncertain write leaves pending set. Further runs refuse before API
+refuse. Each recorded scope mapping is inspected through
+/propertymappings/all/UUID/used_by/ on the concrete ScopeMapping. Pinned Authentik
+2026.8.4 enumerates reverse managers without pagination; verified superuser access
+is required for unfiltered evidence. This covers base and subclass relations,
+including DCR, Source user/group, provider group and RAC consumers, without
+enumerating those endpoint collections in the controller.
+
+Only the exact common Provider row and ProviderPropertyMapping through row for
+the receipt-bound OAuth2 provider/mapping IDs are accepted for an attached mapping;
+an unattached mapping must have no references. The through row's fixed model
+string encodes the two FK IDs; it is not an editable name or name-based adoption.
+Foreign, missing, malformed, duplicate, oversized or unavailable evidence refuses
+before convergence writes and is freshly checked before credential retrieval.
+Mapping mutations remain confined to the recorded OAuth2 scope/provider endpoints.
+
+The offline Django5.2.17/DRF3.17.1/SQLite seam executes pinned UsedByMixin and
+extracts relevant actual model declarations from hash-checked upstream snapshots.
+It qualifies producer shape and consumer refusal, including direct ScopeMapping
+DCR relations. Its guardian stand-in requires a strict superuser and returns the
+real queryset; it does not qualify live RBAC or a full Authentik runtime.
+An uncertain write leaves pending set. Further runs refuse before API
 requests. Root must reconcile that original operation separately. Never delete
 the receipt, invent an acknowledgement or replay a POST. No automatic adoption
 or recovery command is provided.

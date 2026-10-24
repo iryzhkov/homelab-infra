@@ -5,12 +5,15 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace as NS
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "roles/authentik_webmcp_interactive/tests"))
+import used_by_seam as seam
 spec = importlib.util.spec_from_file_location("managed", ROOT / "roles/authentik_webmcp_interactive/library/webmcp_managed_enrollment.py")
 assert spec and spec.loader
 m = importlib.util.module_from_spec(spec)
@@ -27,11 +30,15 @@ class FakeAPI:
         self.calls = []
         self.next = 100
         self.fail_next = False
+        self.superuser = True
+        self.foreign = []
+        self.evidence = None
+        self.used_by_reads = 0
+
+    require_superuser = m.APIClient.require_superuser
+    mapping_uses = m.APIClient.mapping_uses
 
     def rows(self, kind):
-        if kind == "all_provider":
-            # The common endpoint includes OAuth2 and other provider subclasses.
-            return copy.deepcopy(self.data["provider"] + self.data[kind])
         return copy.deepcopy(self.data[kind])
 
     def request(self, method, path, body=None, public=False):
@@ -39,6 +46,15 @@ class FakeAPI:
         if self.fail_next and method in ("POST", "PATCH", "DELETE"):
             self.fail_next = False
             raise m.Refused()
+        if path == "/core/users/me/":
+            return {"user": {"is_superuser": self.superuser}}
+        if path.startswith("/propertymappings/all/") and path.endswith("/used_by/"):
+            self.used_by_reads += 1
+            pk = path.split("/")[3]
+            result = seam.references(pk, self.data["provider"], self.foreign)
+            if self.evidence is not None:
+                return self.evidence(result)
+            return result
         if public:
             assert path == "/application/o/jocasta-managed-interactive/jwks/"
             return {"keys": [{"use": "sig", "kty": "RSA", "alg": "RS256", "n": "public", "e": "AQAB"}]}
@@ -150,13 +166,7 @@ class Tests(unittest.TestCase):
         with self.assertRaises(m.Refused):
             self.enroll().converge(hosts(), "present")
 
-    def test_proxy_mapping_reference_refuses_present_and_global_revocation(self):
-        self.enroll().converge(hosts(), "present")
-        self.api.data["all_provider"].append({
-            "pk": 999, "name": "unrelated-proxy",
-            "meta_model_name": "authentik_providers_proxy.proxyprovider",
-            "property_mappings": [self.api.data["mapping"][0]["pk"]],
-        })
+    def assert_reference_refusal(self):
         receipt = (self.path / "receipt.json").read_bytes()
         credential = (self.path / "laptop.json").read_bytes()
         for state in ("present", "absent"):
@@ -170,29 +180,135 @@ class Tests(unittest.TestCase):
                 self.assertEqual((self.path / "laptop.json").read_bytes(), credential)
         self.assertTrue(self.api.data["mapping"])
 
-    def test_incomplete_common_provider_reference_evidence_refuses(self):
+    def test_real_owned_producer_output_is_accepted(self):
         self.enroll().converge(hosts(), "present")
-        self.api.data["all_provider"].append({"pk": 999})
-        before = len(self.api.calls)
-        with self.assertRaises(m.Refused):
-            self.enroll().converge(hosts(), "present")
-        self.assertFalse(any(method != "GET" or path.endswith("/view_key/")
-                             for method, path, _, _ in self.api.calls[before:]))
+        provider = self.api.data["provider"][0]
+        pk = self.api.data["mapping"][0]["pk"]
+        result = self.api.mapping_uses(pk)
+        self.assertEqual(result, [
+            {"app": "authentik_core", "model_name": "provider",
+             "pk": str(provider["pk"]), "name": m.CLIENT, "action": "cascade_many"},
+            {"app": "authentik_core", "model_name": "providerpropertymapping",
+             "pk": result[1]["pk"],
+             "name": f"ProviderPropertyMapping for Provider {provider['pk']} and PropertyMapping {pk}.",
+             "action": "cascade"},
+        ])
+        # The view retrieves the concrete subclass, not the base mapping.
+        self.assertIsInstance(seam.ScopeMapping.objects.get(pk=pk), seam.PropertyMapping)
+        self.assertEqual(seam.ScopeMapping._meta.pk.name, "propertymapping_ptr")
+        self.assertEqual(seam.ProviderPropertyMapping._meta.pk.get_internal_type(), "AutoField")
+        self.assertFalse(self.enroll().converge(hosts(), "present"))
 
-    def test_common_provider_collection_requires_complete_bounded_results(self):
+    def test_foreign_provider_mapping_reference_refuses_present_and_global_revocation(self):
+        self.enroll().converge(hosts(), "present")
+        self.api.data["provider"].append({
+            "pk": 999, "name": "unrelated-proxy",
+            "property_mappings": [self.api.data["mapping"][0]["pk"]],
+        })
+        # Common Provider reverse managers include proxy and other subclasses.
+        self.assert_reference_refusal()
+
+    def test_real_dcr_and_source_references_refuse_before_any_effect(self):
+        self.enroll().converge(hosts(), "present")
+        for relation, expected_model in (
+                ("dcr", "oauth2dynamicclientregistration"),
+                ("source_user", "source"), ("source_group", "source")):
+            with self.subTest(relation=relation):
+                self.api.foreign = [relation]
+                pk = self.api.data["mapping"][0]["pk"]
+                result = self.api.mapping_uses(pk)
+                self.assertIn(expected_model, {row["model_name"] for row in result})
+                self.assert_reference_refusal()
+        self.api.foreign = []
+
+    def test_used_by_malformed_oversize_and_unavailable_evidence_refuses(self):
+        self.enroll().converge(hosts(), "present")
+        def unavailable(rows):
+            raise m.Refused()
+        transforms = [
+            lambda rows: {}, lambda rows: None, lambda rows: {"results": rows},
+            lambda rows: rows * 251, lambda rows: rows[:1], lambda rows: [],
+            lambda rows: rows + [rows[1]],
+            lambda rows: [dict(rows[0], extra="unexpected"), rows[1]],
+            lambda rows: [dict(rows[0], pk=103), rows[1]],
+            lambda rows: [dict(rows[0], name="x" * 1025), rows[1]],
+            lambda rows: [dict(rows[0], action="cascade"), rows[1]],
+            lambda rows: [rows[0], dict(rows[1], name="editable display name")],
+            lambda rows: [rows[0], dict(rows[1], pk="0")],
+            lambda rows: [rows[0], dict(rows[1], name=f"ProviderPropertyMapping for Provider 999 and PropertyMapping {self.api.data['mapping'][0]['pk']}.")],
+            unavailable,
+        ]
+        for index, transform in enumerate(transforms):
+            with self.subTest(index=index):
+                self.api.evidence = transform
+                self.assert_reference_refusal()
+        self.api.evidence = None
+
+    def test_filtered_actor_evidence_refuses_before_used_by_and_effects(self):
+        self.enroll().converge(hosts(), "present")
+        for flag in (False, None, "true", 1):
+            with self.subTest(flag=flag):
+                self.api.superuser = flag
+                reads = self.api.used_by_reads
+                self.assert_reference_refusal()
+                self.assertEqual(self.api.used_by_reads, reads)
+        # The stand-in never presents filtered evidence as complete.
+        pk = self.api.data["mapping"][0]["pk"]
+        seam.references(pk, self.api.data["provider"])
+        with self.assertRaises(AssertionError):
+            seam.used_by(pk, superuser=False)
+
+    def test_used_by_checks_actor_without_previous_application_load(self):
         api = m.APIClient("synthetic-admin-token")
-        called = []
-        response = {"results": [], "pagination": {"count": 0, "next": 0}}
-        def request(method, path):
-            called.append((method, path))
-            return response
-        api.request = request
-        self.assertEqual(api.rows("all_provider"), [])
-        self.assertEqual(called, [("GET", "/providers/all/?page_size=500")])
-        for pagination in ({"count": 1, "next": 0}, {"count": 0, "next": 2}, {}):
-            response["pagination"] = pagination
+        pk = "00000000-0000-4000-8000-000000000001"
+        for actor in ({}, {"user": None}, {"user": {}}, {"user": {"is_superuser": 1}},
+                      {"user": {"is_superuser": True}}):
+            calls = []
+            def request(method, path):
+                calls.append((method, path))
+                return actor if path == "/core/users/me/" else []
+            api.request = request
+            if isinstance(actor.get("user"), dict) and actor["user"].get("is_superuser") is True:
+                self.assertEqual(api.mapping_uses(pk), [])
+                self.assertEqual(calls[-1], ("GET", f"/propertymappings/all/{pk}/used_by/"))
+            else:
+                with self.assertRaises(m.Refused):
+                    api.mapping_uses(pk)
+                self.assertEqual(calls, [("GET", "/core/users/me/")])
+
+    def test_rechecks_reference_evidence_before_view_key(self):
+        self.enroll().converge(hosts(), "present")
+        before_reads = self.api.used_by_reads
+        def late_foreign(rows):
+            # Two mappings pass the first guard, then drift appears on readback.
+            if self.api.used_by_reads > before_reads + 2:
+                return seam.references(self.api.data["mapping"][0]["pk"],
+                                       self.api.data["provider"], ["dcr"])
+            return rows
+        self.api.evidence = late_foreign
+        self.assert_reference_refusal()
+
+    def test_unattached_mapping_requires_empty_evidence(self):
+        self.enroll().converge(hosts(), "present")
+        enrollment = self.enroll()
+        # Model a confirmed bootstrap boundary before mappings are attached.
+        enrollment.receipt["objects"]["provider"]["body"]["property_mappings"] = []
+        self.api.data["provider"][0]["property_mappings"] = []
+        enrollment.no_foreign_references()
+        self.api.foreign = ["dcr"]
+        with self.assertRaises(m.Refused):
+            enrollment.no_foreign_references()
+
+    def test_collections_still_require_complete_bounded_results(self):
+        api = m.APIClient("synthetic-admin-token")
+        for result in (
+                {"results": [], "pagination": {"count": 1, "next": 0}},
+                {"results": [], "pagination": {"count": 0, "next": 2}},
+                {"results": [], "pagination": {}},
+                {"results": [{}] * 501, "pagination": {"count": 501, "next": 0}}):
+            api.request = lambda *args: result
             with self.assertRaises(m.Refused):
-                api.rows("all_provider")
+                api.rows("provider")
 
     def test_application_collection_requires_verified_superuser(self):
         api = m.APIClient("synthetic-admin-token")
