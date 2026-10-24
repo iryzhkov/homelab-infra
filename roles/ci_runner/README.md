@@ -1,4 +1,11 @@
-# Private infrastructure CI runner
+# Retired private infrastructure CI runner
+
+The public repository uses GitHub-hosted CI. This role is retained as a historical
+implementation reference; `playbooks/ci-runner.yml` now stops and disables its
+service. Do not register or start it for this public repository. See
+[the hosted CI guide](../../docs/github-hosted-ci.md) for retirement and verification.
+
+## Historical setup
 
 `playbooks/ci-runner.yml` declares a dedicated repository-specific GitHub Actions
 runner on agent-a. Existing UpKeeper and homelab-cli runners are untouched.
