@@ -85,8 +85,9 @@ is still present on homelab.
 2. Restore the cold OV 0.2.6 data and configuration captured for this cutover,
    unchanged. Retain the 0.5.2-mutated data for diagnosis. Never open it with
    the 0.2.6 server.
-3. Put a freshly generated ROOT key into the restored configuration. Never
-   re-enable the old ROOT key, which is public and revoked.
+3. Retain the protected fresh ROOT issued for this rollout in the restored
+   configuration. It must match the retained pre-cutover client bindings. Never
+   re-enable the older public revoked ROOT or rotate again as a rollback shortcut.
 4. Revert this activation commit, so that routine convergence keeps 0.2.6. An
    `openviking_image` extra var alone is undone by the next routine run, which
    would start 0.5.2 against 0.2.6 data.

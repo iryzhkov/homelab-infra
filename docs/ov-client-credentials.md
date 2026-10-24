@@ -268,12 +268,15 @@ performs none of those effects.
    and public read-MCP paths. Semantic ingestion and vector reindex acceptance
    belong to the provider upgrade's separate checks.
 
-Rollback requires another coordinated outage: stop writes, restore the exact
-original 0.2.6 backend data/config from its retained backup, restore the old
-client keyring/keyfile sources, previous ov-http immutable release and dsh managed
-secret/environment, and recreate the service consumers through their owners.
-The existing wrapper sources reload per request during rollback too. Verify
-old credential paths against the old backend. Do not point a new tenant key at 0.2.6 and call that rollback, or reopen 0.5.2-mutated data with
+Rollback requires another coordinated outage. Stop writes and the 0.5.2
+writer, then restore the matching cold 0.2.6 data/config captured for this
+cutover, retaining the protected fresh ROOT in that configuration. Restore only
+the new cutover generation's pre-cutover client bindings, dsh managed source
+and environment, and the retained safe ov-http release through their owners.
+Those bindings must match the protected fresh ROOT. Never restore the earlier
+exposed-root-rotation generation or an ov-http release containing the public
+revoked key. Recreate service consumers through their owners; wrapper sources
+reload per request. Verify the restored credential paths against the old backend. Do not point a new tenant key at 0.2.6 and call that rollback, or reopen 0.5.2-mutated data with
 the old server. Root decides sequencing within the outage and handles any
 writes accepted since cutover; this tool does not roll back server data.
 
