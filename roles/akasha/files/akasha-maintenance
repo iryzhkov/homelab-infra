@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import sys
 import time
 import urllib.request
@@ -45,7 +46,22 @@ def snapshot(root):
     fd = os.open(root / "backup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "rb+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        _snapshot(root)
+        # The existing lock carries bounded rotation evidence before deletion.
+        previous = root / "backup/events.db"
+        try:
+            snapshot_time = previous.stat().st_mtime
+        except FileNotFoundError:
+            snapshot_time = 0
+        lock.seek(0)
+        lock.truncate()
+        lock.write(json.dumps({"started": time.time(), "snapshot_time": snapshot_time}).encode())
+        lock.flush()
+        try:
+            _snapshot(root)
+        finally:
+            lock.seek(0)
+            lock.truncate()
+            lock.flush()
 
 
 def _snapshot(root):
@@ -91,11 +107,38 @@ def _snapshot(root):
         staging.unlink(missing_ok=True)
 
 
+def check_snapshot(root):
+    fd = os.open(root / "backup.lock", os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as lock:
+        rotating = False
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            rotating = True
+        try:
+            info = (root / "backup/events.db").stat()
+            if not stat.S_ISREG(info.st_mode):
+                raise RuntimeError("consistent snapshot is not a regular file")
+            snapshot_time = info.st_mtime
+        except FileNotFoundError:
+            if not rotating:
+                raise RuntimeError("consistent snapshot absent")
+            evidence = json.loads(lock.read(4097))
+            if (not isinstance(evidence, dict) or
+                    any(type(evidence.get(key)) not in (int, float)
+                        for key in ("started", "snapshot_time"))):
+                raise ValueError("invalid snapshot rotation evidence")
+            now = time.time()
+            if not 0 <= now - evidence.get("started", 0) <= 300:
+                raise RuntimeError("snapshot rotation exceeds time bound")
+            snapshot_time = evidence.get("snapshot_time", 0)
+        if not 0 <= time.time() - snapshot_time <= 24 * 3600:
+            raise RuntimeError("consistent snapshot absent or older than proposed 24h RPO")
+
+
 def health(root, url):
     check_storage(root)
-    snapshot_file = root / "backup/events.db"
-    if not snapshot_file.is_file() or time.time() - snapshot_file.stat().st_mtime > 24 * 3600:
-        raise RuntimeError("consistent snapshot absent or older than proposed 24h RPO")
+    check_snapshot(root)
     # Local listener only; no bearer and no proxy environment.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(url, timeout=5) as response:
