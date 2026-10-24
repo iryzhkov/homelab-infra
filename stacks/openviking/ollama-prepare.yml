@@ -1,0 +1,173 @@
+---
+# Included for embeddings and generation, never touches OV config/data.
+- name: Name this runtime
+  ansible.builtin.set_fact:
+    ov_recipe: "{{ ov_inference_recipes[ov_provider.key] }}"
+    ov_runtime_root: "{{ swarm_state_root }}/{{ ov_provider.value.state_dir }}"
+
+- name: Check the scoped destination
+  ansible.builtin.assert:
+    that:
+      - ov_provider.value.host in groups['swarm_workers']
+      - ov_provider.value.state_dir in ['openviking-embeddings', 'openviking-generation']
+      - ov_provider.key in ['embeddings', 'generation']
+      - ov_provider.value.source == 'registry' or ov_provider.value.source is match('^file:///')
+    quiet: true
+
+- name: Verify and install the pinned Ollama model
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/model-prepare.yml"
+  vars:
+    ov_model_root: "{{ ov_runtime_root }}/models"
+    ov_model_owner: root
+    ov_model_host: "{{ ov_provider.value.host }}"
+    ov_model_source: "{{ ov_provider.value.source }}"
+
+- name: Render the scoped CPU runtime project
+  ansible.builtin.template:
+    src: "{{ swarm_stack_src }}/templates/inference-compose.yml.j2"
+    dest: "{{ ov_runtime_root }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Install the generation alias recipe
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/recipes/generation.Modelfile"
+    dest: "{{ ov_runtime_root }}/Modelfile"
+    owner: root
+    group: root
+    mode: "0444"
+  when: ov_provider.key == 'generation'
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Start only this inference runtime with explicit zero swap allowance
+  community.docker.docker_compose_v2:
+    project_src: "{{ ov_runtime_root }}"
+    files: [compose.yml]
+    project_name: "openviking-{{ ov_provider.key }}"
+    state: present
+    wait: true
+    wait_timeout: 120
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Verify the running CPU container has the qualified hard limits
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "--format={{ '{{json .HostConfig}}' }}"
+      - "openviking-{{ ov_provider.key }}"
+  register: ov_runtime_limits
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Refuse a runtime without the measured memory CPU and swap limits
+  ansible.builtin.assert:
+    that:
+      - (ov_runtime_limits.stdout | from_json).Memory == 2147483648
+      - (ov_runtime_limits.stdout | from_json).MemorySwap == 2147483648
+      - (ov_runtime_limits.stdout | from_json).NanoCpus == 2000000000
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Inspect the existing CPU generation alias
+  ansible.builtin.command:
+    argv: [docker, exec, openviking-generation, ollama, show, ov-gen-4k, --modelfile]
+  register: ov_existing_generation_model
+  changed_when: false
+  failed_when: false
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Check whether the existing generation alias matches the pinned recipe
+  vars:
+    # The recipe's four parameters plus the two stops the pinned base inherits
+    # from its params blob sha256:f02dd72b...a2d216, which is exactly
+    # {"stop":["<|im_start|>","<|im_end|>"]}. Ollama does not print parameters in
+    # recipe order, so the lines are compared as a sorted list: any extra,
+    # missing, duplicated or drifted parameter is a mismatch.
+    ov_generation_parameters: &ov_generation_parameters
+      - "PARAMETER num_ctx 4096"
+      - "PARAMETER num_predict 512"
+      - "PARAMETER num_thread 2"
+      - "PARAMETER temperature 0"
+      - "PARAMETER stop <|im_start|>"
+      - "PARAMETER stop <|im_end|>"
+  ansible.builtin.set_fact:
+    ov_generation_alias_matches: >-
+      {{ ov_existing_generation_model.rc == 0
+         and ('TEMPLATE "' ~ lookup('file', swarm_stack_src ~ '/recipes/generation-template.txt', rstrip=false) ~ '"')
+             in ov_existing_generation_model.stdout
+         and ov_existing_generation_model.stdout is search('(?m)^FROM .*sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603$')
+         and (ov_existing_generation_model.stdout | regex_findall('(?m)^PARAMETER .*$') | sort)
+             == (ov_generation_parameters | sort)
+         and ov_existing_generation_model.stdout is not search('(?m)^(SYSTEM|MESSAGE|ADAPTER) ') }}
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+
+- name: Create the generation alias using the pinned base
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - openviking-generation
+      - ollama
+      - create
+      - ov-gen-4k
+      - -f
+      - /recipe/Modelfile
+  # Recreate only an absent or drifted alias, then verify actual runtime output.
+  changed_when: true
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+    - not ov_generation_alias_matches
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+# The guard counts this exact legacy template, with no hidden system/history.
+# Inspect the recreated alias rather than trusting a retained cache's parameters.
+- name: Inspect the actual CPU generation alias
+  ansible.builtin.command:
+    argv: [docker, exec, openviking-generation, ollama, show, ov-gen-4k, --modelfile]
+  register: ov_generation_model
+  changed_when: false
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Refuse an alias that differs from the counted CPU model recipe
+  vars:
+    ov_generation_parameters: *ov_generation_parameters
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('TEMPLATE "' ~ lookup('file', swarm_stack_src ~ '/recipes/generation-template.txt', rstrip=false) ~ '"')
+        in ov_generation_model.stdout
+      - ov_generation_model.stdout is search('(?m)^FROM .*sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER num_ctx 4096$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER num_predict 512$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER num_thread 2$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER temperature 0$')
+      - >-
+        (ov_generation_model.stdout | regex_findall('(?m)^PARAMETER .*$') | sort)
+        == (ov_generation_parameters | sort)
+      - ov_generation_model.stdout is not search('(?m)^(SYSTEM|MESSAGE|ADAPTER) ')
+    quiet: true
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode

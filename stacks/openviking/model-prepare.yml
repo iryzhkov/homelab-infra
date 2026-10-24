@@ -1,0 +1,158 @@
+---
+# The recipe pins the manifest and every reachable blob, including the official
+# embedding manifest used by the matched wrapper. No ollama pull of a mutable tag.
+- name: Check the model recipe
+  ansible.builtin.assert:
+    that:
+      - ov_recipe.manifest_sha256 is match('^[0-9a-f]{64}$')
+      - ov_recipe.files | map(attribute='sha256') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+      - ov_recipe.files | map(attribute='path') | reject('match', '^blobs/sha256-[0-9a-f]{64}$') | list | length == 0
+      - ov_recipe.manifest_path is match('^manifests/registry.ollama.ai/library/[a-z0-9-]+/[A-Za-z0-9._-]+$')
+      - ov_model_root is match('^/')
+      - ov_model_source == 'registry' or ov_model_source is match('^file:///')
+    quiet: true
+
+- name: Inspect model directory ancestors before writing
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ ov_model_root }}"
+    - "{{ ov_model_root }}/blobs"
+    - "{{ ov_model_root }}/manifests"
+    - "{{ ov_model_root }}/manifests/registry.ollama.ai"
+    - "{{ ov_model_root }}/manifests/registry.ollama.ai/library"
+    - "{{ ov_model_root }}/{{ ov_recipe.manifest_path | dirname }}"
+  register: ov_model_dirs
+  delegate_to: "{{ ov_model_host }}"
+  become: true
+
+- name: Refuse symlinked destination directories
+  ansible.builtin.assert:
+    that: not item.stat.exists or (item.stat.isdir | default(false) and not item.stat.islnk | default(false))
+    quiet: true
+  loop: "{{ ov_model_dirs.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Create model directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ov_model_owner }}"
+    group: "{{ ov_model_owner }}"
+    mode: "0755"
+  loop:
+    - "{{ ov_model_root }}"
+    - "{{ ov_model_root }}/blobs"
+    - "{{ ov_model_root }}/manifests"
+    - "{{ ov_model_root }}/manifests/registry.ollama.ai"
+    - "{{ ov_model_root }}/manifests/registry.ollama.ai/library"
+    - "{{ ov_model_root }}/{{ ov_recipe.manifest_path | dirname }}"
+  delegate_to: "{{ ov_model_host }}"
+  become: true
+
+- name: Inspect existing blobs without following links
+  ansible.builtin.stat:
+    path: "{{ ov_model_root }}/{{ item.path }}"
+    follow: false
+  loop: "{{ ov_recipe.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: ov_model_existing
+  delegate_to: "{{ ov_model_host }}"
+  become: true
+
+- name: Refuse symlinked or nonregular blobs before download
+  ansible.builtin.assert:
+    that: not item.stat.exists or (item.stat.isreg | default(false) and not item.stat.islnk | default(false))
+    quiet: true
+  loop: "{{ ov_model_existing.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+- name: Install small source-managed embedding metadata blobs
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/{{ item.bundled }}"
+    dest: "{{ ov_model_root }}/{{ item.path }}"
+    owner: "{{ ov_model_owner }}"
+    group: "{{ ov_model_owner }}"
+    mode: "0444"
+  loop: "{{ ov_recipe.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: item.bundled is defined
+  delegate_to: "{{ ov_model_host }}"
+  become: true
+
+- name: Fetch pinned blobs from the retained cache or registry by digest
+  ansible.builtin.get_url:
+    url: >-
+      {{ (ov_model_source ~ '/' ~ item.path) if ov_model_source != 'registry'
+         else item.url | default(ov_recipe.registry ~ '/blobs/sha256:' ~ item.sha256) }}
+    dest: "{{ ov_model_root }}/{{ item.path }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    owner: "{{ ov_model_owner }}"
+    group: "{{ ov_model_owner }}"
+    mode: "0444"
+    timeout: 900
+  when: item.bundled is not defined
+  loop: "{{ ov_recipe.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  delegate_to: "{{ ov_model_host }}"
+  become: true
+
+- name: Read each blob back
+  ansible.builtin.stat:
+    path: "{{ ov_model_root }}/{{ item.path }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+    follow: false
+  loop: "{{ ov_recipe.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: ov_model_verified
+  delegate_to: "{{ ov_model_host }}"
+  become: true
+
+- name: Require each installed blob to match its pin
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - not item.stat.islnk | default(false)
+      - item.stat.size == item.item.size
+      - item.stat.checksum == item.item.sha256
+    quiet: true
+  loop: "{{ ov_model_verified.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+  when: not ansible_check_mode
+
+- name: Verify the source-managed manifest before installing it
+  ansible.builtin.assert:
+    that: lookup('file', swarm_stack_src ~ '/' ~ ov_recipe.manifest, rstrip=false) | hash('sha256') == ov_recipe.manifest_sha256
+    quiet: true
+
+- name: Inspect the manifest destination without following links
+  ansible.builtin.stat:
+    path: "{{ ov_model_root }}/{{ ov_recipe.manifest_path }}"
+    follow: false
+  register: ov_manifest_existing
+  delegate_to: "{{ ov_model_host }}"
+  become: true
+
+- name: Refuse a symlinked or nonregular manifest
+  ansible.builtin.assert:
+    that: not ov_manifest_existing.stat.exists or (ov_manifest_existing.stat.isreg | default(false) and not ov_manifest_existing.stat.islnk | default(false))
+    quiet: true
+
+- name: Install the exact manifest
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/{{ ov_recipe.manifest }}"
+    dest: "{{ ov_model_root }}/{{ ov_recipe.manifest_path }}"
+    owner: "{{ ov_model_owner }}"
+    group: "{{ ov_model_owner }}"
+    mode: "0444"
+  delegate_to: "{{ ov_model_host }}"
+  become: true

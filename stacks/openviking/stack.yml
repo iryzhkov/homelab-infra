@@ -1,18 +1,16 @@
-# OpenViking as a Swarm stack (phase 5, batch F3). Deployed by
-# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
-# stacks-f3.yml; the Compose file beside this one (which builds the image
-# locally) stays until the phase 5 cleanup. The image is the one
-# `--tags registry` pushes and pre-pulls on both workers.
-#
-# State lives in ${SWARM_STATE_ROOT}/openviking on the node labelled
-# pin.openviking: data/ (vector store and viking files) and config/ov.conf,
-# which holds the API keys and is not in this repository. The health check
-# reads the root API key from ov.conf instead of carrying it as a literal, as
-# the Compose file does.
-
+# Keep OV 0.2.6 until root's reviewed activation. Controlled cutover overrides the image.
+# CPU providers are scoped Compose projects because Swarm has no memory-swap cap.
+# All inference endpoints are overlay-only. ov.conf remains private and untouched.
+# embeddings-prepare.yml sets the adapter variables. docker stack config reads a
+# hyphen in a :? message as a default, so the messages must not contain one.
 services:
   openviking:
-    image: git.ryzhkov.dev/igor/openviking:latest
+    image: ${OPENVIKING_IMAGE:-git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f}
+    environment:
+      OPENVIKING_CONFIG_FILE: /app/ov.conf
+      OPENVIKING_WITH_BOT: "0"
+      TMPDIR: /app/data/temp
+    networks: [default, providers]
     ports:
       - "1933:1933"
     volumes:
@@ -55,3 +53,53 @@ services:
       restart_policy:
         condition: any
         delay: 5s
+
+
+  inference-adapter:
+    image: ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f
+    entrypoint: [python3, -B, /app/inference-adapter.py]
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      OPENVIKING_ADAPTER_SHA256: ${OPENVIKING_ADAPTER_SHA256:?required}
+    volumes:
+      - type: bind
+        source: ${OPENVIKING_ADAPTER_PATH:?required}
+        target: /app/inference-adapter.py
+        read_only: true
+      - type: bind
+        source: ${OPENVIKING_TOKENIZER_PATH:?required}
+        target: /app/cpu-tokenizer
+        read_only: true
+    networks:
+      providers:
+        aliases: [embedding-adapter]
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.host == homelab]
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"
+          pids: 32
+      update_config:
+        order: stop-first
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+
+networks:
+  default: {}
+  providers:
+    external: true
+    name: openviking-providers

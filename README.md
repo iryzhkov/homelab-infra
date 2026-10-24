@@ -10,9 +10,10 @@ homelab deploys it on the standby host, so the two cannot drift apart. An
 earlier attempt at cloud failover (2026-03 to 2026-05) kept a hand-written copy
 of each stack and did not survive the machine it was written on.
 
-The remote is `github.com/iryzhkov/homelab-infra`, private. Deliberately not the
-self-hosted Forgejo: that runs on homelab, which is one of the machines this
-repository exists to be able to rebuild.
+The remote is `github.com/iryzhkov/homelab-infra`. It lives on GitHub because
+the homelab is one of the machines this repository exists to rebuild. CI runs
+in isolated, pinned Python containers on standard GitHub-hosted Ubuntu runners;
+it does not need access to the homelab or deployment credentials.
 
 ## Layout
 

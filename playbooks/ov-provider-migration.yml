@@ -1,0 +1,61 @@
+---
+# Explicit staging only. Not imported by site.yml and never changes the Swarm service.
+- name: Prepare a copied OpenViking upgrade candidate
+  hosts: "{{ ov_migration_target | default('__no_migration_target__') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require one explicit host and an operator-created scratch stage
+      ansible.builtin.assert:
+        that:
+          - ov_migration_enabled | default(false) | bool
+          - ov_migration_target | default('') is match('^[A-Za-z0-9][A-Za-z0-9_-]*$')
+          - ansible_play_hosts_all | length == 1
+          - ov_migration_stage | default('') is match('^/[^\n]+/\.cache/ov-selfhost-20261024/upgrade-stage$')
+        quiet: true
+
+    - name: Refuse missing or symlinked stage paths before copying the helper
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - >-
+            import pathlib, sys;
+            p = pathlib.Path(sys.argv[1]);
+            assert p.is_absolute() and '..' not in p.parts;
+            assert p.is_dir() and not any(n.is_symlink() for n in [p, *p.parents])
+          - "{{ ov_migration_stage }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Install the staging helper without exposing private configuration
+      ansible.builtin.copy:
+        src: ../scripts/ov-provider-migration.py
+        dest: "{{ ov_migration_stage }}/ov-provider-migration.py"
+        mode: "0700"
+
+    - name: Prepare a candidate from the completed quiescent backup
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ ov_migration_stage }}/ov-provider-migration.py"
+          - prepare
+          - --stage-root
+          - "{{ ov_migration_stage }}"
+      register: ov_migration_prepared
+      changed_when: (ov_migration_prepared.stdout | from_json).changed
+      when: not ansible_check_mode
+
+    - name: Start only the explicitly requested loopback candidate
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ ov_migration_stage }}/candidate-0.5.2/compose.json"
+          - up
+          - -d
+      when:
+        - not ansible_check_mode
+        - ov_migration_start | default(false) | bool
+      changed_when: true
