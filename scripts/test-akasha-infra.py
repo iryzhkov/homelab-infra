@@ -379,21 +379,47 @@ class SnapshotTest(unittest.TestCase):
                         self.assertEqual(snapshot(), before)
                         print(f"{label} explicit selector rejected before file changes; check={check}")
 
+    def test_mission_control_repair_packet_only_selects_existing_runtime(self):
+        packet_path = ROOT / "vars/mission-control-repair-runtime.yml"
+        self.assertEqual(yaml.safe_load(packet_path.read_text()), {
+            "mission_control_runtime_version": "client-v0.4.19",
+            "mission_control_runtime_sha256":
+                "fd5ebe83c26ae2fd72c7443581cf532d39479b4f84eaae177c3e3c0bf874f85a",
+        })
+        # Selection is explicit extra-vars, never an automatic source of authority.
+        play = (ROOT / "playbooks/mission-control.yml").read_text()
+        self.assertNotIn(packet_path.name, play)
+        self.assertIn('name: "{{ mission_control_fleet_checkout }}/roles/mission_control_runtime"', play)
+        self.assertIn('name: "{{ mission_control_fleet_checkout }}/roles/mission_control_reader"', play)
+
     def test_homelab_runtime_pin_is_role_local_and_keeps_trust_on_shared_release(self):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
         self.assertEqual(shared["chaldea_host_version"], "host-v0.2.2")
-        self.assertEqual(pin["akasha_host_version"], "host-v0.2.10")
+        self.assertEqual(pin["akasha_host_version"], "host-v0.2.14")
         self.assertEqual(pin["akasha_host_sha256"],
-                         "f57daeed3a9391ff076a0a893d14844a88da5d7f0ea3cb2860e56338d5873ad1")
+                         "969319cb2dbde4978604edd109ce543711a6960c54d5e45cb1138d2a2f23c0ec")
+        old_versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10)]
+        versions = old_versions + [pin["akasha_host_version"]]
+        self.assertEqual(shared["chaldea_clock_host_version"], "host-v0.2.12")
+        trust_tasks = yaml.safe_load((ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())
+        clock_vars = trust_tasks[1]["vars"]
+        self.assertEqual(clock_vars["chaldea_host_artifact_release_root"],
+                         "/opt/chaldea-clock-host/releases")
+        self.assertEqual(clock_vars["chaldea_host_artifact_cache"], "/var/cache/chaldea-clock-host")
+        self.assertEqual(clock_vars["chaldea_host_artifact_preserve_versions"], [])
         old_root = "/opt/chaldea-host/releases/host-v0.2.2/host"
-        new_root = "/opt/chaldea-host/releases/host-v0.2.10/host"
+        new_root = "/opt/chaldea-host/releases/host-v0.2.14/host"
         checks = {
-            "chaldea_node": ["chaldea_host_version == 'host-v0.2.2'"],
+            "chaldea_node": [
+                "chaldea_host_version == 'host-v0.2.2'",
+                "chaldea_node_version == '26.10.0'",
+                "chaldea_node_sha256 == 'ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022'"],
             "chaldea_host_artifact": [
-                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.10')",
+                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.14')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
-                "chaldea_host_artifact_preserve_versions == (['host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7', 'host-v0.2.8', 'host-v0.2.9'] if fixture_artifact_calls | default([]) | length else ['host-v0.2.2', 'host-v0.2.3', 'host-v0.2.4', 'host-v0.2.6', 'host-v0.2.7', 'host-v0.2.8'])",
+                "chaldea_host_artifact_preserve_versions == (fixture_old_versions[1:] if fixture_artifact_calls | default([]) | length else fixture_old_versions[:-1])",
+                "chaldea_host_artifact_preserve_versions | length == 7",
                 "chaldea_host_artifact_root == '/opt/chaldea-host/releases/' ~ chaldea_host_version ~ '/host'"],
             "chaldea_access_trust": [
                 "chaldea_host_version == 'host-v0.2.2'",
@@ -401,7 +427,7 @@ class SnapshotTest(unittest.TestCase):
                 "chaldea_host_artifact_root == '" + old_root + "'",
                 "chaldea_access_trust_runtime == '/opt/chaldea-clock-host/releases/" + shared["chaldea_clock_host_version"] + "/host/access-maintenance.mjs'"],
             "akasha": [
-                "chaldea_host_version == 'host-v0.2.10'",
+                "chaldea_host_version == 'host-v0.2.14'",
                 "chaldea_host_artifact_root == '" + new_root + "'",
                 "'" + new_root + "/akasha-service.mjs' in akasha_exec_start"],
         }
@@ -410,10 +436,10 @@ class SnapshotTest(unittest.TestCase):
             releases, cache = root / "releases", root / "cache"
             releases.mkdir()
             cache.mkdir()
-            # Eight retained releases through runtime0210 THEN shared022.
-            # Controlled fixture mtimes make prior029 then prior0210 explicit;
-            # fresh actual target directory/mtime evidence remains an operator gate.
-            for index, version in enumerate(("host-v0.2.1", "host-v0.2.2", "host-v0.2.3", "host-v0.2.4", "host-v0.2.6", "host-v0.2.7", "host-v0.2.8", "host-v0.2.9", "host-v0.2.10")):
+            # All eight actual old releases plus selected014 must survive EACH call.
+            # The obsolete021 fixture proves GC runs. Controlled fixture mtimes make
+            # prior0210 then prior014 explicit; live evidence remains an operator gate.
+            for index, version in enumerate(["host-v0.2.1"] + versions):
                 release = releases / version
                 release.mkdir()
                 os.utime(release, (index + 1, index + 1))
@@ -422,14 +448,34 @@ class SnapshotTest(unittest.TestCase):
             artifact_tasks = yaml.safe_load((ROOT / "roles/chaldea_host_artifact/tasks/main.yml").read_text())
             gc_start = next(i for i, task in enumerate(artifact_tasks)
                             if task.get("name") == "Find installed host releases without following links")
-            trust_include = yaml.safe_load((ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())[0]
+            trust_include = trust_tasks[0]
+            units = ("chaldea-access-trust.service", "chaldea-access-trust.timer",
+                     "chaldea-clock-health.service", "chaldea-clock-health.timer")
+            # Render the same templates with shared-only values as the comparison.
+            trust_defaults = yaml.safe_load(
+                (ROOT / "roles/chaldea_access_trust/defaults/main.yml").read_text())
+            unit_context = {
+                **trust_defaults, **shared,
+                "chaldea_access_trust_root": shared["chaldea_access_paths"]["root"],
+                "chaldea_access_trust_state": shared["chaldea_access_paths"]["state"],
+                "chaldea_access_trust_public": shared["chaldea_access_paths"]["public"],
+                "chaldea_access_trust_run": shared["chaldea_access_paths"]["run"],
+                "chaldea_access_trust_runtime": "/opt/chaldea-clock-host/releases/"
+                    + shared["chaldea_clock_host_version"] + "/host/access-maintenance.mjs",
+            }
+            templates = ROOT / "roles/chaldea_access_trust/templates"
+            env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+            expected_units = {
+                unit: env.from_string((templates / (unit + ".j2")).read_text()).render(unit_context)
+                for unit in units}
+
             for role, assertions in checks.items():
                 target = root / "roles" / role
                 (target / "tasks").mkdir(parents=True)
                 defaults = ROOT / "roles" / role / "defaults"
                 if defaults.exists():
                     shutil.copytree(defaults, target / "defaults")
-                tasks = [{"ansible.builtin.assert": {"that": assertions, "quiet": True}}]
+                tasks: list[dict] = [{"ansible.builtin.assert": {"that": assertions, "quiet": True}}]
                 if role == "chaldea_host_artifact":
                     tasks.extend([
                         {"ansible.builtin.set_fact": {"fixture_artifact_calls":
@@ -437,9 +483,25 @@ class SnapshotTest(unittest.TestCase):
                         {"block": artifact_tasks[gc_start:], "vars": {
                             "chaldea_host_artifact_release_root": str(releases),
                             "chaldea_host_artifact_cache": str(cache),
-                            "chaldea_host_artifact_become": False}}])
+                            "chaldea_host_artifact_become": False}},
+                        {"ansible.builtin.assert": {"that": [
+                            "chaldea_host_artifact_prior_releases[0].path | basename == "
+                            "(fixture_old_versions[-1] if fixture_artifact_calls | length == 1 else akasha_host_version)",
+                            "chaldea_host_artifact_retained_versions | sort == fixture_versions | sort"],
+                            "quiet": True}},
+                        {"ansible.builtin.find": {"paths": str(releases), "file_type": "directory",
+                            "follow": False, "recurse": False}, "register": "fixture_releases"},
+                        {"ansible.builtin.find": {"paths": str(cache), "file_type": "file",
+                            "follow": False, "recurse": False}, "register": "fixture_cache"},
+                        {"ansible.builtin.assert": {"that": [
+                            "fixture_releases.files | map(attribute='path') | map('basename') | sort == fixture_versions | sort",
+                            "fixture_cache.files | map(attribute='path') | map('basename') | sort == fixture_cache_names | sort"],
+                            "quiet": True}}])
                 if role == "chaldea_access_trust":
                     tasks.insert(0, trust_include)
+                    tasks.append({"ansible.builtin.template": {
+                        "src": str(templates / "{{ item }}.j2"),
+                        "dest": str(root / "{{ item }}"), "mode": "0600"}, "loop": list(units)})
                 if role == "akasha":
                     tasks.append({"ansible.builtin.template": {
                         "src": str(ROOT / "roles/akasha/templates/akasha.service.j2"),
@@ -449,6 +511,10 @@ class SnapshotTest(unittest.TestCase):
             play["become"] = False
             play["vars"] = {"chaldea_access_trust_enabled": True,
                             "fixture_shared_sha": shared["chaldea_host_sha256"],
+                            "fixture_old_versions": old_versions,
+                            "fixture_versions": versions,
+                            "fixture_cache_names": [v + suffix for v in versions
+                                                    for suffix in (".tar.gz", ".json")],
                             "mission_control_laptop_qualified": True,
                             "mission_control_laptop_host_version": pin["akasha_host_version"],
                             "mission_control_laptop_host_sha256": pin["akasha_host_sha256"]}
@@ -456,7 +522,7 @@ class SnapshotTest(unittest.TestCase):
                                   for path in play["vars_files"]]
             play["post_tasks"] = [{"ansible.builtin.assert": {"that": [
                 "chaldea_host_version == 'host-v0.2.2'",
-                "fixture_artifact_calls == ['host-v0.2.10', 'host-v0.2.2']",
+                "fixture_artifact_calls == ['host-v0.2.14', 'host-v0.2.2']",
                 "chaldea_host_artifact_root == '" + old_root + "'"], "quiet": True}}]
             path = root / "play.yml"
             path.write_text(yaml.safe_dump([play]))
@@ -469,7 +535,9 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn(new_root + "/akasha-service.mjs",
                           (root / "akasha.service").read_text())
-            for version in ("host-v0.2.2", "host-v0.2.3", "host-v0.2.4", "host-v0.2.6", "host-v0.2.7", "host-v0.2.8", "host-v0.2.9", "host-v0.2.10"):
+            for unit, expected in expected_units.items():
+                self.assertEqual((root / unit).read_text(), expected)
+            for version in versions:
                 self.assertTrue((releases / version).is_dir())
                 for suffix in (".tar.gz", ".json"):
                     self.assertEqual((cache / (version + suffix)).read_text(), version)

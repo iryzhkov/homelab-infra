@@ -1,14 +1,16 @@
 ---
 # Homelab Akasha only; shared consumer trust remains on host-v0.2.2.
-# C67 rich.v5 candidate; ROOT must qualify publication before any artifact call.
-# Eight-release retention: runtime0210 keeps old022/023/024/026/027/028 +
-# newest prior029; shared022 keeps old023/024/026/027/028/029 + newest prior0210.
-# Both calls preserve every actual release and cache within the six-entry bound.
-# Fresh directory/mtime evidence gates EACH call; STOP if the actual set or newest
-# prior differs. Never install missing versions or write target mtimes.
+# Candidate SHA only: ROOT must compare the official publication before activation.
+# Nine members: old022/023/024/026/027/028/029/0210 plus selected014.
+# runtime014 keeps seven explicit old022/023/024/026/027/028/029 + newest prior0210;
+# shared022 keeps seven explicit old023/024/026/027/028/029/0210 + newest prior014.
+# Seven is the installer's actual maximum; selected + newest prior are implicit.
+# Fresh release AND matching cache membership, ownership, no-symlink and directory
+# mtime evidence gate EACH call. STOP if the actual set or newest prior differs.
+# Never install missing old versions or write target mtimes to satisfy retention.
 # Use akasha_trust_preserve_versions for the trust call; never override the global
 # chaldea_host_artifact_preserve_versions through extra vars in the canonical full play.
-akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9]
-chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8]
-akasha_host_version: host-v0.2.10
-akasha_host_sha256: f57daeed3a9391ff076a0a893d14844a88da5d7f0ea3cb2860e56338d5873ad1
+akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9, host-v0.2.10]
+chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9]
+akasha_host_version: host-v0.2.14
+akasha_host_sha256: 969319cb2dbde4978604edd109ce543711a6960c54d5e45cb1138d2a2f23c0ec
