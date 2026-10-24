@@ -76,6 +76,11 @@ class NativeTests(unittest.TestCase):
         for line in ("User=1000", "Group=1000", "SendSIGKILL=no", "Restart=no",
                      "KillMode=control-group", "TimeoutStopSec=30s", "MemoryMax=2G", "TasksMax=128"):
             self.assertIn(line, unit.splitlines())
+        for directive in ("ProtectSystem", "ProtectHome", "ReadWritePaths", "ReadOnlyPaths",
+                          "BindPaths", "BindReadOnlyPaths", "PrivateMounts", "PrivateTmp",
+                          "RootDirectory", "RootImage", "TemporaryFileSystem"):
+            self.assertFalse(any(line.startswith(directive + "=") for line in unit.splitlines()),
+                             "native guard must inherit the host storage mount view")
         self.assertNotIn("[Install]", unit)
         self.assertEqual([x for x in unit.splitlines() if x.startswith("Exec")],
             ["ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/garage-storage-native.py --config /etc/garage/storage.json"])

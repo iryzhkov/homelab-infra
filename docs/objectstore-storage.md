@@ -21,9 +21,13 @@ Success is point in time, with no continuous mount-loss, fullness or authority
 monitor. It does not establish NFS soft-mount power-loss durability.
 
 The unit limits memory to2GiB, tasks to128 and open files to65536. It grants no
-capabilities, permits writes only to the selected metadata and data directories,
-and suppresses server stdout/stderr rather than exporting potentially sensitive
+capabilities and suppresses server stdout/stderr rather than exporting potentially sensitive
 RPC/config diagnostics. It sends TERM and waits30seconds with SendSIGKILL=no.
+The unit deliberately has no filesystem mount-namespace directives: it inherits
+the host mount view required by the exact preflight checks. ProtectSystem=strict
+with ReadWritePaths would create subtree bind mounts and make the host's valid
+mount identities fail. Existing UID1000 filesystem permissions provide access
+control; this unit does not claim filesystem confinement beyond those permissions.
 A stuck process remains a failure. Neither the unit nor maintenance may KILL and
 continue to backup. Automatic OOM termination is not a clean-stop qualification.
 
@@ -120,8 +124,13 @@ Reusable proof references remain Q2
 `jocasta:75988be5921944746f349a2adee821b9@26` and revocation experiment
 `jocasta:56e6d40d605c7a3181aef45747357087@1`. That experiment required fixture
 KILL for an incomplete PUT. New local contracts qualify source guards and
-ordering only. Installed target service, production credentials, full-scale
-backup and continuous/adverse-storage behavior remain unqualified.
+ordering only. Installed target service, production credentials, full-scale backup, root read of
+mode0700 NAS data under the actual export's squash policy, and
+continuous/adverse-storage behavior remain unqualified. The accepted NAS copy
+proof ran as1000:1000, not root; a root read refusal must not trigger export,
+ownership or identity changes. Each retained pair also retains its RPC-secret
+copy after a later live-secret rotation; continuing private custody belongs to
+the operator.
 
 
 The objectstore (Garage) source is disabled. This change adds no directory,

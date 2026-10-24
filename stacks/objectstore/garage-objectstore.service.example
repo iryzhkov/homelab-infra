@@ -23,9 +23,6 @@ NoNewPrivileges=true
 CapabilityBoundingSet=
 RestrictSUIDSGID=true
 RestrictNamespaces=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/mnt/docker-data/swarm/objectstore/meta /mnt/nas/ml/garage-blobs
 StandardOutput=null
 StandardError=null
 # No Install section: deliberate explicit start only.
