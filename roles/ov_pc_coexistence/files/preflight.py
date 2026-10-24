@@ -11,7 +11,8 @@ def check(models, free_mib):
     if len(local) != 1 or local[0].get("size_vram", 0) <= 0:
         raise ValueError("local:latest must already be loaded on the GPU; warm it explicitly first")
     embedding = [m for m in models if m.get("name") == "qwen3-embedding:0.6b"]
-    required = 256 if embedding else 1536
+    # Preserve the headroom used by the successful coexistence qualification.
+    required = 1024 if embedding else 3072
     if free_mib < required:
         raise ValueError("Insufficient free GPU memory; leave the game and local model alone")
     return {"local_digest": local[0]["digest"], "embedding_loaded": bool(embedding),
