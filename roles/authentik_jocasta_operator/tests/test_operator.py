@@ -79,10 +79,16 @@ class Backend(fake.Authentik):
                 if old:
                     del table[old["pk"]]
                 continue
-            pk = ident.get("pk") or (old or {}).get("pk") or self._pk()
-            row = old or {"pk": pk}
+            # Authentik 2026.8.4 importer sets the child link PK, but Django
+            # saves the default UUID on the concrete parent, then replaces
+            # the child link. Group and PolicyBinding have no concrete parent.
+            # See test_importer_semantics.py for the real importer/Django seam.
+            inherited = kind in {"mapping", "policy", "application"}
+            pk = (old or {}).get("pk") or (str(uuid.uuid4()) if inherited else ident.get("pk")) or self._pk()
+            row = old or {}
             row.update(ident)
             row.update(resolve(entry["attrs"]))
+            row["pk"] = pk
             if kind == "application":
                 row.setdefault("backchannel_providers", [])
             if kind == "binding":
