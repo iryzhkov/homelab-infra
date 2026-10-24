@@ -1,0 +1,5 @@
+FROM qwen2:1.5b-instruct-q4_K_M
+PARAMETER num_ctx 4096
+PARAMETER num_thread 2
+PARAMETER num_predict 512
+PARAMETER temperature 0
