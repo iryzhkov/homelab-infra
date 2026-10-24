@@ -66,6 +66,21 @@ jobs:
           mkdir -p "$TMPDIR"
           python3 scripts/test-ov-provider-migration.py
           ansible-playbook playbooks/ov-provider-migration.yml --syntax-check
+      - name: Test guarded OpenViking client credential rollover
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/client-home"
+          export TMPDIR="$HOME/tmp" OV_CLIENT_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/client-home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test-ov-client-credentials.py
+          ansible-playbook playbooks/ov-client-credentials.yml --syntax-check
+      - name: Test bounded OpenViking inference provisioning
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/inference-home"
+          export TMPDIR="$HOME/tmp" OPENVIKING_INFERENCE_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/inference-home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test-openviking-inference.py
       - name: Validate the NATS stack
         run: |
           python3 scripts/stack-lint.py stacks/nats/stack.yml
