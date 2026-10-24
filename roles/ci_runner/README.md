@@ -7,14 +7,14 @@ runners. Nothing in the workflow targets a self-hosted label, so this role is
 not on the CI path. Each job still runs inside the digest-pinned
 `python:3.11-slim` container with its existing memory and CPU limits (512 MiB
 and one CPU, or 2 GiB and two CPUs for the native OpenViking provider job),
-well inside a hosted runner's capacity. Jobs run in parallel on separate
+within a hosted runner's capacity. Jobs run in parallel on separate
 hosted machines, and a newer push to the same pull request cancels the
 superseded run; pushes to `main` are never cancelled.
 
 The workflow triggers on `push` to `main` and on `pull_request`, never on
 `pull_request_target`. It uses no repository secrets, and the token is limited
 to `contents: read`, so a pull request from a fork runs untrusted code with no
-credentials. Every test step sets an explicit scratch `HOME` and `TMPDIR` and
+repository secrets or write-capable token. Every test step sets an explicit scratch `HOME` and `TMPDIR` and
 asserts the value before writing. Paths such as `/home/job/...` or
 `/home/igor/.cache/chaldea-scratch/...` are created inside the disposable job
 container, which runs as root; they do not refer to any homelab machine.
@@ -22,11 +22,12 @@ Fixtures are synthetic, and the jobs reach only public package and release
 URLs, never LAN hosts.
 
 All packages (ShellCheck, Ansible, SDKs, and the checksum-pinned NATS, Traefik
-and Node binaries) are installed inside the job container. A job that needs
-the real Docker CLI mounts the runner's `/usr/bin/docker` read-only into its
-container and runs it without a daemon socket. The hosted image ships that
-binary, so the mount needs no change between runner types, but the binary must
-still run against the container's Debian glibc.
+and Node binaries) are installed inside the job container. Pending PR #76 adds
+a read-only mount of the runner's `/usr/bin/docker` for the real Swarm rendering
+regression. That check uses an absent daemon socket and requires no daemon
+calls; GitHub's runner also mounts its Docker socket into Linux job containers,
+so the container itself does not provide socket isolation. The mounted Docker
+binary must still run against the container's Debian glibc.
 
 ## The dormant self-hosted role
 
@@ -45,7 +46,10 @@ and bounded service memory. It follows the existing runner account convention
 sandbox against jobs running as that same user. Only reviewed code from a
 private repository may run on it. Never attach a self-hosted runner to a
 public repository, where pull requests from forks could run arbitrary code on
-the host.
+the host. Before making this repository public, stop its dedicated runner and
+remove its GitHub registration; changing the default workflow labels alone is
+insufficient because a fork can change its workflow's labels. Leave runners for
+other repositories untouched.
 
 To reactivate it:
 
