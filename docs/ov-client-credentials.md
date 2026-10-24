@@ -2,8 +2,9 @@
 
 This is preparation for the OV 0.2.6 to 0.5.2 upgrade. The new playbook is
 standalone and never imported by a normal converge. It changes only the
-executing user's OV wrapper TOML when explicitly applied. It does not enroll
-users, change backend authentication, restart clients or services, or deploy OV.
+executing user's existing live keyring item or keyfile when explicitly applied.
+It does not enroll users, change backend authentication, restart clients or
+services, or deploy OV.
 Root orchestration owns those effects and their authorization.
 
 ## Read-only binding inventory, 2026-10-24
@@ -15,7 +16,7 @@ to write to every host.
 
 | Host / service | Active or retained credential binding | Endpoint / owner |
 | --- | --- | --- |
-| Current host, omarchy-macbook-air-igor, user igor | GNOME keyring service=openviking, key=api; /home/igor/.config/ov-mcp/config.toml has no api_key | Running local MCP processes use https://ov.ryzhkov.dev. Claude, Codex and OpenCode registrations have OV_BASE_URL and OV_AGENT, no OV_API_KEY. Agent-tools supplies the wrapper; this standalone playbook can manage its TOML credential. |
+| Current host, omarchy-macbook-air-igor, user igor | GNOME keyring service=openviking, key=api; /home/igor/.config/ov-mcp/config.toml has no api_key | Running local MCP processes use https://ov.ryzhkov.dev. Claude, Codex and OpenCode registrations have OV_BASE_URL and OV_AGENT, no OV_API_KEY. Agent-tools supplies the wrapper; this standalone playbook selects its existing keyring item. |
 | homelab, user iryzhkov | /home/iryzhkov/.config/ov-mcp/key, mode0600; config.toml has no api_key | Retained direct REST configuration http://192.168.70.223:1933. No live wrapper process was found in the exact argv scan. Agent-tools wrapper and user binding remain affected on next launch. |
 | normandy, user igor | /home/igor/.config/ov-mcp/key, mode0600; config.toml has no api_key | Same retained direct REST address. No live wrapper process found in the exact argv scan. Agent-tools supplies the wrapper. |
 | gaming-pc, user igor | /home/igor/.config/ov-mcp/key, mode0600; config.toml has no api_key | Running MCP processes and Claude/Codex/OpenCode registrations use https://ov.ryzhkov.dev, no OV_API_KEY override. Agent-tools supplies the wrapper. |
@@ -89,41 +90,104 @@ custody. Routine clients get the user key; an operator-only tenant admin may be
 needed separately for resource reindexing. The ordinary user probe does not
 qualify that administrative action.
 
-## Local wrapper installation and rollback
+## Existing live wrapper sources and rollback
 
-scripts/ov-client-credentials.py manages only
-$HOME/.config/ov-mcp/config.toml. It adds/replaces top-level api_key, preserving
-other parsed TOML values and remaining text. Existing simple assignments are
-supported; unsupported TOML editing refuses. It creates a missing config when
-needed. The new credential overrides keyring and fallback files after the MCP
-process reloads. It never edits agent registrations, packages or keyrings.
+The installed wrapper's _api_key() checks environment OV_API_KEY and cached
+_CFG.api_key first. Without either override, every request invokes
+secret-tool lookup service openviking key api, then falls back to
+$HOME/.config/ov-mcp/key. The observed current-host keyring and headless
+keyfiles therefore take effect on the next request in an already running MCP
+process. Installation and restoration of these sources require no MCP restart.
 
-Install requires an explicit host alias, an explicit approved host list,
-a bounded generation ID and a protected raw-key source. Default behavior is
-dry-run. --apply is required for writes. --source checks a mode0600 regular
-single-link file owned by the executing user, safe ancestors and no repository
-ancestor. The playbook validates that protected source on its controller,
-then passes the key through a no_log command's stdin. The remote executing user
+scripts/ov-client-credentials.py requires an explicit backend, keyring or
+keyfile. There is no TOML configuration mode. It refuses OV_API_KEY or
+OV_CONFIG in its environment and any top-level api_key in the existing default
+config.toml, including an empty assignment. It never edits configuration or
+registrations. Root must recheck actual running-process environments, original
+startup configuration and registrations before activation. The updater's
+environment cannot prove that another process has no cached override. If one
+exists, stop and resolve that concrete binding through its owner.
+
+Use keyring only on omarchy-macbook-air-igor as user igor, in that user's
+existing unlocked GNOME Secret Service session. The system python3 needs
+PyGObject and the Secret-1 typelib. The backend calls libsecret directly,
+searching all collections for service=openviking/key=api without an unlock
+flag. It requires exactly one matching unlocked item, loads its text secret,
+and updates that same item's secret. Its object path, attributes and label are
+recorded and checked. There is no store/create operation or fallback to a
+keyfile. Missing dependencies, an unavailable session, a locked item, ambiguity
+or a library error refuse. Existing session access is a prerequisite; this
+playbook does not arrange a session bus or unlock a keyring.
+The [libsecret search API](https://gnome.pages.gitlab.gnome.org/libsecret/method.Service.search_sync.html)
+documents that ALL returns every match and that unlocking requires UNLOCK,
+which this updater never requests.
+
+Use keyfile for homelab as user iryzhkov and Normandy/gaming-pc as user igor.
+Agent-a and agent-b would use keyfile as user igor only after root resolves
+their additional scope. This backend requires the existing
+$HOME/.config/ov-mcp/key, owned by that user, regular, single-link and mode0600.
+It never creates a missing keyfile. Root must retain the observed absence of a
+successful keyring lookup on these headless bindings, since a working keyring
+would precede the file in the wrapper. Selection is explicit; the tool does
+not discover or change another store to force uniformity.
+
+Install requires an explicit host alias, approved host list, bounded generation
+ID and protected raw-key source. Default behavior is dry-run; --apply enables
+writes. --source checks a mode0600 regular single-link file owned by the
+executing user, safe ancestors and no repository ancestor. The playbook
+validates that controller source, then passes the value through a no_log
+command's stdin. Libsecret receives the value in process memory. Neither
+backend passes secrets through argv, environment or output. The remote user
 must be the intended client owner. No become or arbitrary HOME/path override
 is supported.
 
-The tool keeps an exclusive mode0600 backup in the mode0700 directory
-$HOME/.config/ov-mcp/credential-rollovers/<generation>.json. It contains exact
-prior bytes/mode or absence, the selected new bytes and the host/generation
-identity. Those bytes contain secrets. The backup must stay private. Files
-with symlinks, hardlinks, unsafe ownership/permissions or unexpected changes
-are refused. A per-user advisory lock serializes this tool; atomic replacement
-and file/directory fsync protect writes. Independent same-user writers must
-remain quiescent during application. A generation cannot be reused for changed
-input. Rerunning after a backup-only interruption can finish the same update
-or restore the original state. A partial/corrupt backup refuses and needs
-operator inspection.
+An exclusive mode0600 backup is retained under the mode0700 directory
+$HOME/.config/ov-mcp/credential-rollovers/<generation>.json, outside repositories.
+Schema version 2 records exact old and selected new secret bytes, backend,
+binding identity, host and generation. Existing keyfile mode0600 is required
+and restored. Config bytes remain untouched. Keyring attributes and label
+remain unchanged. Backups contain secrets and must stay private.
 
-Create an absolute standalone inventory outside this repository containing
-exactly the approved aliases, with each host's existing SSH identity and
-correct remote user. Include the current host as a distinct local-connection
-alias if approved. The playbook checks full inventory membership, even with
---limit. Do not include extra fleet hosts merely because they are reachable.
+The version-1 tools backed up TOML rather than these live sources. Version-1 or
+unrecognized records explicitly refuse; there is no automatic migration or
+claim that a prior TOML override was removed. None were used in production.
+If such a record or override is found, root must inspect and restore its actual
+state through the version-appropriate owner before selecting a new generation.
+
+Symlinks, hardlinks, unsafe ownership/modes/ancestors, changed binding identity
+and unexpected secret changes refuse. A per-user advisory lock serializes this
+tool, and it rereads the selected source immediately before writing. Keyfile
+replacement uses an exclusive private temporary file, atomic rename and
+file/directory fsync. Keyring writes use the existing item's set-secret call.
+Both are read back before reporting success. Libsecret and independent file
+writers provide no compare-and-swap transaction with this tool. Other writers
+must remain quiescent across the final check and update. A generation cannot
+be reused for a different key.
+
+Restore requires the matching backend, host and generation record, and a live
+source still equal to that generation's selected new bytes or its exact old
+bytes. It refuses to clobber a user's different secret or a replaced keyring
+item. Rerunning after a backup-only interruption can finish installation or
+leave the original source unchanged on restore. A failure after a keyring
+write may be uncertain; retain the backup and inspect the live source before
+retrying. Partial/corrupt backups refuse. Restoration changes client custody;
+it does not revoke a credential or restore backend data.
+
+Create an absolute standalone inventory outside this repository with exactly
+the approved aliases and existing SSH identities. Set ov_client_backend per
+host, for example:
+
+```ini
+current-host ansible_connection=local ov_client_backend=keyring
+homelab ansible_user=iryzhkov ov_client_backend=keyfile
+normandy ansible_user=igor ov_client_backend=keyfile
+gaming-pc ansible_user=igor ov_client_backend=keyfile
+```
+
+Use the actual existing SSH addresses or inventory aliases. The current-host
+alias refers only to omarchy-macbook-air-igor, user igor. This example omits
+agent-a/b pending root's decision. The playbook checks full inventory membership
+even with --limit. Do not add hosts merely because they are reachable.
 
 Create a protected nonsecret variables file outside the repository:
 
@@ -135,43 +199,25 @@ ov_client_action: install
 ov_client_key_source: /absolute/protected/new-production-user-key
 ```
 
-That example omits agent-a and agent-b pending the root's authority decision.
-If they are approved, add both exact aliases to inventory and ov_client_hosts.
-A partial rollout leaves their old ROOT credential unusable on OV 0.5.2.
-
 ```sh
-# Dry-run; also safe with --check. Neither creates backups nor changes clients.
+# Preview only. --check also prevents effects even if ov_client_apply is true.
 ansible-playbook -i /absolute/protected/ov-clients.ini \
   playbooks/ov-client-credentials.yml -e @/absolute/protected/ov-client-vars.yml --check
 
-# Later, only under root's authorized activation:
+# Later, only within root's authorized activation.
 ansible-playbook -i /absolute/protected/ov-clients.ini \
   playbooks/ov-client-credentials.yml -e @/absolute/protected/ov-client-vars.yml \
   -e ov_client_apply=true
 
-# Preview restoration of the exact prior file/mode or absence:
+# Preview exact restoration. Applying also requires ov_client_apply=true.
 ansible-playbook -i /absolute/protected/ov-clients.ini \
   playbooks/ov-client-credentials.yml -e @/absolute/protected/ov-client-vars.yml \
   -e ov_client_action=restore
-
-# Applying restoration additionally needs ov_client_apply=true.
 ```
 
-TOML is cached at module import as _CFG. Both installation and restoration
-therefore require the root to close/respawn every affected local ov-memory MCP
-process through its owning application, including already open sessions.
-An existing process does not pick up a new TOML key. Fresh environment
-OV_API_KEY overrides TOML; OV_CONFIG can select another file. Recheck the
-registrations and live process metadata before activation. Stop if such a
-binding is found; this tool deliberately does not change it.
-The fallback file and keyring are queried per request, but updating them alone
-cannot override an existing cached TOML key. Do not claim same-process TOML
-rollback. Verify using an actual MCP request after each controlled reload.
-
-Prior keyring/fallback files remain untouched to preserve the existing rollback
-path. After acceptance and the rollback window, root must explicitly retire
-old ROOT-bearing client copies and protect retained operator backups. File
-restoration is configuration rollback, not credential revocation.
+Retain approved operator backups through the rollback window. Root owns
+retirement of old ROOT-bearing client copies after acceptance. No process
+restart is required for these wrapper sources in either direction.
 
 ## Existing service owners
 
@@ -206,21 +252,21 @@ performs none of those effects.
    Do not assume 0.2.6 supports the new tenant key or production enrollment.
 3. Explicitly issue/export the fresh production user key through the supported
    0.5.2 admin API. Keep the backend ROOT and operator admin credentials private.
-4. Dry-run then apply only the approved user configurations. Use the existing
-   dsh and ov-http owners for their source updates and gated recreations.
-   Root controls all MCP process reloads and service effects.
+4. Dry-run then apply only the approved existing keyring/keyfile sources. Use
+   the existing dsh and ov-http owners for source updates and gated recreations.
+   Root controls service effects through the existing service owners.
 5. Verify real read/search requests and a separately authorized synthetic
    write/read/cleanup through the actual clients, with no real note mutation.
-   Include existing open MCP sessions after their reload and both direct REST
+   Include existing open MCP sessions without restarting them, direct REST
    and public read-MCP paths. Semantic ingestion and vector reindex acceptance
    belong to the provider upgrade's separate checks.
 
 Rollback requires another coordinated outage: stop writes, restore the exact
 original 0.2.6 backend data/config from its retained backup, restore the old
-client TOML/key sources, previous ov-http immutable release and dsh managed
-secret/environment, and reload/recreate affected consumers through their
-owners. Verify old credential paths against the old backend. Do not point a
-new tenant key at 0.2.6 and call that rollback, or reopen 0.5.2-mutated data with
+client keyring/keyfile sources, previous ov-http immutable release and dsh managed
+secret/environment, and recreate the service consumers through their owners.
+The existing wrapper sources reload per request during rollback too. Verify
+old credential paths against the old backend. Do not point a new tenant key at 0.2.6 and call that rollback, or reopen 0.5.2-mutated data with
 the old server. Root decides sequencing within the outage and handles any
 writes accepted since cutover; this tool does not roll back server data.
 
@@ -230,8 +276,14 @@ Run scripts/test-ov-client-credentials.py only in Chaldea on agent-a, with
 HOME equal to OV_CLIENT_TEST_HOME, a disposable disk directory containing
 .cache/ov-selfhost-20261024 in its path, and TMPDIR beneath that HOME.
 The suite asserts those boundaries before writes. It covers secret-update
-failure boundaries, interrupted backup recovery, exact restoration, scope
-refusals, source/destination links and permissions, private errors, and the
-actual Ansible preview/apply/idempotence/restore flow against a local fixture.
+failure boundaries, interrupted backup recovery, exact restoration, scope and
+override refusals, source/destination links and permissions, private errors,
+version-1 backup refusal, and actual Ansible keyfile preview/apply/idempotence/
+restore/failure against a local fixture. A recording synthetic libsecret API
+exercises keyring calls, locked/missing/ambiguous service refusals and changed
+item protection without touching a real user keyring. A single running
+synthetic wrapper process reads changed keyfile bytes on successive requests.
+This models the inspected installed lookup logic; live MCP acceptance remains
+root's production cutover check.
 Install pinned ansible-core==2.19.13 and PyYAML==6.0.3 inside the job scratch.
-These fixture checks grant no production rollout or reload authority.
+These fixture checks grant no production rollover or rollout authority.
