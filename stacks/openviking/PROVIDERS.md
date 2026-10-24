@@ -1,10 +1,30 @@
 # OV 0.5.2 provider integration
 
-Routine convergence retains the original immutable OV 0.2.6 image. These defaults
-stay on 0.2.6 until root's separately reviewed activation source commit. Selecting
-the tested OV 0.5.2 image requires the exact override below, a fresh production-derived
-migration, fresh tenant credentials and client rollover under root's controlled
-cutover. This directory contains no server or tenant keys.
+This source sets the default OV image in `stack.yml` and `embeddings-prepare.yml`
+to the qualified official OV 0.5.2 linux/amd64 image,
+`ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f`.
+It is prepared for root's controlled activation and does not record that
+production has been activated. Until root completes that cutover, production
+remains on OV 0.2.6 with its existing cloud providers.
+
+Merge this source only inside root's controlled cutover. After the merge, any
+routine Swarm convergence deploys the 0.5.2 default, so the fresh
+production-derived migration, fresh tenant credentials and client rollover must
+already be in place. Never promote bootstrap, admin or auth keys from the old
+`ov-upgrade-052` candidate or any other staging candidate into production. This
+directory contains no server or tenant keys.
+
+## Activation evidence
+
+Root supplied this evidence from the fresh accepted offline migration:
+
+* 881/881 records are raw-exact and all 1915 original files are unchanged.
+* Ordinary reads as the `default/default` identity with role=user returned all 881
+  records exactly.
+* CPU and GPU query embeddings returned identical ordered search results (32
+  compared). Known-answer retrieval was 9/14 at top-1 and 14/14 within top-5.
+* Four structural summaries are absent from the debug scroll listing, but
+  authorized content reads of them returned HTTP 200 with exact content.
 
 ## Routes and deployment
 
@@ -20,7 +40,7 @@ cutover. This directory contains no server or tenant keys.
   only. Chat uses `/v1/chat/completions` on the existing PC and `generation:11434`. Caller URLs, redirects and arbitrary routes are unsupported.
   The adapter publishes no ports, accepts no URLs or arbitrary prefix, and ignores
   authorization headers. Only members of the provider overlay can reach it.
-* The same adapter process uses the pinned official OV candidate image, a read-only
+* The adapter process uses the same pinned official OV 0.5.2 image as OV, a read-only
   source mount and checksummed tokenizer assets. It does not start OV or build an
   image. Its entrypoint is Python, with no inherited OV entrypoint. Health is local
   and never infers. Resource limits are 384 MiB, 0.5 CPU and 32 PIDs.
@@ -43,21 +63,49 @@ Root rollout commands, after its own deployment approval, from this checkout:
 ```sh
 # Starts only CPU provider projects and installs adapter source. No OV config/data writes.
 ansible-playbook playbooks/ov-inference.yml
-# Provider-only default: installs adapter files/service and retains OV 0.2.6.
+# Controlled activation only, after migration, credential and client readiness.
+# Deploys the OV 0.5.2 default, which joins the provider overlay, and the adapter.
 # Does not provision or recreate CPU runtimes or create their network.
 ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
   -e swarm_lint_via_chaldea=true
-# Controlled root cutover only, after migration and credential readiness:
-ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
-  -e swarm_lint_via_chaldea=true \
-  -e openviking_image=ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f
-# Existing candidate container must join the provider overlay before provider tests.
-ssh homelab sudo docker network connect openviking-providers ov-upgrade-052
 # Experimental and unused in production, since PC embeddings are disabled.
 # Explicit PC-only restart window, after game/operator approval:
 ansible-playbook playbooks/ov-pc-coexistence.yml \
   -e ov_pc_apply=true -e ov_pc_allow_restart=true
 ```
+
+## Rollback
+
+Rollback restores a matched set, never the old image alone. Before activation,
+confirm that the old image
+`git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f`
+is still present on homelab.
+
+1. Stop OV 0.5.2 and stop writes, under root's outage procedure. Block every
+   other OpenViking convergence until the matched data, configuration and source
+   image default have been restored and the old backend has passed verification.
+2. Restore the cold OV 0.2.6 data and configuration captured for this cutover,
+   unchanged. Retain the 0.5.2-mutated data for diagnosis. Never open it with
+   the 0.2.6 server.
+3. Retain the protected fresh ROOT issued for this rollout in the restored
+   configuration. It must match the retained pre-cutover client bindings. Never
+   re-enable the older public revoked ROOT or rotate again as a rollback shortcut.
+4. Revert this activation commit, so that routine convergence keeps 0.2.6. An
+   `openviking_image` extra var alone is undone by the next routine run, which
+   would start 0.5.2 against 0.2.6 data.
+5. Deploy the old image with the matching data:
+
+```sh
+ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
+  -e swarm_lint_via_chaldea=true \
+  -e openviking_image=git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f
+```
+
+Client credential rollback follows `docs/ov-client-credentials.md`. Never point a
+new 0.5.2 tenant key at 0.2.6 and call that rollback. Root handles any writes
+accepted after activation.
+
+## Experimental PC coexistence
 
 The PC coexistence role is experimental and unused: production sends no
 embedding traffic to the PC, and nothing below changes that. The role does not
@@ -101,8 +149,8 @@ embedding num_ctx=4096 per request on the CPU runtime. It sends one text to
 
 ## Native configuration and limits
 
-`recipes/providers-052.json` is a nonsecret merge fragment for the candidate and
-later controlled cutover. Merge its embedding, vlm and retrieval sections into
+`recipes/providers-052.json` is a nonsecret merge fragment for the controlled
+activation. Merge its embedding, vlm and retrieval sections into
 the private configuration, preserving root/tenant keys, storage and unrelated
 settings. The root owns that operation and the reviewed credential helper.
 Do not use embedding metadata override to retain vectors from the old model.
@@ -118,9 +166,13 @@ Already-prefixed queries are rejected. Documents remain plain. Responses require
 one finite normalized vector of exactly 1024 floats and valid native usage.
 Oversize is HTTP 400, with no retry or silent truncation; endpoint errors become
 502/503/504 and surface to OV. Busy is 429.
-Embeddings and chat share one inference permit and eight HTTP handlers. Request body
-is at most 64 KiB, upstream response 128 KiB, input read timeout 10 seconds,
-upstream connect timeout 2 seconds and embedding CPU read 180 seconds. Chat read
+Embeddings and chat each have one independent inference permit; both PC and CPU
+chat routes share the chat permit. The measured Normandy embedding runtime is
+independent of both the PC and homelab generation runtimes, so embedding work must
+not reject concurrent chat. Same-kind contention still returns 429 without queuing.
+The adapter keeps eight HTTP handlers. Request body is at most 64 KiB, upstream
+response 128 KiB, input read timeout 10 seconds, upstream connect timeout 2 seconds
+and embedding CPU read 180 seconds. Chat read
 budgets are specified below.
 Health stays responsive during inference.
 
@@ -171,8 +223,8 @@ VLMConfig.timeout=490 is the SDK-to-local-adapter budget. The adapter gives each
 upstream connection 2 seconds, then PC reads 120 seconds or CPU reads 480 seconds.
 A blackholed PC cannot consume the CPU read budget while connecting. No SDK fork,
 extra process, or invented per-credential timeout field is used. Root must merge
-the new fragment into the candidate's private config; existing candidates still
-using direct generation URLs do not acquire these guarantees automatically.
+the new fragment into the production private config at activation; a config still
+using direct generation URLs does not acquire these guarantees automatically.
 
 OV 0.5.2 OpenAIVLM calls chat.completions.create without stream in both sync and
 async methods. The adapter implements those nonstreaming calls and rejects stream.

@@ -92,7 +92,8 @@ class Runtime(BaseHTTPRequestHandler):
         cast(Any, self.server).calls.append((self.path, request))
         cast(Any, self.server).last_headers = dict(self.headers)
         cast(Any, self.server).entered.set()
-        cast(Any, self.server).release.wait(2)
+        if not cast(Any, self.server).release.wait(5):
+            return
         time.sleep(cast(Any, self.server).delay)
         status, body = cast(Any, self.server).reply
         raw = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -112,6 +113,17 @@ def start(server):
     return server
 
 
+def runtime(reply) -> Any:
+    server: Any = ThreadingHTTPServer(("127.0.0.1", 0), Runtime)
+    server.calls = []
+    server.entered = threading.Event()
+    server.release = threading.Event()
+    server.release.set()
+    server.delay = 0
+    server.reply = reply
+    return start(server)
+
+
 def stop(server):
     server.shutdown()
     server.server_close()
@@ -119,15 +131,9 @@ def stop(server):
 
 class Protocol(unittest.TestCase):
     def setUp(self):
-        self.upstream: Any = ThreadingHTTPServer(("127.0.0.1", 0), Runtime)
-        self.primary = None
-        self.upstream.calls = []
-        self.upstream.entered = threading.Event()
-        self.upstream.release = threading.Event()
-        self.upstream.release.set()
-        self.upstream.delay = 0
-        self.upstream.reply = (200, {"embeddings": [[1 / 32] * 1024], "prompt_eval_count": 17})
-        start(self.upstream)
+        self.upstream: Any = runtime(
+            (200, {"embeddings": [[1 / 32] * 1024], "prompt_eval_count": 17}))
+        self.primary: Any = None
         self.old = adapter.UPSTREAMS
         adapter.UPSTREAMS = {"cpu": ("127.0.0.1", self.upstream.server_port, 1)}
         self.old_generation = adapter.GENERATION_UPSTREAMS
@@ -141,6 +147,7 @@ class Protocol(unittest.TestCase):
         stop(self.bridge)
         stop(self.upstream)
         if self.primary is not None:
+            self.primary.release.set()
             stop(self.primary)
         adapter.UPSTREAMS = self.old
         adapter.GENERATION_UPSTREAMS = self.old_generation
@@ -257,18 +264,92 @@ class Protocol(unittest.TestCase):
             self.assertEqual(caught.exception.status, 504)
             self.assertEqual(connection.call_args.kwargs["timeout"], 2)
 
-    def test_concurrency_is_one_and_health_never_infers_or_queues(self):
-        self.upstream.release.clear()
-        result = []
-        worker = threading.Thread(target=lambda: result.append(self.request()))
-        worker.start()
-        self.assertTrue(self.upstream.entered.wait(1))
-        self.assertEqual(self.request(route="cpu")[0], 429)
-        self.assertEqual(self.request(method="GET", path="/health")[0], 200)
-        self.assertEqual(len(self.upstream.calls), 1)
-        self.upstream.release.set()
-        worker.join(3)
-        self.assertEqual(result[0][0], 200)
+    def separate_chat_runtime(self):
+        self.primary = runtime(None)
+        self.chat_reply(self.primary)
+        adapter.GENERATION_UPSTREAMS = {
+            route: ("127.0.0.1", self.primary.server_port, 1) for route in ("pc", "cpu")}
+
+    def test_blocked_embedding_allows_pc_and_cpu_chat_and_releases_after_error(self):
+        self.separate_chat_runtime()
+        good = self.upstream.reply
+        for reply, expected in ((good, 200), ((500, {"error": "fixture failure"}), 503)):
+            with self.subTest(embedding_status=expected):
+                self.upstream.reply = reply
+                self.upstream.entered.clear()
+                self.upstream.release.clear()
+                self.upstream.calls.clear()
+                self.primary.calls.clear()
+                result = []
+                worker = threading.Thread(target=lambda: result.append(self.request()))
+                worker.start()
+                try:
+                    self.assertTrue(self.upstream.entered.wait(1))
+                    status, body = self.request()
+                    self.assertEqual((status, body["error"]["code"]), (429, "busy"))
+                    self.assertEqual(self.request(route="pc")[0], 410)
+                    self.assertEqual(self.request(raw=b"{")[0], 400)
+                    self.assertEqual(self.chat(route="pc")[0], 200)
+                    # CPU fallback uses a different host from CPU embeddings.
+                    adapter.GENERATION_UPSTREAMS["pc"] = ("127.0.0.1", 1, 1)
+                    self.assertEqual(self.chat(route="pc")[0], 503)
+                    self.assertEqual(self.chat(route="cpu")[0], 200)
+                    adapter.GENERATION_UPSTREAMS["pc"] = adapter.GENERATION_UPSTREAMS["cpu"]
+                    self.assertEqual(self.request()[0], 429)
+                    self.assertEqual(self.request(method="GET", path="/health")[0], 200)
+                    self.assertEqual(len(self.upstream.calls), 1)
+                    self.assertEqual([call[1]["model"] for call in self.primary.calls],
+                                     ["local:latest", "ov-gen-4k"])
+                    self.assertTrue(worker.is_alive())
+                finally:
+                    self.upstream.release.set()
+                    worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(result[0][0], expected)
+                self.upstream.reply = good
+                self.assertEqual(self.request()[0], 200)
+                self.assertEqual(self.chat()[0], 200)
+
+    def test_chat_admission_is_shared_across_routes_while_embedding_stays_independent(self):
+        self.separate_chat_runtime()
+        good_embedding = self.upstream.reply
+        good_chat = self.primary.reply
+        for held, expected in (("pc", 503), ("cpu", 200)):
+            with self.subTest(held_chat_route=held):
+                self.primary.reply = ((500, {"error": "fixture failure"})
+                                      if expected == 503 else good_chat)
+                self.primary.entered.clear()
+                self.primary.release.clear()
+                self.primary.calls.clear()
+                result = []
+                worker = threading.Thread(target=lambda: result.append(self.chat(route=held)))
+                worker.start()
+                try:
+                    self.assertTrue(self.primary.entered.wait(1))
+                    for route in ("pc", "cpu"):
+                        status, body = self.chat(route=route)
+                        self.assertEqual((status, body["error"]["code"]), (429, "busy"))
+                    self.assertEqual(self.chat(raw=b"{")[0], 400)
+                    self.assertEqual(self.request()[0], 200)
+                    self.upstream.reply = (500, {"error": "fixture failure"})
+                    self.assertEqual(self.request()[0], 503)
+                    self.upstream.reply = good_embedding
+                    self.assertEqual(self.request()[0], 200)
+                    # Neither validation nor another permit's release admits extra chat.
+                    for route in ("pc", "cpu"):
+                        self.assertEqual(self.chat(route=route)[0], 429)
+                    self.assertEqual(self.request(method="GET", path="/health")[0], 200)
+                    self.assertEqual(len(self.primary.calls), 1)
+                    self.assertTrue(worker.is_alive())
+                finally:
+                    self.primary.release.set()
+                    worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(result[0][0], expected)
+                self.primary.reply = good_chat
+                for route in ("pc", "cpu"):
+                    self.assertEqual(self.chat(route=route)[0], 200)
+                self.assertEqual(self.request()[0], 200)
 
     def chat_body(self, route="cpu", **kwargs):
         return dict(model=adapter.GENERATION_MODELS[route],
@@ -279,8 +360,8 @@ class Protocol(unittest.TestCase):
         return self.request(body or self.chat_body(route), route=route,
                             path=f"/{route}/v1/chat/completions", **kwargs)
 
-    def chat_reply(self):
-        self.upstream.reply = (200, {
+    def chat_reply(self, upstream=None):
+        (upstream or self.upstream).reply = (200, {
             "id": "fixture", "object": "chat.completion", "created": 1,
             "model": "ov-gen-4k",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "summary"},
@@ -399,7 +480,7 @@ class Protocol(unittest.TestCase):
             self.upstream.reply = (200, dict(good, **changes))
             self.assertEqual(self.chat()[0], 502)
 
-    def test_generation_connect_read_budgets_cross_route_busy_and_health(self):
+    def test_generation_connect_and_read_budgets(self):
         self.chat_reply()
         self.assertEqual(self.old_generation["pc"], ("192.168.90.212", 11434, 120))
         self.assertEqual(self.old_generation["cpu"], ("generation", 11434, 480))
@@ -417,20 +498,6 @@ class Protocol(unittest.TestCase):
         adapter.GENERATION_UPSTREAMS["cpu"] = ("127.0.0.1", self.upstream.server_port, 0.03)
         self.upstream.delay = 0.15
         self.assertEqual(self.chat()[0], 504)
-        self.upstream.delay = 0
-        adapter.GENERATION_UPSTREAMS["cpu"] = ("127.0.0.1", self.upstream.server_port, 1)
-        self.upstream.entered.clear()
-        self.upstream.release.clear()
-        result = []
-        worker = threading.Thread(target=lambda: result.append(self.chat()))
-        worker.start()
-        self.assertTrue(self.upstream.entered.wait(1))
-        self.assertEqual(self.request()[0], 429)
-        self.assertEqual(self.chat()[0], 429)
-        self.assertEqual(self.request(method="GET", path="/health")[0], 200)
-        self.upstream.release.set()
-        worker.join(3)
-        self.assertEqual(result[0][0], 200)
 
 
 
@@ -494,8 +561,8 @@ class SourceContracts(unittest.TestCase):
                          [("pc", "http://inference-adapter:8000/pc/v1"),
                           ("homelab", "http://inference-adapter:8000/cpu/v1")])
         self.assertEqual(stack["services"]["openviking"]["image"],
-                         "${OPENVIKING_IMAGE:-git.ryzhkov.dev/igor/openviking@sha256:"
-                         "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f}")
+                         "${OPENVIKING_IMAGE:-ghcr.io/volcengine/openviking@sha256:"
+                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f}")
         self.assertEqual(stack["services"]["openviking"]["environment"], {
             "OPENVIKING_CONFIG_FILE": "/app/ov.conf",
             "OPENVIKING_WITH_BOT": "0", "TMPDIR": "/app/data/temp"})
@@ -528,8 +595,8 @@ class SourceContracts(unittest.TestCase):
         self.assertEqual({volume["target"]: volume["source"] for volume in service["volumes"]}, {
             "/app/inference-adapter.py": supplied["OPENVIKING_ADAPTER_PATH"],
             "/app/cpu-tokenizer": supplied["OPENVIKING_TOKENIZER_PATH"]})
-        self.assertEqual(services["openviking"]["image"], "git.ryzhkov.dev/igor/openviking@sha256:"
-                         "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f")
+        self.assertEqual(services["openviking"]["image"], "ghcr.io/volcengine/openviking@sha256:"
+                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
         # A missing or empty value refuses to render instead of using a default.
         for name in supplied:
             for value in (None, ""):
@@ -667,17 +734,17 @@ class Provisioning(unittest.TestCase):
         self.assertNotIn("Read the existing system service custody", result.stdout)
 
 
-    def test_image_default_and_controlled_override_in_actual_ansible(self):
+    def test_image_default_and_rollback_override_in_actual_ansible(self):
         tasks = yaml.safe_load((STACK / "embeddings-prepare.yml").read_text())
         wiring = next(task for task in tasks if task["name"] ==
                       "Add adapter revision and path to the stack interpolation environment")
-        old_image = ("git.ryzhkov.dev/igor/openviking@sha256:"
-                     "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f")
-        candidate_image = ("ghcr.io/volcengine/openviking@sha256:"
-                           "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
+        default_image = ("ghcr.io/volcengine/openviking@sha256:"
+                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
+        rollback_image = ("git.ryzhkov.dev/igor/openviking@sha256:"
+                          "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f")
         self.variables.update(swarm_stack_src=str(STACK), swarm_state_root=str(self.work))
-        for image in (old_image, candidate_image):
-            if image == candidate_image:
+        for image in (default_image, rollback_image):
+            if image == rollback_image:
                 self.variables["openviking_image"] = image
             play = [{"hosts": "localhost", "gather_facts": False,
                      "vars": {"swarm_stack_env": {}}, "tasks": [wiring,

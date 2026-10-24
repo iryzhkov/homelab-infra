@@ -329,6 +329,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         acquired = False
+        permit = None
         try:
             routes = {"/" + key + "/v1/embeddings": key for key in UPSTREAMS}
             chat_routes = {"/" + key + "/v1/chat/completions": key for key in GENERATION_UPSTREAMS}
@@ -358,9 +359,11 @@ class Handler(BaseHTTPRequestHandler):
                            if self.path in chat_routes else payload(body))
             except (ValueError, UnicodeError, RecursionError):
                 raise Rejected(400, "invalid_json", "Invalid JSON body") from None
-            acquired = cast("Server", self.server).inference.acquire(blocking=False)
+            server = cast("Server", self.server)
+            permit = server.chat if self.path in chat_routes else server.embedding
+            acquired = permit.acquire(blocking=False)
             if not acquired:
-                raise Rejected(429, "busy", "One inference request may run at a time")
+                raise Rejected(429, "busy", "One request of this inference kind may run at a time")
             result = (generate(chat_routes[self.path], request) if self.path in chat_routes
                       else embed(routes[self.path], request))
             self.send_json(200, result)
@@ -370,8 +373,8 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, TimeoutError):
             self.send_json(408, {"error": {"code": "body_timeout", "message": "Request body timed out"}})
         finally:
-            if acquired:
-                cast("Server", self.server).inference.release()
+            if acquired and permit is not None:
+                permit.release()
 
 
 class Server(ThreadingHTTPServer):
@@ -381,7 +384,10 @@ class Server(ThreadingHTTPServer):
     def __init__(self, address, tokenizer_dir=None):
         self.guard = PromptGuard(tokenizer_dir or Path(__file__).parent / "cpu-tokenizer")
         self.workers = threading.BoundedSemaphore(8)
-        self.inference = threading.BoundedSemaphore(1)
+        # Embeddings and generation run on distinct physical Ollama runtimes.
+        # PC and CPU generation still share one admission bound across failover.
+        self.embedding = threading.BoundedSemaphore(1)
+        self.chat = threading.BoundedSemaphore(1)
         super().__init__(address, Handler)
 
     def process_request(self, request, client_address):
