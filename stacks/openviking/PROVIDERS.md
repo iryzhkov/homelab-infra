@@ -6,15 +6,20 @@ by the root have passed. This directory contains no server or tenant keys.
 
 ## Routes and deployment
 
-* PC generation: `http://192.168.90.212:11434/v1`, existing `local:latest`.
-* Homelab generation: overlay `http://generation:11434/v1`, `ov-gen-4k`.
+* PC generation: `http://inference-adapter:8000/pc/v1/chat/completions`, `local:latest`.
+* CPU generation: `http://inference-adapter:8000/cpu/v1/chat/completions`, `ov-gen-4k`.
 * Embedding primary: overlay `http://embedding-adapter:8000/pc/v1/embeddings`.
 * Embedding fallback: overlay `http://embedding-adapter:8000/cpu/v1/embeddings`.
-* Adapter upstreams are fixed in source. CPU upstream is `http://embeddings:11434/api/embed`.
+* `embedding-adapter` remains a network alias for the renamed `inference-adapter` service.
+* Upstreams are fixed in source. Embeddings use `/api/embed` on the existing PC
+  and `embeddings:11434`. Chat uses `/v1/chat/completions` on the same PC and
+  `generation:11434`. Caller URLs, redirects and arbitrary routes are unsupported.
   The adapter publishes no ports, accepts no URLs or arbitrary prefix, and ignores
   authorization headers. Only members of the provider overlay can reach it.
-* The adapter uses the repository's existing pinned Python 3.11 slim image with a
-  read-only bind mount, without an image build. Health is local and never infers.
+* The same adapter process uses the pinned official OV candidate image, a read-only
+  source mount and checksummed tokenizer assets. It does not start OV or build an
+  image. Its entrypoint is Python, with no inherited OV entrypoint. Health is local
+  and never infers. Resource limits are 384 MiB, 0.5 CPU and 32 PIDs.
 
 The CPU runtimes are two scoped Compose projects, on homelab and Normandy, attached
 to `openviking-providers`. They have no published ports. Both use the pinned
@@ -39,10 +44,10 @@ ansible-playbook playbooks/ov-pc-coexistence.yml \
 
 The PC role verifies existing system service owner ollama:ollama, the upstream
 0.40.5 runtime, the 65536 generation context and the loaded local model digest.
-It requires at least 1536 MiB free VRAM before adding an unloaded embedding model.
-If embeddings are already loaded it requires 256 MiB free. These are capacity
-guards derived from the measured 1.23 GB embedding allocation, not a reservation
-against a game allocating memory concurrently. Failure never unloads a model.
+It requires at least 3072 MiB free VRAM before adding an unloaded embedding model.
+If embeddings are already loaded it requires 1024 MiB free. These retain the measured
+3.4 GiB starting / 1.6 GiB loaded margin and the 1 GiB spike-abort bound. They are
+capacity guards, not a reservation against a game allocating memory concurrently. Failure never unloads a model.
 The role adds only `zz-openviking-coexistence.conf`, setting MAX_LOADED_MODELS=2,
 preserving the original override.conf and upstream.conf. It retains original
 effective settings under root-only `/var/lib/ov-pc-coexistence/service-before.txt`
@@ -90,9 +95,10 @@ Already-prefixed queries are rejected. Documents remain plain. Responses require
 one finite normalized vector of exactly 1024 floats and valid native usage.
 Oversize is HTTP 400, with no fallback or silent truncation; endpoint errors become
 502/503/504 so OV's native switcher can try the peer. Busy is 429.
-The adapter admits one inference globally and eight HTTP handlers. Request body
+Embeddings and chat share one inference permit and eight HTTP handlers. Request body
 is at most 64 KiB, upstream response 128 KiB, input read timeout 10 seconds,
-upstream connect timeout 2 seconds, PC read 30 seconds and CPU read 180 seconds.
+upstream connect timeout 2 seconds, embedding PC read 30 seconds and embedding
+CPU read 180 seconds. Chat read budgets are specified below.
 Health stays responsive during inference.
 
 OV itself estimates tokens and truncates at embedding.max_input_tokens. The
@@ -120,32 +126,110 @@ structured extraction is not qualified. No global guessed character cap is added
 to reduce primary prompts. 12000 semantic characters and 8000 overview characters
 were derived trial settings, not token guarantees, especially for Chinese/code.
 
-Generation cutover remains blocked on two concrete native 0.5.2 limitations:
+Generation now uses the internal adapter for both native ordered credentials.
+VLMConfig.timeout=490 is the SDK-to-local-adapter budget. The adapter gives each
+upstream connection 2 seconds, then PC reads 120 seconds or CPU reads 480 seconds.
+A blackholed PC cannot consume the CPU read budget while connecting. No SDK fork,
+extra process, or invented per-credential timeout field is used. Root must merge
+the new fragment into the candidate's private config; existing candidates still
+using direct generation URLs do not acquire these guarantees automatically.
 
-1. VLMConfig.timeout is one positive float shared by all credentials.
-   VLMCredential has neither a timeout nor a connect-timeout field.
-   OpenAIVLM gives that float to the SDK. Thus timeout=480 permits CPU reads
-   but also gives an offline PC a 480-second connect budget. The native test
-   forces connection refusal and recovery; it does not claim a blackholed PC
-   connection returns quickly. The fragment records 480 honestly.
-2. VLMCredential has no prompt-context guard. Ollama generation can truncate
-   overlong prompts at its 4096-token CPU context. Completion max_tokens only
-   caps output. The measured safe acceptance case is the exact 2510-token
-   summary; arbitrary prompts are not qualified.
+OV 0.5.2 OpenAIVLM calls chat.completions.create without stream in both sync and
+async methods. The adapter implements those nonstreaming calls and rejects stream.
+It preserves max_tokens at 1..512, temperature=0, PC reasoning_effort=none and
+presence_penalty=0. CPU always reserves the full 512-token output budget even when
+a caller asks for less. The source-managed CPU alias remains context=4096,
+num_predict=512, num_thread=2. Provisioning recreates it and then checks the actual
+GGUF, template, absence of hidden SYSTEM/MESSAGE directives and all four parameters.
+A retained measurement-cache alias inspected during this work had num_thread=1;
+that cache was not changed. Do not treat that retained alias as deployment proof.
 
-Proposed minimal next decision for root: approve a narrowly scoped generation
-transport in the same internal process, limited to the two fixed chat endpoints,
-with a 2-second connect budget and 480-second CPU read budget. CPU requests would
-need a verified tokenizer/context guard before forwarding. This is additional
-implementation, not a field to invent in the provider JSON. Until approved and
-tested, do not advertise general offline generation or enable silent CPU
-truncation. A vector-only candidate reindex and raw-query retrieval can proceed.
+## CPU prompt guard
+
+Ollama 0.40.10 exposes no supported public tokenize endpoint. The adapter instead
+loads tokenizers 0.22.2 from the pinned official OV image and the immutable
+Qwen/Qwen2-1.5B-Instruct revision
+`ba1cf1846d7df0a0591d6c00649f57e798519da8`. No transformers dependency, dynamic
+package install, mutable tokenizer download or custom image build is required.
+
+Runtime asset SHA-256 values:
+
+* tokenizer.json, 7028015 bytes:
+  `f7c9b2dba4a296b1aa76c16a34b8225c0c118978400d4bb66bff0902d702f5b8`.
+* tokenizer_config.json, 1287 bytes:
+  `482bd979881423375ca5414e4e0d94cd7c5349dbb17fffd46b4d36d71e62a1bc`.
+* ollama-template.txt, the bundled 182-byte generation-template.txt:
+  `62fbfd9ed093d6e5ac83190c86eec5369317919f4b149598d2dbb38900e9faef`.
+
+Provisioning downloads the two HF files from that revision with Ansible checksums
+and installs the exact pinned Ollama template. Startup independently verifies all
+three digests and refuses missing or changed assets. No runtime download occurs.
+The template is the base manifest's actual template layer. It has no default
+system message or BOS. HF ships an NFC normalizer which Ollama does not apply;
+the guard disables that normalizer for counting and preserves caller bytes.
+Unmodified HF counting undercounted a decomposed-accent probe by 30 tokens.
+That mismatch is corrected rather than hidden by the safety margin. The HF
+config's default helpful-assistant message is not inserted, since that would
+count a different prompt.
+
+The supported CPU format is an optional initial system message followed by
+alternating plain-text user/assistant messages, ending with user. Every message
+must have only role/content fields. Empty messages, embedded Qwen control tokens,
+tools, multimodal content, response_format and reasoning options fail clearly
+with HTTP 400 before CPU forwarding. PC can carry tools and inline image content
+within the body bound; remote image URLs are rejected.
+
+Counting includes each role, newline, im_start/im_end token and the final
+assistant prefix. The adapter rejects counted_prompt + 512 + 64 > 4096 with a
+visible HTTP 413 reporting the measured count and 3520-token accepted limit.
+The 64-token margin is explicit protection beyond the measured tokenizer agreement.
+It never removes messages, truncates notes, auto-summarizes or applies a semantic
+character limit. HTTP's existing 64 KiB JSON body bound remains a transport bound.
+
+Synthetic comparisons against the pinned actual CPU runtime's OpenAI
+usage.prompt_tokens/prompt_eval_count matched exactly for plain, system, multi-turn,
+Chinese, code and long prose: 10, 29, 47, 1059, 2774 and 2659 tokens respectively.
+The mixed-Unicode prompt matches at 1028 tokens after disabling NFC. Thirteen
+separate Unicode probes also match, including decomposed accents, Arabic, emoji,
+CJK, fullwidth letters and CRLF. These comparisons used one generated token so
+they measured prompt ingestion rather than summary quality. The 2774-token code
+and 2659-token prose probes took 127.43 and 134.85 seconds on the retained
+num_thread=1 alias. Thread count does not change the tokenizer; this does not
+qualify num_thread=2 latency.
+
+The isolated actual native OV SDK then used the same restricted adapter process
+and CPU runtime: PC unreachable, sync fallback returned OK in 2.20 seconds,
+async returned OK in 0.55 seconds, and oversize surfaced as ModelError with code
+context_length_exceeded. The fixed generation hostname resolved to the isolated
+runtime in a network namespace with no external route. The first separate-bridge
+fixture could not connect between its containers; sharing the isolated namespace
+removed that harness networking issue without altering adapter destinations.
+Health remained responsive. Temporary containers and network were removed.
+
+Ollama was constrained to 2 CPUs, memory=memory-swap=2147483648, parallel=1 and
+loaded=1, with OOMKilled=false. Observed cgroup memory.peak was 1772515328 bytes
+for Ollama and 92983296 for the adapter; the adapter used the planned unprivileged
+UID, read-only mounts, 384 MiB / 0.5 CPU / 32 PID limits. These are short-output
+operational probes; the root's prior 512-output summary evidence remains separate.
+
+Synthetic agreement and a conservative margin qualify this restricted template,
+not arbitrary model templates or CPU structured-memory extraction. The actual
+Ollama source routes and OV SDK call sites are available in
+[Ollama routes.go](https://github.com/ollama/ollama/blob/v0.40.10/server/routes.go),
+[Ollama template.go](https://github.com/ollama/ollama/blob/v0.40.10/template/template.go)
+and [OV OpenAIVLM](https://github.com/volcengine/OpenViking/blob/v0.5.2/openviking/models/vlm/backends/openai_vlm.py).
+
+Context errors from the guard or upstream are permanent 400/413 errors. Runtime
+unavailability, timeout or invalid/empty successful responses return 502/503/504
+to OV's native ordered credentials; busy is 429. No upstream body, caller content
+or authorization header is logged or echoed, and authorization is not forwarded.
+This process does not follow redirects or serve general completions/proxy routes.
 
 retrieval.enable_intent=false is a real 0.5.2 field. It avoids optional session
 query planning so CPU generation is not required for always-available retrieval.
 The CPU summary latency exceeds that step's short deadline. This does not
 disable unrelated summary or session extraction calls, and those retain the
-generation limitations above.
+restricted CPU prompt format and latency limits above.
 
 ## Validation
 
@@ -157,9 +241,29 @@ usage/vector validation, context rejection, timeout/connect behavior, busy and
 health behavior, and actual Ansible checksum/symlink/idempotence boundaries.
 
 A separate native job pins openviking==0.5.2 and sets OPENVIKING_NATIVE_TEST=1,
-running the two NativeOV.test_actual_* cases. Those use the real schema, SDK,
-ordered switchers and sync/async failover against controlled HTTP runtimes.
-No patched OV fork or mocked native failover implementation is used.
-Root should add that job and syntax checks for both new playbooks to its owned
-.github/workflows/check.yml. Neither root-owned migration/credential helpers nor
-existing documentation were changed by this implementation.
+running NativeOV, including both NativeOV.test_actual_* cases through adapter
+routes. Those use the real schema, SDK, ordered switchers and sync/async failover
+against controlled HTTP runtimes. No patched OV fork or mocked native failover
+implementation is used. Root has added the standalone native job and both
+playbook syntax checks in its owned .github/workflows/check.yml. This worker
+did not edit root's CI, migration, credential or prior migration documentation.
+
+The ordinary Python CI job must install `tokenizers==0.22.2` alongside
+`ansible-core==2.19.13`; the native job should pin the same tokenizer version.
+Tests download only the pinned tokenizer assets into the asserted scratch HOME,
+or reuse a prepopulated `OPENVIKING_TOKENIZER_DIR` inside that HOME. The native
+class remains named `NativeOV`, so root's standalone CI selector is unchanged.
+
+A complete worker check command, from this worktree:
+
+```sh
+chaldea exec --host agent-a -- sh -c '
+  export HOME="$PWD/.cache/ov-generation-final/home"
+  test "$HOME" = "$PWD/.cache/ov-generation-final/home" || exit 90
+  export OPENVIKING_INFERENCE_TEST_HOME="$HOME" OPENVIKING_NATIVE_TEST=1
+  mkdir -p "$HOME/tmp"
+  export TMPDIR="$HOME/tmp"
+  uv run --python 3.11 --with openviking==0.5.2 \
+    --with ansible-core==2.19.13 --with tokenizers==0.22.2 \
+    python3 scripts/test-openviking-inference.py -v'
+```

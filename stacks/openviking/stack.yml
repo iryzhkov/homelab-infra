@@ -49,9 +49,9 @@ services:
         delay: 5s
 
 
-  embedding-adapter:
-    image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
-    command: [python3, -B, /app/embedding-adapter.py]
+  inference-adapter:
+    image: ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f
+    entrypoint: [python3, -B, /app/inference-adapter.py]
     user: "65534:65534"
     read_only: true
     cap_drop: [ALL]
@@ -61,9 +61,15 @@ services:
     volumes:
       - type: bind
         source: ${OPENVIKING_ADAPTER_PATH:?set by embeddings-prepare.yml}
-        target: /app/embedding-adapter.py
+        target: /app/inference-adapter.py
         read_only: true
-    networks: [providers]
+      - type: bind
+        source: ${OPENVIKING_TOKENIZER_PATH:?set by embeddings-prepare.yml}
+        target: /app/cpu-tokenizer
+        read_only: true
+    networks:
+      providers:
+        aliases: [embedding-adapter]
     healthcheck:
       test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
       interval: 30s
@@ -75,7 +81,7 @@ services:
         constraints: [node.labels.host == homelab]
       resources:
         limits:
-          memory: 128M
+          memory: 384M
           cpus: "0.5"
           pids: 32
       update_config:

@@ -36,7 +36,7 @@
     "max_tokens": 512,
     "max_retries": 0,
     "max_concurrent": 1,
-    "timeout": 480,
+    "timeout": 490,
     "failback_timeout_seconds": 30,
     "failback_request_count": 5,
     "credentials": [
@@ -45,7 +45,7 @@
         "provider": "openai",
         "model": "local:latest",
         "api_key": "internal-unused",
-        "api_base": "http://192.168.90.212:11434/v1",
+        "api_base": "http://inference-adapter:8000/pc/v1",
         "reasoning_effort": "none",
         "extra_request_body": {
           "presence_penalty": 0
@@ -56,7 +56,7 @@
         "provider": "openai",
         "model": "ov-gen-4k",
         "api_key": "internal-unused",
-        "api_base": "http://generation:11434/v1"
+        "api_base": "http://inference-adapter:8000/cpu/v1"
       }
     ]
   },

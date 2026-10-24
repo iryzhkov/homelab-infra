@@ -42,16 +42,36 @@ def load(name, path) -> Any:
     return module
 
 
-adapter = load("embedding_adapter", "stacks/openviking/files/embedding-adapter.py")
+adapter = load("embedding_adapter", "stacks/openviking/files/inference-adapter.py")
 pc = load("pc_preflight", "roles/ov_pc_coexistence/files/preflight.py")
 RECIPE = json.loads((STACK / "recipes/models.json").read_text())
 CONFIG = json.loads((STACK / "recipes/providers-052.json").read_text())
+
+# Tests use the same immutable assets as provisioning. Downloads are confined to
+# the asserted scratch HOME; callers may prepopulate this directory for offline CI.
+TOKENIZER_DIR = Path(os.environ.get("OPENVIKING_TOKENIZER_DIR", str(Path(HOME) / "cpu-tokenizer")))
+assert TOKENIZER_DIR.resolve().is_relative_to(Path(HOME).resolve()), "tokenizer cache must be inside scratch HOME"
+TOKENIZER_DIR.mkdir(parents=True, exist_ok=True)
+for name, digest in adapter.TOKENIZER_ASSETS.items():
+    target = TOKENIZER_DIR / name
+    if not target.exists():
+        if name == "ollama-template.txt":
+            target.write_bytes((STACK / "recipes/generation-template.txt").read_bytes())
+        else:
+            import urllib.request
+            url = ("https://huggingface.co/Qwen/Qwen2-1.5B-Instruct/resolve/"
+                   + adapter.TOKENIZER_REVISION + "/" + name)
+            with urllib.request.urlopen(url, timeout=60) as response:
+                target.write_bytes(response.read(8 * 1024 * 1024))
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == digest, "tokenizer checksum"
+
 
 
 class Runtime(BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         cast(Any, self.server).calls.append((self.path, request))
+        cast(Any, self.server).last_headers = dict(self.headers)
         cast(Any, self.server).entered.set()
         cast(Any, self.server).release.wait(2)
         time.sleep(cast(Any, self.server).delay)
@@ -92,7 +112,10 @@ class Protocol(unittest.TestCase):
         self.old = adapter.UPSTREAMS
         adapter.UPSTREAMS = {route: ("127.0.0.1", self.upstream.server_port, 1)
                              for route in ("pc", "cpu")}
-        self.bridge = start(adapter.Server(("127.0.0.1", 0)))
+        self.old_generation = adapter.GENERATION_UPSTREAMS
+        adapter.GENERATION_UPSTREAMS = {route: ("127.0.0.1", self.upstream.server_port, 1)
+                                        for route in ("pc", "cpu")}
+        self.bridge = start(adapter.Server(("127.0.0.1", 0), tokenizer_dir=TOKENIZER_DIR))
         self.base = f"http://127.0.0.1:{self.bridge.server_port}"
 
     def tearDown(self):
@@ -102,6 +125,7 @@ class Protocol(unittest.TestCase):
         if self.primary is not None:
             stop(self.primary)
         adapter.UPSTREAMS = self.old
+        adapter.GENERATION_UPSTREAMS = self.old_generation
 
     def request(self, data=None, route="pc", raw=None, method="POST", path=None, headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.bridge.server_port, timeout=3)
@@ -215,8 +239,189 @@ class Protocol(unittest.TestCase):
         worker.join(3)
         self.assertEqual(result[0][0], 200)
 
+    def chat_body(self, route="cpu", **kwargs):
+        return dict(model=adapter.GENERATION_MODELS[route],
+                    messages=[{"role": "user", "content": "Summarize the note."}],
+                    max_tokens=512, temperature=0, **kwargs)
+
+    def chat(self, body=None, route="cpu", **kwargs):
+        return self.request(body or self.chat_body(route), route=route,
+                            path=f"/{route}/v1/chat/completions", **kwargs)
+
+    def chat_reply(self):
+        self.upstream.reply = (200, {
+            "id": "fixture", "object": "chat.completion", "created": 1,
+            "model": "ov-gen-4k",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "summary"},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2510, "completion_tokens": 20, "total_tokens": 2530}})
+
+    def test_generation_fixed_routes_models_options_and_no_credentials(self):
+        self.chat_reply()
+        for route in ("pc", "cpu"):
+            status, response = self.chat(route=route)
+            self.assertEqual(status, 200)
+            path, call = self.upstream.calls[-1]
+            self.assertEqual(path, "/v1/chat/completions")
+            self.assertEqual(call["model"], adapter.GENERATION_MODELS[route])
+            self.assertEqual(call["max_tokens"], 512)
+            self.assertFalse(call["stream"])
+            self.assertEqual(call["presence_penalty"], 0)
+            if route == "pc":
+                self.assertEqual(call["reasoning_effort"], "none")
+            self.assertEqual(response["choices"][0]["message"]["content"], "summary")
+        self.assertEqual(self.chat(self.chat_body(api_base="http://evil.invalid"))[0], 400)
+        self.assertEqual(self.chat(self.chat_body(model_url="http://evil.invalid"))[0], 400)
+        self.assertEqual(self.request(path="/cpu/v1/completions")[0], 404)
+        # A credential provided by an SDK never travels to Ollama.
+        self.assertEqual(self.chat(headers={"Content-Type": "application/json",
+                                           "Authorization": "Bearer private-secret"})[0], 200)
+        self.assertNotIn("Authorization", self.upstream.last_headers)
+
+    def test_cpu_real_tokenizer_context_boundary_and_supported_rendering(self):
+        self.chat_reply()
+        guard = self.bridge.guard
+        self.assertEqual(guard.count([{"role": "user", "content": "Hello."}]), 10)
+        # HF default NFC normalizes e + combining accent and undercounts Ollama.
+        # Keep original bytes and count decomposed Unicode exactly as the GGUF.
+        self.assertEqual(guard.count([{"role": "user", "content": "é " * 20}]), 49)
+        self.assertEqual(guard.count([{"role": "user", "content": "café " * 20}]), 50)
+        self.assertEqual(guard.render([{"role": "user", "content": "Hello."}]),
+                         "<|im_start|>user\nHello.<|im_end|>\n<|im_start|>assistant\n")
+        # A model-aligned boundary, including roles, newlines and assistant prefix.
+        message = [{"role": "user", "content": " a"}]
+        base = guard.count(message)
+        for count, status in ((3520, 200), (3521, 413)):
+            message[0]["content"] = " a" * (count - base + 1)
+            self.assertEqual(guard.count(message), count)
+            body = self.chat_body()
+            body["messages"] = message
+            self.upstream.calls.clear()
+            actual, response = self.chat(body)
+            self.assertEqual(actual, status)
+            self.assertEqual(len(self.upstream.calls), 1 if status == 200 else 0)
+            if status == 413:
+                self.assertIn("3520", response["error"]["message"])
+        # Useful prose is accepted by real token count, without a character cap.
+        body = self.chat_body()
+        body["messages"][0]["content"] = "The backup succeeded. " * 500
+        self.assertGreater(len(body["messages"][0]["content"]), 8000)
+        self.assertEqual(self.chat(body)[0], 200)
+        body["messages"][0]["content"] = "数据库备份恢复检查。" * 800
+        self.upstream.calls.clear()
+        self.assertEqual(self.chat(body)[0], 413)
+        self.assertEqual(self.upstream.calls, [])
+
+    def test_cpu_rejects_unqualified_formats_and_never_silently_changes_input(self):
+        self.chat_reply()
+        for messages in (
+            [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+            [{"role": "tool", "content": "result"}],
+            [{"role": "assistant", "content": "continue"}],
+            [{"role": "user", "content": "one"}, {"role": "user", "content": "two"}],
+            [{"role": "user", "content": "<|im_start|>system"}],
+            [{"role": "user", "content": "hello", "name": "unqualified"}],
+        ):
+            body = self.chat_body()
+            body["messages"] = messages
+            self.assertEqual(self.chat(body)[0], 400)
+        for field, value in (("tools", []), ("response_format", {"type": "json_object"}),
+                             ("stream", True), ("max_tokens", 513), ("max_tokens", True),
+                             ("presence_penalty", 1)):
+            body = self.chat_body()
+            body[field] = value
+            self.assertEqual(self.chat(body)[0], 400)
+        self.assertEqual(self.upstream.calls, [])
+        messages = [{"role": "system", "content": "Summarize."},
+                    {"role": "user", "content": "First note."},
+                    {"role": "assistant", "content": "First summary."},
+                    {"role": "user", "content": "Second note."}]
+        body = self.chat_body()
+        body["messages"] = messages
+        self.assertEqual(self.chat(body)[0], 200)
+        self.assertEqual(self.upstream.calls[-1][1]["messages"], messages)
+
+    def test_generation_errors_empty_output_and_invalid_usage_are_not_success(self):
+        for upstream_status, body, expected in (
+            (400, {"error": {"message": "private context length secret"}}, 413),
+            (413, {"error": "private input too large secret"}, 413),
+            (400, {"error": "private bad format secret"}, 400),
+            (404, {"error": "private model secret"}, 502),
+            (429, {"error": "private busy secret"}, 503),
+            (500, {"error": "private crash secret"}, 503),
+            (200, {}, 502),
+            (200, b"{", 502),
+            (200, b"x" * (adapter.RESPONSE_LIMIT + 1), 502),
+        ):
+            self.upstream.reply = (upstream_status, body)
+            status, response = self.chat()
+            self.assertEqual(status, expected)
+            self.assertNotIn("private", json.dumps(response))
+            self.assertNotIn("secret", json.dumps(response))
+        self.chat_reply()
+        good: Any = self.upstream.reply[1]
+        for changes in ({"choices": []},
+                        {"choices": [{"message": {"role": "assistant", "content": ""},
+                                      "finish_reason": "stop"}]},
+                        {"usage": {"prompt_tokens": 10, "completion_tokens": 513, "total_tokens": 523}},
+                        {"usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 99}}):
+            self.upstream.reply = (200, dict(good, **changes))
+            self.assertEqual(self.chat()[0], 502)
+
+    def test_generation_connect_read_budgets_cross_route_busy_and_health(self):
+        self.chat_reply()
+        self.assertEqual(self.old_generation["pc"], ("192.168.90.212", 11434, 120))
+        self.assertEqual(self.old_generation["cpu"], ("generation", 11434, 480))
+        adapter.GENERATION_UPSTREAMS["cpu"] = ("127.0.0.1", self.upstream.server_port, 480)
+        with patch.object(adapter.http.client, "HTTPConnection") as connection:
+            connection.return_value.connect.side_effect = socket.timeout()
+            with self.assertRaises(adapter.Rejected) as caught:
+                adapter.generate("cpu", self.chat_body())
+            self.assertEqual(caught.exception.status, 504)
+            self.assertEqual(connection.call_args.kwargs["timeout"], 2)
+        adapter.GENERATION_UPSTREAMS["pc"] = ("127.0.0.1", 1, 120)
+        began = time.monotonic()
+        self.assertEqual(self.chat(route="pc")[0], 503)
+        self.assertLess(time.monotonic() - began, 1)
+        adapter.GENERATION_UPSTREAMS["cpu"] = ("127.0.0.1", self.upstream.server_port, 0.03)
+        self.upstream.delay = 0.15
+        self.assertEqual(self.chat()[0], 504)
+        self.upstream.delay = 0
+        adapter.GENERATION_UPSTREAMS["cpu"] = ("127.0.0.1", self.upstream.server_port, 1)
+        self.upstream.entered.clear()
+        self.upstream.release.clear()
+        result = []
+        worker = threading.Thread(target=lambda: result.append(self.chat()))
+        worker.start()
+        self.assertTrue(self.upstream.entered.wait(1))
+        self.assertEqual(self.request()[0], 429)
+        self.assertEqual(self.chat()[0], 429)
+        self.assertEqual(self.request(method="GET", path="/health")[0], 200)
+        self.upstream.release.set()
+        worker.join(3)
+        self.assertEqual(result[0][0], 200)
+
+
 
 class SourceContracts(unittest.TestCase):
+
+    def test_tokenizer_assets_fail_closed_and_provisioning_pins_match(self):
+        guard_dir = Path(tempfile.mkdtemp())
+        try:
+            for name in adapter.TOKENIZER_ASSETS:
+                shutil.copyfile(TOKENIZER_DIR / name, guard_dir / name)
+            (guard_dir / "tokenizer_config.json").write_text("{}")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                adapter.PromptGuard(guard_dir)
+        finally:
+            shutil.rmtree(guard_dir)
+        provisioning = (STACK / "embeddings-prepare.yml").read_text()
+        for name in ("tokenizer.json", "tokenizer_config.json"):
+            self.assertIn(adapter.TOKENIZER_ASSETS[name], provisioning)
+        self.assertIn(adapter.TOKENIZER_REVISION, provisioning)
+        self.assertEqual(hashlib.sha256((STACK / "recipes/generation-template.txt").read_bytes()).hexdigest(),
+                         adapter.TOKENIZER_ASSETS["ollama-template.txt"])
+
     def test_manifest_pins_and_model_layer_match(self):
         for name in ("embeddings", "generation"):
             recipe = RECIPE[name]
@@ -247,23 +452,27 @@ class SourceContracts(unittest.TestCase):
             self.assertEqual(service["mem_limit"], 2 * 1024 ** 3)
             self.assertEqual(service["cpus"], 2)
         stack = yaml.safe_load((STACK / "stack.yml").read_text())
-        self.assertEqual(set(stack["services"]), {"openviking", "embedding-adapter"})
-        self.assertNotIn("ports", stack["services"]["embedding-adapter"])
-        self.assertTrue(stack["services"]["embedding-adapter"]["read_only"])
+        self.assertEqual(set(stack["services"]), {"openviking", "inference-adapter"})
+        self.assertNotIn("ports", stack["services"]["inference-adapter"])
+        self.assertTrue(stack["services"]["inference-adapter"]["read_only"])
+        self.assertIn("embedding-adapter", stack["services"]["inference-adapter"]["networks"]["providers"]["aliases"])
+        for credential in CONFIG["embedding"]["dense"]["credentials"]:
+            self.assertEqual(credential["api_base"],
+                             "http://embedding-adapter:8000/" + credential["id"] + "/v1")
         self.assertIn("e9a7222f", stack["services"]["openviking"]["image"])
 
     def test_pc_preflight_preserves_game_and_generation(self):
         local = {"name": "local:latest", "size_vram": 6_000_000_000, "digest": "stable"}
-        self.assertFalse(pc.check([local], 1600)["embedding_loaded"])
+        self.assertFalse(pc.check([local], 3072)["embedding_loaded"])
         with self.assertRaises(ValueError):
-            pc.check([local], 1500)
+            pc.check([local], 3071)
         with self.assertRaises(ValueError):
             pc.check([], 20000)
         with self.assertRaises(ValueError):
             pc.check([dict(local, size_vram=0)], 20000)
-        self.assertTrue(pc.check([local, {"name": adapter.MODEL}], 300)["embedding_loaded"])
+        self.assertTrue(pc.check([local, {"name": adapter.MODEL}], 1024)["embedding_loaded"])
         with self.assertRaises(ValueError):
-            pc.check([local, {"name": adapter.MODEL}], 255)
+            pc.check([local, {"name": adapter.MODEL}], 1023)
 
 
 class Provisioning(unittest.TestCase):
@@ -352,6 +561,34 @@ class Provisioning(unittest.TestCase):
         self.assertIn("Require the exact host and explicit restart authority", result.stdout)
         self.assertNotIn("Read the existing system service custody", result.stdout)
 
+
+    def test_cpu_alias_verification_rejects_template_parameter_and_system_drift(self):
+        tasks = yaml.safe_load((STACK / "ollama-prepare.yml").read_text())
+        assertion = next(task for task in tasks if task["name"] ==
+                         "Refuse an alias that differs from the counted CPU model recipe")
+        # Module stdout is deliberately untrusted in Ansible 2.19. Use actual
+        # command output, not trusted extra-vars containing Go's {{ .System }}.
+        model_output = self.work / "model.out"
+        play = [{"hosts": "localhost", "gather_facts": False, "tasks": [
+            {"ansible.builtin.command": {"argv": ["cat", str(model_output)]},
+             "register": "ov_generation_model", "changed_when": False}, assertion]}]
+        (self.work / "play.yml").write_text(yaml.safe_dump(play))
+        template = (STACK / "recipes/generation-template.txt").read_text()
+        good = ('FROM /models/blobs/sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603\n'
+                + 'TEMPLATE "' + template + '"\n'
+                + "PARAMETER num_ctx 4096\nPARAMETER num_predict 512\n"
+                + "PARAMETER num_thread 2\nPARAMETER temperature 0\n")
+        self.variables.update(swarm_stack_src=str(STACK), ov_provider={"key": "generation"})
+        model_output.write_text(good)
+        self.assert_ok(self.run_play())
+        for changed in (good.replace("num_ctx 4096", "num_ctx 8192"),
+                        good.replace("num_thread 2", "num_thread 1"),
+                        good.replace("user\n", "user: "),
+                        good + 'SYSTEM "hidden instruction"\n',
+                        good + 'MESSAGE user "hidden history"\n'):
+            model_output.write_text(changed)
+            self.assertNotEqual(self.run_play().returncode, 0)
+
     def test_rejects_tampered_manifest(self):
         self.manifest.write_text('{"fixture":false}')
         self.assertNotEqual(self.run_play().returncode, 0)
@@ -387,45 +624,58 @@ class NativeOV(Protocol):
             embedder.embed("a" * 300000)
         self.assertEqual(self.upstream.calls, [])
 
+
     def test_actual_vlm_ordered_failover_and_timeout_schema_boundary(self):
         from importlib.metadata import version
         from openviking_cli.utils.config.vlm_config import VLMConfig
         self.assertEqual(version("openviking"), "0.5.2")
         conf = json.loads(json.dumps(CONFIG["vlm"]))
-        conf["timeout"] = 1
+        conf["timeout"] = 3
         conf["failback_request_count"] = 1
-        unused = socket.socket()
-        unused.bind(("127.0.0.1", 0))
-        primary_port = unused.getsockname()[1]
-        unused.close()
-        conf["credentials"][0]["api_base"] = f"http://127.0.0.1:{primary_port}/v1"
-        conf["credentials"][1]["api_base"] = f"http://127.0.0.1:{self.upstream.server_port}/v1"
-        self.upstream.reply = (200, {"id": "fixture", "object": "chat.completion", "created": 1,
-            "model": "ov-gen-4k", "choices": [{"index": 0, "message": {"role": "assistant", "content": "summary"},
-                                             "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 2510, "completion_tokens": 20, "total_tokens": 2530}})
+        for credential, route in zip(conf["credentials"], ("pc", "cpu")):
+            credential["api_base"] = self.base + "/" + route + "/v1"
+        self.chat_reply()
         config = VLMConfig.model_validate(conf)
         client = config.get_vlm_instance()
-        self.assertEqual(client.get_completion("summarize"), "summary")
-        fallback_call = self.upstream.calls[-1][1]
-        self.assertEqual(fallback_call["model"], "ov-gen-4k")
-        self.assertEqual(fallback_call["max_tokens"], 512)
-        # Recovery goes back to primary via the native request-count policy.
-        self.primary = ThreadingHTTPServer(("127.0.0.1", primary_port), Runtime)
-        for key in ("reply", "entered", "release", "delay"):
-            setattr(self.primary, key, getattr(self.upstream, key))
-        self.primary.calls = []
-        start(self.primary)
-        # One fallback request increments the native counter; the next probes the primary.
-        for _ in range(2):
-            self.assertEqual(asyncio.run(client.get_completion_async("again")), "summary")
-        self.assertTrue(self.primary.calls)
-        self.assertEqual(self.primary.calls[-1][1]["model"], "local:latest")
-        self.assertEqual(self.primary.calls[-1][1]["reasoning_effort"], "none")
-        self.assertEqual(self.primary.calls[-1][1]["presence_penalty"], 0)
-        self.assertNotIn("timeout", config.credentials[0].model_fields)
-        self.assertIsInstance(VLMConfig.model_fields["timeout"].default, float)
-        client.close()
+        try:
+            for asynchronous in (False, True):
+                adapter.GENERATION_UPSTREAMS["pc"] = ("127.0.0.1", 1, 120)
+                self.upstream.calls.clear()
+                if asynchronous:
+                    self.assertEqual(asyncio.run(client.get_completion_async("summarize")), "summary")
+                else:
+                    self.assertEqual(client.get_completion("summarize"), "summary")
+                self.assertEqual(self.upstream.calls[-1][0], "/v1/chat/completions")
+                self.assertEqual(self.upstream.calls[-1][1]["model"], "ov-gen-4k")
+                self.assertEqual(self.upstream.calls[-1][1]["max_tokens"], 512)
+                # Native failback uses the same adapter and probes the PC after
+                # one fallback request. Exercise recovery in BOTH call styles.
+                adapter.GENERATION_UPSTREAMS["pc"] = adapter.GENERATION_UPSTREAMS["cpu"]
+                for _ in range(2):
+                    if asynchronous:
+                        self.assertEqual(asyncio.run(client.get_completion_async("recovered")), "summary")
+                    else:
+                        self.assertEqual(client.get_completion("recovered"), "summary")
+                primary = self.upstream.calls[-1][1]
+                self.assertEqual(primary["model"], "local:latest")
+                self.assertEqual(primary["reasoning_effort"], "none")
+                self.assertEqual(primary["presence_penalty"], 0)
+            # Native OV must expose permanent prompt errors, without trying CPU.
+            self.upstream.reply = (400, {"error": "context length exceeded"})
+            self.upstream.calls.clear()
+            with self.assertRaises(Exception):
+                client.get_completion("oversize")
+            self.assertEqual(len(self.upstream.calls), 1)
+            # Offline CPU oversize fails locally before ANY upstream generation.
+            adapter.GENERATION_UPSTREAMS["pc"] = ("127.0.0.1", 1, 120)
+            self.upstream.calls.clear()
+            with self.assertRaises(Exception):
+                asyncio.run(client.get_completion_async("数据库备份恢复检查。" * 800))
+            self.assertEqual(self.upstream.calls, [])
+            self.assertNotIn("timeout", config.credentials[0].model_fields)
+            self.assertIsInstance(VLMConfig.model_fields["timeout"].default, float)
+        finally:
+            client.close()
 
 
 if __name__ == "__main__":

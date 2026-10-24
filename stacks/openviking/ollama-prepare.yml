@@ -96,3 +96,33 @@
     - not ansible_check_mode
   delegate_to: "{{ ov_provider.value.host }}"
   become: true
+
+# The guard counts this exact legacy template, with no hidden system/history.
+# Inspect the recreated alias rather than trusting a retained cache's parameters.
+- name: Inspect the actual CPU generation alias
+  ansible.builtin.command:
+    argv: [docker, exec, openviking-generation, ollama, show, ov-gen-4k, --modelfile]
+  register: ov_generation_model
+  changed_when: false
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Refuse an alias that differs from the counted CPU model recipe
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('TEMPLATE "' ~ lookup('file', swarm_stack_src ~ '/recipes/generation-template.txt', rstrip=false) ~ '"')
+        in ov_generation_model.stdout
+      - ov_generation_model.stdout is search('(?m)^FROM .*sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER num_ctx 4096$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER num_predict 512$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER num_thread 2$')
+      - ov_generation_model.stdout is search('(?m)^PARAMETER temperature 0$')
+      - ov_generation_model.stdout is not search('(?m)^(SYSTEM|MESSAGE) ')
+    quiet: true
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
