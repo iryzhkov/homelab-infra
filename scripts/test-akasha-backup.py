@@ -143,6 +143,97 @@ class PackagingTest(unittest.TestCase):
                     offsite.package(self.work)
                 self.assertEqual(self.calls, [])
 
+    def test_health_during_real_snapshot_rotation_and_failed_rotation(self):
+        opener = mock.MagicMock()
+        opener.open.return_value.__enter__.return_value.status = 200
+        opener.open.return_value.__enter__.return_value.read.return_value = b'{"ok":true}'
+        original_connect = maintenance.sqlite3.connect
+        observed = []
+        def connect_during_gap(*args, **kwargs):
+            if not offsite.SOURCE.exists():
+                maintenance.health(self.state, "http://127.0.0.1/healthz")
+                observed.append(True)
+            return original_connect(*args, **kwargs)
+        with mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener):
+            with mock.patch.object(maintenance.sqlite3, "connect", side_effect=connect_during_gap):
+                maintenance.snapshot(self.state)
+            self.assertTrue(observed)
+            # A failed rotation must fail health once its lock is released.
+            with mock.patch.object(maintenance.sqlite3, "connect", side_effect=RuntimeError("fixture")):
+                with self.assertRaises(RuntimeError):
+                    maintenance.snapshot(self.state)
+            with self.assertRaises((RuntimeError, OSError)):
+                maintenance.health(self.state, "http://127.0.0.1/healthz")
+
+    def test_health_reconciles_rotation_finishing_after_missing_snapshot_stat(self):
+        source = offsite.SOURCE
+        snapshot_bytes = source.read_bytes()
+        source.unlink()
+        real_stat = Path.stat
+        observed = []
+        with (self.state / "backup.lock").open("rb+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            lock.write(json.dumps({"started": time.time(), "snapshot_time": time.time()}).encode())
+            lock.flush()
+            def stat_finishing_rotation(path, *args, **kwargs):
+                if path == source and not observed:
+                    observed.append(True)
+                    source.write_bytes(snapshot_bytes)
+                    lock.seek(0)
+                    lock.truncate()
+                    lock.flush()
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    raise FileNotFoundError("snapshot was missing before publication")
+                return real_stat(path, *args, **kwargs)
+            with mock.patch.object(Path, "stat", stat_finishing_rotation):
+                maintenance.check_snapshot(self.state)
+            self.assertTrue(observed)
+
+    def test_invalid_or_empty_rotation_evidence_fails_closed(self):
+        offsite.SOURCE.unlink()
+        with (self.state / "backup.lock").open("rb+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            for evidence in (b"", b"{", b"[]", b'{"started":true,"snapshot_time":null}'):
+                with self.subTest(evidence=evidence):
+                    lock.seek(0)
+                    lock.truncate()
+                    lock.write(evidence)
+                    lock.flush()
+                    with self.assertRaises((RuntimeError, ValueError, OSError)):
+                        maintenance.check_snapshot(self.state)
+
+    def test_rotation_grace_requires_live_lock_fresh_snapshot_and_bounded_duration(self):
+        source = offsite.SOURCE
+        source.unlink()
+        now = time.time()
+        with (self.state / "backup.lock").open("rb+") as lock:
+            for held, started, snapshot_time, valid in (
+                    (True, now, now - 3600, True),
+                    (False, now, now - 3600, False),
+                    (True, now - 301, now - 3600, False),
+                    (True, now, now - 86401, False),
+                    (True, now, now + 60, False),
+                    (True, now + 60, now - 3600, False)):
+                with self.subTest(held=held, started=started, snapshot_time=snapshot_time):
+                    lock.seek(0)
+                    lock.truncate()
+                    lock.write(json.dumps({"started": started, "snapshot_time": snapshot_time}).encode())
+                    lock.flush()
+                    fcntl.flock(lock, fcntl.LOCK_EX if held else fcntl.LOCK_UN)
+                    opener = mock.MagicMock()
+                    opener.open.return_value.__enter__.return_value.status = 200
+                    opener.open.return_value.__enter__.return_value.read.return_value = b'{"ok":true}'
+                    with mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener):
+                        if valid:
+                            maintenance.health(self.state, "http://127.0.0.1/healthz")
+                            opener.open.side_effect = OSError("not ready")
+                            with self.assertRaises(OSError):
+                                maintenance.health(self.state, "http://127.0.0.1/healthz")
+                        else:
+                            with self.assertRaises((RuntimeError, OSError)):
+                                maintenance.health(self.state, "http://127.0.0.1/healthz")
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
     def test_fifo_source_fails_without_waiting_for_timeout(self):
         offsite.SOURCE.unlink()
         os.mkfifo(offsite.SOURCE, 0o600)
