@@ -53,10 +53,10 @@ def snapshot(base):
 class Probe(preflight.HostProbe):
     """Real lstat/listdir; declared mounts, owners and devices."""
 
-    def __init__(self, mounts, uid, owners=None, devices=None, modes=None):
+    def __init__(self, mounts, uid, owners=None, devices=None, modes=None, groups=None):
         self.mounts, self.uid = mounts, uid
         self.owners, self.devices = owners or {}, devices or {}
-        self.modes = modes or {}
+        self.modes, self.groups = modes or {}, groups or {}
         self.asked, self.inspected = [], []
 
     def lstat(self, path):
@@ -65,6 +65,7 @@ class Probe(preflight.HostProbe):
         mode = self.modes.get(path)
         return types.SimpleNamespace(st_mode=real.st_mode if mode is None else stat.S_IFDIR | mode,
                                      st_uid=self.owners.get(path, self.uid),
+                                     st_gid=self.groups.get(path, real.st_gid),
                                      st_dev=self.devices.get(path, real.st_dev))
 
     def mount(self, path):
@@ -138,6 +139,13 @@ class Fixture:
             acceptance_mode="operational_budget", physical_cap=None,
             operational_budget={"bytes": 2_000_000_000_000,
                                 "risk_acceptance": "evidence:unquotaed-data-risk-acceptance"})
+        return qualify(config)
+
+    def mapped_config(self, budget=True):
+        config = self.budget_config() if budget else self.config()
+        config["gid"] = 1000
+        config["data"]["identity_mapping"] = {
+            "owner_uid": 977, "owner_gid": 988, "evidence": "fixture:process-1000-1000-nfs-977-988"}
         return qualify(config)
 
     def probe(self, **kwargs):
@@ -665,6 +673,163 @@ class BudgetTest(Scratch):
         self.assert_refused(fixture, fixture.budget_config(), fixture.probe(), "symlink at")
 
 
+class IdentityMappingTest(Scratch):
+    """Synthetic owner mapping, never evidence for production qualification."""
+
+    assert_refused = PreflightTest.assert_refused
+
+    def mapped_probe(self, fixture, **kwargs):
+        owners = {str(fixture.blobs): 977, **kwargs.pop("owners", {})}
+        groups = {str(fixture.blobs): 988, **kwargs.pop("groups", {})}
+        return fixture.probe(owners=owners, groups=groups, **kwargs)
+
+    def test_process_1000_1000_accepts_measured_data_977_988_in_both_modes(self):
+        fixture = Fixture(self.base)
+        for budget in (False, True):
+            with self.subTest(budget=budget):
+                config = fixture.mapped_config(budget=budget)
+                original, before = copy.deepcopy(config), snapshot(self.base)
+                probe = self.mapped_probe(fixture)
+                result = preflight.validate(config, probe)
+                self.assertEqual(result["status"], "passed-startup-preflight")
+                self.assertEqual((config["uid"], config["gid"]), (1000, 1000))
+                self.assertIn(str(fixture.blobs), probe.inspected)
+                self.assertIn(str(fixture.objectstore / "meta"), probe.inspected)
+                self.assertEqual(config, original)
+                self.assertEqual(snapshot(self.base), before)
+
+    def test_either_wrong_observed_data_id_refuses(self):
+        fixture = Fixture(self.base)
+        for owner, group in ((1000, 988), (977, 1000), (1000, 1000), (0, 988), (977, 0)):
+            with self.subTest(owner=owner, group=group):
+                probe = self.mapped_probe(fixture, owners={str(fixture.blobs): owner},
+                                          groups={str(fixture.blobs): group})
+                self.assert_refused(fixture, fixture.mapped_config(), probe,
+                                    "must be owned by mapped uid:gid 977:988")
+
+    def test_malformed_mapping_refuses_before_host_inspection(self):
+        fixture = Fixture(self.base)
+        valid = fixture.mapped_config()["data"]["identity_mapping"]
+        cases: list[tuple[object, str]] = [(value, "requires exactly") for value in
+                 (None, False, True, 0, "", "977:988", [], {}, {"owner_uid": 977})]
+        for key in valid:
+            incomplete = dict(valid)
+            del incomplete[key]
+            cases.append((incomplete, "requires exactly"))
+        for key in ("mode", "uid", "gid", "process_uid", "process_gid"):
+            cases.append(({**valid, key: 1000}, "requires exactly"))
+        for key in ("owner_uid", "owner_gid"):
+            for value in (None, True, False, 0, -1, 977.0, "977", [], {}):
+                cases.append(({**valid, key: value}, "positive non-root integer"))
+        for value in (None, "", " \n\t", True, 1, [], {}):
+            cases.append(({**valid, "evidence": value}, "qualification evidence"))
+        for mapping, message in cases:
+            with self.subTest(mapping=mapping):
+                config = fixture.mapped_config()
+                config["data"]["identity_mapping"] = mapping
+                self.assert_refused(fixture, qualify(config), Exploding(), message)
+        for mapping in (None, {}, valid):
+            with self.subTest(metadata_mapping=mapping):
+                config = fixture.mapped_config()
+                config["metadata"]["identity_mapping"] = mapping
+                self.assert_refused(fixture, qualify(config), Exploding(),
+                                    "allowed only on data, never metadata")
+
+    def test_mapping_and_process_identity_require_exact_digest_requalification(self):
+        fixture = Fixture(self.base)
+        changes = [
+            lambda c: c["data"].pop("identity_mapping"),
+            lambda c: c["data"]["identity_mapping"].update(owner_uid=978),
+            lambda c: c["data"]["identity_mapping"].update(owner_gid=989),
+            lambda c: c["data"]["identity_mapping"].update(evidence="fixture:other-mapping"),
+            lambda c: c.update(uid=1001),
+            lambda c: c.update(gid=1001),
+        ]
+        for change in changes:
+            config = fixture.mapped_config()
+            change(config)
+            self.assert_refused(fixture, config, Exploding(), "exact configuration digest")
+        legacy = fixture.config()
+        legacy["data"]["identity_mapping"] = fixture.mapped_config()["data"]["identity_mapping"]
+        self.assert_refused(fixture, legacy, Exploding(), "exact configuration digest")
+        config = fixture.mapped_config()
+        config["data"]["identity_mapping"]["evidence"] = "fixture:other-mapping"
+        preflight.validate(qualify(config), self.mapped_probe(fixture))
+        for gate in preflight.DURABILITY_GATES:
+            config = fixture.mapped_config()
+            config["qualifications"][gate] = None
+            self.assert_refused(fixture, qualify(config), Exploding(), "unqualified live gate")
+
+    def test_absent_mapping_preserves_legacy_uid_only_contract_and_configuration(self):
+        fixture = Fixture(self.base)
+        config = fixture.config()
+        original, original_digest = copy.deepcopy(config), preflight.digest(config)
+        self.assertNotIn("identity_mapping", config["data"])
+        self.assertNotIn("identity_mapping", CANONICAL["data"])
+        # The original contract did not bind st_gid, even to the process gid.
+        for group in (0, 988, 1000, 1234):
+            probe = fixture.probe(groups={str(fixture.blobs): group})
+            preflight.validate(config, probe)
+        self.assertEqual(config, original)
+        self.assertEqual(preflight.digest(config), original_digest)
+        self.assert_refused(fixture, config, self.mapped_probe(fixture),
+                            "must be owned by uid 1000")
+
+    def test_data_mapping_never_trusts_nas_owner_for_local_metadata(self):
+        fixture = Fixture(self.base)
+        config = fixture.mapped_config()
+        for path in (Path("/"), fixture.base, fixture.local, fixture.local / "swarm",
+                     fixture.objectstore, fixture.objectstore / "config",
+                     fixture.objectstore / "meta"):
+            with self.subTest(path=path):
+                probe = self.mapped_probe(fixture, owners={str(path): 977})
+                self.assert_refused(fixture, config, probe, "owned by root or uid 1000")
+        self.assert_refused(fixture, config, self.mapped_probe(
+            fixture, owners={str(fixture.objectstore / "meta"): 0}), "must be owned by uid 1000")
+        self.assert_refused(fixture, config, self.mapped_probe(
+            fixture, modes={str(fixture.objectstore / "config"): 0o777}),
+            "not be group or other writable")
+
+    def test_mapping_preserves_data_namespace_mount_device_and_mode_refusals(self):
+        fixture = Fixture(self.base)
+        for path, message in ((fixture.nas, "strictly below"),
+                              (fixture.nas / "datasets/garage", "top-level directory")):
+            config = fixture.mapped_config()
+            config["data"]["path"] = str(path)
+            self.assert_refused(fixture, qualify(config), Exploding(), message)
+        for mode in (0o710, 0o701, 0o770, 0o777):
+            self.assert_refused(fixture, fixture.mapped_config(),
+                                self.mapped_probe(fixture, modes={str(fixture.blobs): mode}),
+                                "no group or other access")
+        self.assert_refused(fixture, fixture.mapped_config(),
+                            self.mapped_probe(fixture, devices={str(fixture.blobs): -1}),
+                            "on another device")
+        for key, value, message in (("source", "nas:/wrong", "mount source"),
+                                    ("fstype", "ext4", "mount fstype"),
+                                    ("fsroot", "/sub", "mount fsroot"),
+                                    ("options", "ro,soft", "lacks rw")):
+            probe = self.mapped_probe(fixture)
+            probe.mounts[str(fixture.nas)][key] = value
+            self.assert_refused(fixture, fixture.mapped_config(), probe, message)
+        probe = self.mapped_probe(fixture)
+        del probe.mounts[str(fixture.nas)]
+        self.assert_refused(fixture, fixture.mapped_config(), probe, "mount target")
+        probe = self.mapped_probe(fixture)
+        probe.mounts[str(fixture.blobs)] = dict(probe.mounts[str(fixture.nas)])
+        self.assert_refused(fixture, fixture.mapped_config(), probe, "mount target")
+        config = fixture.mapped_config(budget=False)
+        config["data"]["physical_cap"].update(mechanism="dedicated_filesystem",
+                                               scope=str(fixture.nas))
+        self.assert_refused(fixture, qualify(config), self.mapped_probe(fixture),
+                            "mount is shared")
+        target = fixture.nas / "elsewhere"
+        target.mkdir(mode=0o700)
+        fixture.blobs.rmdir()
+        fixture.blobs.symlink_to(target)
+        self.assert_refused(fixture, fixture.mapped_config(), self.mapped_probe(fixture),
+                            "symlink at")
+
+
 class SourceTest(Scratch):
     def test_garage_configuration_renders_configured_fsync(self):
         env = jinja2.Environment(undefined=jinja2.StrictUndefined)
@@ -762,6 +927,15 @@ class SourceTest(Scratch):
         qualify(budget)
         cases += [("budget " + name, stack, budget, script, message)
                   for name, stack, storage, script, message in cases if storage is qualified]
+        mapped = dict(fixture.mapped_config(), host="localhost")
+        qualify(mapped)
+        mapped_env = {**env, "OBJECTSTORE_GID": "1000"}
+        mapped_stack = {**matched, "env_extra": mapped_env}
+        cases.append(("mapped process identity", mapped_stack, mapped, passing, "Lint objectstore"))
+        for key, wrong in (("OBJECTSTORE_UID", "977"), ("OBJECTSTORE_GID", "988")):
+            cases.append(("mapped owner is not process " + key,
+                          {**mapped_stack, "env_extra": {**mapped_env, key: wrong}},
+                          mapped, passing, "objectstore env_extra " + key + " must match"))
         for index, (name, stack, storage, script, message) in enumerate(cases):
             with self.subTest(name):
                 raw = json.dumps(tasks[:stop + 1])

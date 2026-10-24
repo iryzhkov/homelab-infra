@@ -103,6 +103,16 @@ def expected_store(config, label):
     """Validate one store's declared identity without touching the host."""
     store = config.get(label)
     require(isinstance(store, dict), label + " storage is required")
+    mapping = store.get("identity_mapping")
+    if "identity_mapping" in store:
+        require(label == "data", "identity_mapping is allowed only on data, never metadata")
+        require(isinstance(mapping, dict)
+                and set(mapping) == {"owner_uid", "owner_gid", "evidence"},
+                "data identity_mapping requires exactly owner_uid, owner_gid and evidence")
+        require(positive(mapping["owner_uid"]) and positive(mapping["owner_gid"]),
+                "data identity_mapping needs positive non-root integer owner_uid and owner_gid")
+        require(text(mapping["evidence"]),
+                "data identity_mapping qualification evidence reference is required")
     mount = store.get("mount")
     require(isinstance(mount, dict), label + " mount identity is required")
     for key in ("target", "source", "fstype", "fsroot"):
@@ -149,7 +159,7 @@ def expected_store(config, label):
         require(text(budget["risk_acceptance"]),
                 "data operational budget risk_acceptance evidence reference is required")
         return {"label": label, "mount": mount, "root": root, "path": path,
-                "cap": None, "mode": mode, "budget": budget}
+                "cap": None, "mode": mode, "budget": budget, "identity_mapping": mapping}
     require("operational_budget" not in store,
             label + " physical_cap mode must not declare an operational_budget")
     cap = store.get("physical_cap")
@@ -170,7 +180,7 @@ def expected_store(config, label):
                       + ", ".join(WHOLE_MOUNT_CAPS + DIRECTORY_CAPS) + "); free space, "
                       "logical or bucket quotas and cleanup are not physical caps")
     return {"label": label, "mount": mount, "root": root, "path": path, "cap": cap,
-            "mode": mode}
+            "mode": mode, "identity_mapping": mapping}
 
 
 def inspect(probe, path, what):
@@ -236,7 +246,9 @@ def probe_store(probe, store, uid):
     # Privileged local metadata/config writes require trusted directory custody.
     if label == "metadata":
         metadata_custody(probe, path, uid)
-    # Garage's own directories still belong to its uid alone.
+    # Only data may have a qualified NFS owner mapping. Metadata keeps the
+    # process uid, including the separate ancestor/config custody checks.
+    mapping = store["identity_mapping"]
     if label == "data":
         checks = [(path, True)]
     else:
@@ -249,9 +261,17 @@ def probe_store(probe, store, uid):
         require(info.st_dev == root_info.st_dev, label + ": " + directory
                 + " is on another device than " + root)
         if owned:
-            require(info.st_uid == uid and not info.st_mode & 0o077,
-                    label + ": " + directory + " must be owned by uid " + str(uid)
-                    + " with no group or other access")
+            if mapping is not None:
+                require(info.st_uid == mapping["owner_uid"]
+                        and info.st_gid == mapping["owner_gid"],
+                        label + ": " + directory + " must be owned by mapped uid:gid "
+                        + str(mapping["owner_uid"]) + ":" + str(mapping["owner_gid"]))
+                require(not info.st_mode & 0o077,
+                        label + ": " + directory + " must have no group or other access")
+            else:
+                require(info.st_uid == uid and not info.st_mode & 0o077,
+                        label + ": " + directory + " must be owned by uid " + str(uid)
+                        + " with no group or other access")
     if store["cap"] is not None and store["cap"]["mechanism"] in WHOLE_MOUNT_CAPS:
         top = path[len(root) + 1:].split("/")[0]
         try:
