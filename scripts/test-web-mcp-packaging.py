@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import hashlib
 import struct
@@ -112,6 +113,12 @@ def route():
     return {"service": "ha-mcp", "state": "present", "directory_uid": 1000,
             "resource": "https://ha.mcp.example.invalid/mcp",
             "upstream": "http://192.168.70.240:8787"}
+
+
+def jocasta_route():
+    return {"service": "jocasta", "state": "present", "directory_uid": 1000,
+            "resource": "https://jocasta.mcp.ryzhkov.dev/mcp",
+            "upstream": "http://10.42.0.2:1935"}
 
 
 class PackagingTest(unittest.TestCase):
@@ -334,6 +341,49 @@ class PackagingTest(unittest.TestCase):
             if service in ("homelab-observer", "holonet"):
                 self.assertIn("--listen 192.168.70.240:8787", unit)
                 self.assertIn("--config /etc/" + service + "/config.json", unit)
+
+    def test_jocasta_route_is_fixed_and_only_it_rewrites_host(self):
+        # trim_blocks matches Ansible's template rendering.
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True,
+                                 trim_blocks=True)
+        source = (ROOT / "roles/web_mcp_route/templates/route.yml.j2").read_text()
+        fixed = yaml.safe_load((ROOT / "roles/web_mcp_route/vars/main.yml").read_text())
+        edge = contract.route_contract(jocasta_route())
+        self.assertEqual((edge["host"], edge["host_rewrite"]), ("jocasta.mcp.ryzhkov.dev", "10.42.0.2:1935"))
+        dynamic = yaml.safe_load(env.from_string(source).render(web_mcp_edge=edge, **fixed))
+        router = dynamic["http"]["routers"]["web-mcp-jocasta"]
+        self.assertEqual(router["rule"], "Host(`jocasta.mcp.ryzhkov.dev`) && (Path(`/mcp`) || "
+                         "Path(`/.well-known/oauth-protected-resource/mcp`)) && !HeaderRegexp(`Cf-Ray`, `.*`)")
+        self.assertEqual(router["middlewares"], ["web-mcp-jocasta-host"])
+        self.assertEqual(router["tls"], {"certResolver": "letencrypt",
+                                         "domains": [{"main": "jocasta.mcp.ryzhkov.dev"}]})
+        # Only Host is rewritten; Origin and every other header pass unchanged.
+        self.assertEqual(dynamic["http"]["middlewares"], {"web-mcp-jocasta-host": {
+            "headers": {"customRequestHeaders": {"Host": "10.42.0.2:1935"}}}})
+        self.assertEqual(dynamic["http"]["services"]["web-mcp-jocasta"]["loadBalancer"]["servers"],
+                         [{"url": "http://10.42.0.2:1935"}])
+        for key, value in (("resource", "https://jocasta.ryzhkov.dev/mcp"),
+                           ("resource", "https://media.mcp.ryzhkov.dev/mcp"),
+                           ("upstream", "http://10.42.0.3:1935"), ("upstream", "http://10.42.0.2:8080"),
+                           ("upstream", "https://10.42.0.2:1935"), ("upstream", "http://127.0.0.1:1935")):
+            with self.subTest(**{key: value}), self.assertRaises(AnsibleFilterError):
+                contract.route_contract(dict(jocasta_route(), **{key: value}))
+        removal = {"service": "jocasta", "state": "absent", "directory_uid": 1000}
+        self.assertEqual(contract.route_contract(removal), removal)
+        # Every other service renders exactly the template without the Jocasta blocks.
+        plain = re.sub(r"\{% if web_mcp_edge.service == 'jocasta' %\}\n.*?\{% endif %\}\n", "",
+                       source, flags=re.S)
+        self.assertEqual(source.count("web_mcp_edge.service == 'jocasta'"), 2)
+        self.assertNotIn("jocasta", plain)
+        for service, resource in (("ha-mcp", "https://ha.mcp.example.invalid/mcp"),
+                                  ("homelab-observer", "https://homelab.mcp.example.invalid/mcp"),
+                                  ("holonet", "https://media.mcp.ryzhkov.dev/mcp"),
+                                  ("ov-http", "https://ov.mcp.example.invalid/mcp")):
+            other = contract.route_contract(dict(route(), service=service, resource=resource))
+            self.assertNotIn("host_rewrite", other)
+            rendered = env.from_string(source).render(web_mcp_edge=other, **fixed)
+            self.assertEqual(rendered, env.from_string(plain).render(web_mcp_edge=other, **fixed))
+            self.assertNotIn("middlewares", rendered)
 
     def test_protected_paths_reject_links_modes_and_unowned_route(self):
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as scratch:
@@ -715,6 +765,14 @@ class PackagingTest(unittest.TestCase):
                 stderr=subprocess.STDOUT).stdout
             self.assertIn("changed=1", removed)
             self.assertFalse(routefile.exists())
+            # The actual role and guard also accept the fixed Jocasta route.
+            jocasta = dict(jocasta_route(), directory_uid=os.getuid())
+            checked_run(command + ["-e", json.dumps({"web_mcp_route": jocasta})], env=env,
+                        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            jocasta_file = (edge / "web-mcp-jocasta.yml").read_text()
+            self.assertTrue(jocasta_file.startswith("# Managed by homelab-infra web-mcp jocasta\n"))
+            self.assertEqual(yaml.safe_load(jocasta_file)["http"]["middlewares"], {"web-mcp-jocasta-host": {
+                "headers": {"customRequestHeaders": {"Host": "10.42.0.2:1935"}}}})
 
     def test_ansible_syntax_and_template_idempotence(self):
         # The generated inventory and all outputs stay within the asserted scratch HOME.

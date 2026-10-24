@@ -5,6 +5,12 @@
       - "'@sha256:' in stack.env_extra.JOCASTA_IMAGE or stack.env_extra.JOCASTA_IMAGE is match('.*:[0-9a-f]{40}$')"
     fail_msg: Set jocasta_image to a validated immutable image digest or full source commit tag.
 
+# Opt-in HTTP MCP (docs/jocasta.md): all four MCP keys in env_extra, or none.
+# None renders the .env below exactly as before.
+- name: Validate opt-in HTTP MCP settings before writes
+  ansible.builtin.set_fact:
+    jocasta_mcp_settings: "{{ stack.env_extra | jocasta_mcp_env }}"
+
 - name: Verify the database filesystem supports SQLite WAL
   ansible.builtin.command:
     argv: [findmnt, --noheadings, --output, FSTYPE, --target, "{{ stack_dir if stack_dir_stat.stat.exists else stack_root }}"]
@@ -28,6 +34,9 @@
     content: |
       HOST_IP={{ mesh_host }}
       JOCASTA_IMAGE={{ stack.env_extra.JOCASTA_IMAGE }}
+      {% for key, value in jocasta_mcp_settings | dictsort %}
+      {{ key }}={{ value }}
+      {% endfor %}
     dest: "{{ stack_dir }}/.env"
     mode: "0600"
 

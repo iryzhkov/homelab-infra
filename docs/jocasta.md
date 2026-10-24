@@ -54,6 +54,113 @@ converge UpKeeper. The server rereads the mounted token directory each request.
 The backup role deployment installs the existing rclone exclude list changes
 so twice-weekly copies do not capture live Jocasta database or token files.
 
+## HTTP MCP (opt-in, off by default)
+
+Jocasta can serve a read-only MCP resource at /mcp, verified against Authentik
+with short-lived OIDC tokens (Jocasta's docs/http-mcp.md). It is off: the
+jocasta stack's env_extra names only JOCASTA_IMAGE, so prepare.yml renders the
+.env exactly as before and the Compose file passes the four MCP variables as
+empty strings, which Jocasta treats as unset. Static per-host REST tokens are
+unchanged either way, and opaque operator tokens never reach MCP.
+
+The first converge after the Compose file gained those four empty variables
+recreates the container once, because its environment changed. That restart
+is the only effect while MCP stays off.
+
+The canonical MCP resource is https://jocasta.mcp.ryzhkov.dev/mcp, the
+dedicated namespace Igor chose for MCP services. The browser hostname
+jocasta.ryzhkov.dev is not an MCP resource.
+
+The only accepted MCP image is built from the reviewed, published Jocasta
+source a3e83c55e73661fc50d92a9ca328236a86f291fd (MCP_IMAGE_REVISIONS in
+filter_plugins/jocasta.py); its application tree equals the qualified
+232c5e3. The deployed 37ce657515092be80c5d49b4a3b30f482d86ed63 image has no
+MCP support and is refused. Accepting another commit is a reviewed source
+change to that set.
+
+To enable it, an explicitly approved deployment packet:
+
+1. Loads the image built from a3e83c5, for example Jocasta CI's retained
+   jocasta-image artifact, as
+   git.ryzhkov.dev/igor/jocasta:a3e83c55e73661fc50d92a9ca328236a86f291fd and
+   points jocasta_image in inventory/host_vars/homelab.yml at it, optionally
+   with @sha256:<digest>, as described under Deploy.
+2. Adds all four MCP keys to the jocasta entry's env_extra:
+
+```yaml
+  - name: jocasta
+    env_extra:
+      JOCASTA_IMAGE: "{{ jocasta_image }}"
+      JOCASTA_MCP_RESOURCE_URL: https://jocasta.mcp.ryzhkov.dev/mcp
+      JOCASTA_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/chaldea-jocasta/
+      JOCASTA_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/chaldea-jocasta/jwks/
+      JOCASTA_OIDC_AUDIENCE: <REST audience chosen by the packet>
+```
+
+Before anything on homelab is written, prepare.yml refuses:
+
+- some but not all four keys, an empty value, or any other env_extra key;
+- a resource other than exactly https://jocasta.mcp.ryzhkov.dev/mcp;
+- an issuer or JWKS URL that is not canonical HTTPS on port 443, with no
+  escapes or dot segments, an issuer without its trailing slash, or a JWKS URL
+  on a different host from the issuer;
+- an audience other than 1 to 256 characters from A-Z, a-z, 0-9 and ._~:/-;
+- an image that is not jocasta:<commit> for the accepted commit.
+
+The resource audience in MCP tokens is the resource URL itself, which the
+Authentik machine-identities mapping issues as the tokens' aud
+(docs/authentik-machine-identities.md). JOCASTA_OIDC_AUDIENCE is the separate
+REST JWT audience. The packet chooses it and must not widen it to make a test
+pass.
+
+3. Installs the MCP route with the existing web_mcp_route role, service
+   jocasta, in its own run (docs/web-mcp-endpoints.md, Separate ingress
+   contract):
+
+```yaml
+web_mcp_route_enabled: true
+web_mcp_route:
+  service: jocasta
+  state: present
+  directory_uid: <actual owner UID of the edge file-provider directory>
+  resource: https://jocasta.mcp.ryzhkov.dev/mcp
+  upstream: http://10.42.0.2:1935
+```
+
+The route contract fixes both values for jocasta, so the route cannot send
+Jocasta-audience tokens to another backend. It serves only /mcp and
+/.well-known/oauth-protected-resource/mcp on jocasta.mcp.ryzhkov.dev, excludes
+Cf-Ray requests, and requests an exact-name certificate from the existing
+letencrypt resolver, because the *.ryzhkov.dev wildcard does not cover a
+nested name. As the Jocasta HTTPS canary qualified, a Jocasta-only middleware
+rewrites Host to the backend authority 10.42.0.2:1935 for the MCP SDK's host
+protection and leaves Origin untouched; other services keep the public Host.
+The backend is homelab's existing Compose port on the mesh, which
+jocasta-firewall already restricts to the edge proxies. The jocasta.ryzhkov.dev
+browser route is unchanged.
+
+Apply the stack first, then the route, then check metadata and refusal:
+
+```sh
+ansible-playbook playbooks/site.yml -l homelab -e only=jocasta
+ansible-playbook -i /protected/approved/scope.yml playbooks/web-mcp-route.yml \
+  -e web_mcp_edge_target=approved_edge_alias -e @/protected/approved/jocasta-route.yml
+curl -fsS https://jocasta.mcp.ryzhkov.dev/.well-known/oauth-protected-resource/mcp
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST https://jocasta.mcp.ryzhkov.dev/mcp  # 401
+```
+
+DNS for jocasta.mcp.ryzhkov.dev must resolve to the edge, and the exact-name
+certificate must issue; neither is managed here. Runtime qualification must
+confirm loaded routers, the certificate, metadata, anonymous 401, scope 403,
+Origin refusal and project grants.
+
+To turn MCP off again, remove the route first (web_mcp_route state absent),
+then remove the four keys and rerun the stack. The container restarts with
+MCP and OIDC unset; REST tokens keep working. Rolling
+back the image as well needs the previous jocasta_image and its schema: if the
+newer image migrated the database, older binaries refuse it, and rollback then
+means a selected pre-upgrade recovery point (see Recovery).
+
 ## Backups and cold storage
 
 The root system timer jocasta-backup.timer runs hourly. It uses Python's

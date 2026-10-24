@@ -197,7 +197,7 @@ def main():
     module = AnsibleModule(argument_spec={
         "kind": {"type": "str", "choices": ["endpoint", "credential", "route", "binary", "ov-package", "ov-files", "ov-runtime"],
                  "required": True},
-        "service": {"type": "str", "choices": [*SERVICES, "ov-http"]},
+        "service": {"type": "str", "choices": [*SERVICES, "ov-http", "jocasta"]},
         "uid": {"type": "int"},
         "gid": {"type": "int"},
         "sha256": {"type": "str"},
@@ -218,7 +218,7 @@ def main():
         elif p["kind"] == "ov-runtime":
             ov_runtime()
         else:
-            need(p["service"] in (*SERVICES, "ov-http") if p["kind"] == "route"
+            need(p["service"] in (*SERVICES, "ov-http", "jocasta") if p["kind"] == "route"
                  else p["service"] in SERVICES)
             if p["kind"] in ("endpoint", "binary"):
                 import re
