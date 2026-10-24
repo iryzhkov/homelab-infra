@@ -159,13 +159,13 @@ acceptance requirements. Existing signed access JWTs can remain useful for
 300 seconds plus Jocasta's 30-second leeway; removing the optional trust ends
 acceptance sooner.
 
-Jocasta operator trust stays disabled in inventory. The matching deployment
-source now validates the exact JOCASTA_OPERATOR_OIDC_ISSUER,
-JOCASTA_OPERATOR_OIDC_JWKS_URL and JOCASTA_OPERATOR_OIDC_CLIENT_ID trio,
-as documented in [jocasta.md](jocasta.md). No operator image source is accepted:
-the allowlist is empty while root fixes the blocked initial server candidate.
-Root must supply the replacement reviewed source, checked image publication
-and Auth readiness gates before convergence.
+Jocasta inventory stages the exact public JOCASTA_OPERATOR_OIDC_ISSUER,
+JOCASTA_OPERATOR_OIDC_JWKS_URL and JOCASTA_OPERATOR_OIDC_CLIENT_ID trio with
+the reviewed/published 295d9a2 source image pinned by qualified digest, as
+documented in [jocasta.md](jocasta.md). Source/image acceptance does not imply
+runtime/native qualification or permission to apply. Root owns final infra
+review/CI, Auth readiness and authorized convergence. This Authentik playbook
+remains disabled by default and requires the external exact user PK.
 
 After source deployment, Igor performs each client's supported native one-time
 MCP OAuth login as a user action. Ansible does not launch a browser or native

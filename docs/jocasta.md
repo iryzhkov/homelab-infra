@@ -64,15 +64,16 @@ Jocasta treats as disabled. Static per-host REST tokens are unchanged and never
 authorize MCP. A separately pinned operator-capable source can add interactive
 full-store access through the optional configuration below.
 
-The homelab inventory turns it on for the laptop's persistent read-only
-Jocasta tooling sessions (maintenance af50ab7396f94090bb590da80785596f):
-jocasta_image is the a3e83c5 image, env_extra holds the four keys below with the
-REST audience jocasta-rest-persistent-tooling, the identities come from
-playbooks/authentik-jocasta-tooling.yml and the route from
-playbooks/vars/web-mcp-route-jocasta.yml. The database and server are the same
-ones; only the image and the four variables changed. A later
-`playbooks/swarm.yml --tags registry` pushes the new jocasta_image to Forgejo
-and pre-pulls it on normandy, as for any image change.
+The existing limited setup for the laptop's persistent read-only tooling
+sessions was qualified in maintenance af50ab7396f94090bb590da80785596f.
+Its four settings remain unchanged: the REST audience is
+jocasta-rest-persistent-tooling, identities come from
+playbooks/authentik-jocasta-tooling.yml, and the route comes from
+playbooks/vars/web-mcp-route-jocasta.yml. The desired homelab image now pins
+the reviewed, published 295d9a2 operator-capable image by tag and digest and
+appends the public operator trio below. This is staged inventory source;
+runtime convergence and native acceptance remain pending with root.
+The same database, server, limited verifier and route are retained.
 
 The first converge after the Compose file gained those four empty variables
 recreates the container once, because its environment changed. That restart
@@ -173,38 +174,46 @@ back the image as well needs the previous jocasta_image and its schema: if the
 newer image migrated the database, older binaries refuse it, and rollback then
 means a selected pre-upgrade recovery point (see Recovery).
 
-## Interactive operator source integration, deployment pending
+## Interactive operator source integration, runtime acceptance pending
 
-The current inventory retains the existing limited-only image and four
-settings. Operator trust is OFF. No inventory pin, route, port, service unit,
-data path, runtime UID, mount, REST credential or filesystem protection changes
-are included in this integration.
+The homelab inventory stages the exact reviewed and published operator-capable
+image below and the public operator trio. Its four limited settings remain
+unchanged. No route, port, service unit, data path, runtime UID, mount, REST
+credential or filesystem protection changes are included. The Authentik
+operator playbook remains a separate disabled-by-default opt-in.
 
-No operator image is currently accepted. The separate
-`OPERATOR_IMAGE_REVISIONS` source allowlist is empty, so operator settings
-refuse before writes even with otherwise valid configuration. The initial
-`acd4ba57001559ef0e795ccf47f34413c9420c59` server candidate is BLOCKED by
-peer review and is not accepted for publication or deployment. Its earlier
-unit/race/cross PASS does not override those blockers. Root owns the replacement
-clean server head and final review/CI/image qualification; this integration
-qualifies configuration readiness independently with a synthetic test image.
+Root accepted source `295d9a221867f219c33b6a76d09a6e0320f3d774`,
+tree `efd8637c9a8af2b694b570f50056da5e452e6cc0`, after independent
+Opus 5.5 high and Sol 6.1 high ACCEPT and exact-head CI run 40082520891 SUCCESS.
+PR3 merged as `6d26b9d592becc1d84321a5602c07db7a6d41bf0`.
+The checked amd64/UID10001 image artifact 12555901461 has archive SHA256
+`4da0bee3ff1b6010dc18bbebcf96aa961d60b504730dbba90202c15a54dcda99`,
+OCI manifest
+`71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a`,
+and config
+`4608bafc9d3b27c93037ca97501d6f1066000b33639981b4de549041bdaac9e8`.
+Root verified all layers/config hashes and embedded source provenance, then
+published the exact tag through the existing controlled registry auth path.
+Its registry digest matches that checked OCI manifest. Root's
+`jocasta-image-295d9a2/{qualification,publication}.json` receipts distinguish
+image qualification/publication from pending runtime and native acceptance.
 
-After root supplies the replacement reviewed head/tree, a bounded source update
-must add that exact full source revision to the operator allowlist and bind the
-checked image archive and immutable registry tag. Operator mode additionally
-requires the exact `git.ryzhkov.dev/igor/jocasta` repository, optionally with
-a verified digest. The old limited-only image, a mutable tag, or a digest without
-its admitted full source tag cannot enable operator mode. No temporary source
-pin should be published or deployed while the server review is unresolved.
+The separate `OPERATOR_IMAGE_REVISIONS` source gate admits only 295d9a2.
+Operator mode additionally requires the exact
+`git.ryzhkov.dev/igor/jocasta` repository. The old limited-only image, blocked
+acd4ba5 candidate, mutable tags, and digests without an admitted full source tag
+cannot enable operator mode. Tests now exercise the actual unmodified source
+filter and renderer; no synthetic source allowlist is substituted.
 
-After those gates, root can update only the existing Jocasta stack's image
-and append these public values to its existing `env_extra`. Preserve its
-current limited issuer, JWKS, REST audience and MCP resource:
+The existing Jocasta stack's desired configuration pins the published digest
+and appends only the three public values below. Root owns final infra
+review/CI, Auth readiness, authorized convergence and live acceptance.
+Publication alone grants no authority to apply.
 
 ```yaml
-# Template only. No operator source is accepted yet; this placeholder refuses.
-jocasta_image: git.ryzhkov.dev/igor/jocasta:<root-qualified-full-source-revision>
-# Add to the existing Jocasta stack's env_extra:
+# Published source/image pin; homelab/runtime/native convergence is still pending.
+jocasta_image: git.ryzhkov.dev/igor/jocasta:295d9a221867f219c33b6a76d09a6e0320f3d774@sha256:71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a
+# Appended to the existing Jocasta stack's env_extra:
 JOCASTA_OPERATOR_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
 JOCASTA_OPERATOR_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/
 JOCASTA_OPERATOR_OIDC_CLIENT_ID: jocasta-laptop-interactive

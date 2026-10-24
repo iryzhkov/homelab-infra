@@ -77,14 +77,11 @@ local_mounts:
 # /var/lib/docker is kept on the root disk as the rollback copy.
 docker_data_root: /mnt/docker-data/docker
 
-# Built from the exact source commit validated by Jocasta CI, and loaded on
-# homelab under its registry name (the local-only tag jocasta:<commit> was
-# pruned on 2026-10-03; the .env had been set to this name by hand that day).
-# a3e83c5 is the reviewed HTTP/OIDC-capable build (Jocasta PR2), the only image
-# filter_plugins/jocasta.py accepts for MCP. It replaced 37ce657 in the
-# persistent Jocasta tooling maintenance af50ab7396f94090bb590da80785596f, over
-# the same schema-2 database; docs/jocasta.md, "HTTP MCP".
-jocasta_image: git.ryzhkov.dev/igor/jocasta:a3e83c55e73661fc50d92a9ca328236a86f291fd
+# Desired operator-capable image: reviewed source 295d9a2, exact-head CI
+# 40082520891, checked artifact 12555901461, and published matching OCI digest.
+# This is desired source state, not a receipt of homelab/native convergence.
+# The old a3e83c5 image remains allowed for limited-only rollback; docs/jocasta.md.
+jocasta_image: git.ryzhkov.dev/igor/jocasta:295d9a221867f219c33b6a76d09a6e0320f3d774@sha256:71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a
 
 # The iGPU passed through to this VM (UHD 770, hostpci0 0000:00:02 on
 # proxmox-a), as Compose stacks that may land here need it: the render and
@@ -191,6 +188,11 @@ host_stacks:
       JOCASTA_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/chaldea-jocasta/
       JOCASTA_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/chaldea-jocasta/jwks/
       JOCASTA_OIDC_AUDIENCE: jocasta-rest-persistent-tooling
+      # Public operator trust, distinct from the unchanged limited verifier.
+      # Root still owns Auth readiness and authorized convergence/native checks.
+      JOCASTA_OPERATOR_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
+      JOCASTA_OPERATOR_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/
+      JOCASTA_OPERATOR_OIDC_CLIENT_ID: jocasta-laptop-interactive
     routes:
       - host: jocasta.ryzhkov.dev
         url: "http://{{ mesh_host }}:1935"

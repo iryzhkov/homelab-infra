@@ -35,11 +35,11 @@ web_mcp = load("web_mcp_filter", "filter_plugins/web_mcp.py")
 ACCEPTED = "a3e83c55e73661fc50d92a9ca328236a86f291fd"
 OLD_PIN = "git.ryzhkov.dev/igor/jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63"
 IMAGE = "git.ryzhkov.dev/igor/jocasta:" + ACCEPTED
-# Synthetic source only, installed in the in-process filter for rendering tests.
-# Production has no accepted operator image until root qualifies a replacement.
-OPERATOR_SOURCE = "b" * 40
+OPERATOR_SOURCE = "295d9a221867f219c33b6a76d09a6e0320f3d774"
 BLOCKED_OPERATOR_SOURCE = "acd4ba57001559ef0e795ccf47f34413c9420c59"
-OPERATOR_IMAGE = "git.ryzhkov.dev/igor/jocasta:" + OPERATOR_SOURCE
+OPERATOR_DIGEST = "71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a"
+OPERATOR_TAG = "git.ryzhkov.dev/igor/jocasta:" + OPERATOR_SOURCE
+OPERATOR_IMAGE = OPERATOR_TAG + "@sha256:" + OPERATOR_DIGEST
 OPERATOR = {
     "JOCASTA_OPERATOR_OIDC_ISSUER": "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/",
     "JOCASTA_OPERATOR_OIDC_JWKS_URL": "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/",
@@ -136,19 +136,13 @@ class FilterTest(unittest.TestCase):
 
 
 class OperatorFilterTest(unittest.TestCase):
-    def setUp(self):
-        self.production_sources = jocasta.OPERATOR_IMAGE_REVISIONS
-        self.assertEqual(self.production_sources, frozenset())
-        self.addCleanup(setattr, jocasta, "OPERATOR_IMAGE_REVISIONS", self.production_sources)
-        jocasta.OPERATOR_IMAGE_REVISIONS = frozenset({OPERATOR_SOURCE})
-
     def test_separate_source_gate_and_off_defaults(self):
         self.assertEqual(jocasta.OPERATOR_IMAGE_REVISIONS, frozenset({OPERATOR_SOURCE}))
         self.assertNotIn(ACCEPTED, jocasta.OPERATOR_IMAGE_REVISIONS)
         self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled()), MCP | OPERATOR)
         self.assertEqual(jocasta.jocasta_mcp_env(enabled(JOCASTA_IMAGE=OPERATOR_IMAGE)), MCP)
         self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled(
-            JOCASTA_IMAGE=OPERATOR_IMAGE + "@sha256:" + "b"*64)), MCP | OPERATOR)
+            JOCASTA_IMAGE=OPERATOR_TAG)), MCP | OPERATOR)
         empty = dict.fromkeys(OPERATOR, "")
         self.assertEqual(jocasta.jocasta_mcp_env(enabled(**empty)), MCP)
         self.assertEqual(jocasta.jocasta_mcp_env({"JOCASTA_IMAGE": OLD_PIN, **empty}), {})
@@ -214,7 +208,7 @@ class StackTest(unittest.TestCase):
             **{key: "${%s:-}" % key for key in jocasta.MCP_KEYS + jocasta.OPERATOR_KEYS},
         })
 
-    def run_prepare(self, env_extra, check=False, synthetic_operator=False):
+    def run_prepare(self, env_extra, check=False):
         """Run the actual image, MCP and .env tasks of prepare.yml; return the .env."""
         tasks = yaml.safe_load((REPO / "stacks/jocasta/prepare.yml").read_text())
         names = ("Require an immutable Jocasta image reference",
@@ -225,20 +219,9 @@ class StackTest(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="jocasta-mcp-"))
         self.assertTrue(root.resolve().is_relative_to(Path(HOME).resolve()))
         (root / "stack").mkdir()
-        # Actual repository filter in production tests. Rendering a future
-        # operator config uses a scratch copy with only a synthetic source added;
-        # it does not accept a production image or alter the real source gate.
-        filter_dir = REPO / "filter_plugins"
-        if synthetic_operator:
-            filter_dir = root / "filters"
-            filter_dir.mkdir()
-            source = (REPO / "filter_plugins/jocasta.py").read_text()
-            marker = "OPERATOR_IMAGE_REVISIONS = frozenset()"
-            self.assertEqual(source.count(marker), 1)
-            (filter_dir / "jocasta.py").write_text(source.replace(
-                marker, "OPERATOR_IMAGE_REVISIONS = frozenset({" + repr(OPERATOR_SOURCE) + "})"))
+        # The actual, unmodified repository filter and accepted source gate.
         (root / "ansible.cfg").write_text("[defaults]\nfilter_plugins = %s\n"
-                                          "retry_files_enabled = False\n" % filter_dir)
+                                          "retry_files_enabled = False\n" % (REPO / "filter_plugins"))
         play = [{"hosts": "localhost", "gather_facts": False, "tasks": selected, "vars": {
             "stack": {"name": "jocasta", "env_extra": env_extra,
                       "routes": [{"host": "jocasta.ryzhkov.dev"}]},
@@ -266,15 +249,15 @@ class StackTest(unittest.TestCase):
         self.assertEqual(dotenv, "\n".join(expected) + "\n")
 
     def test_operator_renders_exact_public_trio_with_existing_limited_values(self):
-        result, dotenv = self.run_prepare(operator_enabled(), synthetic_operator=True)
+        result, dotenv = self.run_prepare(operator_enabled())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         expected = ["HOST_IP=10.42.0.2", "JOCASTA_IMAGE=" + OPERATOR_IMAGE]
         expected += ["%s=%s" % item for item in sorted((MCP | OPERATOR).items())]
         self.assertEqual(dotenv, "\n".join(expected) + "\n")
 
-    def test_production_operator_gate_remains_closed(self):
-        self.assertEqual(jocasta.OPERATOR_IMAGE_REVISIONS, frozenset())
-        for revision in (BLOCKED_OPERATOR_SOURCE, OPERATOR_SOURCE, ACCEPTED):
+    def test_production_operator_gate_refuses_unaccepted_sources(self):
+        self.assertEqual(jocasta.OPERATOR_IMAGE_REVISIONS, frozenset({OPERATOR_SOURCE}))
+        for revision in (BLOCKED_OPERATOR_SOURCE, "b" * 40, ACCEPTED):
             result, dotenv = self.run_prepare(operator_enabled(
                 JOCASTA_IMAGE="git.ryzhkov.dev/igor/jocasta:" + revision))
             self.assertNotEqual(result.returncode, 0)
@@ -282,7 +265,7 @@ class StackTest(unittest.TestCase):
             self.assertIsNone(dotenv)
 
     def test_operator_check_mode_has_no_env_write(self):
-        result, dotenv = self.run_prepare(operator_enabled(), check=True, synthetic_operator=True)
+        result, dotenv = self.run_prepare(operator_enabled(), check=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIsNone(dotenv)
 
@@ -311,7 +294,7 @@ class StackTest(unittest.TestCase):
                  (operator_enabled(JOCASTA_OPERATOR_CLIENT_SECRET="synthetic"), "unknown"))
         for env_extra, message in cases:
             with self.subTest(message=message):
-                result, dotenv = self.run_prepare(env_extra, synthetic_operator=True)
+                result, dotenv = self.run_prepare(env_extra)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stdout + result.stderr)
                 self.assertIsNone(dotenv)
@@ -330,7 +313,7 @@ class PersistentToolingTest(unittest.TestCase):
 
     def test_homelab_enables_mcp_on_the_existing_stack(self):
         values, stack = self.jocasta_stack()
-        self.assertEqual(values["jocasta_image"], IMAGE)
+        self.assertEqual(values["jocasta_image"], OPERATOR_IMAGE)
         self.assertEqual(set(stack), {"name", "prepare_tasks", "secrets", "write_env", "env_extra", "routes"})
         self.assertEqual((stack["prepare_tasks"], stack["secrets"], stack["write_env"]),
                          ("prepare.yml", "homelab-jocasta", False))
@@ -340,11 +323,11 @@ class PersistentToolingTest(unittest.TestCase):
             "monitor_url": "https://jocasta.ryzhkov.dev/healthz", "health_check": {"path": "/healthz"}}])
         self.assertEqual(stack["env_extra"]["JOCASTA_IMAGE"], "{{ jocasta_image }}")
         env_extra = dict(stack["env_extra"], JOCASTA_IMAGE=values["jocasta_image"])
-        expected = dict(MCP, JOCASTA_OIDC_AUDIENCE="jocasta-rest-persistent-tooling")
+        expected = dict(MCP, JOCASTA_OIDC_AUDIENCE="jocasta-rest-persistent-tooling") | OPERATOR
         self.assertEqual(jocasta.jocasta_mcp_env(env_extra), expected)
         result, dotenv = self.run_prepare(env_extra)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        lines = ["HOST_IP=10.42.0.2", "JOCASTA_IMAGE=" + IMAGE] + ["%s=%s" % i for i in sorted(expected.items())]
+        lines = ["HOST_IP=10.42.0.2", "JOCASTA_IMAGE=" + OPERATOR_IMAGE] + ["%s=%s" % i for i in sorted(expected.items())]
         self.assertEqual(dotenv, "\n".join(lines) + "\n")
 
     def test_route_vars_select_only_the_fixed_jocasta_route(self):
