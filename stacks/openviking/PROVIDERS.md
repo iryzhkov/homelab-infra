@@ -10,12 +10,14 @@ cutover. This directory contains no server or tenant keys.
 
 * PC generation: `http://inference-adapter:8000/pc/v1/chat/completions`, `local:latest`.
 * CPU generation: `http://inference-adapter:8000/cpu/v1/chat/completions`, `ov-gen-4k`.
-* Embedding primary: overlay `http://embedding-adapter:8000/pc/v1/embeddings`.
-* Embedding fallback: overlay `http://embedding-adapter:8000/cpu/v1/embeddings`.
+* Embeddings: overlay `http://embedding-adapter:8000/cpu/v1/embeddings`, Normandy CPU
+  only. There is no PC embedding route in production.
+* `http://embedding-adapter:8000/pc/v1/embeddings` answers HTTP 410
+  `embedding_route_disabled` without contacting the PC, so a stale configuration
+  fails clearly instead of mixing vectors (see "Why embeddings are CPU only").
 * `embedding-adapter` remains a network alias for the renamed `inference-adapter` service.
-* Upstreams are fixed in source. Embeddings use `/api/embed` on the existing PC
-  and `embeddings:11434`. Chat uses `/v1/chat/completions` on the same PC and
-  `generation:11434`. Caller URLs, redirects and arbitrary routes are unsupported.
+* Upstreams are fixed in source. Embeddings use `/api/embed` on `embeddings:11434`
+  only. Chat uses `/v1/chat/completions` on the existing PC and `generation:11434`. Caller URLs, redirects and arbitrary routes are unsupported.
   The adapter publishes no ports, accepts no URLs or arbitrary prefix, and ignores
   authorization headers. Only members of the provider overlay can reach it.
 * The same adapter process uses the pinned official OV candidate image, a read-only
@@ -51,11 +53,15 @@ ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
   -e openviking_image=ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f
 # Existing candidate container must join the provider overlay before provider tests.
 ssh homelab sudo docker network connect openviking-providers ov-upgrade-052
+# Experimental and unused in production, since PC embeddings are disabled.
 # Explicit PC-only restart window, after game/operator approval:
 ansible-playbook playbooks/ov-pc-coexistence.yml \
   -e ov_pc_apply=true -e ov_pc_allow_restart=true
 ```
 
+The PC coexistence role is experimental and unused: production sends no
+embedding traffic to the PC, and nothing below changes that. The role does not
+change the PC's global KV cache type, which is why its embeddings do not qualify.
 The PC role verifies existing system service owner ollama:ollama, the upstream
 0.40.5 runtime, the 65536 generation context and the loaded local model digest.
 It requires at least 3072 MiB free VRAM before adding an unloaded embedding model.
@@ -90,8 +96,8 @@ Default file sources reuse the retained measured caches on each host. To rebuild
 without them use `-e openviking_embeddings_model_source=registry` and
 `-e openviking_generation_model_source=registry`; PC uses `-e ov_pc_model_source=registry`.
 All downloads use explicit checksums, including manifest bytes. The adapter fixes
-embedding num_ctx=4096 per request on both hosts, independent of the PC's larger
-generation default. It sends one text to /api/embed with truncate=false.
+embedding num_ctx=4096 per request on the CPU runtime. It sends one text to
+/api/embed with truncate=false.
 
 ## Native configuration and limits
 
@@ -102,17 +108,20 @@ settings. The root owns that operation and the reviewed credential helper.
 Do not use embedding metadata override to retain vectors from the old model.
 Rebuild the complete vector index and test real-note retrieval first.
 
-Embedding routes are ordered PC, CPU with native failback after 30 seconds or
-five fallback requests. Requests specify float format and query/document type.
+Production embeddings use one credential, the Normandy CPU route. There is no
+embedding failover: when the CPU runtime is unavailable, embedding and search
+fail visibly rather than using vectors from another runtime. The fragment's
+failback settings have no effect with one credential. Requests specify float
+format and query/document type.
 The exact Qwen retrieval instruction is added once, only for query input.
 Already-prefixed queries are rejected. Documents remain plain. Responses require
 one finite normalized vector of exactly 1024 floats and valid native usage.
-Oversize is HTTP 400, with no fallback or silent truncation; endpoint errors become
-502/503/504 so OV's native switcher can try the peer. Busy is 429.
+Oversize is HTTP 400, with no retry or silent truncation; endpoint errors become
+502/503/504 and surface to OV. Busy is 429.
 Embeddings and chat share one inference permit and eight HTTP handlers. Request body
 is at most 64 KiB, upstream response 128 KiB, input read timeout 10 seconds,
-upstream connect timeout 2 seconds, embedding PC read 30 seconds and embedding
-CPU read 180 seconds. Chat read budgets are specified below.
+upstream connect timeout 2 seconds and embedding CPU read 180 seconds. Chat read
+budgets are specified below.
 Health stays responsive during inference.
 
 OV itself estimates tokens and truncates at embedding.max_input_tokens. The
@@ -130,6 +139,23 @@ top-1 on three synthetic mixed-host queries. PC queries took 6–28 ms, 2048 tok
 Normandy queries took 376–411 ms, 512 tokens 5.66 s, 2048 tokens 35.84 s and
 4095 tokens 74.73 s under 2 GiB without swap or OOM. Batch and concurrency above
 one are unqualified. Synthetic agreement does not establish real-note quality.
+
+### Why embeddings are CPU only
+
+The matched evidence above used an isolated GPU runtime with an f16 KV cache. The
+live PC service runs Ollama 0.40.5 with a global OLLAMA_KV_CACHE_TYPE=q4_0, which
+also applies to the embedding runner. Ollama 0.40.5 has no per-request or
+per-model override for it, and it silently ignores unknown request options. Live
+PC embeddings measured cosine 0.877 against the CPU vectors, so they cannot share
+an index with them. Root accepted CPU query search at about 0.3 seconds and
+adopted Normandy CPU embeddings as the steady state. PC generation, and the
+ordered PC then homelab generation fallback, are unchanged.
+
+Vectors from a matched f16 GPU runtime remain valid for the CPU index, within the
+same 4096-token limit. A temporary isolated f16 GPU runtime may therefore be used
+only for a fresh migration's bulk re-embedding, and is removed afterwards. No
+permanent extra runtime, process or network is added, and the PC's global KV
+setting is not changed.
 
 Generation credentials are ordered PC local:latest then homelab ov-gen-4k.
 PC uses reasoning_effort=none, presence_penalty=0 and max_tokens=512. CPU alias
@@ -154,7 +180,11 @@ It preserves max_tokens at 1..512, temperature=0, PC reasoning_effort=none and
 presence_penalty=0. CPU always reserves the full 512-token output budget even when
 a caller asks for less. The source-managed CPU alias remains context=4096,
 num_predict=512, num_thread=2. Provisioning recreates it and then checks the actual
-GGUF, template, absence of hidden SYSTEM/MESSAGE directives and all four parameters.
+GGUF, template, absence of hidden SYSTEM/MESSAGE/ADAPTER directives and the exact
+parameter set: the four recipe parameters plus the two stops, <|im_start|> and
+<|im_end|>, that the pinned base inherits from its params blob f02dd72b...a2d216.
+An existing alias with exactly that content is kept; any extra, missing or drifted
+parameter recreates it.
 A retained measurement-cache alias inspected during this work had num_thread=1;
 that cache was not changed. Do not treat that retained alias as deployment proof.
 
@@ -256,9 +286,16 @@ health behavior, and actual Ansible checksum/symlink/idempotence boundaries.
 
 A separate native job pins openviking==0.5.2 and sets OPENVIKING_NATIVE_TEST=1,
 running NativeOV, including both NativeOV.test_actual_* cases through adapter
-routes. Those use the real schema, SDK, ordered switchers and sync/async failover
-against controlled HTTP runtimes. No patched OV fork or mocked native failover
-implementation is used. Root has added the standalone native job and both
+routes against controlled HTTP runtimes, with the real schema and SDK. The
+embedding case qualifies the production CPU-only credential, the query prefix,
+sync/async error surfacing and the refused PC route. The generation case keeps
+ordered PC/CPU sync/async failover and failback. No patched OV fork or mocked
+native failover implementation is used.
+
+When the docker CLI is installed, the ordinary run also renders stack.yml with
+the real `docker stack config`, which needs no daemon, and checks that the
+adapter SHA-256, adapter path and tokenizer path keep their supplied values and
+that a missing or empty value refuses to render. Root has added the standalone native job and both
 playbook syntax checks in its owned .github/workflows/check.yml. This worker
 did not edit root's CI, migration, credential or prior migration documentation.
 

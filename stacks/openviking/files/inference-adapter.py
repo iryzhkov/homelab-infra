@@ -13,7 +13,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODEL = "qwen3-embedding:0.6b"
 PREFIX = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
 # Source-managed destinations only. Never read upstream addresses from a request or environment.
-UPSTREAMS = {"pc": ("192.168.90.212", 11434, 30), "cpu": ("embeddings", 11434, 180)}
+# Embeddings use only the Normandy CPU runtime. The PC's Ollama 0.40.5 applies its
+# global OLLAMA_KV_CACHE_TYPE=q4_0 to the embedding runner, with no per-request or
+# per-model override, and its live vectors measured cosine 0.877 against CPU ones.
+# The PC route answers with an explicit error so a stale configuration can never
+# write or search with vectors that do not match the index.
+UPSTREAMS = {"cpu": ("embeddings", 11434, 180)}
+DISABLED_EMBEDDING_ROUTES = {"/pc/v1/embeddings"}
 CONNECT_TIMEOUT = 2
 BODY_LIMIT = 65536
 RESPONSE_LIMIT = 131072
@@ -326,6 +332,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             routes = {"/" + key + "/v1/embeddings": key for key in UPSTREAMS}
             chat_routes = {"/" + key + "/v1/chat/completions": key for key in GENERATION_UPSTREAMS}
+            if self.path in DISABLED_EMBEDDING_ROUTES:
+                raise Rejected(410, "embedding_route_disabled",
+                               "PC embeddings are disabled because they do not match the CPU index; "
+                               "use /cpu/v1/embeddings")
             if self.path not in routes and self.path not in chat_routes:
                 raise Rejected(404, "not_found", "Unknown endpoint")
             if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) != 1:

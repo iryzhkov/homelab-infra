@@ -91,17 +91,27 @@
   become: true
 
 - name: Check whether the existing generation alias matches the pinned recipe
+  vars:
+    # The recipe's four parameters plus the two stops the pinned base inherits
+    # from its params blob sha256:f02dd72b...a2d216, which is exactly
+    # {"stop":["<|im_start|>","<|im_end|>"]}. Ollama does not print parameters in
+    # recipe order, so the lines are compared as a sorted list: any extra,
+    # missing, duplicated or drifted parameter is a mismatch.
+    ov_generation_parameters: &ov_generation_parameters
+      - "PARAMETER num_ctx 4096"
+      - "PARAMETER num_predict 512"
+      - "PARAMETER num_thread 2"
+      - "PARAMETER temperature 0"
+      - "PARAMETER stop <|im_start|>"
+      - "PARAMETER stop <|im_end|>"
   ansible.builtin.set_fact:
     ov_generation_alias_matches: >-
       {{ ov_existing_generation_model.rc == 0
          and ('TEMPLATE "' ~ lookup('file', swarm_stack_src ~ '/recipes/generation-template.txt', rstrip=false) ~ '"')
              in ov_existing_generation_model.stdout
          and ov_existing_generation_model.stdout is search('(?m)^FROM .*sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603$')
-         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER num_ctx 4096$')
-         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER num_predict 512$')
-         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER num_thread 2$')
-         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER temperature 0$')
-         and ov_existing_generation_model.stdout | regex_findall('(?m)^PARAMETER ') | length == 4
+         and (ov_existing_generation_model.stdout | regex_findall('(?m)^PARAMETER .*$') | sort)
+             == (ov_generation_parameters | sort)
          and ov_existing_generation_model.stdout is not search('(?m)^(SYSTEM|MESSAGE|ADAPTER) ') }}
   when:
     - ov_provider.key == 'generation'
@@ -141,6 +151,8 @@
   become: true
 
 - name: Refuse an alias that differs from the counted CPU model recipe
+  vars:
+    ov_generation_parameters: *ov_generation_parameters
   ansible.builtin.assert:
     that:
       - >-
@@ -151,7 +163,10 @@
       - ov_generation_model.stdout is search('(?m)^PARAMETER num_predict 512$')
       - ov_generation_model.stdout is search('(?m)^PARAMETER num_thread 2$')
       - ov_generation_model.stdout is search('(?m)^PARAMETER temperature 0$')
-      - ov_generation_model.stdout is not search('(?m)^(SYSTEM|MESSAGE) ')
+      - >-
+        (ov_generation_model.stdout | regex_findall('(?m)^PARAMETER .*$') | sort)
+        == (ov_generation_parameters | sort)
+      - ov_generation_model.stdout is not search('(?m)^(SYSTEM|MESSAGE|ADAPTER) ')
     quiet: true
   when:
     - ov_provider.key == 'generation'

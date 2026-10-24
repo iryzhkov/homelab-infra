@@ -1,6 +1,8 @@
 # Keep OV 0.2.6 until root's reviewed activation. Controlled cutover overrides the image.
 # CPU providers are scoped Compose projects because Swarm has no memory-swap cap.
 # All inference endpoints are overlay-only. ov.conf remains private and untouched.
+# embeddings-prepare.yml sets the adapter variables. docker stack config reads a
+# hyphen in a :? message as a default, so the messages must not contain one.
 services:
   openviking:
     image: ${OPENVIKING_IMAGE:-git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f}
@@ -61,14 +63,14 @@ services:
     cap_drop: [ALL]
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
-      OPENVIKING_ADAPTER_SHA256: ${OPENVIKING_ADAPTER_SHA256:?set by embeddings-prepare.yml}
+      OPENVIKING_ADAPTER_SHA256: ${OPENVIKING_ADAPTER_SHA256:?required}
     volumes:
       - type: bind
-        source: ${OPENVIKING_ADAPTER_PATH:?set by embeddings-prepare.yml}
+        source: ${OPENVIKING_ADAPTER_PATH:?required}
         target: /app/inference-adapter.py
         read_only: true
       - type: bind
-        source: ${OPENVIKING_TOKENIZER_PATH:?set by embeddings-prepare.yml}
+        source: ${OPENVIKING_TOKENIZER_PATH:?required}
         target: /app/cpu-tokenizer
         read_only: true
     networks:
