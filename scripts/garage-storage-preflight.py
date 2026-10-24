@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -83,6 +84,63 @@ def digest(config):
     storage = {key: value for key, value in config.items() if key != "qualifications"}
     raw = json.dumps(storage, sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def operator_qualifications(config):
+    """Validate local bindings only; reviewed receipts establish evidence truth."""
+    qualifications = config.get("qualifications")
+    require(isinstance(qualifications, dict)
+            and set(qualifications) == set(DURABILITY_GATES) | {"configuration"},
+            "operator qualifications require exactly configuration and all five gates")
+    current = digest(config)
+    require(qualifications["configuration"] == current,
+            "qualifications must name this exact configuration digest")
+    for gate in DURABILITY_GATES:
+        record = qualifications[gate]
+        require(isinstance(record, dict), "typed qualification required: " + gate)
+        kind = record.get("type")
+        allowed = (("accepted_risk",) if gate in ("full_volume", "mount_loss")
+                   else ("measured",) if gate == "last_copy_policy"
+                   else ("measured", "composite"))
+        require(kind in allowed, "wrong qualification type for " + gate)
+        if kind == "composite":
+            keys = {"type", "measured_configuration", "qualifying_configuration",
+                    "difference_reference", "references", "limitation"}
+            require(set(record) == keys, "invalid composite fields: " + gate)
+            require(isinstance(record["measured_configuration"], str)
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", record["measured_configuration"]),
+                    "canonical measured configuration digest required: " + gate)
+            require(record["qualifying_configuration"] == current,
+                    "qualification must bind current qualifying configuration: " + gate)
+            require(immutable_reference(record["difference_reference"]),
+                    "immutable difference reference required: " + gate)
+        else:
+            require(set(record) == {"type", "configuration", "references", "limitation"},
+                    "invalid qualification fields: " + gate)
+            require(record["configuration"] == current,
+                    "qualification must bind current qualifying configuration: " + gate)
+        references = record["references"]
+        require(isinstance(references, list) and 1 <= len(references) <= 8
+                and all(immutable_reference(item) for item in references),
+                "1..8 immutable Jocasta references required: " + gate)
+        require(bounded_limitation(record["limitation"]),
+                "nonblank limitation of at most 4096 UTF-8 bytes required: " + gate)
+    return qualifications
+
+
+def immutable_reference(value):
+    # Exact immutable revision, finite reference size; never dereference it here.
+    return (isinstance(value, str) and len(value) <= 96
+            and re.fullmatch(r"jocasta:[0-9a-f]{32}@[1-9][0-9]*", value) is not None)
+
+
+def bounded_limitation(value):
+    if not text(value):
+        return False
+    try:
+        return len(value.encode("utf-8")) <= 4096
+    except UnicodeEncodeError:
+        return False
 
 
 def canonical(value, what):
@@ -290,6 +348,14 @@ def validate(config, probe=None):
     probe = probe or HostProbe()
     require(isinstance(config, dict), "configuration must be an object")
     require(type(config.get("enabled")) is bool, "enabled must be a boolean")
+    operator_contract = "operating_contract" in config
+    if operator_contract:
+        require(config["operating_contract"] == "operator_budget_v1",
+                "unknown operating_contract")
+        require(all(isinstance(config.get(label), dict)
+                    and config[label].get("acceptance_mode") == "operational_budget"
+                    for label in ("data", "metadata")),
+                "operator_budget_v1 requires explicit data and metadata operational_budget")
     if not config["enabled"]:
         # Disabled: no path, mount, host or qualification is inspected.
         return {"status": "disabled"}
@@ -300,12 +366,15 @@ def validate(config, probe=None):
             "explicit non-root uid and gid are required")
     for key in ("data_fsync", "metadata_fsync"):
         require(type(config.get(key)) is bool, key + " must be a boolean")
-    qualifications = config.get("qualifications")
-    require(isinstance(qualifications, dict), "live qualifications are required")
-    for key in DURABILITY_GATES:
-        require(text(qualifications.get(key)), "unqualified live gate: " + key)
-    require(qualifications.get("configuration") == digest(config),
-            "qualifications must name this exact configuration digest")
+    if operator_contract:
+        qualifications = operator_qualifications(config)
+    else:
+        qualifications = config.get("qualifications")
+        require(isinstance(qualifications, dict), "live qualifications are required")
+        for key in DURABILITY_GATES:
+            require(text(qualifications.get(key)), "unqualified live gate: " + key)
+        require(qualifications.get("configuration") == digest(config),
+                "qualifications must name this exact configuration digest")
     stores = [expected_store(config, label) for label in ("data", "metadata")]
     data, metadata = stores
     require(data["root"] != metadata["root"] and not below(data["path"], metadata["path"])
@@ -336,7 +405,7 @@ def validate(config, probe=None):
     if "soft" in options:
         limitations.append("soft NFS data mount: timeouts surface as I/O errors; "
                            "not last-copy durability evidence")
-    return {
+    result = {
         "status": "passed-startup-preflight",
         "configuration": digest(config),
         "host": config["host"],
@@ -347,6 +416,14 @@ def validate(config, probe=None):
         "config_path": metadata["path"] + "/config",
         "limitations": limitations,
     }
+    if operator_contract:
+        result["operating_contract"] = config["operating_contract"]
+        result["qualifications"] = qualifications
+        result["qualification_validation"] = (
+            "local record shape and current qualifying digest only; operator reviews "
+            "evidence truth, allowed configuration differences and restore path mapping; "
+            "no evidence fetched or measured configuration bytes verified")
+    return result
 
 
 def main(argv=None):
