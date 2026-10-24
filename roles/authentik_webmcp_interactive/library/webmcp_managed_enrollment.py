@@ -159,6 +159,11 @@ class APIClient:
         # Complete bounded lists are required; no silent pagination or omissions.
         path = PATHS[kind] + "?page_size=500"
         if kind == "application":
+            # A matching pagination count is not completeness evidence when
+            # Authentik silently filters applications for a non-superuser.
+            actor = self.request("GET", "/core/users/me/")
+            require(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
+                    and actor["user"].get("is_superuser") is True)
             path += "&superuser_full_list=true"
         result = self.request("GET", path)
         require(isinstance(result, dict) and isinstance(result.get("results"), list))

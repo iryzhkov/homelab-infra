@@ -53,6 +53,10 @@ with an API-returned PK is accepted. No blueprint or UUID importer is used.
 Receipt fields are declared public attributes and IDs, never app passwords or
 returned client secrets.
 
+The API actor must report is_superuser=true before the module accepts an
+application collection as complete. A matching filtered pagination count is not
+sufficient. This is checked again for each application collection read.
+
 No name-only adoption occurs. Matching names without receipts refuse; existing
 objects must match original IDs/attributes. Privilege and foreign-reference drift
 refuse. Mapping references are inspected through the complete bounded common

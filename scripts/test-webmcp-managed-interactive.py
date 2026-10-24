@@ -194,6 +194,36 @@ class Tests(unittest.TestCase):
             with self.assertRaises(m.Refused):
                 api.rows("all_provider")
 
+    def test_application_collection_requires_verified_superuser(self):
+        api = m.APIClient("synthetic-admin-token")
+        for flag in (False, None, "true", 1, True):
+            with self.subTest(flag=flag):
+                calls = []
+                def request(method, path):
+                    calls.append((method, path))
+                    if path == "/core/users/me/":
+                        return {"user": {"is_superuser": flag}}
+                    return {"results": [], "pagination": {"count": 0, "next": 0}}
+                api.request = request
+                if flag is True:
+                    self.assertEqual(api.rows("application"), [])
+                    self.assertEqual(calls[-1], ("GET", "/core/applications/?page_size=500&superuser_full_list=true"))
+                else:
+                    with self.assertRaises(m.Refused):
+                        api.rows("application")
+                    self.assertEqual(calls, [("GET", "/core/users/me/")])
+
+    def test_unsafe_shared_scratch_ancestor_is_rejected(self):
+        shared = self.path / "shared"
+        private = shared / "private"
+        private.mkdir(parents=True, mode=0o700)
+        shared.chmod(0o777)
+        with self.assertRaises(m.Refused):
+            m.secure_dir(str(private))
+        shared.chmod(0o700)
+        fd = m.secure_dir(str(private))
+        os.close(fd)
+
     def test_uncertain_operation_never_replayed(self):
         enrollment = self.enroll()
         self.api.fail_next = True

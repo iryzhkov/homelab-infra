@@ -174,7 +174,9 @@ jobs:
         run: |
           python3 -B roles/authentik_jocasta_operator/tests/test_importer_semantics.py -v
           python3 -B roles/authentik_jocasta_operator/tests/test_operator.py -v
-          WEBMCP_TEST_HOME="$PWD/.cache/jocasta-operator-tests/home" python3 -B scripts/test-webmcp-managed-interactive.py -v
+          managed_fixture_home=/root/.cache/webmcp-managed-tests/home
+          install -d -m 0700 "$managed_fixture_home" "$managed_fixture_home/tmp"
+          env HOME="$managed_fixture_home" TMPDIR="$managed_fixture_home/tmp" WEBMCP_TEST_HOME="$managed_fixture_home" python3 -B scripts/test-webmcp-managed-interactive.py -v
           python3 -B scripts/test-jocasta-mcp-config.py -v
 
   authentik-machine-identities:
