@@ -1,5 +1,129 @@
 # Disabled Garage object store storage
 
+## Native service and maintenance readiness proposal
+
+The smaller candidate is the direct native unit
+`stacks/objectstore/garage-objectstore.service.example`, with
+`garage-native.toml.example` and `scripts/garage-storage-native.py`.
+These files are INERT and uninstalled. No Ansible role, active stack, timer,
+pin or current release selection consumes them. Canonical enabled=false and
+null live facts remain unchanged. The older Swarm restart example does not
+satisfy the every-start requirement and must not be used for this candidate.
+
+The native unit's sole ExecStart runs the guard as existing UID/GID1000:1000.
+The guard reads actual trusted storage JSON and TOML, calls the existing
+read-only preflight, checks the exact executable SHA256, fsync=true, configured
+metadata/data paths, RPC secret custody, local space/inode headroom and
+loopback-only RPC/S3, then execs the same Garage binary in place. Unexpected
+TOML settings, including an admin listener, refuse. Each explicit start or
+restart traverses this path; there is no fallback or automatic Restart policy.
+Success is point in time, with no continuous mount-loss, fullness or authority
+monitor. It does not establish NFS soft-mount power-loss durability.
+
+The unit limits memory to2GiB, tasks to128 and open files to65536. It grants no
+capabilities, permits writes only to the selected metadata and data directories,
+and suppresses server stdout/stderr rather than exporting potentially sensitive
+RPC/config diagnostics. It sends TERM and waits30seconds with SendSIGKILL=no.
+A stuck process remains a failure. Neither the unit nor maintenance may KILL and
+continue to backup. Automatic OOM termination is not a clean-stop qualification.
+
+Chaldea's `docs/blob-maintenance.md` describes the single finite root-operator
+invocation and its separate resume. It enumerates keys, revokes every publisher,
+rejects any bucket owner or unexpected writer, confirms exact service exit,
+copies and verifies a local stopped pair, restarts the same metadata/config/RPC
+identity through this guard, verifies the fence and calls existing cleanup.
+No native bootstrap or grant-making convergence is part of startup, restart or
+maintenance. The trusted operator exclusively owns RPC and grant administration.
+No publisher receives the RPC secret or owner permission.
+
+### Inert installation and credential mutations
+
+This is an exact proposal to review after filling remaining facts, not a script
+to run now. Parent integration and applicable production authority remain
+required. No new user, route, issuer, disk, quota, remount or fleet selection
+is proposed.
+
+1. Establish the actual enabled target-local storage JSON from canonical source
+   in a separate private proposal. Keep canonical source disabled. Bind host
+   homelab, process1000:1000, data owner mapping977:988 with accepted evidence,
+   actual NFS identity and local ext4 identity, every qualification, risk
+   references and its exact digest. Data path is
+   `/mnt/nas/ml/garage-blobs`; metadata parent is
+   `/mnt/docker-data/swarm/objectstore`. Data's2TB total and metadata's16GiB
+   are unreserved operating budgets. Actual mount device/FS identity and live
+   durability evidence must be filled truthfully; this text does not supply them.
+2. As an authorized operator, create only those private paths. Proposed local
+   metadata parent/config directories are root:root0755, meta1000:1000mode0700.
+   Proposed backup root `/mnt/docker-data/swarm/objectstore-backups` is
+   root:root0700 on the SAME existing local filesystem. NAS data must show
+  977:988mode0700 after creation through the already qualified1000:1000
+   identity. Do not chown the shared export or assume NAS owner maps locally.
+   Verify actual traversal/access before any start.
+3. Stage the SAME Garage2.4.1 executable from immutable OCI digest
+   `sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020`.
+   Verify accepted executable SHA256
+   `ae49f8de4aaee6b5ca305f7cbdccc8cd8a29b2804aac074649f18bfb83d0a2b6`.
+   Install it root:root0755 at `/usr/local/lib/garage/2.4.1/garage`, with
+   root-owned non-writable ancestors. Existing fixture extraction code supplies
+   the qualified extraction method; this proposal does not fetch on a production
+   host or add a background updater.
+4. Install reviewed `garage-storage-native.py` and
+   `garage-storage-preflight.py` as root:root0644 under
+   `/usr/local/libexec/`, not executable shell hooks. Install the filled storage
+   JSON root:1000mode0640 at `/etc/garage/storage.json`, root-owned directory0755.
+   Install the exact native TOML root:root0644 at
+   `/mnt/docker-data/swarm/objectstore/config/garage.toml`. Native Python
+   requires3.11+ for tomllib; confirm the actual target version before install.
+5. Generate one RPC secret LOCALLY with the existing supported custody method,
+   retaining it only as `/etc/garage/rpc.secret`,1000:1000mode0400. Do not send
+   it through command arguments, clipboard, jobs, logs or exported results.
+   Bootstrap exact bucket aliases/IDs, quotas and synthetic-free production keys
+   through trusted local RPC only after authority. Retain publisher and reader
+   secrets in their own qualified host-local custody. Project the separate
+   cleanup read/write/no-owner credential only into root:root0600
+   `/etc/chaldea/blob-cleanup-<bucket>.json`. Enumerate ALL keys and revoke the
+   one-time bootstrap bucket owner/write privileges before maintenance can pass.
+   Freeze any grant-making bootstrap/converger for the maintenance interval.
+6. Install the exact reviewed example unit, after reviewing its fixed paths,
+   root:root0644 at `/etc/systemd/system/garage-objectstore.service`. No
+   drop-ins, Install section, enable, timer or automated start. Record the
+   actual reviewed unit, guard, preflight, storage and TOML SHA256 values into
+   root:root0600 `/etc/chaldea/blob-maintenance.json` using Chaldea's inert
+   schema. Install the independently qualified Chaldea source with root-only
+   modification rights, including the finite pair helper. No current client
+   release selection or fleet pin changes are part of this proposal.
+7. Only with separate activation authority, run exactly
+   `systemctl daemon-reload` and `systemctl start garage-objectstore.service`.
+   No blanket stack deploy/restart is needed. Qualify actual process exe/UID,
+   loopback endpoint, node identity, grants, mount/custody, adverse storage
+   behavior and clean-stop refusal. Do not enable publication automatically.
+   A manual future maintenance is `chaldea blob-maintenance run`; only a
+   verified successful result supplies an ID eligible for the separate
+   `chaldea blob-maintenance resume <id>` command.
+
+Backup inventory/copy currently refuses above4096entries or512MiB allocated/read
+per tree. It preserves sparse logical files but does not offer full2TB backup
+support. Local available capacity can reduce usable data far below the budget.
+No silent NAS backup relocation or added disk is allowed. Larger-volume operation
+requires a separately reviewed capacity/method change. All pairs, partial copies,
+pending local job bytes, journals and original UUIDs are retained; no rotation or
+replay is implicit.
+
+Rollback after any later authorized installation keeps publication fenced and
+preserves metadata, NAS data and local backups. Stop only this exact newly owned
+service, require confirmed exit, and remove no last good copy. A timeout remains
+a recovery decision, not permission to force-stop and back up. Disable only new
+publication configuration; do not touch ML folders, NATS, Akasha, or ordinary
+SSH job execution.
+
+Reusable proof references remain Q2
+`jocasta:75988be5921944746f349a2adee821b9@26` and revocation experiment
+`jocasta:56e6d40d605c7a3181aef45747357087@1`. That experiment required fixture
+KILL for an incomplete PUT. New local contracts qualify source guards and
+ordering only. Installed target service, production credentials, full-scale
+backup and continuous/adverse-storage behavior remain unqualified.
+
+
 The objectstore (Garage) source is disabled. This change adds no directory,
 mount, service, bucket, secret, route, host pin, quota or backup. It adds a
 canonical disabled configuration, a read-only storage preflight that refuses

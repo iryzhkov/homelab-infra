@@ -1,0 +1,31 @@
+# INERT PROPOSAL. No installer, enabled target, timer or automation consumes this.
+[Unit]
+Description=Guarded single-node Garage object store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=1000
+Group=1000
+UMask=0077
+ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/garage-storage-native.py --config /etc/garage/storage.json
+Restart=no
+KillMode=control-group
+KillSignal=SIGTERM
+SendSIGKILL=no
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+MemoryMax=2G
+TasksMax=128
+LimitNOFILE=65536
+NoNewPrivileges=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/mnt/docker-data/swarm/objectstore/meta /mnt/nas/ml/garage-blobs
+StandardOutput=null
+StandardError=null
+# No Install section: deliberate explicit start only.
