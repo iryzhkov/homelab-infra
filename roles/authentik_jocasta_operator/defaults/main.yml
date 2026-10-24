@@ -1,0 +1,7 @@
+---
+# Source only until explicitly opted in through the separate entrypoint.
+jocasta_operator_enabled: false
+jocasta_operator_state: present
+jocasta_operator_online_check: false
+# Required operator-owned integer input. No production fixture or username lookup.
+jocasta_operator_user_pk: null

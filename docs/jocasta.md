@@ -56,22 +56,24 @@ so twice-weekly copies do not capture live Jocasta database or token files.
 
 ## HTTP MCP (opt-in, on for homelab)
 
-Jocasta can serve a read-only MCP resource at /mcp, verified against Authentik
-with short-lived OIDC tokens (Jocasta's docs/http-mcp.md). It is opt-in: with
-env_extra naming only JOCASTA_IMAGE, prepare.yml renders the .env exactly as
-before and the Compose file passes the four MCP variables as empty strings,
-which Jocasta treats as unset. Static per-host REST tokens are unchanged either
-way, and opaque operator tokens never reach MCP.
+Jocasta serves the limited read-only MCP resource at /mcp, verified against
+Authentik with short-lived OIDC tokens (Jocasta's docs/http-mcp.md). It is opt-in:
+with env_extra naming only JOCASTA_IMAGE, prepare.yml renders the .env exactly
+as before. Compose passes unset MCP/operator values as empty strings, which
+Jocasta treats as disabled. Static per-host REST tokens are unchanged and never
+authorize MCP. A separately pinned operator-capable source can add interactive
+full-store access through the optional configuration below.
 
-The homelab inventory turns it on for the laptop's persistent read-only
-Jocasta tooling sessions (maintenance af50ab7396f94090bb590da80785596f):
-jocasta_image is the a3e83c5 image, env_extra holds the four keys below with the
-REST audience jocasta-rest-persistent-tooling, the identities come from
-playbooks/authentik-jocasta-tooling.yml and the route from
-playbooks/vars/web-mcp-route-jocasta.yml. The database and server are the same
-ones; only the image and the four variables changed. A later
-`playbooks/swarm.yml --tags registry` pushes the new jocasta_image to Forgejo
-and pre-pulls it on normandy, as for any image change.
+The existing limited setup for the laptop's persistent read-only tooling
+sessions was qualified in maintenance af50ab7396f94090bb590da80785596f.
+Its four settings remain unchanged: the REST audience is
+jocasta-rest-persistent-tooling, identities come from
+playbooks/authentik-jocasta-tooling.yml, and the route comes from
+playbooks/vars/web-mcp-route-jocasta.yml. The desired homelab image now pins
+the reviewed, published 295d9a2 operator-capable image by tag and digest and
+appends the public operator trio below. This is staged inventory source;
+runtime convergence and native acceptance remain pending with root.
+The same database, server, limited verifier and route are retained.
 
 The first converge after the Compose file gained those four empty variables
 recreates the container once, because its environment changed. That restart
@@ -81,12 +83,13 @@ The canonical MCP resource is https://jocasta.mcp.ryzhkov.dev/mcp, the
 dedicated namespace Igor chose for MCP services. The browser hostname
 jocasta.ryzhkov.dev is not an MCP resource.
 
-The only accepted MCP image is built from the reviewed, published Jocasta
+The accepted limited-only MCP image is built from reviewed, published Jocasta
 source a3e83c55e73661fc50d92a9ca328236a86f291fd (MCP_IMAGE_REVISIONS in
-filter_plugins/jocasta.py); its application tree equals the qualified
-232c5e3. The deployed 37ce657515092be80c5d49b4a3b30f482d86ed63 image has no
-MCP support and is refused. Accepting another commit is a reviewed source
-change to that set.
+filter_plugins/jocasta.py); its application tree equals qualified 232c5e3.
+It remains accepted for the existing limited mode and cannot enable operator
+trust. Older 37ce657515092be80c5d49b4a3b30f482d86ed63 has no MCP support
+and is refused. The separate operator source allowlist below is not an image
+publication or deployment receipt.
 
 To enable it, an explicitly approved deployment packet:
 
@@ -109,13 +112,13 @@ To enable it, an explicitly approved deployment packet:
 
 Before anything on homelab is written, prepare.yml refuses:
 
-- some but not all four keys, an empty value, or any other env_extra key;
+- some but not all four limited keys, an empty limited value, or any unknown env_extra key;
 - a resource other than exactly https://jocasta.mcp.ryzhkov.dev/mcp;
 - an issuer or JWKS URL that is not canonical HTTPS on port 443, with no
   escapes or dot segments, an issuer without its trailing slash, or a JWKS URL
   on a different host from the issuer;
 - an audience other than 1 to 256 characters from A-Z, a-z, 0-9 and ._~:/-;
-- an image that is not jocasta:<commit> for the accepted commit.
+- an image that is not jocasta:<commit> for an allowed MCP source commit.
 
 The resource audience in MCP tokens is the resource URL itself, which the
 Authentik machine-identities mapping issues as the tokens' aud
@@ -170,6 +173,87 @@ MCP and OIDC unset; REST tokens keep working. Rolling
 back the image as well needs the previous jocasta_image and its schema: if the
 newer image migrated the database, older binaries refuse it, and rollback then
 means a selected pre-upgrade recovery point (see Recovery).
+
+## Interactive operator source integration, runtime acceptance pending
+
+The homelab inventory stages the exact reviewed and published operator-capable
+image below and the public operator trio. Its four limited settings remain
+unchanged. No route, port, service unit, data path, runtime UID, mount, REST
+credential or filesystem protection changes are included. The Authentik
+operator playbook remains a separate disabled-by-default opt-in.
+
+Root accepted source `295d9a221867f219c33b6a76d09a6e0320f3d774`,
+tree `efd8637c9a8af2b694b570f50056da5e452e6cc0`, after independent
+Opus 5.5 high and Sol 6.1 high ACCEPT and exact-head CI run 40082520891 SUCCESS.
+PR3 merged as `6d26b9d592becc1d84321a5602c07db7a6d41bf0`.
+The checked amd64/UID10001 image artifact 12555901461 has archive SHA256
+`4da0bee3ff1b6010dc18bbebcf96aa961d60b504730dbba90202c15a54dcda99`,
+OCI manifest
+`71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a`,
+and config
+`4608bafc9d3b27c93037ca97501d6f1066000b33639981b4de549041bdaac9e8`.
+Root verified all layers/config hashes and embedded source provenance, then
+published the exact tag through the existing controlled registry auth path.
+Its registry digest matches that checked OCI manifest. Root's
+`jocasta-image-295d9a2/{qualification,publication}.json` receipts distinguish
+image qualification/publication from pending runtime and native acceptance.
+
+The separate `OPERATOR_IMAGE_REVISIONS` source gate admits only 295d9a2.
+Operator mode additionally requires the exact
+`git.ryzhkov.dev/igor/jocasta` repository. The old limited-only image, blocked
+acd4ba5 candidate, mutable tags, and digests without an admitted full source tag
+cannot enable operator mode. Tests now exercise the actual unmodified source
+filter and renderer; no synthetic source allowlist is substituted.
+
+The existing Jocasta stack's desired configuration pins the published digest
+and appends only the three public values below. Root owns final infra
+review/CI, Auth readiness, authorized convergence and live acceptance.
+Publication alone grants no authority to apply.
+
+```yaml
+# Published source/image pin; homelab/runtime/native convergence is still pending.
+jocasta_image: git.ryzhkov.dev/igor/jocasta:295d9a221867f219c33b6a76d09a6e0320f3d774@sha256:71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a
+# Appended to the existing Jocasta stack's env_extra:
+JOCASTA_OPERATOR_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
+JOCASTA_OPERATOR_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/
+JOCASTA_OPERATOR_OIDC_CLIENT_ID: jocasta-laptop-interactive
+```
+
+These environment names correspond exactly to daemon flags
+`--operator-oidc-issuer`, `--operator-oidc-jwks-url` and
+`--operator-oidc-client-id`. The trio is absent or all-or-none. All three empty
+strings also mean disabled; partial keys or a mix of empty and nonempty values
+are refused. Enabled values must equal the literal URLs/client ID above.
+The limited verifier and canonical MCP resource must already be configured,
+the limited issuer must share the fixed `https://auth.ryzhkov.dev` origin,
+and its issuer must differ from the operator issuer. No additional audience,
+secret or unknown environment key is accepted. The generic existing .env
+renderer writes only these validated public values and the unchanged limited
+settings. Compose has the three optional empty defaults. A future authorized
+convergence can recreate the existing container for this environment change;
+this source task applies nothing.
+
+The separate Authentik entrypoint is documented in
+[authentik-jocasta-operator.md](authentik-jocasta-operator.md). Its opt-in remains
+false and the exact user PK remains a required external operator input. The
+read-only preflight identifying Igor does not enable this playbook or authorize
+Ansible to log a user in.
+
+Completion scope is Codex 0.163.0 and Claude 2.1.276. Each needs user-performed
+native one-time login, actual full-store read/write/conflict checks, automatic
+refresh/rotation/restart reuse and refusal after revocation on official T3.
+The unchanged limited profiles must retain project-only reads and write denial.
+The unused strict OpenCode redirect is reserved for possible future source
+work; OpenCode enrollment or native acceptance is not a gate for this slice.
+
+For operator rollback, withdraw the three operator variables and revoke only
+the exact operator grants/application authorization. Keep the four limited
+variables, current limited identities, static REST credentials, resource,
+routes and data. The old accepted image remains available for limited-only
+mode after normal schema/image compatibility checks. Native logout is a user
+action for the named registration; Ansible performs no automatic login/logout.
+See the Authentik operator document for ownership-safe issuer retirement and
+the remaining access-token expiry tail.
 
 ## Backups and cold storage
 

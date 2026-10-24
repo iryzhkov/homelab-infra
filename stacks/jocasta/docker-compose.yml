@@ -24,6 +24,10 @@ services:
       JOCASTA_OIDC_AUDIENCE: ${JOCASTA_OIDC_AUDIENCE:-}
       JOCASTA_OIDC_JWKS_URL: ${JOCASTA_OIDC_JWKS_URL:-}
       JOCASTA_MCP_RESOURCE_URL: ${JOCASTA_MCP_RESOURCE_URL:-}
+      # Separate optional public operator trust. Empty trio keeps it disabled.
+      JOCASTA_OPERATOR_OIDC_ISSUER: ${JOCASTA_OPERATOR_OIDC_ISSUER:-}
+      JOCASTA_OPERATOR_OIDC_JWKS_URL: ${JOCASTA_OPERATOR_OIDC_JWKS_URL:-}
+      JOCASTA_OPERATOR_OIDC_CLIENT_ID: ${JOCASTA_OPERATOR_OIDC_CLIENT_ID:-}
     volumes:
       - type: bind
         source: ./data
