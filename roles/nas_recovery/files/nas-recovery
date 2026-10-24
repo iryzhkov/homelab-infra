@@ -1,0 +1,167 @@
+#!/usr/bin/python3
+"""Repair confirmed stale NFS mounts and refresh local Docker bind mounts."""
+import errno
+import fcntl
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+PROBE = """import errno, os, sys
+try:
+    os.stat(sys.argv[1])
+except OSError as e:
+    sys.exit(116 if e.errno == errno.ESTALE else 1)
+"""
+
+
+class Recovery:
+    def __init__(self, config, state_dir):
+        self.config = config
+        self.state_dir = Path(state_dir)
+        self.state_file = self.state_dir / "pending.json"
+        self.pending = json.loads(self.state_file.read_text()) if self.state_file.exists() else {}
+
+    def run(self, *args, timeout=30, ok=(0,)):
+        result = subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+        if result.returncode not in ok:
+            raise RuntimeError(f"{args[0]} failed ({result.returncode}): {result.stderr.strip()}")
+        return result
+
+    def probe(self, path):
+        return self.run(sys.executable, "-c", PROBE, path, timeout=10, ok=(0, 1, 116)).returncode
+
+    def mount_info(self, path, fstab=False):
+        args = ["findmnt", "--json", "--mountpoint", path, "--output", "SOURCE,FSTYPE,OPTIONS"]
+        if fstab:
+            args.append("--fstab")
+        result = self.run(*args, ok=(0, 1))
+        return json.loads(result.stdout)["filesystems"][0] if result.returncode == 0 else None
+
+    def containers(self):
+        ids = self.run("docker", "ps", "-q", "--no-trunc").stdout.split()
+        return json.loads(self.run("docker", "inspect", *ids).stdout) if ids else []
+
+    @staticmethod
+    def uses(source, target):
+        return source == target or source.startswith(target + "/")
+
+    def save(self):
+        tmp = self.state_file.with_suffix(".new")
+        tmp.write_text(json.dumps(self.pending))
+        os.replace(tmp, self.state_file)
+
+    def remember(self, containers, target):
+        for container in containers:
+            sources = [m["Source"] for m in container["Mounts"]
+                       if m["Type"] == "bind" and self.uses(m["Source"], target)]
+            if sources:
+                old = self.pending.get(container["Id"], [])
+                self.pending[container["Id"]] = sorted(set(old + sources))
+        self.save()
+
+    def repair(self, target, expected_source, containers):
+        definition = self.mount_info(target, fstab=True)
+        if not definition or definition["source"] != expected_source or definition["fstype"] not in ("nfs", "nfs4"):
+            raise RuntimeError(f"{target}: fstab does not match the configured NFS source")
+        current = self.mount_info(target)
+        if current and (current["source"] != expected_source or current["fstype"] not in ("nfs", "nfs4")):
+            raise RuntimeError(f"{target}: refusing to replace an unexpected filesystem")
+        if current:
+            status = self.probe(target)
+            if status == 0:
+                return
+            if status != 116:
+                raise RuntimeError(f"{target}: inaccessible without ESTALE; leaving mount alone")
+        stage = self.state_dir / ("probe-" + target.strip("/").replace("/", "-"))
+        if self.mount_info(str(stage)):
+            self.run("umount", str(stage))
+        stage.mkdir(exist_ok=True)
+        mount_args = ["mount", "-t", definition["fstype"], "-o", definition["options"], expected_source]
+        try:
+            # Establish that a fresh export is readable before touching the old mount.
+            self.run(*mount_args, str(stage))
+            if self.probe(str(stage)) != 0:
+                raise RuntimeError(f"{target}: fresh NAS mount is unreadable")
+            for container in containers:
+                for binding in container["Mounts"]:
+                    if binding["Type"] == "bind" and self.uses(binding["Source"], target):
+                        staged_source = str(stage) + binding["Source"][len(target):]
+                        if self.probe(staged_source) != 0:
+                            raise RuntimeError(f"{target}: NAS bind source is inaccessible")
+            # Keep this work across a crash or failed container restart.
+            self.remember(containers, target)
+            if current:
+                self.run("umount", target)
+            self.run(*mount_args, target)
+            if self.probe(target) != 0:
+                raise RuntimeError(f"{target}: replacement mount is unreadable")
+            print(f"repaired {target}", flush=True)
+        finally:
+            if self.mount_info(str(stage)):
+                self.run("umount", str(stage))
+
+    def refresh_containers(self):
+        running = {c["Id"]: c for c in self.containers()}
+        for container_id, sources in list(self.pending.items()):
+            if container_id not in running:
+                # Do not start an intentionally stopped container or a replaced Swarm task.
+                del self.pending[container_id]
+                self.save()
+                continue
+            # Validate ALL NAS binds before Docker can recreate any missing directories.
+            bindings = [m["Source"] for m in running[container_id]["Mounts"] if m["Type"] == "bind"
+                        and any(self.uses(m["Source"], p) for p in self.config)]
+            ready = True
+            for source in bindings:
+                target = next(p for p in self.config if self.uses(source, p))
+                info = self.mount_info(target)
+                if not info or info["source"] != self.config[target] or self.probe(source) != 0:
+                    ready = False
+                    break
+            if not ready:
+                continue
+            self.run("docker", "restart", "--time", "20", container_id, timeout=60)
+            print(f"refreshed {running[container_id]['Name']}", flush=True)
+            del self.pending[container_id]
+            self.save()
+
+    def cycle(self):
+        containers = None
+        errors = []
+        for target, source in self.config.items():
+            try:
+                info = self.mount_info(target)
+                if info and self.probe(target) == 0:
+                    continue
+                if containers is None:
+                    containers = self.containers()
+                self.repair(target, source, containers)
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+                errors.append(f"{target}: {error}")
+        try:
+            if self.pending:
+                self.refresh_containers()
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+            errors.append(str(error))
+        if errors or self.pending:
+            raise RuntimeError("; ".join(errors) or "container refresh still pending")
+        print("NAS mounts healthy; no pending container refresh", flush=True)
+
+
+def main():
+    config = json.loads(Path("/etc/nas-recovery.json").read_text())
+    state_dir = Path("/var/lib/nas-recovery")
+    state_dir.mkdir(mode=0o700, exist_ok=True)
+    with (state_dir / "lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        Recovery(config, state_dir).cycle()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+        print(f"nas-recovery: {error}", file=sys.stderr, flush=True)
+        sys.exit(1)

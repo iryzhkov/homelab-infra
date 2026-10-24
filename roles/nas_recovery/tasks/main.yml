@@ -1,0 +1,66 @@
+---
+- name: Install the NAS recovery helper
+  ansible.builtin.copy:
+    src: nas-recovery
+    dest: /usr/local/sbin/nas-recovery
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure only this host's approved NAS mounts
+  ansible.builtin.copy:
+    content: "{{ nas_recovery_mounts | to_nice_json }}\n"
+    dest: /etc/nas-recovery.json
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the NAS recovery service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Repair stale NAS mounts and refresh affected Docker containers
+      After=network-online.target docker.service
+      Wants=network-online.target
+      ConditionPathExists=/var/run/docker.sock
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/nas-recovery
+      StateDirectory=nas-recovery
+      StateDirectoryMode=0700
+      TimeoutStartSec=10min
+      UMask=0077
+      # Mount changes must occur in the host mount namespace.
+    dest: /etc/systemd/system/nas-recovery.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: nas_recovery_service
+
+- name: Install the NAS recovery timer
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Check NAS mounts every minute
+
+      [Timer]
+      OnBootSec=90s
+      OnUnitInactiveSec=60s
+      AccuracySec=5s
+
+      [Install]
+      WantedBy=timers.target
+    dest: /etc/systemd/system/nas-recovery.timer
+    owner: root
+    group: root
+    mode: "0644"
+  register: nas_recovery_timer
+
+- name: Enable automatic NAS recovery
+  ansible.builtin.systemd_service:
+    name: nas-recovery.timer
+    daemon_reload: "{{ nas_recovery_service is changed or nas_recovery_timer is changed }}"
+    enabled: true
+    state: started
+  when: not ansible_check_mode
