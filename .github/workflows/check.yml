@@ -58,6 +58,14 @@ jobs:
         run: ansible-galaxy collection install community.docker:5.4.0
       - name: Test bounded web MCP and OV packaging
         run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/run-web-mcp-ci.py
+      - name: Test isolated OpenViking upgrade migration
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/home"
+          export TMPDIR="$HOME/tmp" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test-ov-provider-migration.py
+          ansible-playbook playbooks/ov-provider-migration.yml --syntax-check
       - name: Validate the NATS stack
         run: |
           python3 scripts/stack-lint.py stacks/nats/stack.yml
