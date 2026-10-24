@@ -34,13 +34,17 @@ objectstore_storage:
     acceptance_mode: operational_budget
     operational_budget: {bytes: 2000000000000, risk_acceptance: null}
     physical_cap: null
-  # LMDB metadata and garage.toml on a local filesystem, path/meta and
-  # path/config existing beforehand. Positive physical bytes + inodes and
-  # hard-cap mechanism/scope/evidence remain mandatory; no budget mode here.
+  # LMDB metadata and garage.toml in ordinary private directories on the
+  # existing shared /mnt/docker-data service-state filesystem, not a new disk.
+  # 16 GiB is a proposed operating budget, not an approved hard cap,
+  # reservation or allocation. Actual paths/identity and risk evidence remain
+  # unselected. path/meta and path/config must already exist before enabling.
   metadata:
     path: null
     mount: {target: null, source: null, fstype: null, fsroot: null, options: []}
-    physical_cap: {bytes: null, inodes: null, mechanism: null, scope: null, evidence: null}
+    acceptance_mode: operational_budget
+    operational_budget: {bytes: 17179869184, risk_acceptance: null}
+    physical_cap: null
   # Evidence references for live gates this source cannot qualify.
   qualifications:
     configuration: null
