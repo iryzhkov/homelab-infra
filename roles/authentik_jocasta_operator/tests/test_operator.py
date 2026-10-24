@@ -289,6 +289,26 @@ class ContractTest(unittest.TestCase):
         with self.assertRaises(op.AnsibleFilterError):
             op.operator_guard(absent, tombstone, s.snapshot(), {}, {})
 
+    def test_replacement_provider_requires_owned_application_reference(self):
+        s = Backend()
+        s.apply(CONTENT)
+        receipt = s.instance()
+        self.assertEqual(op.operator_instance(fake.page([receipt]), SPEC), receipt)
+        original = next(iter(s.tables["provider"].values()))
+        replacement = original | {"pk": s._pk()}
+        del s.tables["provider"][original["pk"]]
+        s.tables["provider"][replacement["pk"]] = replacement
+        app = next(x for x in s.tables["application"].values() if x.get("slug") == op.SLUG)
+        absent = op.operator_spec(PK, "absent")
+        for reference in (None, original["pk"]):
+            app["provider"] = reference
+            with self.subTest(reference=reference), self.assertRaisesRegex(
+                    op.AnsibleFilterError, "exact reference"):
+                op.operator_guard(absent, receipt, s.snapshot(), {}, {})
+        del s.tables["application"][app["pk"]]
+        with self.assertRaisesRegex(op.AnsibleFilterError, "exact reference"):
+            op.operator_guard(absent, receipt, s.snapshot(), {}, {})
+
     def test_incomplete_collections_refuse(self):
         for body in ({}, {"results": [], "pagination": {"count": 3, "current": 1, "total_pages": 2}},
                      fake.page([{"pk": "x"}, {"pk": "x"}])):
@@ -370,6 +390,27 @@ class RoleTest(unittest.TestCase):
             code, _ = self.run_role(state=state)
             self.assertNotEqual(code, 0)
             self.assertEqual(self.fixture.writes(), [])
+
+    def test_successful_receipt_cannot_adopt_or_retire_unbound_replacement(self):
+        self.ok()
+        receipt = deepcopy(next(iter(self.state.blueprints.values())))
+        self.assertEqual(op.operator_instance(fake.page([receipt]), SPEC), receipt)
+        original = next(iter(self.state.tables["provider"].values()))
+        replacement = original | {"pk": self.state._pk()}
+        del self.state.tables["provider"][original["pk"]]
+        self.state.tables["provider"][replacement["pk"]] = replacement
+        app = next(x for x in self.state.tables["application"].values() if x.get("slug") == op.SLUG)
+        self.assertEqual(app["provider"], original["pk"])
+        app["provider"] = None
+        for state in ("present", "absent"):
+            with self.subTest(state=state):
+                code, output = self.run_role(state=state)
+                self.assertNotEqual(code, 0)
+                self.assertIn("Refuse foreign ownership, references and unsafe input", output)
+                self.assertEqual(self.fixture.writes(), [])
+                self.assertEqual(self.state.blueprints[receipt["pk"]], receipt)
+                self.assertEqual(self.state.tables["provider"][replacement["pk"]], replacement)
+                self.assertIsNone(app["provider"])
 
     def test_failed_apply_is_not_replayed(self):
         self.state.apply_failure = True

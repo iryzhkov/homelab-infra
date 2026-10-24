@@ -290,6 +290,11 @@ def operator_guard(spec, instance, results, user, key, verify=False):
                   or group.get("parents") != [] or not isinstance(group.get("users_obj"), list)
                   or any(u.get("pk") != spec["user_pk"] for u in group["users_obj"])):
         refuse("group privilege or membership drift")
+    # Names and a successful old blueprint receipt cannot establish ownership
+    # of a replacement provider. Require the owned application's live exact
+    # reference before any mutation, including name-selected retirement.
+    if provider and (not app or app.get("provider") != provider["pk"]):
+        refuse("operator provider lacks the owned application's exact reference; reconcile before writes")
     if app and app.get("provider") not in (None, provider.get("pk")):
         refuse("operator application is bound to a foreign provider")
     owned_bindings = {x["pk"] for x in spec["objects"] if x["kind"] == "binding"}

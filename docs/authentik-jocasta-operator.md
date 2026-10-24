@@ -101,7 +101,12 @@ Future source changes that alter rendering need an explicit compatible ownership
 migration; do not replace the ownership check with automatic adoption.
 
 UUID-backed objects have deterministic role-specific UUIDs. Provider identity
-uses the fixed name/client ID and the owned application's provider reference.
+uses the fixed name/client ID and the owned application's exact live provider
+reference. Any discovered provider requires that owned application to exist and
+still reference its exact PK, including before retirement writes. A missing,
+detached or different reference requires explicit reconciliation; a successful
+old blueprint receipt does not authorize adoption or deletion of a replacement
+with the same name/client ID.
 Complete bounded collections establish name/UUID collisions and cross-object
 references. Pagination, missing reference fields, foreign bindings, a shared
 provider/mapping, or group privilege/member drift stop the run. Collections
