@@ -3,11 +3,15 @@ on:
   push:
     branches: [main]
   pull_request:
+# Keep main-branch checks; only superseded revisions of the same PR cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   drift:
     env:
       TMPDIR: ${{ github.workspace }}/../akasha-cutover-${{ github.run_id }}-${{ github.run_attempt }}
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -106,7 +110,7 @@ jobs:
       - run: python3 -m py_compile roles/drift_check/files/homelab-drift-check
 
   openviking-native-providers:
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -146,7 +150,7 @@ jobs:
           ansible-playbook playbooks/ov-pc-coexistence.yml --syntax-check
 
   authentik-machine-identities:
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -171,7 +175,7 @@ jobs:
 
   machine-profiles:
     # Keep the long real-role coexistence/cleanup matrix separate from legacy tests.
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
       contents: read
@@ -193,7 +197,7 @@ jobs:
             -s roles/authentik_machine_identities/tests -p test_service_profiles.py -v
 
   akasha:
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
