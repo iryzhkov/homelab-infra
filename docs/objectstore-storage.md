@@ -1,5 +1,138 @@
 # Disabled Garage object store storage
 
+## Native service and maintenance readiness proposal
+
+The smaller candidate is the direct native unit
+`stacks/objectstore/garage-objectstore.service.example`, with
+`garage-native.toml.example` and `scripts/garage-storage-native.py`.
+These files are INERT and uninstalled. No Ansible role, active stack, timer,
+pin or current release selection consumes them. Canonical enabled=false and
+null live facts remain unchanged. The older Swarm restart example does not
+satisfy the every-start requirement and must not be used for this candidate.
+
+The native unit's sole ExecStart runs the guard as existing UID/GID1000:1000.
+The guard reads actual trusted storage JSON and TOML, calls the existing
+read-only preflight, checks the exact executable SHA256, fsync=true, configured
+metadata/data paths, RPC secret custody, local space/inode headroom and
+loopback-only RPC/S3, then execs the same Garage binary in place. Unexpected
+TOML settings, including an admin listener, refuse. Each explicit start or
+restart traverses this path; there is no fallback or automatic Restart policy.
+Success is point in time, with no continuous mount-loss, fullness or authority
+monitor. It does not establish NFS soft-mount power-loss durability.
+
+The unit limits memory to2GiB, tasks to128 and open files to65536. It grants no
+capabilities and suppresses server stdout/stderr rather than exporting potentially sensitive
+RPC/config diagnostics. It sends TERM and waits30seconds with SendSIGKILL=no.
+The unit deliberately has no filesystem mount-namespace directives: it inherits
+the host mount view required by the exact preflight checks. ProtectSystem=strict
+with ReadWritePaths would create subtree bind mounts and make the host's valid
+mount identities fail. Existing UID1000 filesystem permissions provide access
+control; this unit does not claim filesystem confinement beyond those permissions.
+A stuck process remains a failure. Neither the unit nor maintenance may KILL and
+continue to backup. Automatic OOM termination is not a clean-stop qualification.
+
+Chaldea's `docs/blob-maintenance.md` describes the single finite root-operator
+invocation and its separate resume. It enumerates keys, revokes every publisher,
+rejects any bucket owner or unexpected writer, confirms exact service exit,
+copies and verifies a local stopped pair, restarts the same metadata/config/RPC
+identity through this guard, verifies the fence and calls existing cleanup.
+No native bootstrap or grant-making convergence is part of startup, restart or
+maintenance. The trusted operator exclusively owns RPC and grant administration.
+No publisher receives the RPC secret or owner permission.
+
+### Inert installation and credential mutations
+
+This is an exact proposal to review after filling remaining facts, not a script
+to run now. Parent integration and applicable production authority remain
+required. No new user, route, issuer, disk, quota, remount or fleet selection
+is proposed.
+
+1. Establish the actual enabled target-local storage JSON from canonical source
+   in a separate private proposal. Keep canonical source disabled. Bind host
+   homelab, process1000:1000, data owner mapping977:988 with accepted evidence,
+   actual NFS identity and local ext4 identity, every qualification, risk
+   references and its exact digest. Data path is
+   `/mnt/nas/ml/garage-blobs`; metadata parent is
+   `/mnt/docker-data/swarm/objectstore`. Data's2TB total and metadata's16GiB
+   are unreserved operating budgets. Actual mount device/FS identity and live
+   durability evidence must be filled truthfully; this text does not supply them.
+2. As an authorized operator, create only those private paths. Proposed local
+   metadata parent/config directories are root:root0755, meta1000:1000mode0700.
+   Proposed backup root `/mnt/docker-data/swarm/objectstore-backups` is
+   root:root0700 on the SAME existing local filesystem. NAS data must show
+  977:988mode0700 after creation through the already qualified1000:1000
+   identity. Do not chown the shared export or assume NAS owner maps locally.
+   Verify actual traversal/access before any start.
+3. Stage the SAME Garage2.4.1 executable from immutable OCI digest
+   `sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020`.
+   Verify accepted executable SHA256
+   `ae49f8de4aaee6b5ca305f7cbdccc8cd8a29b2804aac074649f18bfb83d0a2b6`.
+   Install it root:root0755 at `/usr/local/lib/garage/2.4.1/garage`, with
+   root-owned non-writable ancestors. Existing fixture extraction code supplies
+   the qualified extraction method; this proposal does not fetch on a production
+   host or add a background updater.
+4. Install reviewed `garage-storage-native.py` and
+   `garage-storage-preflight.py` as root:root0644 under
+   `/usr/local/libexec/`, not executable shell hooks. Install the filled storage
+   JSON root:1000mode0640 at `/etc/garage/storage.json`, root-owned directory0755.
+   Install the exact native TOML root:root0644 at
+   `/mnt/docker-data/swarm/objectstore/config/garage.toml`. Native Python
+   requires3.11+ for tomllib; confirm the actual target version before install.
+5. Generate one RPC secret LOCALLY with the existing supported custody method,
+   retaining it only as `/etc/garage/rpc.secret`,1000:1000mode0400. Do not send
+   it through command arguments, clipboard, jobs, logs or exported results.
+   Bootstrap exact bucket aliases/IDs, quotas and synthetic-free production keys
+   through trusted local RPC only after authority. Retain publisher and reader
+   secrets in their own qualified host-local custody. Project the separate
+   cleanup read/write/no-owner credential only into root:root0600
+   `/etc/chaldea/blob-cleanup-<bucket>.json`. Enumerate ALL keys and revoke the
+   one-time bootstrap bucket owner/write privileges before maintenance can pass.
+   Freeze any grant-making bootstrap/converger for the maintenance interval.
+6. Install the exact reviewed example unit, after reviewing its fixed paths,
+   root:root0644 at `/etc/systemd/system/garage-objectstore.service`. No
+   drop-ins, Install section, enable, timer or automated start. Record the
+   actual reviewed unit, guard, preflight, storage and TOML SHA256 values into
+   root:root0600 `/etc/chaldea/blob-maintenance.json` using Chaldea's inert
+   schema. Install the independently qualified Chaldea source with root-only
+   modification rights, including the finite pair helper. No current client
+   release selection or fleet pin changes are part of this proposal.
+7. Only with separate activation authority, run exactly
+   `systemctl daemon-reload` and `systemctl start garage-objectstore.service`.
+   No blanket stack deploy/restart is needed. Qualify actual process exe/UID,
+   loopback endpoint, node identity, grants, mount/custody, adverse storage
+   behavior and clean-stop refusal. Do not enable publication automatically.
+   A manual future maintenance is `chaldea blob-maintenance run`; only a
+   verified successful result supplies an ID eligible for the separate
+   `chaldea blob-maintenance resume <id>` command.
+
+Backup inventory/copy currently refuses above4096entries or512MiB allocated/read
+per tree. It preserves sparse logical files but does not offer full2TB backup
+support. Local available capacity can reduce usable data far below the budget.
+No silent NAS backup relocation or added disk is allowed. Larger-volume operation
+requires a separately reviewed capacity/method change. All pairs, partial copies,
+pending local job bytes, journals and original UUIDs are retained; no rotation or
+replay is implicit.
+
+Rollback after any later authorized installation keeps publication fenced and
+preserves metadata, NAS data and local backups. Stop only this exact newly owned
+service, require confirmed exit, and remove no last good copy. A timeout remains
+a recovery decision, not permission to force-stop and back up. Disable only new
+publication configuration; do not touch ML folders, NATS, Akasha, or ordinary
+SSH job execution.
+
+Reusable proof references remain Q2
+`jocasta:75988be5921944746f349a2adee821b9@26` and revocation experiment
+`jocasta:56e6d40d605c7a3181aef45747357087@1`. That experiment required fixture
+KILL for an incomplete PUT. New local contracts qualify source guards and
+ordering only. Installed target service, production credentials, full-scale backup, root read of
+mode0700 NAS data under the actual export's squash policy, and
+continuous/adverse-storage behavior remain unqualified. The accepted NAS copy
+proof ran as1000:1000, not root; a root read refusal must not trigger export,
+ownership or identity changes. Each retained pair also retains its RPC-secret
+copy after a later live-secret rotation; continuing private custody belongs to
+the operator.
+
+
 The objectstore (Garage) source is disabled. This change adds no directory,
 mount, service, bucket, secret, route, host pin, quota or backup. It adds a
 canonical disabled configuration, a read-only storage preflight that refuses
@@ -13,7 +146,9 @@ fresh-client round trip remain unqualified.
   `inventory/group_vars/swarm/objectstore.yml`, with `enabled: false` and every
   measured live fact null. Data explicitly selects `operational_budget` at
   2 TB decimal total across artifacts and results, with risk-acceptance
-  evidence pending null. Metadata hard-cap facts remain unknown. No
+  evidence pending null. Metadata explicitly selects the same mode with a
+  proposed 16 GiB budget and null risk evidence on the existing shared
+  service-state disk. All measured facts remain unknown. No
   `swarm_stacks_*` entry names the objectstore source, so
   the stack wrapper never selects it.
 - Guard: `roles/swarm/tasks/stack.yml` includes
@@ -119,8 +254,8 @@ Metadata refuses `identity_mapping`, including null. Its parent, config
 directory and ancestors still trust only root or the selected process uid;
 `meta` still belongs to the process uid alone. A data mapping grants no
 metadata custody. Deployment environment binding still uses the process
-uid/gid, never the mapped owner IDs. Physical metadata caps and all live
-qualification gates remain mandatory.
+uid/gid, never the mapped owner IDs. The selected metadata acceptance mode
+and all live qualification gates remain mandatory.
 
 This declaration only checks observed ownership. It does not change NFS
 server mapping, exports, ownership, accounts, group membership or ACLs.
@@ -133,64 +268,90 @@ all live facts null, and the source disabled.
 The approved blob data budget is **2 TB decimal (2,000,000,000,000 bytes)
 combined across artifacts and results**. This is one aggregate operational
 budget, not 2 TB per bucket. It supersedes the historical 1 TiB / 400 GiB
-proposal. Local metadata still requires its own physical byte and inode
-bounds; its allocation remains unselected.
+proposal.
 
-Data has two acceptance modes:
+Metadata is intended to use ordinary private directories under
+`/mnt/docker-data/swarm/objectstore` on homelab's existing local ext4
+service-state disk, shared with Docker and other services. The proposed
+metadata operating budget is **16 GiB (17,179,869,184 bytes)**. It is not an
+approved hard cap, physical allocation or reservation. The proposed new
+16 GiB virtual disk packet was withdrawn, never approved or executed.
+This source does not allocate, format, mount or provision storage. Actual
+host, uid/gid, paths and mount identities remain null in the canonical
+configuration. Directory preparation, backup and retention preparation,
+and activation remain separate work; this source adopts no production
+backup or service.
 
-- `data.acceptance_mode: physical_cap` requires the original physical-cap
+Each store uses the same two acceptance modes:
+
+- `acceptance_mode: physical_cap` requires the original physical-cap
   evidence described below. Omitting `acceptance_mode` retains this mode for
   existing configurations. Missing or invalid cap evidence never selects a
   budget implicitly.
-- `data.acceptance_mode: operational_budget` explicitly accepts unquotaed
-  data. It requires `data.operational_budget` with exactly `bytes`, a positive
-  integer aggregate budget across artifacts and results, and
-  `risk_acceptance`, a nonblank string referencing the operator's acceptance
-  of the unbounded physical-data risk. Booleans, structured acknowledgments
-  and unknown budget keys refuse. `data.physical_cap` must be absent or null;
+- `acceptance_mode: operational_budget` explicitly accepts an unquotaed
+  store. Its `operational_budget` object requires exactly `bytes`, a positive
+  integer, and `risk_acceptance`, a nonblank string referencing the
+  operator's acceptance of that store's unbounded physical-capacity risk.
+  Data bytes are aggregate across artifacts and results. Metadata bytes
+  cover its local store. Booleans, structured acknowledgments, inode claims
+  and unknown budget keys refuse. `physical_cap` must be absent or null;
   even an empty cap object refuses because it mixes incompatible claims.
-  The canonical selection records the approved value but leaves the
-  acceptance reference null. It remains disabled and cannot pass enabled
-  validation with unknown facts.
+  Canonical data records the approved budget, while canonical metadata
+  records the proposed budget. Both acceptance references remain null.
+  The source stays disabled and cannot pass enabled validation with
+  unknown facts.
 
-An operational budget does **not** enforce physical data bytes or inodes,
-reserve NAS space, or constrain multipart uploads. It adds no admission
-controller, quota, cleanup process or runtime monitor. Multipart data,
-overhead, unrelated consumers and ordinary writes can exhaust the shared NAS.
-A successful budget preflight reports `data_acceptance.mode` and
-`aggregate_budget_bytes`, plus these limitations; it never reports physical
-enforcement.
+An operational budget does **not** enforce physical bytes or inodes,
+reserve space, or constrain multipart uploads. It adds no admission
+controller, automatic capacity controller, quota, headroom reserve, cleanup
+process or runtime monitor. Multipart data, overhead, unrelated consumers
+and ordinary writes can exhaust the shared NAS. Metadata and other services
+can exhaust the shared Docker filesystem. A successful budget preflight
+reports `data_acceptance` and `metadata_acceptance` separately, each with
+`mode` and, in budget mode, `aggregate_budget_bytes`. The existing data
+warnings remain, and the metadata warning explicitly states that it has no
+physical byte or inode enforcement or reservation. This is a point-in-time
+check, not continuous admission or monitoring, and it proves no backup
+safety. Headroom, cleanup outage and fullness behaviour still need the
+existing live qualifications; this change defines no new threshold or proof.
 
 `physical_cap` mode refuses any `operational_budget` field. Unknown modes,
-null modes and contradictory cap claims refuse before host probing.
-Metadata always requires a physical cap and refuses data acceptance fields.
-To change modes, explicitly select the new mode, remove the incompatible
-declaration, supply its required evidence and requalify. The existing digest
-covers the mode, aggregate budget and risk-acceptance reference as well as all
-other storage settings. Adding an explicit mode to an old config changes its
-digest; leaving an old config unchanged preserves both its digest and
-hard-cap validation semantics. No migration or host change happens here.
+null modes and contradictory cap claims refuse before host probing in an
+enabled configuration. To change modes, explicitly select the new mode,
+remove the incompatible declaration, supply its required evidence and
+requalify. The existing digest covers each store's mode, budget and
+risk-acceptance reference as well as all other storage settings. Adding an
+explicit mode to an old config changes its digest; leaving an old config
+unchanged preserves both its digest and hard-cap validation semantics.
+No migration or host change happens here.
 
-A physical cap with positive bytes and inodes, an evidence reference and a
-mechanism that bounds physical allocation is required for metadata in every
-mode, and for data in `physical_cap` mode:
+Budget acceptance changes only the capacity declaration. Metadata still
+requires local storage, trusted ancestry and config custody, private
+process-owned `meta`, canonical paths, symlink and device checks, exact
+mount identity and disjoint data storage. It still refuses
+`identity_mapping`, including null. Process identity stays bound to the
+deployment environment. A shared local mount with nested metadata is
+permitted only when its selected acceptance mode and evidence allow it.
+
+In `physical_cap` mode, either store requires positive bytes and inodes, an
+evidence reference and a mechanism that bounds physical allocation:
 
 - `dedicated_volume` or `dedicated_filesystem`, scoped to the mount target.
   The store must be an immediate child of the mount target. The preflight
   lists the mount root and refuses if it holds anything except the store
   directory and `lost+found`. This prevents a nested metadata path such as
   `/disk/swarm/objectstore` from claiming all of `/disk` while another stack
-  uses `/disk/swarm/other-stack`. Nested metadata needs a directory-scoped
-  hard quota. Claiming a whole shared mount refuses.
+  uses `/disk/swarm/other-stack`. Nested metadata in physical-cap mode
+  needs a directory-scoped hard quota. Claiming a whole shared mount refuses.
 - `nas_directory_hard_quota` or `filesystem_project_hard_quota`, scoped to
   exactly the store path.
 
 Free space, df figures, logical or Garage bucket quotas and cleanup scans are
 not physical caps and are refused. The cap's bytes, inodes and enforcement are
-evidence the preflight requires but cannot measure. A read-only survey found no
-existing physical byte or inode enforcement for any candidate location, so no
-cap is qualified yet. Choosing operational data acceptance does not qualify
-metadata, identity, custody, mount behaviour, durability, retention, restore
+evidence the preflight requires but cannot measure. A read-only survey found
+no existing physical byte or inode enforcement for any candidate location,
+so no cap is qualified yet. Operational acceptance for either store does not
+qualify identity, custody, mount behaviour, durability, retention, restore
 or activation. All existing live gates and deployment environment binding
 still apply.
 
@@ -249,8 +410,8 @@ before activation. Passing the synthetic layout is not that evidence.
 ## Activation (not part of this change)
 
 Each step needs separate approval: create the dedicated directories and the
-RPC secret, establish and evidence the metadata physical cap, qualify the
-selected data acceptance mode and its evidence, run the live
+RPC secret, qualify both stores' selected acceptance modes and their
+required evidence, run the live
 full-volume, mount-loss, consistent-restore, fresh-client and last-copy
 qualifications, fill `objectstore_storage`, record the digest from `--digest`,
 rename the examples, and add a `swarm_stacks_*` entry with `pin` equal to the

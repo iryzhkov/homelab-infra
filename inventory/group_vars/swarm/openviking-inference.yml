@@ -1,0 +1,16 @@
+---
+# Both providers use the identical checksummed Q8_0 GGUF and 4096-token context.
+# PC GPU vs Normandy CPU was matched at cosine > .99949 on 2026-10-24.
+# Qualified only at batch=1/concurrency=1. See stacks/openviking/PROVIDERS.md.
+openviking_inference_network: openviking-providers
+openviking_inference:
+  embeddings:
+    host: normandy
+    state_dir: openviking-embeddings
+    source: "{{ openviking_embeddings_model_source | default('file:///home/igor/.cache/ov-selfhost-20261024/matched-embeddings') }}"
+  generation:
+    host: homelab
+    state_dir: openviking-generation
+    source: "{{ openviking_generation_model_source | default('file:///home/iryzhkov/.cache/ov-selfhost-20261024/generation-production/models') }}"
+# Use source=registry for a rebuild without the retained cache.
+# PC provisioning is separate and opt-in: playbooks/ov-pc-coexistence.yml.

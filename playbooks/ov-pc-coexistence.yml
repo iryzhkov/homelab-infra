@@ -1,0 +1,10 @@
+---
+# Opt-in, existing-service change only. No fleet/desktop/driver convergence.
+- name: Enable measured PC generation and embedding coexistence
+  hosts: gaming-pc
+  gather_facts: false
+  become: true
+  vars:
+    swarm_stack_src: "{{ playbook_dir }}/../stacks/openviking"
+  roles:
+    - ov_pc_coexistence
