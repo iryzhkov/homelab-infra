@@ -84,9 +84,13 @@
           'scripts/stack-lint.py',
           'stacks/' ~ (swarm_stack.source | default(swarm_stack.name)) ~ '/stack.yml']
          if swarm_lint_via_chaldea | default(false) | bool
-         else ['python3', playbook_dir ~ '/../scripts/stack-lint.py',
-               playbook_dir ~ '/../stacks/' ~ (swarm_stack.source | default(swarm_stack.name)) ~ '/stack.yml'] }}
+         else swarm_stack_local_lint_argv }}
     chdir: "{{ playbook_dir }}/.."
+  vars:
+    swarm_stack_local_lint_argv:
+      - python3
+      - "{{ playbook_dir }}/../scripts/stack-lint.py"
+      - "{{ playbook_dir }}/../stacks/{{ swarm_stack.source | default(swarm_stack.name) }}/stack.yml"
   delegate_to: localhost
   changed_when: false
   check_mode: false

@@ -24,7 +24,7 @@ jobs:
           printf 'HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
           printf 'ANSIBLE_COLLECTIONS_PATH=%s\n' "$HOME/.ansible/collections" >>"$GITHUB_ENV"
       - name: Install ShellCheck in the disposable CI container
-        run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck
+        run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck git
       - run: python3 scripts/test-upkeeper-drift.py
       - run: python3 scripts/test-authentik-drift.py
       - run: python3 scripts/test-helper-backups.py
@@ -55,7 +55,8 @@ jobs:
           mkdir -p "$TMPDIR"
           python3 scripts/test-jocasta-mcp-config.py
       - name: Install the Compose module for OV source syntax checks
-        run: ansible-galaxy collection install community.docker:5.4.0
+        # Exact commit of the verified upstream 5.4.0 tag; avoids its broken Galaxy artifact.
+        run: ansible-galaxy collection install git+https://github.com/ansible-collections/community.docker.git,6be1a09bebd60cb5d07e4f4753b2f393e44fe0e2
       - name: Test bounded web MCP and OV packaging
         run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/run-web-mcp-ci.py
       - name: Test isolated OpenViking upgrade migration
