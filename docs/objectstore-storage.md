@@ -13,7 +13,9 @@ fresh-client round trip remain unqualified.
   `inventory/group_vars/swarm/objectstore.yml`, with `enabled: false` and every
   measured live fact null. Data explicitly selects `operational_budget` at
   2 TB decimal total across artifacts and results, with risk-acceptance
-  evidence pending null. Metadata hard-cap facts remain unknown. No
+  evidence pending null. Metadata explicitly selects the same mode with a
+  proposed 16 GiB budget and null risk evidence on the existing shared
+  service-state disk. All measured facts remain unknown. No
   `swarm_stacks_*` entry names the objectstore source, so
   the stack wrapper never selects it.
 - Guard: `roles/swarm/tasks/stack.yml` includes
@@ -119,8 +121,8 @@ Metadata refuses `identity_mapping`, including null. Its parent, config
 directory and ancestors still trust only root or the selected process uid;
 `meta` still belongs to the process uid alone. A data mapping grants no
 metadata custody. Deployment environment binding still uses the process
-uid/gid, never the mapped owner IDs. Physical metadata caps and all live
-qualification gates remain mandatory.
+uid/gid, never the mapped owner IDs. The selected metadata acceptance mode
+and all live qualification gates remain mandatory.
 
 This declaration only checks observed ownership. It does not change NFS
 server mapping, exports, ownership, accounts, group membership or ACLs.
@@ -133,64 +135,90 @@ all live facts null, and the source disabled.
 The approved blob data budget is **2 TB decimal (2,000,000,000,000 bytes)
 combined across artifacts and results**. This is one aggregate operational
 budget, not 2 TB per bucket. It supersedes the historical 1 TiB / 400 GiB
-proposal. Local metadata still requires its own physical byte and inode
-bounds; its allocation remains unselected.
+proposal.
 
-Data has two acceptance modes:
+Metadata is intended to use ordinary private directories under
+`/mnt/docker-data/swarm/objectstore` on homelab's existing local ext4
+service-state disk, shared with Docker and other services. The proposed
+metadata operating budget is **16 GiB (17,179,869,184 bytes)**. It is not an
+approved hard cap, physical allocation or reservation. The proposed new
+16 GiB virtual disk packet was withdrawn, never approved or executed.
+This source does not allocate, format, mount or provision storage. Actual
+host, uid/gid, paths and mount identities remain null in the canonical
+configuration. Directory preparation, backup and retention preparation,
+and activation remain separate work; this source adopts no production
+backup or service.
 
-- `data.acceptance_mode: physical_cap` requires the original physical-cap
+Each store uses the same two acceptance modes:
+
+- `acceptance_mode: physical_cap` requires the original physical-cap
   evidence described below. Omitting `acceptance_mode` retains this mode for
   existing configurations. Missing or invalid cap evidence never selects a
   budget implicitly.
-- `data.acceptance_mode: operational_budget` explicitly accepts unquotaed
-  data. It requires `data.operational_budget` with exactly `bytes`, a positive
-  integer aggregate budget across artifacts and results, and
-  `risk_acceptance`, a nonblank string referencing the operator's acceptance
-  of the unbounded physical-data risk. Booleans, structured acknowledgments
-  and unknown budget keys refuse. `data.physical_cap` must be absent or null;
+- `acceptance_mode: operational_budget` explicitly accepts an unquotaed
+  store. Its `operational_budget` object requires exactly `bytes`, a positive
+  integer, and `risk_acceptance`, a nonblank string referencing the
+  operator's acceptance of that store's unbounded physical-capacity risk.
+  Data bytes are aggregate across artifacts and results. Metadata bytes
+  cover its local store. Booleans, structured acknowledgments, inode claims
+  and unknown budget keys refuse. `physical_cap` must be absent or null;
   even an empty cap object refuses because it mixes incompatible claims.
-  The canonical selection records the approved value but leaves the
-  acceptance reference null. It remains disabled and cannot pass enabled
-  validation with unknown facts.
+  Canonical data records the approved budget, while canonical metadata
+  records the proposed budget. Both acceptance references remain null.
+  The source stays disabled and cannot pass enabled validation with
+  unknown facts.
 
-An operational budget does **not** enforce physical data bytes or inodes,
-reserve NAS space, or constrain multipart uploads. It adds no admission
-controller, quota, cleanup process or runtime monitor. Multipart data,
-overhead, unrelated consumers and ordinary writes can exhaust the shared NAS.
-A successful budget preflight reports `data_acceptance.mode` and
-`aggregate_budget_bytes`, plus these limitations; it never reports physical
-enforcement.
+An operational budget does **not** enforce physical bytes or inodes,
+reserve space, or constrain multipart uploads. It adds no admission
+controller, automatic capacity controller, quota, headroom reserve, cleanup
+process or runtime monitor. Multipart data, overhead, unrelated consumers
+and ordinary writes can exhaust the shared NAS. Metadata and other services
+can exhaust the shared Docker filesystem. A successful budget preflight
+reports `data_acceptance` and `metadata_acceptance` separately, each with
+`mode` and, in budget mode, `aggregate_budget_bytes`. The existing data
+warnings remain, and the metadata warning explicitly states that it has no
+physical byte or inode enforcement or reservation. This is a point-in-time
+check, not continuous admission or monitoring, and it proves no backup
+safety. Headroom, cleanup outage and fullness behaviour still need the
+existing live qualifications; this change defines no new threshold or proof.
 
 `physical_cap` mode refuses any `operational_budget` field. Unknown modes,
-null modes and contradictory cap claims refuse before host probing.
-Metadata always requires a physical cap and refuses data acceptance fields.
-To change modes, explicitly select the new mode, remove the incompatible
-declaration, supply its required evidence and requalify. The existing digest
-covers the mode, aggregate budget and risk-acceptance reference as well as all
-other storage settings. Adding an explicit mode to an old config changes its
-digest; leaving an old config unchanged preserves both its digest and
-hard-cap validation semantics. No migration or host change happens here.
+null modes and contradictory cap claims refuse before host probing in an
+enabled configuration. To change modes, explicitly select the new mode,
+remove the incompatible declaration, supply its required evidence and
+requalify. The existing digest covers each store's mode, budget and
+risk-acceptance reference as well as all other storage settings. Adding an
+explicit mode to an old config changes its digest; leaving an old config
+unchanged preserves both its digest and hard-cap validation semantics.
+No migration or host change happens here.
 
-A physical cap with positive bytes and inodes, an evidence reference and a
-mechanism that bounds physical allocation is required for metadata in every
-mode, and for data in `physical_cap` mode:
+Budget acceptance changes only the capacity declaration. Metadata still
+requires local storage, trusted ancestry and config custody, private
+process-owned `meta`, canonical paths, symlink and device checks, exact
+mount identity and disjoint data storage. It still refuses
+`identity_mapping`, including null. Process identity stays bound to the
+deployment environment. A shared local mount with nested metadata is
+permitted only when its selected acceptance mode and evidence allow it.
+
+In `physical_cap` mode, either store requires positive bytes and inodes, an
+evidence reference and a mechanism that bounds physical allocation:
 
 - `dedicated_volume` or `dedicated_filesystem`, scoped to the mount target.
   The store must be an immediate child of the mount target. The preflight
   lists the mount root and refuses if it holds anything except the store
   directory and `lost+found`. This prevents a nested metadata path such as
   `/disk/swarm/objectstore` from claiming all of `/disk` while another stack
-  uses `/disk/swarm/other-stack`. Nested metadata needs a directory-scoped
-  hard quota. Claiming a whole shared mount refuses.
+  uses `/disk/swarm/other-stack`. Nested metadata in physical-cap mode
+  needs a directory-scoped hard quota. Claiming a whole shared mount refuses.
 - `nas_directory_hard_quota` or `filesystem_project_hard_quota`, scoped to
   exactly the store path.
 
 Free space, df figures, logical or Garage bucket quotas and cleanup scans are
 not physical caps and are refused. The cap's bytes, inodes and enforcement are
-evidence the preflight requires but cannot measure. A read-only survey found no
-existing physical byte or inode enforcement for any candidate location, so no
-cap is qualified yet. Choosing operational data acceptance does not qualify
-metadata, identity, custody, mount behaviour, durability, retention, restore
+evidence the preflight requires but cannot measure. A read-only survey found
+no existing physical byte or inode enforcement for any candidate location,
+so no cap is qualified yet. Operational acceptance for either store does not
+qualify identity, custody, mount behaviour, durability, retention, restore
 or activation. All existing live gates and deployment environment binding
 still apply.
 
@@ -249,8 +277,8 @@ before activation. Passing the synthetic layout is not that evidence.
 ## Activation (not part of this change)
 
 Each step needs separate approval: create the dedicated directories and the
-RPC secret, establish and evidence the metadata physical cap, qualify the
-selected data acceptance mode and its evidence, run the live
+RPC secret, qualify both stores' selected acceptance modes and their
+required evidence, run the live
 full-volume, mount-loss, consistent-restore, fresh-client and last-copy
 qualifications, fill `objectstore_storage`, record the digest from `--digest`,
 rename the examples, and add a `swarm_stacks_*` entry with `pin` equal to the
