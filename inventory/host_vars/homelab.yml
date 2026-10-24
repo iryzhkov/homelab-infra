@@ -190,9 +190,12 @@ host_stacks:
       JOCASTA_OIDC_AUDIENCE: jocasta-rest-persistent-tooling
       # Public operator trust, distinct from the unchanged limited verifier.
       # Root still owns Auth readiness and authorized convergence/native checks.
-      JOCASTA_OPERATOR_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
-      JOCASTA_OPERATOR_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/
-      JOCASTA_OPERATOR_OIDC_CLIENT_ID: jocasta-laptop-interactive
+      # Capability only: default false preserves the current exact verifier.
+      # Root opts in after separate enrollment; laptop native acceptance then
+      # gates every other host. This remains the single operator verifier slot.
+      JOCASTA_OPERATOR_OIDC_ISSUER: "{{ 'https://auth.ryzhkov.dev/application/o/jocasta-managed-interactive/' if jocasta_managed_interactive_verifier_enabled | default(false) | bool else 'https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/' }}"
+      JOCASTA_OPERATOR_OIDC_JWKS_URL: "{{ 'https://auth.ryzhkov.dev/application/o/jocasta-managed-interactive/jwks/' if jocasta_managed_interactive_verifier_enabled | default(false) | bool else 'https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/' }}"
+      JOCASTA_OPERATOR_OIDC_CLIENT_ID: "{{ 'jocasta-managed-interactive' if jocasta_managed_interactive_verifier_enabled | default(false) | bool else 'jocasta-laptop-interactive' }}"
     routes:
       - host: jocasta.ryzhkov.dev
         url: "http://{{ mesh_host }}:1935"

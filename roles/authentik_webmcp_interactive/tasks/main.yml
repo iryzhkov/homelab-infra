@@ -1,0 +1,14 @@
+---
+- name: Enroll through the closed receipt-bound controller module
+  webmcp_managed_enrollment:
+    enabled: "{{ webmcp_managed_enabled }}"
+    hosts: "{{ webmcp_managed_hosts }}"
+    owner: "{{ webmcp_managed_owner }}"
+    receipt_dir: "{{ webmcp_managed_receipt_dir }}"
+    laptop_qualified: "{{ webmcp_managed_laptop_qualified }}"
+    state: "{{ webmcp_managed_state }}"
+    api_token: "{{ authentik_api.authentik_api_token | default('') }}"
+  # The module writes protected controller delivery files directly. It never
+  # returns keys, API responses or credential-bearing errors to Ansible.
+  no_log: true
+  diff: false

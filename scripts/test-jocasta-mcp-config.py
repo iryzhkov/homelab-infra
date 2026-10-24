@@ -195,6 +195,24 @@ class OperatorFilterTest(unittest.TestCase):
                 jocasta.jocasta_mcp_env(operator_enabled(**changes))
 
 
+class ManagedOperatorTest(unittest.TestCase):
+    def test_exact_trio_default_and_opt_in(self):
+        from jinja2 import Environment
+        renderer = Environment()
+        renderer.filters["bool"] = bool
+        values = yaml.safe_load((REPO / "inventory/host_vars/homelab.yml").read_text())
+        stack = next(s for s in values["host_stacks"] if s["name"] == "jocasta")
+        managed = dict(zip(jocasta.OPERATOR_KEYS, (jocasta.MANAGED_OPERATOR_ISSUER, jocasta.MANAGED_OPERATOR_ISSUER + "jwks/", "jocasta-managed-interactive")))
+        for active, expected in ((False, OPERATOR), (True, managed)):
+            rendered = {key: renderer.from_string(stack["env_extra"][key]).render(jocasta_managed_interactive_verifier_enabled=active) for key in OPERATOR}
+            self.assertEqual(rendered, expected)
+            self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled(**rendered)), MCP | expected)
+        for key in OPERATOR:
+            mixed = managed | {key: OPERATOR[key]}
+            with self.assertRaises(REFUSED):
+                jocasta.jocasta_mcp_env(operator_enabled(**mixed))
+
+
 class StackTest(unittest.TestCase):
     def test_compose_passes_only_the_public_optional_variables(self):
         compose = yaml.safe_load((REPO / "stacks/jocasta/docker-compose.yml").read_text())
@@ -323,6 +341,11 @@ class PersistentToolingTest(unittest.TestCase):
             "monitor_url": "https://jocasta.ryzhkov.dev/healthz", "health_check": {"path": "/healthz"}}])
         self.assertEqual(stack["env_extra"]["JOCASTA_IMAGE"], "{{ jocasta_image }}")
         env_extra = dict(stack["env_extra"], JOCASTA_IMAGE=values["jocasta_image"])
+        from jinja2 import Environment
+        renderer = Environment()
+        renderer.filters["bool"] = bool
+        for key in OPERATOR:
+            env_extra[key] = renderer.from_string(env_extra[key]).render()
         expected = dict(MCP, JOCASTA_OIDC_AUDIENCE="jocasta-rest-persistent-tooling") | OPERATOR
         self.assertEqual(jocasta.jocasta_mcp_env(env_extra), expected)
         result, dotenv = self.run_prepare(env_extra)

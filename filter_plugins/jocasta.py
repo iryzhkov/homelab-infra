@@ -38,6 +38,11 @@ OPERATOR_IMAGE_REPOSITORY = "git.ryzhkov.dev/igor/jocasta"
 OPERATOR_ISSUER = "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/"
 OPERATOR_JWKS = OPERATOR_ISSUER + "jwks/"
 OPERATOR_CLIENT_ID = "jocasta-laptop-interactive"
+MANAGED_OPERATOR_ISSUER = "https://auth.ryzhkov.dev/application/o/jocasta-managed-interactive/"
+OPERATOR_TRUST = frozenset({
+    (OPERATOR_ISSUER, OPERATOR_JWKS, OPERATOR_CLIENT_ID),
+    (MANAGED_OPERATOR_ISSUER, MANAGED_OPERATOR_ISSUER + "jwks/", "jocasta-managed-interactive"),
+})
 
 # The canonical MCP resource. Its HTTPS route is the separately managed
 # web_mcp_route service "jocasta" (filter_plugins/web_mcp.py JOCASTA_ROUTE),
@@ -103,15 +108,12 @@ def jocasta_mcp_env(env_extra):
              "MCP needs a jocasta:<commit> image from an accepted MCP-capable source commit")
     settings = {key: env_extra[key] for key in MCP_KEYS}
     if operator_on:
-        _require(env_extra["JOCASTA_OPERATOR_OIDC_ISSUER"] == OPERATOR_ISSUER,
-                 "operator issuer must be exactly " + OPERATOR_ISSUER)
-        _require(env_extra["JOCASTA_OPERATOR_OIDC_JWKS_URL"] == OPERATOR_JWKS,
-                 "operator JWKS must be exactly " + OPERATOR_JWKS)
-        _require(env_extra["JOCASTA_OPERATOR_OIDC_CLIENT_ID"] == OPERATOR_CLIENT_ID,
-                 "operator client ID must be exactly " + OPERATOR_CLIENT_ID)
+        selected = tuple(env_extra[key] for key in OPERATOR_KEYS)
+        _require(all(isinstance(value, str) for value in selected) and selected in OPERATOR_TRUST,
+                 "operator trio must match exactly one accepted issuer/JWKS/client combination")
         _require(issuer_host == "auth.ryzhkov.dev",
                  "operator and limited issuers must use the fixed Authentik origin")
-        _require(env_extra["JOCASTA_OIDC_ISSUER"] != OPERATOR_ISSUER,
+        _require(env_extra["JOCASTA_OIDC_ISSUER"] != env_extra["JOCASTA_OPERATOR_OIDC_ISSUER"],
                  "operator issuer must be distinct from the limited issuer")
         _require(found.group(1) in OPERATOR_IMAGE_REVISIONS
                  and image.split("@", 1)[0] == OPERATOR_IMAGE_REPOSITORY + ":" + found.group(1),

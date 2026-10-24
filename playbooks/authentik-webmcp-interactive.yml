@@ -1,0 +1,35 @@
+---
+# Separate opt-in. Never imported by authentik.yml or site.yml.
+- name: Manage only the explicitly adopted interactive Web MCP enrollment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
+  vars_files:
+    - vars/authentik-webmcp-interactive.yml
+  pre_tasks:
+    - name: Require explicit bounded enrollment input
+      ansible.builtin.assert:
+        that:
+          - webmcp_managed_enabled | bool
+          - webmcp_managed_owner is match('^[0-9a-f-]{36}$')
+          - webmcp_managed_receipt_dir is match('^/')
+          - webmcp_managed_hosts | length > 0
+        quiet: true
+
+    - name: Load the existing encrypted controller API credential
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/authentik-api.sops.yaml"
+        name: authentik_api
+      no_log: true
+      when: not ansible_check_mode
+
+    - name: Refuse any different administrative origin
+      ansible.builtin.assert:
+        that: authentik_api.authentik_api_url | regex_replace('/api/v3/?$', '') == 'https://auth.ryzhkov.dev'
+        quiet: true
+      no_log: true
+      when: not ansible_check_mode
+  roles:
+    - authentik_webmcp_interactive
