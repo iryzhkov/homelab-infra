@@ -17,11 +17,6 @@
       "failback_request_count": 5,
       "credentials": [
         {
-          "id": "pc",
-          "api_base": "http://embedding-adapter:8000/pc/v1",
-          "api_key": "internal-unused"
-        },
-        {
           "id": "cpu",
           "api_base": "http://embedding-adapter:8000/cpu/v1",
           "api_key": "internal-unused"
