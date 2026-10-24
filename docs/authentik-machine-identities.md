@@ -364,17 +364,19 @@ client enrollment or host grant is enabled here.
 
 ## Isolated Jocasta tooling enrollment
 
-`playbooks/authentik-jocasta-tooling.yml` enrolls the laptop's two persistent
-read-only Jocasta tooling accounts, `chaldea-laptop-jocasta-tooling-codex` and
-`chaldea-laptop-jocasta-tooling-claude`, declared in
+`playbooks/authentik-jocasta-tooling.yml` enrolls the laptop's read-only Jocasta
+tooling accounts, `chaldea-laptop-jocasta-tooling-codex`,
+`chaldea-laptop-jocasta-tooling-claude` and
+`chaldea-laptop-jocasta-tooling-opencode`, declared in
 `playbooks/vars/authentik-jocasta-tooling.yml`. It owns its own blueprint,
 "homelab-infra Jocasta tooling laptop", with the application `chaldea-jocasta`
 ("Chaldea Jocasta tooling access"), client ID `chaldea-jocasta-tooling`, group
 `chaldea-jocasta-tooling-identities`, the existing RSA signing key
 `8bbd6516-af33-4e64-a73b-caa39e692c29`, scope `jocasta.read` and 300-second
-tokens. Each account's only project is `tooling`. The Codex account is retained
-inactive: the laptop's session policy admits only the Claude preset until the
-Codex profile qualifies natively.
+tokens. Each account's only project is `tooling`. Codex and Claude have passed
+native acceptance. OpenCode enrollment is source preparation; its protected
+profile must pass separate source, CI and native acceptance gates before
+persistent activation. Enrollment alone does not admit a Chaldea session.
 
 The entrypoint loads the existing controller SOPS API credential the way
 `authentik_config` does, refuses any origin other than
@@ -391,9 +393,9 @@ ansible-playbook playbooks/authentik-jocasta-tooling.yml
 Check mode is the offline plan; add `-e jocasta_tooling_online_check=true` for
 the read-only ownership and collision preflight. A second real run changes
 nothing. The ownership, refusal and recovery rules above apply unchanged: never
-replay an uncertain apply. Both app passwords expire 2026-11-23T00:00:00Z.
+replay an uncertain apply. These app passwords expire 2026-11-23T00:00:00Z.
 Extend `expires` or raise `generation` before then; within a day of expiry the
-role refuses to run. To remove the enrollment, set both identities and
+role refuses to run. To remove the entire enrollment, set all identities and
 `authentik_jocasta_machine_access` to `state: absent` in that file and run the
 same entrypoint; keep the blueprint name. Offline tokens stay valid for up to
 300 seconds after removal.

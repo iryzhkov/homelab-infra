@@ -29,10 +29,8 @@ authentik_jocasta_machine_access:
   scope: jocasta.read
   token_seconds: 300
 
-# The Codex account is retained inactive: enrolled and delivered, but the
-# laptop's session policy admits only the Claude preset until the Codex profile
-# qualifies natively. Keep it present; absent would delete the account and its
-# host file.
+# Codex and Claude are natively qualified. OpenCode is a separate pending
+# enrollment/profile; source presence does not establish native acceptance.
 # One account per laptop profile, matching chaldea-fleet-config's
 # inventory/host_vars/laptop/chaldea-jocasta-tooling.yml presets. Raise
 # generation to rotate; extend expires before it is less than a day away, or
@@ -46,6 +44,12 @@ authentik_machine_identities:
     state: present
   - host: laptop
     profile: jocasta-tooling-claude
+    project: tooling
+    generation: 1
+    expires: "2026-11-23T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: jocasta-tooling-opencode
     project: tooling
     generation: 1
     expires: "2026-11-23T00:00:00Z"
