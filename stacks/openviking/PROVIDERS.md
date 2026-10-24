@@ -1,9 +1,10 @@
 # OV 0.5.2 provider integration
 
-The release defaults to the tested OV 0.5.2 image. Production deployment requires
-completed index migration, fresh tenant credentials and client rollover under the
-root's controlled cutover. Provider-only preparation must explicitly retain the
-old OV image with the override below. This directory contains no server or tenant keys.
+Routine convergence retains the original immutable OV 0.2.6 image. These defaults
+stay on 0.2.6 until root's separately reviewed activation source commit. Selecting
+the tested OV 0.5.2 image requires the exact override below, a fresh production-derived
+migration, fresh tenant credentials and client rollover under root's controlled
+cutover. This directory contains no server or tenant keys.
 
 ## Routes and deployment
 
@@ -22,6 +23,12 @@ old OV image with the override below. This directory contains no server or tenan
   image. Its entrypoint is Python, with no inherited OV entrypoint. Health is local
   and never infers. Resource limits are 384 MiB, 0.5 CPU and 32 PIDs.
 
+Only the explicit `playbooks/ov-inference.yml` provisions the provider network and
+CPU runtimes. Swarm prepare installs adapter/tokenizer assets under
+`/srv/swarm/openviking/inference` and wires stack environment variables. It never
+starts or recreates a CPU runtime. Existing matching generation aliases are
+retained; missing or drifted aliases are recreated only by that explicit playbook.
+
 The CPU runtimes are two scoped Compose projects, on homelab and Normandy, attached
 to `openviking-providers`. They have no published ports. Both use the pinned
 Ollama 0.40.10 image, 2 CPUs, 2 GiB memory, memory-swap=memory, one loaded model,
@@ -34,11 +41,14 @@ Root rollout commands, after its own deployment approval, from this checkout:
 ```sh
 # Starts only CPU provider projects and installs adapter source. No OV config/data writes.
 ansible-playbook playbooks/ov-inference.yml
-# Installs the adapter while explicitly preserving the original OV image.
+# Provider-only default: installs adapter files/service and retains OV 0.2.6.
+# Does not provision or recreate CPU runtimes or create their network.
+ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
+  -e swarm_lint_via_chaldea=true
+# Controlled root cutover only, after migration and credential readiness:
 ansible-playbook playbooks/swarm.yml --tags stacks -e only=openviking \
   -e swarm_lint_via_chaldea=true \
-  -e openviking_image=git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f
-# At controlled cutover, omit openviking_image to select the pinned 0.5.2 release.
+  -e openviking_image=ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f
 # Existing candidate container must join the provider overlay before provider tests.
 ssh homelab sudo docker network connect openviking-providers ov-upgrade-052
 # Explicit PC-only restart window, after game/operator approval:

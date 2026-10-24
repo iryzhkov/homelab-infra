@@ -128,12 +128,40 @@ class MigrationTests(unittest.TestCase):
                 raise m.MigrationError("interrupted")
             return [0.0, 1.0] + [0.0] * 1022, 20
         tags = {"models": [{"name": m.MODEL, "digest": m.MODEL_DIGEST}]}
-        with mock.patch.object(m, "request_json", return_value=tags), mock.patch.object(m, "embed", fake_embed):
+        sdk_paths = []
+        def mutating_sdk_open(*, path):
+            sdk_path = Path(path)
+            sdk_paths.append(sdk_path)
+            # Simulate SDK recovery writing during an otherwise read-only fetch.
+            (sdk_path.parent / "sdk-opened").write_text("disposable SDK side effect")
+            return get_or_create_local_collection(path=path)
+        with mock.patch.object(m, "request_json", return_value=tags), mock.patch.object(
+                m, "embed", fake_embed), mock.patch(
+                "openviking.storage.vectordb.collection.local_collection.get_or_create_local_collection",
+                side_effect=mutating_sdk_open):
             with self.assertRaisesRegex(m.MigrationError, "interrupted"):
                 m.migrate(args)
             self.assertFalse(args.publish.exists())
+            snapshot = args.work / "old-snapshot"
+            self.assertEqual(m.tree_hash(snapshot), before)
+            self.assertEqual(m.tree_hash(source), before)
+            self.assertEqual(sdk_paths, [args.work / "sdk-reader/context"])
+            self.assertTrue((args.work / "sdk-reader/sdk-opened").exists())
+            # A ready marker must never hide a missing or changed cached file.
+            cached_file = next(p for p in snapshot.rglob("*") if p.is_file())
+            saved_snapshot_bytes = cached_file.read_bytes()
+            for change in ("modify", "remove"):
+                if change == "modify":
+                    cached_file.write_bytes(saved_snapshot_bytes + b"corrupt cached snapshot")
+                else:
+                    cached_file.unlink()
+                with self.assertRaisesRegex(m.MigrationError, "cached snapshot differs"):
+                    m.migrate(args)
+                cached_file.write_bytes(saved_snapshot_bytes)
+            self.assertEqual(len(sdk_paths), 1, "tampered snapshots must fail before SDK access")
             with self.assertRaisesRegex(m.MigrationError, "uncertain"):
                 m.migrate(args)
+            self.assertEqual(m.tree_hash(snapshot), before)
         args.retry_uncertain = True
         with mock.patch.object(m, "request_json", return_value=tags), mock.patch.object(
                 m, "embed", return_value=([0.0, 1.0] + [0.0] * 1022, 20)) as embed:
@@ -144,6 +172,8 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(report["after"]["context_types"], {"memory": 2, "skill": 1})
         self.assertEqual(report["contexts"], {"4096": 2, "8192": 1})
         self.assertEqual(m.tree_hash(source), before)
+        self.assertEqual(m.tree_hash(args.work / "old-snapshot"), before)
+        self.assertFalse((args.publish / "sdk-opened").exists())
         self.assertEqual(m.physical_ids(args.publish / "context"), ["long", "original", "skill"])
         self.assertTrue(report["raw_metadata_equal"])
         self.assertEqual(m.raw_metadata(m.physical_rows(args.publish / "context")), expected_raw)

@@ -252,10 +252,17 @@ performs none of those effects.
    Do not assume 0.2.6 supports the new tenant key or production enrollment.
 3. Explicitly issue/export the fresh production user key through the supported
    0.5.2 admin API. Keep the backend ROOT and operator admin credentials private.
-4. Dry-run then apply only the approved existing keyring/keyfile sources. Use
+4. Before client rollout, use the supported admin user inventory,
+   GET /api/v1/admin/accounts/default/users, under protected operator custody.
+   Confirm the approved production identity belongs to account default and has
+   role=user. Retain a nonsecret record of that identity and role. Stop if absent,
+   ambiguous or privileged. The helper copies opaque key bytes and cannot enforce
+   role=user; issuance and this inventory check enforce it. Never inspect private
+   key databases or infer the role from a successful data request.
+5. Dry-run then apply only the approved existing keyring/keyfile sources. Use
    the existing dsh and ov-http owners for source updates and gated recreations.
    Root controls service effects through the existing service owners.
-5. Verify real read/search requests and a separately authorized synthetic
+6. Verify real read/search requests and a separately authorized synthetic
    write/read/cleanup through the actual clients, with no real note mutation.
    Include existing open MCP sessions without restarting them, direct REST
    and public read-MCP paths. Semantic ingestion and vector reindex acceptance

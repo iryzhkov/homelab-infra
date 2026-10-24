@@ -117,9 +117,16 @@ provider. Rankings differ, including archived and unrelated results. This is
 route/data compatibility evidence, not local-model retrieval acceptance.
 Production's existing wrapper MCP failure remains a separate issue.
 
-## Vector-only reindex handoff
+## Historical resource-only reindex handoff, superseded
 
-The helper's `reindex-plan` action prints this request and never submits it:
+This section records the earlier native resource-only experiment. It is superseded
+by [the raw-preserving physical migration procedure](ov-vector-migration.md).
+Never use this request as a full-store migration procedure. It omits non-resource
+namespaces, and native reindex can change legacy classification and metadata.
+Production requires a fresh production-derived offline migration using that guide;
+the published 921-row staging index is evidence only.
+
+The helper's `reindex-plan` action prints this historical request and never submits it:
 
 ```http
 POST /api/v1/content/reindex
@@ -142,14 +149,14 @@ Source qualification:
 https://github.com/volcengine/OpenViking/blob/v0.5.2/openviking/service/reindex_executor.py
 and https://github.com/volcengine/OpenViking/blob/v0.5.2/docs/en/api/02-resources.md
 
-Root must supply the prepared internal OVMS endpoint and validated query
-instruction/config seam before executing this request on the candidate. Equal
+The earlier candidate plan required a prepared internal OVMS endpoint and
+validated query instruction/config seam. That plan is superseded. Equal
 1024-dimensional outputs do not make old OpenAI vectors comparable to Qwen vectors.
 Do not expose mixed-model retrieval as accepted. Preserve the original index;
-do not clear production or regenerate summaries. Track the returned task_id through
-GET /api/v1/tasks/{task_id}, then verify checksums and repeat the four baseline
-queries using the new model before approving production cutover. If the request
-times out after submission, reconcile the existing task instead of blindly resubmitting.
+do not clear production or regenerate summaries. The historical request returned
+a task_id tracked through GET /api/v1/tasks/{task_id}; submission alone was never
+acceptance. Use the superseding migration guide's metadata and physical-coverage
+checks for the controlled cutover.
 
 The selected embedding providers use the identical Qwen3-Embedding 0.6B Q8_0
 GGUF on the gaming PC GPU and Normandy CPU. The GGUF SHA-256 is

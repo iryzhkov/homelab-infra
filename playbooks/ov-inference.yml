@@ -7,6 +7,9 @@
     swarm_stack_src: "{{ playbook_dir }}/../stacks/openviking"
     swarm_stack_env: {}
   tasks:
-    - name: Prepare inference
+    - name: Provision CPU runtimes and the provider network explicitly
+      ansible.builtin.include_tasks:
+        file: "{{ swarm_stack_src }}/runtimes-prepare.yml"
+    - name: Prepare stack-local adapter files
       ansible.builtin.include_tasks:
         file: "{{ swarm_stack_src }}/embeddings-prepare.yml"

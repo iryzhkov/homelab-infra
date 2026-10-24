@@ -460,8 +460,37 @@ class SourceContracts(unittest.TestCase):
             self.assertEqual(credential["api_base"],
                              "http://embedding-adapter:8000/" + credential["id"] + "/v1")
         self.assertEqual(stack["services"]["openviking"]["image"],
-                         "${OPENVIKING_IMAGE:-ghcr.io/volcengine/openviking@sha256:"
-                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f}")
+                         "${OPENVIKING_IMAGE:-git.ryzhkov.dev/igor/openviking@sha256:"
+                         "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f}")
+        self.assertEqual(stack["services"]["openviking"]["environment"], {
+            "OPENVIKING_CONFIG_FILE": "/app/ov.conf",
+            "OPENVIKING_WITH_BOT": "0", "TMPDIR": "/app/data/temp"})
+
+    def test_routine_prepare_is_stack_local_and_explicit_playbook_owns_runtimes(self):
+        swarm = yaml.load((STACK / "swarm-prepare.yml").read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(swarm[0]["ansible.builtin.include_tasks"]["file"],
+                         "{{ swarm_stack_src }}/embeddings-prepare.yml")
+        prepare = yaml.safe_load((STACK / "embeddings-prepare.yml").read_text())
+        allowed = {"ansible.builtin.file", "ansible.builtin.copy", "ansible.builtin.get_url",
+                   "ansible.builtin.set_fact"}
+        for task in prepare:
+            modules = {key for key in task if key.startswith(("ansible.", "community."))}
+            self.assertEqual(len(modules), 1)
+            module = modules.pop()
+            self.assertIn(module, allowed, task["name"])
+            if module != "ansible.builtin.set_fact":
+                arguments = task[module]
+                destination = arguments.get("dest", arguments.get("path"))
+                self.assertTrue(destination.startswith("{{ swarm_state_root }}/openviking/inference"),
+                                task["name"])
+        play = yaml.safe_load((ROOT / "playbooks/ov-inference.yml").read_text())[0]
+        includes = [task["ansible.builtin.include_tasks"]["file"] for task in play["tasks"]]
+        self.assertEqual(includes, ["{{ swarm_stack_src }}/runtimes-prepare.yml",
+                                    "{{ swarm_stack_src }}/embeddings-prepare.yml"])
+        runtime = yaml.safe_load((STACK / "runtimes-prepare.yml").read_text())
+        self.assertTrue(any("community.docker.docker_network" in task for task in runtime))
+        self.assertTrue(any(task.get("ansible.builtin.include_tasks", {}).get("file") ==
+                            "{{ swarm_stack_src }}/ollama-prepare.yml" for task in runtime))
 
     def test_pc_preflight_preserves_game_and_generation(self):
         local = {"name": "local:latest", "size_vram": 6_000_000_000, "digest": "stable"}
@@ -564,6 +593,29 @@ class Provisioning(unittest.TestCase):
         self.assertNotIn("Read the existing system service custody", result.stdout)
 
 
+    def test_image_default_and_controlled_override_in_actual_ansible(self):
+        tasks = yaml.safe_load((STACK / "embeddings-prepare.yml").read_text())
+        wiring = next(task for task in tasks if task["name"] ==
+                      "Add adapter revision and path to the stack interpolation environment")
+        old_image = ("git.ryzhkov.dev/igor/openviking@sha256:"
+                     "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f")
+        candidate_image = ("ghcr.io/volcengine/openviking@sha256:"
+                           "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
+        self.variables.update(swarm_stack_src=str(STACK), swarm_state_root=str(self.work))
+        for image in (old_image, candidate_image):
+            if image == candidate_image:
+                self.variables["openviking_image"] = image
+            play = [{"hosts": "localhost", "gather_facts": False,
+                     "vars": {"swarm_stack_env": {}}, "tasks": [wiring,
+                {"ansible.builtin.assert": {"that": [
+                    "swarm_stack_env.OPENVIKING_IMAGE == expected_image",
+                    "swarm_stack_env.OPENVIKING_ADAPTER_PATH == swarm_state_root ~ '/openviking/inference/inference-adapter.py'",
+                    "swarm_stack_env.OPENVIKING_TOKENIZER_PATH == swarm_state_root ~ '/openviking/inference/cpu-tokenizer'"
+                ]}}]}]
+            self.variables["expected_image"] = image
+            (self.work / "play.yml").write_text(yaml.safe_dump(play))
+            self.assert_ok(self.run_play())
+
     def test_cpu_alias_verification_rejects_template_parameter_and_system_drift(self):
         tasks = yaml.safe_load((STACK / "ollama-prepare.yml").read_text())
         assertion = next(task for task in tasks if task["name"] ==
@@ -590,6 +642,57 @@ class Provisioning(unittest.TestCase):
                         good + 'MESSAGE user "hidden history"\n'):
             model_output.write_text(changed)
             self.assertNotEqual(self.run_play().returncode, 0)
+
+    def test_cpu_alias_creation_is_idempotent_and_repairs_drift(self):
+        tasks = yaml.safe_load((STACK / "ollama-prepare.yml").read_text())
+        names = {
+            "Inspect the existing CPU generation alias",
+            "Check whether the existing generation alias matches the pinned recipe",
+            "Create the generation alias using the pinned base",
+            "Inspect the actual CPU generation alias",
+            "Refuse an alias that differs from the counted CPU model recipe",
+        }
+        selected = [task for task in tasks if task["name"] in names]
+        self.assertEqual(len(selected), 5)
+        (self.work / "play.yml").write_text(yaml.safe_dump([
+            {"hosts": "localhost", "gather_facts": False, "tasks": selected}]))
+        self.variables.update(swarm_stack_src=str(STACK),
+                              ov_provider={"key": "generation", "value": {"host": "localhost"}})
+        template = (STACK / "recipes/generation-template.txt").read_text()
+        good = ('FROM /models/blobs/sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603\n'
+                + 'TEMPLATE "' + template + '"\n'
+                + "PARAMETER num_ctx 4096\nPARAMETER num_predict 512\n"
+                + "PARAMETER num_thread 2\nPARAMETER temperature 0\n")
+        (self.work / "good-model").write_text(good)
+        docker = self.work / "docker"
+        docker.write_text("""#!/usr/bin/env python3
+import pathlib, sys
+root = pathlib.Path(__file__).parent
+model = root / "current-model"
+if sys.argv[4] == "show":
+    if not model.exists():
+        sys.exit(1)
+    sys.stdout.write(model.read_text())
+elif sys.argv[4] == "create":
+    model.write_bytes((root / "good-model").read_bytes())
+    with (root / "creates").open("a") as stream:
+        stream.write("created\\n")
+else:
+    sys.exit(99)
+""")
+        docker.chmod(0o755)
+        with patch.dict(os.environ, PATH=str(self.work) + os.pathsep + os.environ["PATH"]):
+            self.assert_ok(self.run_play())
+            self.assertEqual((self.work / "creates").read_text().splitlines(), ["created"])
+            second = self.run_play()
+            self.assert_ok(second)
+            self.assertRegex(second.stdout, r"changed=0\s")
+            for drift in (good.replace("num_ctx 4096", "num_ctx 8192"),
+                          good + "PARAMETER seed 1\n", good + 'SYSTEM "hidden"\n'):
+                (self.work / "current-model").write_text(drift)
+                self.assert_ok(self.run_play())
+                self.assertEqual((self.work / "current-model").read_text(), good)
+        self.assertEqual(len((self.work / "creates").read_text().splitlines()), 4)
 
     def test_rejects_tampered_manifest(self):
         self.manifest.write_text('{"fixture":false}')

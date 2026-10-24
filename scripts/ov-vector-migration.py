@@ -245,8 +245,21 @@ def migrate_locked(args):
         if tree_hash(snapshot) != original_hash:
             raise MigrationError("source changed during snapshot")
         atomic_json(args.work / "snapshot-ready.json", {"sha256": original_hash})
-    ids = physical_ids(snapshot / "context")
-    old = get_or_create_local_collection(path=str(snapshot / "context"))
+    # A ready marker is not evidence that cached bytes remain unchanged.
+    if (json.loads((args.work / "snapshot-ready.json").read_text()) != {"sha256": original_hash}
+            or tree_hash(snapshot) != original_hash):
+        raise MigrationError("cached snapshot differs from retained source")
+    # Even opening the pinned SDK can recover/write collection state. Keep all
+    # SDK reads on a disposable clone, never on the hash-bound snapshot.
+    reader = args.work / "sdk-reader"
+    if reader.exists():
+        shutil.rmtree(reader)
+    shutil.copytree(snapshot, reader)
+    if tree_hash(reader) != original_hash:
+        raise MigrationError("SDK reader clone differs from retained source")
+    raw_before = physical_rows(reader / "context")
+    ids = sorted(raw_before)
+    old = get_or_create_local_collection(path=str(reader / "context"))
     try:
         records = fetch(old, ids)
     finally:
@@ -308,7 +321,6 @@ def migrate_locked(args):
     # store API retains the original CandidateData.fields JSON byte-for-byte,
     # and emits SDK delta records that collection recovery replays into indexes.
     from openviking.storage.vectordb.store.store_manager import create_store_manager
-    raw_before = physical_rows(snapshot / "context")
     expected_raw = {i: row for i, row in raw_before.items() if i in texts}
     manager = create_store_manager("local", str(candidate / "context" / "store"))
     try:
@@ -354,6 +366,8 @@ def migrate_locked(args):
     verify_manifest(args.files, manifest)
     if tree_hash(args.source) != original_hash:
         raise MigrationError("retained source database changed")
+    if tree_hash(snapshot) != original_hash:
+        raise MigrationError("cached snapshot changed during migration")
     report = {"sdk": SDK_VERSION, "model": MODEL, "model_digest": MODEL_DIGEST,
               "source_sha256": original_hash, "before": inventory(records),
               "after": inventory(after), "original_records_preserved": len(originals),

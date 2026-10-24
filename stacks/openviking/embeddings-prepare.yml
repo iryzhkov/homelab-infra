@@ -1,29 +1,9 @@
 ---
-# CPU runtimes need memory.swap.max=0. Swarm cannot express memory-swap;
-# these two small Compose projects join an attachable overlay without ports.
-- name: Load checksummed inference recipes
-  ansible.builtin.set_fact:
-    ov_inference_recipes: "{{ lookup('file', swarm_stack_src ~ '/recipes/models.json') | from_json }}"
-
-- name: Create the private provider overlay on the Swarm manager
-  community.docker.docker_network:
-    name: "{{ openviking_inference_network }}"
-    driver: overlay
-    attachable: true
-    scope: swarm
-  delegate_to: homelab
-  become: true
-
-- name: Provision each CPU runtime
-  ansible.builtin.include_tasks:
-    file: "{{ swarm_stack_src }}/ollama-prepare.yml"
-  loop: "{{ openviking_inference | dict2items }}"
-  loop_control:
-    loop_var: ov_provider
-
+# Stack-local adapter files and interpolation only. Provision runtimes/network
+# explicitly through playbooks/ov-inference.yml before deploying the stack.
 - name: Create the adapter source directory on homelab
   ansible.builtin.file:
-    path: "{{ swarm_state_root }}/openviking-inference"
+    path: "{{ swarm_state_root }}/openviking/inference"
     state: directory
     owner: root
     group: root
@@ -34,7 +14,7 @@
 - name: Install the read-only inference adapter
   ansible.builtin.copy:
     src: "{{ swarm_stack_src }}/files/inference-adapter.py"
-    dest: "{{ swarm_state_root }}/openviking-inference/inference-adapter.py"
+    dest: "{{ swarm_state_root }}/openviking/inference/inference-adapter.py"
     owner: root
     group: root
     mode: "0444"
@@ -44,7 +24,7 @@
 
 - name: Create the pinned CPU tokenizer directory
   ansible.builtin.file:
-    path: "{{ swarm_state_root }}/openviking-inference/cpu-tokenizer"
+    path: "{{ swarm_state_root }}/openviking/inference/cpu-tokenizer"
     state: directory
     owner: root
     group: root
@@ -55,7 +35,7 @@
 - name: Install immutable Qwen2 tokenizer and provenance config
   ansible.builtin.get_url:
     url: "https://huggingface.co/Qwen/Qwen2-1.5B-Instruct/resolve/ba1cf1846d7df0a0591d6c00649f57e798519da8/{{ item.name }}"
-    dest: "{{ swarm_state_root }}/openviking-inference/cpu-tokenizer/{{ item.name }}"
+    dest: "{{ swarm_state_root }}/openviking/inference/cpu-tokenizer/{{ item.name }}"
     checksum: "sha256:{{ item.sha256 }}"
     owner: root
     group: root
@@ -71,7 +51,7 @@
 - name: Install the exact Ollama generation template counted by the guard
   ansible.builtin.copy:
     src: "{{ swarm_stack_src }}/recipes/generation-template.txt"
-    dest: "{{ swarm_state_root }}/openviking-inference/cpu-tokenizer/ollama-template.txt"
+    dest: "{{ swarm_state_root }}/openviking/inference/cpu-tokenizer/ollama-template.txt"
     owner: root
     group: root
     mode: "0444"
@@ -82,9 +62,9 @@
   ansible.builtin.set_fact:
     swarm_stack_env: >-
       {{ swarm_stack_env | combine({
-        'OPENVIKING_IMAGE': openviking_image | default('ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f'),
-        'OPENVIKING_TOKENIZER_PATH': swarm_state_root ~ '/openviking-inference/cpu-tokenizer',
-        'OPENVIKING_ADAPTER_PATH': swarm_state_root ~ '/openviking-inference/inference-adapter.py',
+        'OPENVIKING_IMAGE': openviking_image | default('git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f'),
+        'OPENVIKING_TOKENIZER_PATH': swarm_state_root ~ '/openviking/inference/cpu-tokenizer',
+        'OPENVIKING_ADAPTER_PATH': swarm_state_root ~ '/openviking/inference/inference-adapter.py',
         'OPENVIKING_ADAPTER_SHA256': lookup('file', swarm_stack_src ~ '/files/inference-adapter.py', rstrip=false) | hash('sha256')
       }) }}
   no_log: true

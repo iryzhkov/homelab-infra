@@ -78,6 +78,35 @@
     quiet: true
   when: not ansible_check_mode
 
+- name: Inspect the existing CPU generation alias
+  ansible.builtin.command:
+    argv: [docker, exec, openviking-generation, ollama, show, ov-gen-4k, --modelfile]
+  register: ov_existing_generation_model
+  changed_when: false
+  failed_when: false
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Check whether the existing generation alias matches the pinned recipe
+  ansible.builtin.set_fact:
+    ov_generation_alias_matches: >-
+      {{ ov_existing_generation_model.rc == 0
+         and ('TEMPLATE "' ~ lookup('file', swarm_stack_src ~ '/recipes/generation-template.txt', rstrip=false) ~ '"')
+             in ov_existing_generation_model.stdout
+         and ov_existing_generation_model.stdout is search('(?m)^FROM .*sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603$')
+         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER num_ctx 4096$')
+         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER num_predict 512$')
+         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER num_thread 2$')
+         and ov_existing_generation_model.stdout is search('(?m)^PARAMETER temperature 0$')
+         and ov_existing_generation_model.stdout | regex_findall('(?m)^PARAMETER ') | length == 4
+         and ov_existing_generation_model.stdout is not search('(?m)^(SYSTEM|MESSAGE|ADAPTER) ') }}
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+
 - name: Create the generation alias using the pinned base
   ansible.builtin.command:
     argv:
@@ -89,11 +118,12 @@
       - ov-gen-4k
       - -f
       - /recipe/Modelfile
-  # Alias parameters and context are source-managed in the mounted Modelfile.
+  # Recreate only an absent or drifted alias, then verify actual runtime output.
   changed_when: true
   when:
     - ov_provider.key == 'generation'
     - not ansible_check_mode
+    - not ov_generation_alias_matches
   delegate_to: "{{ ov_provider.value.host }}"
   become: true
 

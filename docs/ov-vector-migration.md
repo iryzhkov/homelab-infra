@@ -6,8 +6,13 @@ reindex derives context types from paths and does not preserve every legacy
 classification. Use this offline path when stable IDs, legacy memory and skill
 types, ownership and ACL metadata must survive.
 
-The tool snapshots the retained database before opening the SDK. Physical
-candidate rows are enumerated with the pinned SDK's version-aware
+The tool snapshots the retained database before opening the SDK. It re-hashes the
+cached snapshot against the original source binding on every resume, regardless
+of its ready marker. All SDK reads use a fresh disposable clone, because opening
+the SDK can recover or write collection state. The immutable snapshot supplies
+the candidate copy and remains hash-checked before publication. Raw metadata is
+captured from the disposable clone before opening the collection API.
+Physical candidate rows are enumerated with the pinned SDK's version-aware
 `CandidateData.from_bytes` codec. The collection API fetches every physical ID.
 The codec's schema is the candidate storage schema, not the collection field
 schema. No identity-filtered HTTP scroll defines migration coverage.

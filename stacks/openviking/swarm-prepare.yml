@@ -19,10 +19,9 @@
 # never overwrites what the Swarm service wrote with older Compose data. The
 # Compose directory is left as it was: it is the rollback copy.
 
-# The self-hosted embedding service's model and configuration, on its own
-# node and under its own state directory. Runs on every deploy; it does not
-# touch the OpenViking service or the Compose project.
-- name: Prepare the embedding service
+# Ordinary convergence prepares only this stack's adapter/tokenizer files.
+# CPU runtimes and their network require explicit playbooks/ov-inference.yml.
+- name: Prepare stack-local inference files
   ansible.builtin.include_tasks:
     file: "{{ swarm_stack_src }}/embeddings-prepare.yml"
 
