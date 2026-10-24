@@ -111,7 +111,8 @@ jobs:
     permissions:
       contents: read
     container:
-      options: --memory=2g --cpus=2
+      # The renderer test uses the runner's CLI read-only, with an absent daemon socket.
+      options: --memory=2g --cpus=2 --volume /usr/bin/docker:/usr/local/bin/docker:ro
       image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     steps:
       - uses: actions/checkout@v4
@@ -127,8 +128,11 @@ jobs:
           printf 'PYTHONDONTWRITEBYTECODE=1\n' >>"$GITHUB_ENV"
       - name: Install pinned native provider and deployment schemas
         run: pip install --disable-pip-version-check openviking==0.5.2 ansible-core==2.19.13 tokenizers==0.22.2
-      - name: Exercise native provider failover and recovery
-        run: python3 scripts/test-openviking-inference.py NativeOV -v
+      - name: Exercise native inference and actual Swarm rendering
+        run: |
+          test -x /usr/local/bin/docker
+          docker --version
+          python3 scripts/test-openviking-inference.py NativeOV SourceContracts.test_actual_docker_stack_config_keeps_supplied_adapter_values -v
       - name: Test lossless physical vector migration with the pinned SDK
         run: |
           export HOME="$PWD/.cache/ov-selfhost-20261024/test-home"
