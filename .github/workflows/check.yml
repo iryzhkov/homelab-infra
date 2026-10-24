@@ -37,7 +37,7 @@ jobs:
       - run: python3 scripts/test_media_observability.py
       - run: python3 -m unittest discover -s scripts -p test_seedpool_policy.py
       - name: Install the deployment templating version for guarded role tests
-        run: pip install --disable-pip-version-check ansible-core==2.19.13
+        run: pip install --disable-pip-version-check ansible-core==2.19.13 tokenizers==0.22.2
       - name: Test Emby home ownership with a recording backend
         run: |
           export HOME="$PWD/.cache/holonet-executor/p0-tests/home"
@@ -121,7 +121,7 @@ jobs:
           printf 'OPENVIKING_NATIVE_TEST=1\n' >>"$GITHUB_ENV"
           printf 'PYTHONDONTWRITEBYTECODE=1\n' >>"$GITHUB_ENV"
       - name: Install pinned native provider and deployment schemas
-        run: pip install --disable-pip-version-check openviking==0.5.2 ansible-core==2.19.13
+        run: pip install --disable-pip-version-check openviking==0.5.2 ansible-core==2.19.13 tokenizers==0.22.2
       - name: Exercise native provider failover and recovery
         run: python3 scripts/test-openviking-inference.py NativeOV -v
       - name: Check scoped inference playbooks
