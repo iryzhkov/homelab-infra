@@ -80,7 +80,11 @@ docker_data_root: /mnt/docker-data/docker
 # Built from the exact source commit validated by Jocasta CI, and loaded on
 # homelab under its registry name (the local-only tag jocasta:<commit> was
 # pruned on 2026-10-03; the .env had been set to this name by hand that day).
-jocasta_image: git.ryzhkov.dev/igor/jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63
+# a3e83c5 is the reviewed HTTP/OIDC-capable build (Jocasta PR2), the only image
+# filter_plugins/jocasta.py accepts for MCP. It replaced 37ce657 in the
+# persistent Jocasta tooling maintenance af50ab7396f94090bb590da80785596f, over
+# the same schema-2 database; docs/jocasta.md, "HTTP MCP".
+jocasta_image: git.ryzhkov.dev/igor/jocasta:a3e83c55e73661fc50d92a9ca328236a86f291fd
 
 # The iGPU passed through to this VM (UHD 770, hostpci0 0000:00:02 on
 # proxmox-a), as Compose stacks that may land here need it: the render and
@@ -177,8 +181,16 @@ host_stacks:
     prepare_tasks: prepare.yml
     secrets: homelab-jocasta
     write_env: false
+    # HTTP MCP on (docs/jocasta.md): all four keys or none. The issuer and JWKS
+    # are the chaldea-jocasta provider enrolled by
+    # playbooks/authentik-jocasta-tooling.yml. The REST JWT audience is
+    # separate from the MCP resource audience; static REST tokens are unchanged.
     env_extra:
       JOCASTA_IMAGE: "{{ jocasta_image }}"
+      JOCASTA_MCP_RESOURCE_URL: https://jocasta.mcp.ryzhkov.dev/mcp
+      JOCASTA_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/chaldea-jocasta/
+      JOCASTA_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/chaldea-jocasta/jwks/
+      JOCASTA_OIDC_AUDIENCE: jocasta-rest-persistent-tooling
     routes:
       - host: jocasta.ryzhkov.dev
         url: "http://{{ mesh_host }}:1935"

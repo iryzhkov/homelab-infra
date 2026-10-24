@@ -54,14 +54,24 @@ converge UpKeeper. The server rereads the mounted token directory each request.
 The backup role deployment installs the existing rclone exclude list changes
 so twice-weekly copies do not capture live Jocasta database or token files.
 
-## HTTP MCP (opt-in, off by default)
+## HTTP MCP (opt-in, on for homelab)
 
 Jocasta can serve a read-only MCP resource at /mcp, verified against Authentik
-with short-lived OIDC tokens (Jocasta's docs/http-mcp.md). It is off: the
-jocasta stack's env_extra names only JOCASTA_IMAGE, so prepare.yml renders the
-.env exactly as before and the Compose file passes the four MCP variables as
-empty strings, which Jocasta treats as unset. Static per-host REST tokens are
-unchanged either way, and opaque operator tokens never reach MCP.
+with short-lived OIDC tokens (Jocasta's docs/http-mcp.md). It is opt-in: with
+env_extra naming only JOCASTA_IMAGE, prepare.yml renders the .env exactly as
+before and the Compose file passes the four MCP variables as empty strings,
+which Jocasta treats as unset. Static per-host REST tokens are unchanged either
+way, and opaque operator tokens never reach MCP.
+
+The homelab inventory turns it on for the laptop's persistent read-only
+Jocasta tooling sessions (maintenance af50ab7396f94090bb590da80785596f):
+jocasta_image is the a3e83c5 image, env_extra holds the four keys below with the
+REST audience jocasta-rest-persistent-tooling, the identities come from
+playbooks/authentik-jocasta-tooling.yml and the route from
+playbooks/vars/web-mcp-route-jocasta.yml. The database and server are the same
+ones; only the image and the four variables changed. A later
+`playbooks/swarm.yml --tags registry` pushes the new jocasta_image to Forgejo
+and pre-pulls it on normandy, as for any image change.
 
 The first converge after the Compose file gained those four empty variables
 recreates the container once, because its environment changed. That restart

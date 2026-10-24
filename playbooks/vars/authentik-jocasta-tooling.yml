@@ -1,0 +1,52 @@
+---
+# The laptop's persistent Jocasta tooling machine identities, enrolled only by
+# playbooks/authentik-jocasta-tooling.yml (docs/authentik-machine-identities.md,
+# "Isolated Jocasta tooling enrollment"). Public values only: the role reads
+# each app password on the controller under no_log and writes it to the laptop.
+#
+# This is a separate blueprint from the shared "homelab-infra machine
+# identities" one and from the access blueprint. playbooks/vars/authentik.yml
+# keeps authentik_machine_identities_enabled false, so playbooks/authentik.yml
+# never touches these objects. Never rename the blueprint: its stored content
+# is the ownership record.
+
+authentik_machine_identities_enabled: true
+authentik_machine_identities_blueprint_name: homelab-infra Jocasta tooling laptop
+# The entrypoint refuses API credentials for any other Authentik origin.
+jocasta_tooling_authentik_origin: https://auth.ryzhkov.dev
+
+# Legacy single-service form: the one Jocasta application this blueprint owns.
+authentik_machine_services: {}
+authentik_jocasta_machine_access:
+  state: present
+  slug: chaldea-jocasta
+  name: Chaldea Jocasta tooling access
+  group: chaldea-jocasta-tooling-identities
+  client_id: chaldea-jocasta-tooling
+  resource: https://jocasta.mcp.ryzhkov.dev/mcp
+  # kp_uuid of the existing RSA signing keypair; this role never creates a key.
+  signing_key: 8bbd6516-af33-4e64-a73b-caa39e692c29
+  scope: jocasta.read
+  token_seconds: 300
+
+# The Codex account is retained inactive: enrolled and delivered, but the
+# laptop's session policy admits only the Claude preset until the Codex profile
+# qualifies natively. Keep it present; absent would delete the account and its
+# host file.
+# One account per laptop profile, matching chaldea-fleet-config's
+# inventory/host_vars/laptop/chaldea-jocasta-tooling.yml presets. Raise
+# generation to rotate; extend expires before it is less than a day away, or
+# the role refuses the run and the sessions lose token issuance at expiry.
+authentik_machine_identities:
+  - host: laptop
+    profile: jocasta-tooling-codex
+    project: tooling
+    generation: 1
+    expires: "2026-11-23T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: jocasta-tooling-claude
+    project: tooling
+    generation: 1
+    expires: "2026-11-23T00:00:00Z"
+    state: present
