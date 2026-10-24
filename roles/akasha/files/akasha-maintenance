@@ -118,7 +118,10 @@ def check_snapshot(root):
 
 
 def check_snapshot_once(root):
-    fd = os.open(root / "backup.lock", os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        fd = os.open(root / "backup.lock", os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise RuntimeError("consistent snapshot absent: backup lock missing") from None
     with os.fdopen(fd, "rb") as lock:
         rotating = False
         try:
