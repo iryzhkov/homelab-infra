@@ -165,6 +165,43 @@ class PackagingTest(unittest.TestCase):
             with self.assertRaises((RuntimeError, OSError)):
                 maintenance.health(self.state, "http://127.0.0.1/healthz")
 
+    def test_health_reconciles_rotation_finishing_after_missing_snapshot_stat(self):
+        source = offsite.SOURCE
+        snapshot_bytes = source.read_bytes()
+        source.unlink()
+        real_stat = Path.stat
+        observed = []
+        with (self.state / "backup.lock").open("rb+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            lock.write(json.dumps({"started": time.time(), "snapshot_time": time.time()}).encode())
+            lock.flush()
+            def stat_finishing_rotation(path, *args, **kwargs):
+                if path == source and not observed:
+                    observed.append(True)
+                    source.write_bytes(snapshot_bytes)
+                    lock.seek(0)
+                    lock.truncate()
+                    lock.flush()
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    raise FileNotFoundError("snapshot was missing before publication")
+                return real_stat(path, *args, **kwargs)
+            with mock.patch.object(Path, "stat", stat_finishing_rotation):
+                maintenance.check_snapshot(self.state)
+            self.assertTrue(observed)
+
+    def test_invalid_or_empty_rotation_evidence_fails_closed(self):
+        offsite.SOURCE.unlink()
+        with (self.state / "backup.lock").open("rb+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            for evidence in (b"", b"{", b"[]", b'{"started":true,"snapshot_time":null}'):
+                with self.subTest(evidence=evidence):
+                    lock.seek(0)
+                    lock.truncate()
+                    lock.write(evidence)
+                    lock.flush()
+                    with self.assertRaises((RuntimeError, ValueError, OSError)):
+                        maintenance.check_snapshot(self.state)
+
     def test_rotation_grace_requires_live_lock_fresh_snapshot_and_bounded_duration(self):
         source = offsite.SOURCE
         source.unlink()

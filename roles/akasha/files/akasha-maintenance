@@ -108,6 +108,16 @@ def _snapshot(root):
 
 
 def check_snapshot(root):
+    # Reconcile a rotation that publishes or clears its evidence mid-inspection.
+    for attempt in range(2):
+        try:
+            return check_snapshot_once(root)
+        except (OSError, RuntimeError, ValueError):
+            if attempt:
+                raise
+
+
+def check_snapshot_once(root):
     fd = os.open(root / "backup.lock", os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as lock:
         rotating = False
