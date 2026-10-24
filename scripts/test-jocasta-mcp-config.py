@@ -35,6 +35,13 @@ web_mcp = load("web_mcp_filter", "filter_plugins/web_mcp.py")
 ACCEPTED = "a3e83c55e73661fc50d92a9ca328236a86f291fd"
 OLD_PIN = "git.ryzhkov.dev/igor/jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63"
 IMAGE = "git.ryzhkov.dev/igor/jocasta:" + ACCEPTED
+OPERATOR_SOURCE = "acd4ba57001559ef0e795ccf47f34413c9420c59"
+OPERATOR_IMAGE = "git.ryzhkov.dev/igor/jocasta:" + OPERATOR_SOURCE
+OPERATOR = {
+    "JOCASTA_OPERATOR_OIDC_ISSUER": "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/",
+    "JOCASTA_OPERATOR_OIDC_JWKS_URL": "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/",
+    "JOCASTA_OPERATOR_OIDC_CLIENT_ID": "jocasta-laptop-interactive",
+}
 MCP = {
     "JOCASTA_OIDC_ISSUER": "https://auth.ryzhkov.dev/application/o/chaldea-jocasta/",
     "JOCASTA_OIDC_AUDIENCE": "jocasta-rest-client",
@@ -46,6 +53,10 @@ REFUSED = jocasta.AnsibleFilterError
 
 def enabled(**changes):
     return {"JOCASTA_IMAGE": IMAGE, **MCP, **changes}
+
+
+def operator_enabled(**changes):
+    return enabled(JOCASTA_IMAGE=OPERATOR_IMAGE, **OPERATOR) | changes
 
 
 class FilterTest(unittest.TestCase):
@@ -121,8 +132,68 @@ class FilterTest(unittest.TestCase):
             jocasta.jocasta_mcp_env(enabled())
 
 
+class OperatorFilterTest(unittest.TestCase):
+    def test_separate_source_gate_and_off_defaults(self):
+        self.assertEqual(jocasta.OPERATOR_IMAGE_REVISIONS, frozenset({OPERATOR_SOURCE}))
+        self.assertNotIn(ACCEPTED, jocasta.OPERATOR_IMAGE_REVISIONS)
+        self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled()), MCP | OPERATOR)
+        self.assertEqual(jocasta.jocasta_mcp_env(enabled(JOCASTA_IMAGE=OPERATOR_IMAGE)), MCP)
+        self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled(
+            JOCASTA_IMAGE=OPERATOR_IMAGE + "@sha256:" + "b"*64)), MCP | OPERATOR)
+        empty = dict.fromkeys(OPERATOR, "")
+        self.assertEqual(jocasta.jocasta_mcp_env(enabled(**empty)), MCP)
+        self.assertEqual(jocasta.jocasta_mcp_env({"JOCASTA_IMAGE": OLD_PIN, **empty}), {})
+        with self.assertRaisesRegex(REFUSED, "operator-capable"):
+            jocasta.jocasta_mcp_env(operator_enabled(JOCASTA_IMAGE=IMAGE))
+        with self.assertRaisesRegex(REFUSED, "repository"):
+            jocasta.jocasta_mcp_env(operator_enabled(JOCASTA_IMAGE="other.test/igor/jocasta:" + OPERATOR_SOURCE))
+        accepted = jocasta.OPERATOR_IMAGE_REVISIONS
+        self.addCleanup(setattr, jocasta, "OPERATOR_IMAGE_REVISIONS", accepted)
+        jocasta.OPERATOR_IMAGE_REVISIONS = frozenset()
+        with self.assertRaisesRegex(REFUSED, "accepted"):
+            jocasta.jocasta_mcp_env(operator_enabled())
+
+    def test_all_or_none_requires_limited_mcp_and_rejects_secret_keys(self):
+        for omitted in OPERATOR:
+            partial = operator_enabled()
+            del partial[omitted]
+            with self.subTest(omitted=omitted), self.assertRaisesRegex(REFUSED, "or none"):
+                jocasta.jocasta_mcp_env(partial)
+        for key in OPERATOR:
+            for value in ("", None, 4, [], {}):
+                with self.subTest(key=key, value=value), self.assertRaises(REFUSED):
+                    jocasta.jocasta_mcp_env(operator_enabled(**{key: value}))
+        with self.assertRaisesRegex(REFUSED, "existing limited MCP"):
+            jocasta.jocasta_mcp_env({"JOCASTA_IMAGE": OPERATOR_IMAGE, **OPERATOR})
+        for omitted in MCP:
+            partial = operator_enabled()
+            del partial[omitted]
+            with self.subTest(omitted=omitted), self.assertRaisesRegex(REFUSED, "or none"):
+                jocasta.jocasta_mcp_env(partial)
+        for key in ("JOCASTA_OPERATOR_CLIENT_SECRET", "JOCASTA_OPERATOR_OIDC_ISSUER_URL", "JOCASTA_TOKEN"):
+            with self.subTest(key=key), self.assertRaisesRegex(REFUSED, "unknown"):
+                jocasta.jocasta_mcp_env(operator_enabled(**{key: "synthetic-must-not-be-rendered"}))
+
+    def test_fixed_public_trio_and_distinct_same_origin_issuers(self):
+        for key in OPERATOR:
+            value = OPERATOR[key]
+            for bad in (value + " ", value + "\nJOCASTA_TOKEN=bad", value + "$x", value + "#x",
+                        value.upper(), value.rstrip("/") + "?x=1", "https://other.test/"):
+                with self.subTest(key=key, bad=bad), self.assertRaises(REFUSED):
+                    jocasta.jocasta_mcp_env(operator_enabled(**{key: bad}))
+        for changes in (
+                {"JOCASTA_OPERATOR_OIDC_ISSUER": MCP["JOCASTA_OIDC_ISSUER"]},
+                {"JOCASTA_OPERATOR_OIDC_JWKS_URL": MCP["JOCASTA_OIDC_JWKS_URL"]},
+                {"JOCASTA_OPERATOR_OIDC_CLIENT_ID": "chaldea-jocasta-tooling"},
+                {"JOCASTA_OIDC_ISSUER": OPERATOR["JOCASTA_OPERATOR_OIDC_ISSUER"]},
+                {"JOCASTA_OIDC_ISSUER": "https://other.test/application/o/limited/",
+                 "JOCASTA_OIDC_JWKS_URL": "https://other.test/application/o/limited/jwks/"}):
+            with self.subTest(changes=changes), self.assertRaises(REFUSED):
+                jocasta.jocasta_mcp_env(operator_enabled(**changes))
+
+
 class StackTest(unittest.TestCase):
-    def test_compose_passes_only_the_four_optional_variables(self):
+    def test_compose_passes_only_the_public_optional_variables(self):
         compose = yaml.safe_load((REPO / "stacks/jocasta/docker-compose.yml").read_text())
         environment = compose["services"]["jocasta"]["environment"]
         self.assertEqual(environment, {
@@ -131,10 +202,10 @@ class StackTest(unittest.TestCase):
             "JOCASTA_TOKENS_FILE": "/run/secrets/jocasta-tokens.json",
             "JOCASTA_MAX_STORAGE_BYTES": "10737418240",
             "JOCASTA_MIN_FREE_BYTES": "5368709120",
-            **{key: "${%s:-}" % key for key in jocasta.MCP_KEYS},
+            **{key: "${%s:-}" % key for key in jocasta.MCP_KEYS + jocasta.OPERATOR_KEYS},
         })
 
-    def run_prepare(self, env_extra):
+    def run_prepare(self, env_extra, check=False):
         """Run the actual image, MCP and .env tasks of prepare.yml; return the .env."""
         tasks = yaml.safe_load((REPO / "stacks/jocasta/prepare.yml").read_text())
         names = ("Require an immutable Jocasta image reference",
@@ -157,8 +228,8 @@ class StackTest(unittest.TestCase):
         env = dict(os.environ, ANSIBLE_CONFIG=str(root / "ansible.cfg"),
                    ANSIBLE_LOCAL_TEMP=str(root / "local-tmp"))
         result = subprocess.run(
-            ["ansible-playbook", "-i", "localhost,", "-c", "local", "play.yml"],
-            cwd=root, env=env, capture_output=True, text=True)
+            ["ansible-playbook", "-i", "localhost,", "-c", "local", "play.yml"] + (["--check"] if check else []),
+            cwd=root, env=env, capture_output=True, text=True, timeout=90)
         dotenv = root / "stack/.env"
         return result, dotenv.read_text() if dotenv.exists() else None
 
@@ -174,12 +245,41 @@ class StackTest(unittest.TestCase):
         expected += ["%s=%s" % item for item in sorted(MCP.items())]
         self.assertEqual(dotenv, "\n".join(expected) + "\n")
 
+    def test_operator_renders_exact_public_trio_with_existing_limited_values(self):
+        result, dotenv = self.run_prepare(operator_enabled())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = ["HOST_IP=10.42.0.2", "JOCASTA_IMAGE=" + OPERATOR_IMAGE]
+        expected += ["%s=%s" % item for item in sorted((MCP | OPERATOR).items())]
+        self.assertEqual(dotenv, "\n".join(expected) + "\n")
+
+    def test_operator_check_mode_has_no_env_write(self):
+        result, dotenv = self.run_prepare(operator_enabled(), check=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIsNone(dotenv)
+
+    def test_actual_prepare_source_syntax(self):
+        root = Path(tempfile.mkdtemp(prefix="jocasta-syntax-"))
+        self.assertTrue(root.resolve().is_relative_to(Path(HOME).resolve()))
+        play = [{"hosts": "localhost", "gather_facts": False, "tasks": [{
+            "ansible.builtin.import_tasks": str(REPO / "stacks/jocasta/prepare.yml")}]}]
+        (root / "play.yml").write_text(json.dumps(play))
+        env = dict(os.environ, ANSIBLE_CONFIG=str(REPO / "ansible.cfg"),
+                   ANSIBLE_LOCAL_TEMP=str(root / "al"), ANSIBLE_REMOTE_TEMP=str(root / "ar"))
+        result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local",
+                                 str(root / "play.yml"), "--syntax-check"], cwd=REPO, env=env,
+                                capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_refusals_happen_before_any_write(self):
         partial = enabled()
         del partial["JOCASTA_OIDC_AUDIENCE"]
         cases = ((partial, "or none"),
                  (enabled(JOCASTA_IMAGE=OLD_PIN), "accepted"),
-                 (enabled(JOCASTA_MCP_RESOURCE_URL="https://jocasta.ryzhkov.dev/mcp"), "exactly"))
+                 (enabled(JOCASTA_MCP_RESOURCE_URL="https://jocasta.ryzhkov.dev/mcp"), "exactly"),
+                 (operator_enabled(JOCASTA_IMAGE=IMAGE), "operator-capable"),
+                 (operator_enabled(JOCASTA_OPERATOR_OIDC_CLIENT_ID="wrong"), "exactly"),
+                 ({"JOCASTA_IMAGE": OPERATOR_IMAGE, **OPERATOR}, "existing limited MCP"),
+                 (operator_enabled(JOCASTA_OPERATOR_CLIENT_SECRET="synthetic"), "unknown"))
         for env_extra, message in cases:
             with self.subTest(message=message):
                 result, dotenv = self.run_prepare(env_extra)

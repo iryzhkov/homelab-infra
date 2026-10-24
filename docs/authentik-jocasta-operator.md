@@ -159,16 +159,21 @@ acceptance requirements. Existing signed access JWTs can remain useful for
 300 seconds plus Jocasta's 30-second leeway; removing the optional trust ends
 acceptance sooner.
 
-Jocasta operator trust stays disabled until its builder supplies the exact
-qualified configuration names and root accepts the combined contract. This
-change supplies no enabled trust variables or guessed deployment pins.
+Jocasta operator trust stays disabled in inventory. The matching deployment
+source now validates the exact JOCASTA_OPERATOR_OIDC_ISSUER,
+JOCASTA_OPERATOR_OIDC_JWKS_URL and JOCASTA_OPERATOR_OIDC_CLIENT_ID trio,
+as documented in [jocasta.md](jocasta.md). Its intended exact image source
+remains subject to root's final review/CI, checked image publication and
+Auth readiness gates before convergence.
 
 After source deployment, Igor performs each client's supported native one-time
 MCP OAuth login as a user action. Ansible does not launch a browser or native
-login. Codex 0.163.0, Claude 2.1.276 and OpenCode 2.1.3 need independent actual
-login, full-store read/write/conflict and refresh/revocation qualification under
-official T3. Existing limited identities must still receive only their existing
-project read claims. Synthetic tests are not native or live-issuer evidence.
+login. Codex 0.163.0 and Claude 2.1.276 need independent actual login,
+full-store read/write/conflict and refresh/revocation qualification under
+official T3. OpenCode is outside this slice's acceptance scope; its unused
+strict redirect is retained only for possible future work. Existing limited
+identities must still receive only their existing project read claims.
+Synthetic tests are not native or live-issuer evidence.
 
 ## Pinned source and focused checks
 

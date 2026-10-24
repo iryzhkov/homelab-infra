@@ -56,12 +56,13 @@ so twice-weekly copies do not capture live Jocasta database or token files.
 
 ## HTTP MCP (opt-in, on for homelab)
 
-Jocasta can serve a read-only MCP resource at /mcp, verified against Authentik
-with short-lived OIDC tokens (Jocasta's docs/http-mcp.md). It is opt-in: with
-env_extra naming only JOCASTA_IMAGE, prepare.yml renders the .env exactly as
-before and the Compose file passes the four MCP variables as empty strings,
-which Jocasta treats as unset. Static per-host REST tokens are unchanged either
-way, and opaque operator tokens never reach MCP.
+Jocasta serves the limited read-only MCP resource at /mcp, verified against
+Authentik with short-lived OIDC tokens (Jocasta's docs/http-mcp.md). It is opt-in:
+with env_extra naming only JOCASTA_IMAGE, prepare.yml renders the .env exactly
+as before. Compose passes unset MCP/operator values as empty strings, which
+Jocasta treats as disabled. Static per-host REST tokens are unchanged and never
+authorize MCP. A separately pinned operator-capable source can add interactive
+full-store access through the optional configuration below.
 
 The homelab inventory turns it on for the laptop's persistent read-only
 Jocasta tooling sessions (maintenance af50ab7396f94090bb590da80785596f):
@@ -81,12 +82,13 @@ The canonical MCP resource is https://jocasta.mcp.ryzhkov.dev/mcp, the
 dedicated namespace Igor chose for MCP services. The browser hostname
 jocasta.ryzhkov.dev is not an MCP resource.
 
-The only accepted MCP image is built from the reviewed, published Jocasta
+The accepted limited-only MCP image is built from reviewed, published Jocasta
 source a3e83c55e73661fc50d92a9ca328236a86f291fd (MCP_IMAGE_REVISIONS in
-filter_plugins/jocasta.py); its application tree equals the qualified
-232c5e3. The deployed 37ce657515092be80c5d49b4a3b30f482d86ed63 image has no
-MCP support and is refused. Accepting another commit is a reviewed source
-change to that set.
+filter_plugins/jocasta.py); its application tree equals qualified 232c5e3.
+It remains accepted for the existing limited mode and cannot enable operator
+trust. Older 37ce657515092be80c5d49b4a3b30f482d86ed63 has no MCP support
+and is refused. The separate operator source allowlist below is not an image
+publication or deployment receipt.
 
 To enable it, an explicitly approved deployment packet:
 
@@ -109,13 +111,13 @@ To enable it, an explicitly approved deployment packet:
 
 Before anything on homelab is written, prepare.yml refuses:
 
-- some but not all four keys, an empty value, or any other env_extra key;
+- some but not all four limited keys, an empty limited value, or any unknown env_extra key;
 - a resource other than exactly https://jocasta.mcp.ryzhkov.dev/mcp;
 - an issuer or JWKS URL that is not canonical HTTPS on port 443, with no
   escapes or dot segments, an issuer without its trailing slash, or a JWKS URL
   on a different host from the issuer;
 - an audience other than 1 to 256 characters from A-Z, a-z, 0-9 and ._~:/-;
-- an image that is not jocasta:<commit> for the accepted commit.
+- an image that is not jocasta:<commit> for an allowed MCP source commit.
 
 The resource audience in MCP tokens is the resource URL itself, which the
 Authentik machine-identities mapping issues as the tokens' aud
@@ -170,6 +172,81 @@ MCP and OIDC unset; REST tokens keep working. Rolling
 back the image as well needs the previous jocasta_image and its schema: if the
 newer image migrated the database, older binaries refuse it, and rollback then
 means a selected pre-upgrade recovery point (see Recovery).
+
+## Interactive operator source integration, deployment pending
+
+The current inventory retains the existing limited-only image and four
+settings. Operator trust is OFF. No inventory pin, route, port, service unit,
+data path, runtime UID, mount, REST credential or filesystem protection changes
+are included in this integration.
+
+The intended operator image source is
+`acd4ba57001559ef0e795ccf47f34413c9420c59`, source tree
+`f0976cafe974d39ebbc287020fe0424d2727b69a`. The planned immutable tag is
+`git.ryzhkov.dev/igor/jocasta:acd4ba57001559ef0e795ccf47f34413c9420c59`.
+Its separate `OPERATOR_IMAGE_REVISIONS` allowlist permits preparing this exact
+source's configuration, also in limited-only mode. Operator mode additionally
+requires the exact `git.ryzhkov.dev/igor/jocasta` repository, optionally with
+a verified digest. Another source, the old limited-only image, a mutable tag
+or a digest without its admitted full source tag cannot enable operator mode.
+
+Root reports source unit/race/cross checks PASS on agent-a job
+`66f97fa7`. Final source reviews, hosted CI, checked image artifact publication,
+private Authentik issuance/refresh checks and native qualification are PENDING.
+This source pin does not claim that its image exists in the registry. Root
+must reconcile the final reviewed head/tree and checked archive before CI
+publication or convergence. If reviews change the source, repin this allowlist
+and documentation to the exact final source before publishing. Do not deploy
+merely because the filter accepts a candidate configuration.
+
+After those gates, root can update only the existing Jocasta stack's image
+and append these public values to its existing `env_extra`. Preserve its
+current limited issuer, JWKS, REST audience and MCP resource:
+
+```yaml
+# Planned source only; not a deployed or published image receipt.
+jocasta_image: git.ryzhkov.dev/igor/jocasta:acd4ba57001559ef0e795ccf47f34413c9420c59
+# Add to the existing Jocasta stack's env_extra:
+JOCASTA_OPERATOR_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
+JOCASTA_OPERATOR_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/
+JOCASTA_OPERATOR_OIDC_CLIENT_ID: jocasta-laptop-interactive
+```
+
+These environment names correspond exactly to daemon flags
+`--operator-oidc-issuer`, `--operator-oidc-jwks-url` and
+`--operator-oidc-client-id`. The trio is absent or all-or-none. All three empty
+strings also mean disabled; partial keys or a mix of empty and nonempty values
+are refused. Enabled values must equal the literal URLs/client ID above.
+The limited verifier and canonical MCP resource must already be configured,
+the limited issuer must share the fixed `https://auth.ryzhkov.dev` origin,
+and its issuer must differ from the operator issuer. No additional audience,
+secret or unknown environment key is accepted. The generic existing .env
+renderer writes only these validated public values and the unchanged limited
+settings. Compose has the three optional empty defaults. A future authorized
+convergence can recreate the existing container for this environment change;
+this source task applies nothing.
+
+The separate Authentik entrypoint is documented in
+[authentik-jocasta-operator.md](authentik-jocasta-operator.md). Its opt-in remains
+false and the exact user PK remains a required external operator input. The
+read-only preflight identifying Igor does not enable this playbook or authorize
+Ansible to log a user in.
+
+Completion scope is Codex 0.163.0 and Claude 2.1.276. Each needs user-performed
+native one-time login, actual full-store read/write/conflict checks, automatic
+refresh/rotation/restart reuse and refusal after revocation on official T3.
+The unchanged limited profiles must retain project-only reads and write denial.
+The unused strict OpenCode redirect is reserved for possible future source
+work; OpenCode enrollment or native acceptance is not a gate for this slice.
+
+For operator rollback, withdraw the three operator variables and revoke only
+the exact operator grants/application authorization. Keep the four limited
+variables, current limited identities, static REST credentials, resource,
+routes and data. The old accepted image remains available for limited-only
+mode after normal schema/image compatibility checks. Native logout is a user
+action for the named registration; Ansible performs no automatic login/logout.
+See the Authentik operator document for ownership-safe issuer retirement and
+the remaining access-token expiry tail.
 
 ## Backups and cold storage
 
