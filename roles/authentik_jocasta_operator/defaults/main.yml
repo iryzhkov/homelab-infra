@@ -5,3 +5,7 @@ jocasta_operator_state: present
 jocasta_operator_online_check: false
 # Required operator-owned integer input. No production fixture or username lookup.
 jocasta_operator_user_pk: null
+# Explicit root receipt for the single reconciled v1 generation, never inferred.
+jocasta_operator_recovery: null
+# Existing empty controller-owned 0700 directory. Required only for a mutation.
+jocasta_operator_receipt_dir: null

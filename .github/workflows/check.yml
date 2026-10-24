@@ -149,6 +149,33 @@ jobs:
           ansible-playbook playbooks/ov-inference.yml --syntax-check
           ansible-playbook playbooks/ov-pc-coexistence.yml --syntax-check
 
+  jocasta-operator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    container:
+      options: --memory=1g --cpus=2
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare the isolated operator fixture home
+        run: |
+          export HOME="$PWD/.cache/jocasta-operator-tests/home"
+          test "$HOME" = "$PWD/.cache/jocasta-operator-tests/home"
+          export TMPDIR="$HOME/tmp"
+          mkdir -p "$TMPDIR"
+          printf 'HOME=%s\nTMPDIR=%s\n' "$HOME" "$TMPDIR" >>"$GITHUB_ENV"
+          printf 'MACHINE_IDENTITY_TEST_HOME=%s\nJOCASTA_MCP_TEST_HOME=%s\n' "$HOME" "$HOME" >>"$GITHUB_ENV"
+          printf 'PYTHONDONTWRITEBYTECODE=1\n' >>"$GITHUB_ENV"
+      - name: Install pinned deployment and upstream importer dependencies
+        run: pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0 cryptography==46.0.3 Django==5.2.17 djangorestframework==3.17.1
+      - name: Test receipt-bound operator recovery and pinned importer semantics
+        run: |
+          python3 -B roles/authentik_jocasta_operator/tests/test_importer_semantics.py -v
+          python3 -B roles/authentik_jocasta_operator/tests/test_operator.py -v
+          python3 -B scripts/test-jocasta-mcp-config.py -v
+
   authentik-machine-identities:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

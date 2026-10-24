@@ -28,8 +28,13 @@ import fake_authentik as fake
 _loader = importlib.util.spec_from_file_location("operator_contract", HERE.parent / "filter_plugins/jocasta_operator.py")
 op = importlib.util.module_from_spec(_loader)
 _loader.loader.exec_module(op)
-PK = 791  # Synthetic only. The production defaults have no PK.
-SPEC = op.operator_spec(PK)
+# The role fixture starts with the one root-reconciled original operation.
+# These public identities are explicit custody input, never inferred by apply.
+PK = 4
+RECOVERY = deepcopy(op.ORIGINAL_GENERATION)
+LEGACY_SPEC = op.operator_spec(PK)
+LEGACY_CONTENT = op.operator_blueprint(LEGACY_SPEC)
+SPEC = op.operator_spec(PK, ownership=RECOVERY)
 CONTENT = op.operator_blueprint(SPEC)
 
 
@@ -49,7 +54,7 @@ class Backend(fake.Authentik):
             pk = str(uuid.uuid4())
             self.tables["flow"][pk] = {"pk": pk, "slug": slug}
 
-    def apply(self, content):
+    def apply(self, content, seed_ids=None):
         ids = {}
         def resolve(value):
             if isinstance(value, tuple):
@@ -79,10 +84,17 @@ class Backend(fake.Authentik):
                 if old:
                     del table[old["pk"]]
                 continue
-            pk = ident.get("pk") or (old or {}).get("pk") or self._pk()
-            row = old or {"pk": pk}
+            # Authentik 2026.8.4 importer sets the child link PK, but Django
+            # saves the default UUID on the concrete parent, then replaces
+            # the child link. Group and PolicyBinding have no concrete parent.
+            # See test_importer_semantics.py for the real importer/Django seam.
+            inherited = kind in {"mapping", "policy", "application"}
+            pk = ((old or {}).get("pk") or (seed_ids or {}).get(entry["id"])
+                  or (str(uuid.uuid4()) if inherited else ident.get("pk")) or self._pk())
+            row = old or {}
             row.update(ident)
             row.update(resolve(entry["attrs"]))
+            row["pk"] = pk
             if kind == "application":
                 row.setdefault("backchannel_providers", [])
             if kind == "binding":
@@ -103,6 +115,12 @@ class Backend(fake.Authentik):
             if self.tables["provider"]:
                 return 200, self.jwks
             return 404, {}
+        if method == "GET" and api == f"/managed/blueprints/{RECOVERY['blueprint_pk']}/" and getattr(self, "change_before_store", False):
+            self.change_before_store = False
+            self.blueprints[RECOVERY["blueprint_pk"]]["last_applied"] = "2026-10-24T19:45:44Z"
+        if method == "POST" and api.endswith("/apply/"):
+            self.receipts_before_apply = {name: (self.receipt_dir / (name + ".json")).is_file()
+                                          for name in ("before", "stored", "baseline")}
         for kind, endpoint in op.ENDPOINTS.items():
             if method == "GET" and api == urlsplit(endpoint).path:
                 self.requests.append((method, path, query))
@@ -110,15 +128,28 @@ class Backend(fake.Authentik):
         if method == "GET" and api == f"/core/users/{PK}/":
             self.requests.append((method, path, query))
             return 200, self._user_view(self.users["igor"])
-        return super().handle(method, raw_path, body)
+        status, response = super().handle(method, raw_path, body)
+        if method == "PATCH" and getattr(self, "wrong_store_pk", False):
+            response = response | {"pk": str(uuid.uuid4())}
+        return status, response
+
+    def seed_owned(self, legacy=False):
+        """Seed already-created, custody-pinned rows; this is not importer creation."""
+        self.apply(CONTENT, seed_ids=RECOVERY["identities"])
+        receipt = self.instance(LEGACY_CONTENT if legacy else CONTENT)
+        if legacy:
+            receipt.update({field: RECOVERY[field] for field in
+                            ("status", "last_applied", "last_applied_hash")})
+        self.blueprints[receipt["pk"]] = receipt
+        return receipt
 
     def snapshot(self):
         return [{"item": {"kind": k}, "json": fake.page(list(v.values()))} for k, v in self.tables.items()]
 
     def instance(self, content=CONTENT):
-        return {"pk": "owned-blueprint", "name": op.BLUEPRINT, "content": content,
+        return {"pk": RECOVERY["blueprint_pk"], "name": op.BLUEPRINT, "content": content,
                 "path": "", "context": {}, "enabled": True, "status": "successful",
-                "last_applied": "2026-10-24T12:00:00Z",
+                "last_applied": "2026-10-24T20:00:00Z",
                 "last_applied_hash": sha512(content.encode()).hexdigest()}
 
 
@@ -260,12 +291,12 @@ class ContractTest(unittest.TestCase):
     def test_collisions_foreign_references_privileges_and_tombstones(self):
         s = Backend()
         u, k = s.users["igor"], s.keypairs[op.KEY]
-        self.assertTrue(op.operator_guard(SPEC, {}, s.snapshot(), u, k))
-        s.apply(CONTENT)
+        self.assertTrue(op.operator_guard(LEGACY_SPEC, {}, s.snapshot(), u, k))
+        s.seed_owned()
         self.assertTrue(op.operator_guard(SPEC, s.instance(), s.snapshot(), u, k, True))
         with self.assertRaises(op.AnsibleFilterError):
             op.operator_guard(SPEC, {}, s.snapshot(), u, k)
-        absent = op.operator_spec(PK, "absent")
+        absent = op.operator_spec(PK, "absent", RECOVERY)
         with self.assertRaises(op.AnsibleFilterError):
             op.operator_guard(absent, {}, s.snapshot(), {}, {})
         p = next(iter(s.tables["provider"].values()))
@@ -285,13 +316,13 @@ class ContractTest(unittest.TestCase):
         self.assertTrue(op.operator_guard(absent, s.instance(), s.snapshot(), {}, {}, True))
         tombstone = s.instance(op.operator_blueprint(absent))
         self.assertTrue(op.operator_guard(absent, tombstone, s.snapshot(), {}, {}, True))
-        s.apply(CONTENT)
+        s.seed_owned()
         with self.assertRaises(op.AnsibleFilterError):
             op.operator_guard(absent, tombstone, s.snapshot(), {}, {})
 
     def test_replacement_provider_requires_owned_application_reference(self):
         s = Backend()
-        s.apply(CONTENT)
+        s.seed_owned()
         receipt = s.instance()
         self.assertEqual(op.operator_instance(fake.page([receipt]), SPEC), receipt)
         original = next(iter(s.tables["provider"].values()))
@@ -299,7 +330,7 @@ class ContractTest(unittest.TestCase):
         del s.tables["provider"][original["pk"]]
         s.tables["provider"][replacement["pk"]] = replacement
         app = next(x for x in s.tables["application"].values() if x.get("slug") == op.SLUG)
-        absent = op.operator_spec(PK, "absent")
+        absent = op.operator_spec(PK, "absent", RECOVERY)
         for reference in (None, original["pk"]):
             app["provider"] = reference
             with self.subTest(reference=reference), self.assertRaisesRegex(
@@ -308,6 +339,53 @@ class ContractTest(unittest.TestCase):
         del s.tables["application"][app["pk"]]
         with self.assertRaisesRegex(op.AnsibleFilterError, "exact reference"):
             op.operator_guard(absent, receipt, s.snapshot(), {}, {})
+
+    def test_recovery_schema_and_original_content_are_exact(self):
+        self.assertEqual(sha512(LEGACY_CONTENT.encode()).hexdigest(), RECOVERY["content_sha512"])
+        s = Backend()
+        legacy, migrated = s.parse(LEGACY_CONTENT), s.parse(CONTENT)
+        self.assertEqual(legacy["metadata"], migrated["metadata"])
+        for old, new in zip(legacy["entries"], migrated["entries"], strict=True):
+            self.assertEqual(old["model"], new["model"])
+            self.assertEqual(old["id"], new["id"])
+            self.assertEqual(old["attrs"], new["attrs"])
+            self.assertEqual(new["identifiers"], {"pk": RECOVERY["identities"][new["id"]]})
+        invalid = [RECOVERY | {"extra": True}, RECOVERY | {"user_pk": 4.0},
+                   RECOVERY | {"last_applied": "2026-10-24T19:45:44Z"},
+                   RECOVERY | {"status": "unknown"}]
+        for ids in (RECOVERY["identities"] | {"extra": "x"},
+                    RECOVERY["identities"] | {"provider": "105"},
+                    RECOVERY["identities"] | {"provider": True},
+                    RECOVERY["identities"] | {"provider": 105.0},
+                    RECOVERY["identities"] | {"read": RECOVERY["identities"]["read"].upper()}):
+            invalid.append(RECOVERY | {"identities": ids})
+        missing = deepcopy(RECOVERY)
+        del missing["identities"]["binding-policy"]
+        invalid.append(missing)
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(op.AnsibleFilterError):
+                op.operator_recovery(value)
+
+    def test_every_owned_object_field_is_checked_before_writes(self):
+        s = Backend()
+        receipt = s.seed_owned(legacy=True)
+        original = deepcopy(s.tables)
+        drifts = {"read": ("expression", "return {}"), "write": ("scope_name", "foreign"),
+                  "group": ("users_obj", []), "policy": ("execution_logging", True),
+                  "provider": ("client_type", "confidential"), "application": ("policy_engine_mode", "any"),
+                  "binding-group": ("enabled", False), "binding-policy": ("target", str(uuid.uuid4()))}
+        for obj in SPEC["objects"]:
+            s.tables = deepcopy(original)
+            field, value = drifts[obj["id"]]
+            s.tables[obj["kind"]][obj["pk"]][field] = value
+            with self.subTest(obj=obj["id"]), self.assertRaises(op.AnsibleFilterError):
+                op.operator_guard(SPEC, receipt, s.snapshot(), s.users["igor"], s.keypairs[op.KEY])
+
+    def test_terminal_receipt_cannot_change_during_noop(self):
+        s = Backend()
+        receipt = s.seed_owned()
+        with self.assertRaises(op.AnsibleFilterError):
+            op.operator_terminal(receipt | {"last_applied": "2026-10-24T20:01:00Z"}, CONTENT, receipt)
 
     def test_incomplete_collections_refuse(self):
         for body in ({}, {"results": [], "pagination": {"count": 3, "current": 1, "total_pages": 2}},
@@ -325,11 +403,19 @@ class RoleTest(unittest.TestCase):
         finally:
             shared.fake.Authentik = original
         self.state = self.fixture.state
+        self.state.seed_owned(legacy=True)
+        self.receipt_serial = 0
 
-    def run_role(self, state="present", check=False, offline=False, pk=PK):
+    def run_role(self, state="present", check=False, offline=False, pk=PK, recovery=None):
         vars_ = {"ansible_python_interpreter": sys.executable, "jocasta_operator_enabled": True,
                  "jocasta_operator_user_pk": pk, "jocasta_operator_state": state,
-                 "jocasta_operator_online_check": not offline}
+                 "jocasta_operator_online_check": not offline,
+                 "jocasta_operator_recovery": recovery}
+        self.receipt_serial += 1
+        self.receipt_dir = self.fixture.base / f"receipts-{self.receipt_serial}"
+        self.receipt_dir.mkdir(mode=0o700)
+        vars_["jocasta_operator_receipt_dir"] = str(self.receipt_dir)
+        self.state.receipt_dir = self.receipt_dir
         if not offline:
             vars_.update(authentik_url=f"https://127.0.0.1:{self.fixture.server.server_port}/api/v3",
                          authentik_headers={"Authorization": "Bearer " + fake.ADMIN})
@@ -355,10 +441,27 @@ class RoleTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         return out
 
-    def test_create_second_noop_absence_and_unrelated_preservation(self):
+    def migrate(self):
+        return self.ok(recovery=RECOVERY)
+
+    def test_migrate_second_noop_absence_and_unrelated_preservation(self):
         baseline_user = deepcopy(self.state.users)
-        baseline_family = deepcopy(self.state.tables["group"])
-        self.ok()
+        baseline_family = {k: deepcopy(v) for k, v in self.state.tables["group"].items()
+                           if v.get("name") != op.GROUP}
+        baseline_objects = deepcopy(self.state.tables)
+        self.migrate()
+        self.assertEqual(self.state.tables, baseline_objects)
+        self.assertEqual(self.state.receipts_before_apply, dict.fromkeys(("before", "stored", "baseline"), True))
+        self.assertEqual(self.fixture.writes(), [("PATCH", f"/api/v3/managed/blueprints/{RECOVERY['blueprint_pk']}/"),
+                                               ("POST", f"/api/v3/managed/blueprints/{RECOVERY['blueprint_pk']}/apply/")])
+        self.assertEqual(next(iter(self.state.blueprints.values()))["content"], CONTENT)
+        self.assertEqual(len(self.state.blueprints), 1)
+        for name in ("before", "stored", "baseline", "applied", "final"):
+            receipt = self.receipt_dir / (name + ".json")
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+        before = json.loads((self.receipt_dir / "before.json").read_text())
+        self.assertEqual(before["last_applied"], RECOVERY["last_applied"])
+        self.assertEqual(before["content"], LEGACY_CONTENT)
         self.assertEqual(len(self.state.tables["provider"]), 1)
         self.assertFalse(self.state.public_authorization[-1])
         self.assertEqual(self.state.users, baseline_user)
@@ -378,11 +481,12 @@ class RoleTest(unittest.TestCase):
     def test_check_offline_and_online_have_no_writes(self):
         self.ok(check=True, offline=True)
         self.assertEqual(self.state.requests, [])
-        self.ok(check=True)
+        self.ok(check=True, recovery=RECOVERY)
         self.assertEqual(self.fixture.writes(), [])
-        self.assertEqual(self.state.blueprints, {})
+        self.assertEqual(len(self.state.blueprints), 1)
 
     def test_collision_and_absence_refuse_before_writes(self):
+        self.migrate()
         group = {"pk": "foreign", "name": op.GROUP, "is_superuser": False, "roles": [], "parents": [],
                  "users_obj": [{"pk": PK}]}
         self.state.tables["group"]["foreign"] = group
@@ -392,7 +496,7 @@ class RoleTest(unittest.TestCase):
             self.assertEqual(self.fixture.writes(), [])
 
     def test_successful_receipt_cannot_adopt_or_retire_unbound_replacement(self):
-        self.ok()
+        self.migrate()
         receipt = deepcopy(next(iter(self.state.blueprints.values())))
         self.assertEqual(op.operator_instance(fake.page([receipt]), SPEC), receipt)
         original = next(iter(self.state.tables["provider"].values()))
@@ -414,7 +518,7 @@ class RoleTest(unittest.TestCase):
 
     def test_failed_apply_is_not_replayed(self):
         self.state.apply_failure = True
-        code, _ = self.run_role()
+        code, _ = self.run_role(recovery=RECOVERY)
         self.assertNotEqual(code, 0)
         self.assertEqual(sum(p.endswith("/apply/") for m, p in self.fixture.writes()), 1)
         code, _ = self.run_role()
@@ -458,7 +562,7 @@ class RoleTest(unittest.TestCase):
         maintained = ROOT / "roles/authentik_machine_identities/library/authentik_machine_jwks.py"
         self.assertEqual((HERE.parent / "library/authentik_machine_jwks.py").read_bytes(), maintained.read_bytes())
         self.state.jwks = {"keys": [{"use": "sig", "kty": "EC", "alg": "ES256", "kid": "wrong-signer"}]}
-        code, output = self.run_role()
+        code, output = self.run_role(recovery=RECOVERY)
         self.assertNotEqual(code, 0)
         self.assertIn("Verify actual public RSA RS256 signing evidence", output)
         self.assertTrue(self.state.public_authorization)
@@ -466,7 +570,7 @@ class RoleTest(unittest.TestCase):
         self.assertEqual(sum(p.endswith("/apply/") for m, p in self.fixture.writes()), 1)
 
     def test_foreign_binding_and_shared_mapping_refuse_removal(self):
-        self.ok()
+        self.migrate()
         own = next(x for x in self.state.tables["binding"].values() if x["group"])
         foreign = deepcopy(own)
         foreign["pk"] = "foreign-binding"
@@ -485,13 +589,84 @@ class RoleTest(unittest.TestCase):
 
     def test_wrong_bound_user_and_incomplete_snapshot_refuse(self):
         self.state.users["igor"]["type"] = "service_account"
-        code, _ = self.run_role()
+        code, _ = self.run_role(recovery=RECOVERY)
         self.assertNotEqual(code, 0)
         self.assertEqual(self.fixture.writes(), [])
         self.state.users["igor"]["type"] = "internal"
         self.state.responses[("GET", "/policies/bindings/")] = (200, {
             "pagination": {"count": 501, "current": 1, "total_pages": 2}, "results": []})
+        code, _ = self.run_role(recovery=RECOVERY)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fixture.writes(), [])
+
+    def test_original_requires_explicit_receipt_and_fresh_bootstrap_refuses(self):
         code, _ = self.run_role()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fixture.writes(), [])
+        self.state.blueprints.clear()
+        code, _ = self.run_role(recovery=RECOVERY)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fixture.writes(), [])
+
+    def test_recovery_cannot_repeat_or_recreate_a_retired_generation(self):
+        self.migrate()
+        code, _ = self.run_role(recovery=RECOVERY)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fixture.writes(), [])
+        self.ok(state="absent")
+        code, _ = self.run_role()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fixture.writes(), [])
+
+    def test_foreign_store_response_is_retained_and_never_applied(self):
+        self.state.wrong_store_pk = True
+        code, _ = self.run_role(recovery=RECOVERY)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fixture.writes(), [
+            ("PATCH", f"/api/v3/managed/blueprints/{RECOVERY['blueprint_pk']}/")])
+        stored = json.loads((self.receipt_dir / "stored.json").read_text())
+        self.assertNotEqual(stored["pk"], RECOVERY["blueprint_pk"])
+        self.assertTrue((self.receipt_dir / "before.json").is_file())
+        self.assertFalse((self.receipt_dir / "baseline.json").exists())
+
+    def test_generation_change_before_storage_refuses_without_api_writes(self):
+        self.state.change_before_store = True
+        code, _ = self.run_role(recovery=RECOVERY)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.fixture.writes(), [])
+        self.assertEqual(list(self.receipt_dir.iterdir()), [])
+
+    def test_changed_original_receipt_refuses_before_writes(self):
+        original = deepcopy(next(iter(self.state.blueprints.values())))
+        for changes in ({"pk": str(uuid.uuid4())}, {"last_applied": "2026-10-24T19:45:44Z"},
+                        {"last_applied_hash": "0" * 128}, {"status": "unknown"},
+                        {"status": "error"}, {"content": LEGACY_CONTENT + "\n"}):
+            receipt = original | changes
+            self.state.blueprints = {receipt["pk"]: receipt}
+            code, _ = self.run_role(recovery=RECOVERY)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(self.fixture.writes(), [])
+
+    def test_recovery_field_reference_missing_and_replacement_refuse_before_writes(self):
+        baseline = deepcopy(self.state.tables)
+        for obj in SPEC["objects"]:
+            with self.subTest(obj=obj["id"], drift="missing"):
+                self.state.tables = deepcopy(baseline)
+                del self.state.tables[obj["kind"]][obj["pk"]]
+                code, _ = self.run_role(recovery=RECOVERY)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(self.fixture.writes(), [])
+            with self.subTest(obj=obj["id"], drift="replacement"):
+                self.state.tables = deepcopy(baseline)
+                row = self.state.tables[obj["kind"]].pop(obj["pk"])
+                row["pk"] = 999 if obj["kind"] == "provider" else str(uuid.uuid4())
+                self.state.tables[obj["kind"]][row["pk"]] = row
+                code, _ = self.run_role(recovery=RECOVERY)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(self.fixture.writes(), [])
+        self.state.tables = deepcopy(baseline)
+        self.state.tables["provider"][105]["access_token_validity"] = "seconds=301"
+        code, _ = self.run_role(recovery=RECOVERY)
         self.assertNotEqual(code, 0)
         self.assertEqual(self.fixture.writes(), [])
 
