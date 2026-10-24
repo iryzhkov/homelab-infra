@@ -191,6 +191,49 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(result["startup_headroom"]["data"]["available_inodes"], 4096)
         self.assertEqual(result["startup_headroom"]["metadata"]["available_bytes"], 2 * 1024**3)
 
+    def test_operator_contract_through_actual_native_check_preserves_headroom_shape(self):
+        self.opt_in()
+        fixture.operator_qualify(self.storage, composite=True)
+        with patch.object(native.os, "statvfs", side_effect=self.observed_space):
+            result = native.check(self.storage, self.config, probe=self.probe)
+        self.assertEqual(result["status"], "passed-startup-preflight")
+        self.assertEqual(set(result["startup_headroom"]), {"data", "metadata"})
+        self.assertEqual(result["startup_headroom"]["data"], {
+            "available_bytes": 15497819 * 1048576, "filecounts": "UNKNOWN", "available_inodes": None})
+        self.assertEqual(result["qualifications"]["consistent_restore"]["type"], "composite")
+        for gate in fixture.preflight.DURABILITY_GATES:
+            storage = copy.deepcopy(self.storage)
+            storage["qualifications"][gate] = None
+            with self.subTest(gate=gate), patch.object(native.os, "statvfs") as space:
+                with self.assertRaisesRegex(ValueError, "typed qualification"):
+                    native.check(storage, self.config, probe=fixture.Exploding())
+                space.assert_not_called()
+
+    def test_operator_contract_keeps_unknown_bytes_local_inode_floors_and_oserror(self):
+        fixture.operator_qualify(self.storage)
+        with patch.object(native.os, "statvfs", side_effect=self.observed_space):
+            with self.assertRaisesRegex(ValueError, "UNKNOWN filecounts"):
+                native.check(self.storage, self.config, probe=self.probe)
+        self.opt_in()
+        fixture.operator_qualify(self.storage)
+        for label, changes in (
+            ("data", {"f_bavail": 0}),
+            ("data", {"f_files": 5000, "f_ffree": 4096, "f_favail": 4095}),
+            ("metadata", {"f_files": 0, "f_ffree": 0, "f_favail": 0}),
+            ("metadata", {"f_bavail": 0}),
+        ):
+            def space(path):
+                value = self.observed_space(path)
+                if path == self.storage[label]["path"]:
+                    value.__dict__.update(changes)
+                return value
+            with self.subTest(label=label, changes=changes), patch.object(
+                    native.os, "statvfs", side_effect=space), self.assertRaises(ValueError):
+                native.check(self.storage, self.config, probe=self.probe)
+        with patch.object(native.os, "statvfs", side_effect=OSError("injected")):
+            with self.assertRaises(OSError):
+                native.check(self.storage, self.config, probe=self.probe)
+
     def test_unit_cannot_force_kill_or_auto_restart_and_is_inert(self):
         unit = (Path(__file__).parents[1] / "stacks/objectstore/garage-objectstore.service.example").read_text()
         for line in ("User=1000", "Group=1000", "SendSIGKILL=no", "Restart=no",

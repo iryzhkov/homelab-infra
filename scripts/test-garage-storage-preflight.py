@@ -158,12 +158,213 @@ def qualify(config):
     return config
 
 
+# Synthetic immutable-shaped references only. No document or live pass is asserted.
+FIXTURE_REFERENCE = "jocasta:" + "0" * 32 + "@1"
+
+
+def operator_qualify(config, composite=False):
+    config["operating_contract"] = "operator_budget_v1"
+    current = preflight.digest(config)
+    records = {"configuration": current}
+    for gate in preflight.DURABILITY_GATES:
+        kind = ("accepted_risk" if gate in ("full_volume", "mount_loss") else
+                "composite" if composite and gate != "last_copy_policy" else "measured")
+        record = {"type": kind, "references": [FIXTURE_REFERENCE],
+                  "limitation": "Synthetic fixture only; no live evidence or operational authority."}
+        if kind == "composite":
+            record.update(measured_configuration="sha256:" + "a" * 64,
+                          qualifying_configuration=current, difference_reference=FIXTURE_REFERENCE)
+        else:
+            record["configuration"] = current
+        records[gate] = record
+    config["qualifications"] = records
+    return config
+
+
 class Scratch(unittest.TestCase):
     def setUp(self):
         self.home = scratch_home()
         self.temp = tempfile.TemporaryDirectory(dir=self.home)
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name).resolve()
+
+
+class OperatorContractTest(Scratch):
+    def setUp(self):
+        super().setUp()
+        self.fixture = Fixture(self.base)
+        self.config = operator_qualify(self.fixture.budget_config(("data", "metadata")), True)
+
+    def refused(self, config, message):
+        with self.assertRaisesRegex(preflight.Refusal, message):
+            preflight.validate(config, Exploding())
+
+    def test_opt_in_reports_each_class_and_local_validation_limits(self):
+        before = snapshot(self.base)
+        result = preflight.validate(self.config, self.fixture.probe())
+        self.assertEqual(result["status"], "passed-startup-preflight")
+        self.assertEqual(result["operating_contract"], "operator_budget_v1")
+        self.assertEqual(result["qualifications"], self.config["qualifications"])
+        self.assertIn("no evidence fetched or measured configuration bytes verified",
+                      result["qualification_validation"])
+        self.assertEqual(snapshot(self.base), before)
+        for composite in (False, True):
+            config = operator_qualify(copy.deepcopy(self.config), composite)
+            self.assertEqual(preflight.validate(config, self.fixture.probe())["configuration"],
+                             preflight.digest(config))
+
+    def test_selector_is_explicit_and_requires_both_budget_modes(self):
+        self.assertNotIn("operating_contract", CANONICAL)
+        for value in (None, "", "operator_budget_v2", True, 1, [], {}):
+            config = copy.deepcopy(self.config)
+            config["operating_contract"] = value
+            self.refused(config, "unknown operating_contract")
+            config["enabled"] = False
+            self.refused(config, "unknown operating_contract")
+        for label in ("data", "metadata"):
+            for value in (None, "physical_cap", "unknown", True, 1, [], {}):
+                config = copy.deepcopy(self.config)
+                config[label]["acceptance_mode"] = value
+                self.refused(config, "requires explicit data and metadata")
+            config = copy.deepcopy(self.config)
+            del config[label]["acceptance_mode"]
+            self.refused(config, "requires explicit data and metadata")
+        config = copy.deepcopy(self.config)
+        del config["operating_contract"]
+        qualify(config)
+        self.refused(config, "unqualified live gate")
+        # Legacy string gates remain valid with explicit or omitted physical-cap mode.
+        for config in (self.fixture.config(), self.fixture.budget_config(("data", "metadata"))):
+            result = preflight.validate(config, self.fixture.probe())
+            self.assertNotIn("operating_contract", result)
+            self.assertNotIn("qualifications", result)
+
+    def test_gate_matrix_and_required_envelope(self):
+        for gate in preflight.DURABILITY_GATES:
+            for value in (None, "", FIXTURE_REFERENCE, True, 1, [], {}):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate] = value
+                self.refused(config, "typed qualification|wrong qualification type")
+            config = copy.deepcopy(self.config)
+            del config["qualifications"][gate]
+            self.refused(config, "exactly configuration and all five gates")
+            for kind in ("measured", "composite", "accepted_risk", "unknown", None, [], {}):
+                allowed = (("accepted_risk",) if gate in ("full_volume", "mount_loss")
+                           else ("measured",) if gate == "last_copy_policy"
+                           else ("measured", "composite"))
+                if kind in allowed:
+                    continue
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate]["type"] = kind
+                self.refused(config, "wrong qualification type")
+        for value in (None, [], "", True, 1):
+            config = copy.deepcopy(self.config)
+            config["qualifications"] = value
+            self.refused(config, "exactly configuration and all five gates")
+        for key in ("configuration", "unexpected"):
+            config = copy.deepcopy(self.config)
+            if key == "configuration":
+                del config["qualifications"][key]
+            else:
+                config["qualifications"][key] = None
+            self.refused(config, "exactly configuration and all five gates")
+        config = copy.deepcopy(self.config)
+        config["qualifications"] = {key: None for key in config["qualifications"]}
+        self.refused(config, "exact configuration digest")
+        config["qualifications"]["configuration"] = preflight.digest(config)
+        self.refused(config, "typed qualification")
+
+    def test_exact_record_keys_and_binding_fields(self):
+        for gate in preflight.DURABILITY_GATES:
+            original = self.config["qualifications"][gate]
+            for key in (*original, "unexpected"):
+                config = copy.deepcopy(self.config)
+                record = config["qualifications"][gate]
+                if key in record:
+                    del record[key]
+                else:
+                    record[key] = None
+                self.refused(config, "fields|wrong qualification type")
+            binding = "qualifying_configuration" if original["type"] == "composite" else "configuration"
+            for value in (None, True, 1, [], {}, "sha256:" + "0" * 64, "SHA256:" + "a" * 64):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate][binding] = value
+                self.refused(config, "bind current qualifying configuration")
+        for value in (None, True, 1, [], {}, "", "a" * 64, "sha256:" + "A" * 64,
+                      "sha256:" + "a" * 63, "sha256:" + "a" * 64 + "\n"):
+            config = copy.deepcopy(self.config)
+            config["qualifications"]["consistent_restore"]["measured_configuration"] = value
+            self.refused(config, "canonical measured configuration digest")
+
+    def test_bounded_references_and_utf8_limitations(self):
+        invalid = (None, "", " ", True, 1, [], {}, "https://example.invalid/proof",
+                   "jocasta:" + "A" * 32 + "@1", "jocasta:" + "a" * 32,
+                   "jocasta:" + "a" * 32 + "@0", "jocasta:" + "a" * 32 + "@01",
+                   FIXTURE_REFERENCE + "\n", FIXTURE_REFERENCE + " ",
+                   "jocasta:" + "a" * 32 + "@" + "1" * 56)
+        for gate in preflight.DURABILITY_GATES:
+            for value in (None, "", True, 1, {}, [], [FIXTURE_REFERENCE] * 9,
+                          *([item] for item in invalid)):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate]["references"] = value
+                self.refused(config, "1..8 immutable Jocasta references")
+            for value in (None, "", " \n\t", True, 1, [], {}, "x" * 4097, "é" * 2049, "\ud800"):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate]["limitation"] = value
+                self.refused(config, "nonblank limitation")
+        for value in invalid:
+            config = copy.deepcopy(self.config)
+            config["qualifications"]["consistent_restore"]["difference_reference"] = value
+            self.refused(config, "immutable difference reference")
+        config = copy.deepcopy(self.config)
+        # Maximum reference length and UTF-8 byte count are inclusive.
+        reference = "jocasta:" + "a" * 32 + "@" + "1" * 54
+        self.assertEqual(len(reference), 95)
+        config["qualifications"]["consistent_restore"]["difference_reference"] = reference + "1"
+        for gate in preflight.DURABILITY_GATES:
+            config["qualifications"][gate]["references"] = [reference + "1"] * 8
+            config["qualifications"][gate]["limitation"] = "é" * 2048
+        preflight.validate(config, self.fixture.probe())
+
+    def test_discontinuous_composites_preserve_actual_measured_binding(self):
+        legacy = self.fixture.budget_config(("data", "metadata"))
+        legacy["data"]["unknown_filecount_risk_acceptance"] = "fixture:old-nonempty-risk"
+        old = preflight.digest(legacy)
+        current = copy.deepcopy(legacy)
+        current["data"]["unknown_filecount_risk_acceptance"] = "fixture:new-S3-risk"
+        operator_qualify(current, True)
+        new = preflight.digest(current)
+        self.assertNotEqual(old, new)
+        current["qualifications"]["fresh_client_roundtrip"]["measured_configuration"] = old
+        preflight.validate(current, self.fixture.probe())
+        # Startup checks syntax/bindings only; no receipt fetch or historical-byte comparison.
+        current["qualifications"]["consistent_restore"]["measured_configuration"] = "sha256:" + "b" * 64
+        preflight.validate(current, self.fixture.probe())
+        for change in (
+            lambda c: c["data"].update(unknown_filecount_risk_acceptance="fixture:drift"),
+            lambda c: c["metadata"]["operational_budget"].update(bytes=12345),
+            lambda c: c.update(data_fsync=False),
+        ):
+            config = copy.deepcopy(current)
+            change(config)
+            self.refused(config, "exact configuration digest")
+        # Removing fields does not recreate the old nonempty risk reference.
+        del current["operating_contract"]
+        del current["data"]["unknown_filecount_risk_acceptance"]
+        self.assertNotEqual(preflight.digest(current), old)
+
+    def test_typed_contract_preserves_mount_custody_and_io_refusals(self):
+        for change in ("source", "options", "custody", "io"):
+            probe = self.fixture.probe()
+            if change == "custody":
+                probe.modes[str(self.fixture.blobs)] = 0o777
+            elif change == "io":
+                probe.mount = lambda path: (_ for _ in ()).throw(OSError("injected"))
+            else:
+                probe.mounts[str(self.fixture.nas)][change] = (
+                    "wrong:/export" if change == "source" else "ro,soft")
+            with self.subTest(change=change), self.assertRaises((preflight.Refusal, OSError)):
+                preflight.validate(self.config, probe)
 
 
 class DefaultTest(Scratch):
@@ -206,6 +407,22 @@ class DefaultTest(Scratch):
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 2)
         self.assertIn("storage preflight refused: explicit storage host", result.stderr)
+
+    def test_legacy_digest_golden_vector_excludes_only_qualifications(self):
+        # Fixed synthetic JSON bytes, independent of scratch paths and host facts.
+        config = {"enabled": True, "host": "fixture-only", "data_fsync": True,
+                  "metadata_fsync": True,
+                  "data": {"unknown_filecount_risk_acceptance": "fixture:legacy-nonempty"},
+                  "qualifications": {"mount_loss": "legacy string"}}
+        expected = "sha256:7c08e6c7a690acf3782c10a4b9dcbcc5c7babbb1ad6745bd2802adf58d92a8c9"
+        self.assertEqual(preflight.digest(config), expected)
+        config["qualifications"] = {"configuration": None}
+        self.assertEqual(preflight.digest(config), expected)
+        config["operating_contract"] = "operator_budget_v1"
+        self.assertNotEqual(preflight.digest(config), expected)
+        del config["operating_contract"]
+        config["data"]["unknown_filecount_risk_acceptance"] = "fixture:new-reference"
+        self.assertNotEqual(preflight.digest(config), expected)
 
     def test_digest_cli_names_the_exact_configuration(self):
         config = Fixture(self.base).config()

@@ -231,6 +231,73 @@ fresh-client round trip remain unqualified.
 - Tests: `scripts/test-garage-storage-preflight.py`, run in CI beside the NATS
   messaging tests.
 
+## Optional operator-budget qualification contract
+
+Source support is opt-in with top-level `"operating_contract": "operator_budget_v1"`.
+Both data and metadata must explicitly select `operational_budget`. Unknown
+selectors refuse, including on a disabled configuration. The canonical inventory
+remains disabled, all qualification values null, and has no selector. Without the
+selector, legacy nonblank gate strings, defaults, output and digest are unchanged.
+The separate all-null qualification-only starter is unchanged.
+
+The selected contract retains `qualifications.configuration` and exactly the
+five gate keys. Normal startup requires all five nonnull typed records.
+
+| Gate | Permitted type |
+| --- | --- |
+| full_volume, mount_loss | accepted_risk only |
+| consistent_restore, fresh_client_roundtrip | measured or composite |
+| last_copy_policy | measured only, for actual custody/policy evidence |
+
+Measured and accepted-risk records have exactly
+`{type, configuration, references, limitation}`. Their configuration must equal
+the current computed digest. Composite records have exactly
+`{type, measured_configuration, qualifying_configuration, difference_reference, references, limitation}`.
+Their qualifying digest must equal the current digest; their measured digest must
+have canonical `sha256:` plus 64 lowercase hexadecimal digits syntax.
+References contain 1..8 immutable Jocasta references, each at most 96 ASCII bytes
+and exactly `jocasta:` plus 32 lowercase hexadecimal digits, `@`, and a positive
+decimal revision without leading zeros. The difference reference uses the same
+syntax and bound. A limitation must contain non-whitespace text and fit in 4096
+UTF-8 bytes. Extra/missing fields, wrong types and gate classes refuse before
+host inspection. All-null gates refuse normal startup.
+
+Preflight output preserves `passed-startup-preflight` and adds the contract,
+typed qualifications and `qualification_validation` in selected mode. These
+report accepted-risk, measured and composite distinctions plus each limitation.
+Startup verifies record shape and current qualifying bindings. It never fetches
+Jocasta, checks historical configuration bytes, verifies evidence truth, or
+enforces an allowed-difference receipt. Native `check` retains these fields and
+the existing `startup_headroom` shape. Headroom/custody/mount checks and UNKNOWN
+policy are unchanged; there is no reservation, numeric data quota, live mount
+fence or combined host/NAS-loss guarantee.
+
+Adding the selector or changing the UNKNOWN-filecount risk-acceptance string
+changes the digest. A reviewed operator preparation must compare the actual old
+and new JSON locally and record an immutable allowed-difference receipt. S2
+client-proof reuse permits only the selector addition and the
+`data.unknown_filecount_risk_acceptance` reference-string change. Paths, mount
+options, identities/mapping, fsync and budgets must stay identical. Removing both
+fields does not reconstruct the old configuration: its risk string was nonempty.
+The composite record must retain the actual measured digest separately from the
+qualifying digest. Generic source does not embed a deployment digest.
+
+A restore composite uses the actual restored instance's path-derived measured
+digest. Its referenced receipt must disclose source, restored and qualifying
+digests, exact path mapping and observed results. The adopted preparation route
+is one current namespace/key restore with deleted-probe 404, combined explicitly
+with the earlier artifact-restore proof. Current copied state is not a restore,
+and that composition does not prove current artifact recovery, shared fullness,
+live mount loss or production publisher/reader access. The last-copy measured
+record references the actual custodian, retained last-good-pair inventory and
+no-deletion/recovery policy; it makes no capacity or combined-loss claim.
+Actual first publication and original-UUID retrieval through production
+principals remain later requirements.
+
+No live records or pass references are populated by this source change.
+Qualification, gate population, restored-copy starts, credentials and maintenance
+use need their separately reviewed exact operator authority.
+
 ## What the preflight checks
 
 With `enabled: false` it inspects nothing and exits 3. Otherwise every declared
