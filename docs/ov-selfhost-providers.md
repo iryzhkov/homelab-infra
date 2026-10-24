@@ -151,12 +151,24 @@ GET /api/v1/tasks/{task_id}, then verify checksums and repeat the four baseline
 queries using the new model before approving production cutover. If the request
 times out after submission, reconcile the existing task instead of blindly resubmitting.
 
-The selected provider target is Normandy CPU OVMS, image
-`openvino/model_server@sha256:a928903fe429f1e3e27107cc45932d30d95febfd2d1159dc50869c3eac76fc58`,
-with `OpenVINO/Qwen3-Embedding-0.6B-int8-ov` revision
-`80d352d7061ec3e5caa3f26dc4e1f67bb8a21a5e`, LAST pooling, normalization and 1024
-dimensions. Provider configuration and overlay deployment are owned by the other
-worker, not this helper.
+The selected embedding providers use the identical Qwen3-Embedding 0.6B Q8_0
+GGUF on the gaming PC GPU and Normandy CPU. The GGUF SHA-256 is
+`06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439`.
+The earlier OpenVINO int8 runtime was a qualification alternative; its vectors
+are a different embedding space and it is not a fallback for this index.
+See [the provider integration guide](../stacks/openviking/PROVIDERS.md) for
+checksummed assets, query instructions, runtime bounds and deployment commands.
+The internal adapter adds the Qwen query instruction and uses native Ollama
+`truncate:false`; documents remain plain. Existing summaries remain unchanged.
+
+Client credentials must also transition before production cutover. OV 0.5.2
+rejects the old ROOT key on tenant data routes. The guarded rollover updates
+existing per-request keyring or key-file sources and preserves private backups;
+see [client credential cutover](ov-client-credentials.md). No MCP restart is
+needed for the observed bindings, but environment or cached TOML overrides
+must be refused and resolved through their owners. Candidate credentials are
+not production credentials. Final generation transport qualification and
+real-note retrieval acceptance remain required before production cutover.
 
 ## Implementation checks
 
