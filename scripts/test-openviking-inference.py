@@ -494,8 +494,8 @@ class SourceContracts(unittest.TestCase):
                          [("pc", "http://inference-adapter:8000/pc/v1"),
                           ("homelab", "http://inference-adapter:8000/cpu/v1")])
         self.assertEqual(stack["services"]["openviking"]["image"],
-                         "${OPENVIKING_IMAGE:-git.ryzhkov.dev/igor/openviking@sha256:"
-                         "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f}")
+                         "${OPENVIKING_IMAGE:-ghcr.io/volcengine/openviking@sha256:"
+                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f}")
         self.assertEqual(stack["services"]["openviking"]["environment"], {
             "OPENVIKING_CONFIG_FILE": "/app/ov.conf",
             "OPENVIKING_WITH_BOT": "0", "TMPDIR": "/app/data/temp"})
@@ -528,8 +528,8 @@ class SourceContracts(unittest.TestCase):
         self.assertEqual({volume["target"]: volume["source"] for volume in service["volumes"]}, {
             "/app/inference-adapter.py": supplied["OPENVIKING_ADAPTER_PATH"],
             "/app/cpu-tokenizer": supplied["OPENVIKING_TOKENIZER_PATH"]})
-        self.assertEqual(services["openviking"]["image"], "git.ryzhkov.dev/igor/openviking@sha256:"
-                         "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f")
+        self.assertEqual(services["openviking"]["image"], "ghcr.io/volcengine/openviking@sha256:"
+                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
         # A missing or empty value refuses to render instead of using a default.
         for name in supplied:
             for value in (None, ""):
@@ -667,17 +667,17 @@ class Provisioning(unittest.TestCase):
         self.assertNotIn("Read the existing system service custody", result.stdout)
 
 
-    def test_image_default_and_controlled_override_in_actual_ansible(self):
+    def test_image_default_and_rollback_override_in_actual_ansible(self):
         tasks = yaml.safe_load((STACK / "embeddings-prepare.yml").read_text())
         wiring = next(task for task in tasks if task["name"] ==
                       "Add adapter revision and path to the stack interpolation environment")
-        old_image = ("git.ryzhkov.dev/igor/openviking@sha256:"
-                     "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f")
-        candidate_image = ("ghcr.io/volcengine/openviking@sha256:"
-                           "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
+        default_image = ("ghcr.io/volcengine/openviking@sha256:"
+                         "2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
+        rollback_image = ("git.ryzhkov.dev/igor/openviking@sha256:"
+                          "e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f")
         self.variables.update(swarm_stack_src=str(STACK), swarm_state_root=str(self.work))
-        for image in (old_image, candidate_image):
-            if image == candidate_image:
+        for image in (default_image, rollback_image):
+            if image == rollback_image:
                 self.variables["openviking_image"] = image
             play = [{"hosts": "localhost", "gather_facts": False,
                      "vars": {"swarm_stack_env": {}}, "tasks": [wiring,

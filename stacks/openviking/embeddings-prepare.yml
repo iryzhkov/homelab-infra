@@ -62,7 +62,7 @@
   ansible.builtin.set_fact:
     swarm_stack_env: >-
       {{ swarm_stack_env | combine({
-        'OPENVIKING_IMAGE': openviking_image | default('git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f'),
+        'OPENVIKING_IMAGE': openviking_image | default('ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f'),
         'OPENVIKING_TOKENIZER_PATH': swarm_state_root ~ '/openviking/inference/cpu-tokenizer',
         'OPENVIKING_ADAPTER_PATH': swarm_state_root ~ '/openviking/inference/inference-adapter.py',
         'OPENVIKING_ADAPTER_SHA256': lookup('file', swarm_stack_src ~ '/files/inference-adapter.py', rstrip=false) | hash('sha256')

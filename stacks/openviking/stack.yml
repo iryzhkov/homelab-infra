@@ -1,11 +1,12 @@
-# Keep OV 0.2.6 until root's reviewed activation. Controlled cutover overrides the image.
+# Default: qualified official OV 0.5.2, prepared for root's controlled activation.
+# Merge only inside that cutover; rollback is in PROVIDERS.md, never an image swap alone.
 # CPU providers are scoped Compose projects because Swarm has no memory-swap cap.
 # All inference endpoints are overlay-only. ov.conf remains private and untouched.
 # embeddings-prepare.yml sets the adapter variables. docker stack config reads a
 # hyphen in a :? message as a default, so the messages must not contain one.
 services:
   openviking:
-    image: ${OPENVIKING_IMAGE:-git.ryzhkov.dev/igor/openviking@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f}
+    image: ${OPENVIKING_IMAGE:-ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f}
     environment:
       OPENVIKING_CONFIG_FILE: /app/ov.conf
       OPENVIKING_WITH_BOT: "0"
