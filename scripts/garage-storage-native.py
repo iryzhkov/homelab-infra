@@ -41,6 +41,41 @@ def trusted(path, cap, *, secret=False):
         os.close(fd)
 
 
+def check_headroom(storage):
+    """Shared native/bootstrap admission after exact mount and custody validation."""
+    result = {}
+    for label, minimum in (("data", 1024**3), ("metadata", 2 * 1024**3)):
+        store = storage[label]
+        risk = store.get("unknown_filecount_risk_acceptance")
+        if "unknown_filecount_risk_acceptance" in store:
+            require(label == "data" and store.get("acceptance_mode") == "operational_budget"
+                    and store["mount"]["fstype"] in ("nfs", "nfs4")
+                    and isinstance(risk, str) and bool(risk.strip()),
+                    "unknown filecounts require explicit operational-budget NFS data risk evidence")
+        value = os.statvfs(store["path"])  # OSError must propagate, never become UNKNOWN.
+        blocks, size = getattr(value, "f_bavail", None), getattr(value, "f_frsize", None)
+        require(type(blocks) is int and blocks >= 0 and type(size) is int and size > 0
+                and blocks * size >= minimum, label + ": startup byte headroom refused")
+        counts = tuple(getattr(value, key, None) for key in ("f_files", "f_ffree", "f_favail"))
+        require(all(type(count) is int and count >= 0 for count in counts),
+                label + ": malformed filecounts")
+        total, free, available = counts
+        require(available <= free <= total, label + ": inconsistent filecounts")
+        unknown = counts == (0, 0, 0)
+        if unknown:
+            require(risk is not None, label + ": UNKNOWN filecounts require explicit risk acceptance")
+        else:
+            require(available >= 4096, label + ": startup inode headroom refused")
+        result[label] = {"available_bytes": blocks * size,
+                         "filecounts": "UNKNOWN" if unknown else "known",
+                         "available_inodes": None if unknown else available}
+    if result["data"]["filecounts"] == "UNKNOWN":
+        print("data filecount headroom UNKNOWN: all-zero NFS telemetry; "
+              "no free-inode capacity established; risk evidence: "
+              + storage["data"]["unknown_filecount_risk_acceptance"], file=sys.stderr)
+    return result
+
+
 def check(storage, garage, *, probe=None):
     require(storage.get("enabled") is True and storage.get("uid") == 1000
             and storage.get("gid") == 1000, "enabled qualified 1000:1000 storage required")
@@ -66,10 +101,7 @@ def check(storage, garage, *, probe=None):
     require(storage["data_fsync"] is True and storage["metadata_fsync"] is True,
             "fsync required")
     # Space admission is conservative and point in time. It reserves nothing.
-    for label, minimum in (("data", 1024**3), ("metadata", 2 * 1024**3)):
-        value = os.statvfs(storage[label]["path"])
-        require(value.f_bavail * value.f_frsize >= minimum
-                and value.f_favail >= 4096, "startup headroom refused")
+    result["startup_headroom"] = check_headroom(storage)
     return result
 
 
