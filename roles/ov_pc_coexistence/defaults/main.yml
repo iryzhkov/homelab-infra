@@ -1,0 +1,7 @@
+---
+ov_pc_apply: false
+ov_pc_allow_restart: false
+ov_pc_local_digest: 9a6c38c70831b96e51f4eaba2200eae5e85c0f3551d42ffd7cdcab7b5d280ba6
+ov_pc_model_source: file:///home/igor/.cache/ov-selfhost-20261024/matched-embeddings/models
+ov_pc_dropin: /etc/systemd/system/ollama.service.d/zz-openviking-coexistence.conf
+ov_pc_backup: /var/lib/ov-pc-coexistence

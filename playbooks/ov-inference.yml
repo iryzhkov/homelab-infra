@@ -1,0 +1,12 @@
+---
+# Explicit provider-only preparation. Does not deploy or reconfigure OV.
+- name: Prepare the two CPU runtimes and embedding adapter source
+  hosts: homelab
+  gather_facts: false
+  vars:
+    swarm_stack_src: "{{ playbook_dir }}/../stacks/openviking"
+    swarm_stack_env: {}
+  tasks:
+    - name: Prepare inference
+      ansible.builtin.include_tasks:
+        file: "{{ swarm_stack_src }}/embeddings-prepare.yml"

@@ -1,0 +1,76 @@
+{
+  "runtime_image": "ollama/ollama:0.40.10@sha256:4c5b27871a3239a717048f9b93057680a51b60c8119a7016aebb57f938e25e35",
+  "context": 4096,
+  "embeddings": {
+    "model": "qwen3-embedding:0.6b",
+    "manifest": "recipes/embedding-manifest.json",
+    "manifest_path": "manifests/registry.ollama.ai/library/qwen3-embedding/0.6b",
+    "manifest_sha256": "d84267e5df12e19a8be357ab23b88966d61137226724f399707dee270cebccd3",
+    "registry": "https://registry.ollama.ai/v2/library/qwen3-embedding",
+    "files": [
+      {
+        "path": "blobs/sha256-9202febed9e2dadac14bca089be90864571336fa9f4375b690a26ed548957fde",
+        "size": 266,
+        "sha256": "9202febed9e2dadac14bca089be90864571336fa9f4375b690a26ed548957fde",
+        "bundled": "recipes/embedding-config.json"
+      },
+      {
+        "path": "blobs/sha256-06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+        "size": 639150592,
+        "sha256": "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439"
+      },
+      {
+        "path": "blobs/sha256-ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "size": 530,
+        "sha256": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "bundled": "recipes/embedding-official-manifest.json"
+      }
+    ]
+  },
+  "generation": {
+    "model": "ov-gen-4k",
+    "base_model": "qwen2:1.5b-instruct-q4_K_M",
+    "manifest": "recipes/generation-manifest.json",
+    "manifest_path": "manifests/registry.ollama.ai/library/qwen2/1.5b-instruct-q4_K_M",
+    "manifest_sha256": "0d2a504f577120001da91cf8e9fe2bcf74c819d208a888b7b862bd718e55ce44",
+    "registry": "https://registry.ollama.ai/v2/library/qwen2",
+    "files": [
+      {
+        "path": "blobs/sha256-6526537315720146ef6862b3f7f010cb4fa8c24a22c492ac5e984a301bfb0e6e",
+        "sha256": "6526537315720146ef6862b3f7f010cb4fa8c24a22c492ac5e984a301bfb0e6e",
+        "size": 487
+      },
+      {
+        "path": "blobs/sha256-6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603",
+        "sha256": "6acb9bb78ee9d70d4d210ebc3903e6719c7ddb9796dd120f962f640530813603",
+        "size": 986045536
+      },
+      {
+        "path": "blobs/sha256-62fbfd9ed093d6e5ac83190c86eec5369317919f4b149598d2dbb38900e9faef",
+        "sha256": "62fbfd9ed093d6e5ac83190c86eec5369317919f4b149598d2dbb38900e9faef",
+        "size": 182
+      },
+      {
+        "path": "blobs/sha256-c156170b718ec29139d3653d40ed1986fd92fb7e0959b5c71f3c48f62e6636f4",
+        "sha256": "c156170b718ec29139d3653d40ed1986fd92fb7e0959b5c71f3c48f62e6636f4",
+        "size": 11344
+      },
+      {
+        "path": "blobs/sha256-f02dd72bb2423204352eabc5637b44d79d17f109fdb510a7c51455892aa2d216",
+        "sha256": "f02dd72bb2423204352eabc5637b44d79d17f109fdb510a7c51455892aa2d216",
+        "size": 59
+      }
+    ],
+    "create": {
+      "model": "ov-gen-4k",
+      "from": "qwen2:1.5b-instruct-q4_K_M",
+      "parameters": {
+        "num_ctx": 4096,
+        "num_thread": 2,
+        "num_predict": 512,
+        "temperature": 0
+      },
+      "stream": false
+    }
+  }
+}

@@ -1,184 +1,51 @@
 ---
-# Prepare the openviking stack's embedding service: OpenVINO Model Server on
-# the CPU of the node named by openviking_embeddings.host
-# (inventory/group_vars/swarm/openviking-inference.yml). Included by
-# swarm-prepare.yml on every deploy of the stack, before the render.
-#
-# It writes only under {{ swarm_state_root }}/<state_dir> on the embedding
-# host:
-#   models/<repository>/<revision>/   the pinned model files, root-owned, 0444
-#   config/config.json                OVMS's model list
-#   config/<served_name>/graph.pbtxt  the embeddings graph
-# It never touches the OpenViking service, its data or the Compose project,
-# so nothing here is gated on the cutover.
-#
-# Fail closed: a model file whose size or SHA-256 differs from the pin, a
-# missing file, a symlink, or any entry in the revision directory that the
-# pin does not list stops the deploy before the stack is rendered. Download
-# is by get_url with the pinned checksum, so a file already in place and
-# correct is not fetched again.
-#
-# The stack file reads three values this adds to its interpolation
-# environment: the verified model directory, the configuration directory,
-# and a hash of the rendered configuration, so that a configuration change
-# changes deployed.yml and redeploys the service.
-
-- name: Check the embedding pin
-  ansible.builtin.assert:
-    that:
-      - openviking_embeddings.host in groups['swarm_workers']
-      - openviking_embeddings.state_dir is match('^[a-z0-9][a-z0-9-]*$')
-      - openviking_embeddings.state_dir != swarm_stack.name
-      - openviking_embeddings.served_name is match('^[a-z0-9][a-z0-9.-]*$')
-      - openviking_embeddings.model.repository is match('^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')
-      - openviking_embeddings.model.revision is match('^[0-9a-f]{40}$')
-      - openviking_embeddings.model.files | length > 0
-      - openviking_embeddings.model.files | map(attribute='sha256') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
-      - openviking_embeddings.model.files | map(attribute='path') | select('match', '^/|(^|/)\.\.?(/|$)') | list | length == 0
-      - openviking_embeddings.model.files | map(attribute='path') | unique | list | length == openviking_embeddings.model.files | length
-      - openviking_embeddings.graph.max_length | int > 0
-    fail_msg: inventory/group_vars/swarm/openviking-inference.yml does not describe a usable pinned model.
-    quiet: true
-
-- name: Name the embedding directories and render the configuration
+# CPU runtimes need memory.swap.max=0. Swarm cannot express memory-swap;
+# these two small Compose projects join an attachable overlay without ports.
+- name: Load checksummed inference recipes
   ansible.builtin.set_fact:
-    # root on the hosts; scripts/test-openviking-inference.py runs these tasks
-    # unprivileged in a scratch directory and names its own user.
-    ov_embeddings_owner: "{{ openviking_embeddings_test_owner | default('root') }}"
-    ov_embeddings_root: "{{ swarm_state_root }}/{{ openviking_embeddings.state_dir }}"
-    ov_embeddings_model_dir: >-
-      {{ swarm_state_root }}/{{ openviking_embeddings.state_dir }}/models/{{
-         openviking_embeddings.model.repository }}/{{ openviking_embeddings.model.revision }}
-    ov_embeddings_config_dir: "{{ swarm_state_root }}/{{ openviking_embeddings.state_dir }}/config"
-    # Only for the configuration hash; the template tasks below write the files.
-    ov_embeddings_rendered: >-
-      {{ lookup('template', swarm_stack_src ~ '/templates/embeddings-config.json.j2')
-         ~ lookup('template', swarm_stack_src ~ '/templates/embeddings-graph.pbtxt.j2') }}
+    ov_inference_recipes: "{{ lookup('file', swarm_stack_src ~ '/recipes/models.json') | from_json }}"
 
-- name: Create the embedding directories
+- name: Create the private provider overlay on the Swarm manager
+  community.docker.docker_network:
+    name: "{{ openviking_inference_network }}"
+    driver: overlay
+    attachable: true
+    scope: swarm
+  delegate_to: homelab
+  become: true
+
+- name: Provision each CPU runtime
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/ollama-prepare.yml"
+  loop: "{{ openviking_inference | dict2items }}"
+  loop_control:
+    loop_var: ov_provider
+
+- name: Create the adapter source directory on homelab
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ swarm_state_root }}/openviking-inference"
     state: directory
-    owner: "{{ ov_embeddings_owner }}"
-    group: "{{ ov_embeddings_owner }}"
+    owner: root
+    group: root
     mode: "0755"
-  loop: >-
-    {{ [ov_embeddings_root, ov_embeddings_config_dir,
-        ov_embeddings_config_dir ~ '/' ~ openviking_embeddings.served_name, ov_embeddings_model_dir]
-       + (openviking_embeddings.model.files | map(attribute='path') | map('dirname')
-          | reject('equalto', '') | unique | map('regex_replace', '^', ov_embeddings_model_dir ~ '/') | list) }}
-  delegate_to: "{{ openviking_embeddings.host }}"
+  delegate_to: homelab
   become: true
 
-- name: Fetch each pinned model file, verified by its SHA-256
-  ansible.builtin.get_url:
-    url: "{{ openviking_embeddings.model.source }}/{{ item.path }}"
-    dest: "{{ ov_embeddings_model_dir }}/{{ item.path }}"
-    checksum: "sha256:{{ item.sha256 }}"
-    owner: "{{ ov_embeddings_owner }}"
-    group: "{{ ov_embeddings_owner }}"
+- name: Install the read-only embedding adapter
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/files/embedding-adapter.py"
+    dest: "{{ swarm_state_root }}/openviking-inference/embedding-adapter.py"
+    owner: root
+    group: root
     mode: "0444"
-    timeout: 900
-  loop: "{{ openviking_embeddings.model.files }}"
-  loop_control:
-    label: "{{ item.path }}"
-  delegate_to: "{{ openviking_embeddings.host }}"
+  delegate_to: homelab
   become: true
 
-- name: Read every model file back
-  ansible.builtin.stat:
-    path: "{{ ov_embeddings_model_dir }}/{{ item.path }}"
-    follow: false
-    get_checksum: true
-    checksum_algorithm: sha256
-  loop: "{{ openviking_embeddings.model.files }}"
-  loop_control:
-    label: "{{ item.path }}"
-  register: ov_embeddings_stat
-  delegate_to: "{{ openviking_embeddings.host }}"
-  become: true
-
-- name: List everything in the revision directory
-  ansible.builtin.find:
-    paths: "{{ ov_embeddings_model_dir }}"
-    recurse: true
-    hidden: true
-    file_type: any
-    follow: false
-  register: ov_embeddings_found
-  delegate_to: "{{ openviking_embeddings.host }}"
-  become: true
-
-# A check run on a node that has no model yet cannot have fetched it; it
-# reports instead. A real run refuses anything that is not exactly the pin.
-- name: Compare the revision directory with the pin
-  ansible.builtin.set_fact:
-    ov_embeddings_mismatch: >-
-      {%- set bad = [] -%}
-      {%- for result in ov_embeddings_stat.results -%}
-      {%-   set st = result.stat -%}
-      {%-   if not st.exists | default(false) -%}
-      {%-     set _ = bad.append(result.item.path ~ ': missing') -%}
-      {%-   elif not st.isreg | default(false) or st.islnk | default(false) -%}
-      {%-     set _ = bad.append(result.item.path ~ ': not a regular file') -%}
-      {%-   elif st.size != result.item.size or st.checksum != result.item.sha256 -%}
-      {%-     set _ = bad.append(result.item.path ~ ': size or SHA-256 differs from the pin') -%}
-      {%-   endif -%}
-      {%- endfor -%}
-      {%- set pinned = openviking_embeddings.model.files | map(attribute='path') | list -%}
-      {%- set dirs = pinned | map('dirname') | reject('equalto', '') | list -%}
-      {%- for entry in ov_embeddings_found.files | default([]) -%}
-      {%-   set relative = entry.path | relpath(ov_embeddings_model_dir) -%}
-      {%-   if relative not in pinned and not (entry.isdir | default(false) and relative in dirs) -%}
-      {%-     set _ = bad.append(relative ~ ': not part of the pinned revision') -%}
-      {%-   endif -%}
-      {%- endfor -%}
-      {{ bad }}
-
-- name: Refuse a model directory that is not exactly the pinned revision
-  ansible.builtin.assert:
-    that: ov_embeddings_mismatch | length == 0
-    fail_msg: >-
-      {{ ov_embeddings_model_dir }} on {{ openviking_embeddings.host }} does not
-      match {{ openviking_embeddings.model.repository }}@{{ openviking_embeddings.model.revision }}:
-      {{ ov_embeddings_mismatch | join('; ') }}. Remove the directory and deploy
-      again to fetch it afresh.
-    quiet: true
-  when: not ansible_check_mode
-
-- name: Report what a real run would fetch (check mode)
-  ansible.builtin.debug:
-    msg: "{{ ov_embeddings_mismatch }}"
-  when:
-    - ansible_check_mode
-    - ov_embeddings_mismatch | length > 0
-
-- name: Install the OVMS model list
-  ansible.builtin.template:
-    src: "{{ swarm_stack_src }}/templates/embeddings-config.json.j2"
-    dest: "{{ ov_embeddings_config_dir }}/config.json"
-    owner: "{{ ov_embeddings_owner }}"
-    group: "{{ ov_embeddings_owner }}"
-    mode: "0644"
-  delegate_to: "{{ openviking_embeddings.host }}"
-  become: true
-
-- name: Install the embeddings graph
-  ansible.builtin.template:
-    src: "{{ swarm_stack_src }}/templates/embeddings-graph.pbtxt.j2"
-    dest: "{{ ov_embeddings_config_dir }}/{{ openviking_embeddings.served_name }}/graph.pbtxt"
-    owner: "{{ ov_embeddings_owner }}"
-    group: "{{ ov_embeddings_owner }}"
-    mode: "0644"
-  delegate_to: "{{ openviking_embeddings.host }}"
-  become: true
-
-- name: Give the stack file the verified paths and the configuration hash
+- name: Add adapter revision and path to the stack interpolation environment
   ansible.builtin.set_fact:
     swarm_stack_env: >-
       {{ swarm_stack_env | combine({
-           'OPENVIKING_EMBEDDINGS_MODEL_DIR': ov_embeddings_model_dir,
-           'OPENVIKING_EMBEDDINGS_CONFIG_DIR': ov_embeddings_config_dir,
-           'OPENVIKING_EMBEDDINGS_CONFIG_SHA256': ov_embeddings_rendered | string | hash('sha256'),
-         }) }}
+        'OPENVIKING_ADAPTER_PATH': swarm_state_root ~ '/openviking-inference/embedding-adapter.py',
+        'OPENVIKING_ADAPTER_SHA256': lookup('file', swarm_stack_src ~ '/files/embedding-adapter.py', rstrip=false) | hash('sha256')
+      }) }}
   no_log: true

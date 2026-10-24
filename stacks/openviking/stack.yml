@@ -1,31 +1,10 @@
-# OpenViking as a Swarm stack (phase 5, batch F3). Deployed by
-# playbooks/swarm.yml from its entry in inventory/group_vars/swarm/
-# stacks-f3.yml; the Compose file beside this one (which builds the image
-# locally) stays until the phase 5 cleanup. The image is the one
-# `--tags registry` pushes and pre-pulls on both workers.
-#
-# State lives in ${SWARM_STATE_ROOT}/openviking on the node labelled
-# pin.openviking: data/ (vector store and viking files) and config/ov.conf,
-# which holds the API keys and is not in this repository. The health check
-# reads the root API key from ov.conf instead of carrying it as a literal, as
-# the Compose file does.
-#
-# The OpenViking image is pinned to the digest running before the self-hosted
-# providers work (0.2.6), so deploying the embeddings service below cannot pick
-# up a newer :latest. The upgrade changes this line at its own cutover.
-#
-# embeddings: OpenAI-compatible embeddings for OpenViking from OpenVINO Model
-# Server on normandy's CPU (inventory/group_vars/swarm/openviking-inference.yml
-# holds the pinned model and the measurements). It publishes no port: only
-# services on this stack's overlay reach it, as http://embeddings:8000/v3
-# (model qwen3-embedding, 1024 dimensions). embeddings-prepare.yml installs
-# the model and the graph under ${SWARM_STATE_ROOT}/openviking-embeddings on
-# normandy and supplies the OPENVIKING_EMBEDDINGS_* values. Adding it does not
-# change what OpenViking uses: ov.conf names the embedding provider.
-
+# Baseline OV stays at 0.2.6 until the separately controlled upgrade cutover.
+# CPU providers are scoped Compose projects because Swarm has no memory-swap cap.
+# All inference endpoints are overlay-only. ov.conf remains private and untouched.
 services:
   openviking:
     image: git.ryzhkov.dev/igor/openviking:latest@sha256:e9a7222f1f2d4b43bb6e76c50c8a71b70be5d96e7ed0a4a515c1920dcda69b3f
+    networks: [default, providers]
     ports:
       - "1933:1933"
     volumes:
@@ -69,67 +48,36 @@ services:
         condition: any
         delay: 5s
 
-  embeddings:
-    # The image the 2026-10-24 measurements used (OVMS 2026.4.1). The -gpu
-    # variant carries the CPU plugin too; no device is mapped.
-    image: openvino/model_server:2026.4.1-gpu@sha256:a928903fe429f1e3e27107cc45932d30d95febfd2d1159dc50869c3eac76fc58
-    command:
-      - --rest_port
-      - "8000"
-      - --rest_workers
-      - "2"
-      - --config_path
-      - /workspace/config.json
+
+  embedding-adapter:
+    image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    command: [python3, -B, /app/embedding-adapter.py]
+    user: "65534:65534"
     read_only: true
+    cap_drop: [ALL]
     environment:
-      OMP_NUM_THREADS: "2"
-      # Changes when the rendered configuration does, so a new graph redeploys.
-      OPENVIKING_EMBEDDINGS_CONFIG_SHA256: ${OPENVIKING_EMBEDDINGS_CONFIG_SHA256:?set by embeddings-prepare.yml}
+      PYTHONDONTWRITEBYTECODE: "1"
+      OPENVIKING_ADAPTER_SHA256: ${OPENVIKING_ADAPTER_SHA256:?set by embeddings-prepare.yml}
     volumes:
       - type: bind
-        source: ${OPENVIKING_EMBEDDINGS_CONFIG_DIR:?set by embeddings-prepare.yml}
-        target: /workspace
+        source: ${OPENVIKING_ADAPTER_PATH:?set by embeddings-prepare.yml}
+        target: /app/embedding-adapter.py
         read_only: true
-      - type: bind
-        source: ${OPENVIKING_EMBEDDINGS_MODEL_DIR:?set by embeddings-prepare.yml}
-        target: /model
-        read_only: true
-      - type: tmpfs
-        target: /tmp
-        tmpfs:
-          size: 67108864
-    # Readiness of the model, not an inference: a long document can hold the
-    # single inference stream for minutes, and a health check queued behind it
-    # would time out and restart the service in the middle of a reindex.
+    networks: [providers]
     healthcheck:
-      test:
-        - CMD
-        - curl
-        - -fsS
-        - -o
-        - /dev/null
-        - http://127.0.0.1:8000/v2/models/qwen3-embedding/ready
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
       interval: 30s
-      timeout: 5s
+      timeout: 3s
       retries: 3
-      start_period: 120s
-      start_interval: 5s
     deploy:
       replicas: 1
       placement:
-        constraints:
-          - node.labels.host == normandy
+        constraints: [node.labels.host == homelab]
       resources:
-        # Qualified on normandy under exactly these limits: a 6000-token
-        # input peaks at 1.75 GB; 8000 tokens, or four 2000-token inputs in
-        # one request, are OOM-killed. The graph's max_length (6144) refuses
-        # anything longer. Idle with the model loaded: about 0.7 GB.
         limits:
-          memory: 2048M
-          cpus: "2"
-          pids: 128
-        reservations:
-          memory: 1536M
+          memory: 128M
+          cpus: "0.5"
+          pids: 32
       update_config:
         order: stop-first
       rollback_config:
@@ -137,3 +85,9 @@ services:
       restart_policy:
         condition: any
         delay: 5s
+
+networks:
+  default: {}
+  providers:
+    external: true
+    name: openviking-providers

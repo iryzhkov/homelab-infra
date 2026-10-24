@@ -1,0 +1,98 @@
+---
+# Included for embeddings and generation, never touches OV config/data.
+- name: Name this runtime
+  ansible.builtin.set_fact:
+    ov_recipe: "{{ ov_inference_recipes[ov_provider.key] }}"
+    ov_runtime_root: "{{ swarm_state_root }}/{{ ov_provider.value.state_dir }}"
+
+- name: Check the scoped destination
+  ansible.builtin.assert:
+    that:
+      - ov_provider.value.host in groups['swarm_workers']
+      - ov_provider.value.state_dir in ['openviking-embeddings', 'openviking-generation']
+      - ov_provider.key in ['embeddings', 'generation']
+      - ov_provider.value.source == 'registry' or ov_provider.value.source is match('^file:///')
+    quiet: true
+
+- name: Verify and install the pinned Ollama model
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/model-prepare.yml"
+  vars:
+    ov_model_root: "{{ ov_runtime_root }}/models"
+    ov_model_owner: root
+    ov_model_host: "{{ ov_provider.value.host }}"
+    ov_model_source: "{{ ov_provider.value.source }}"
+
+- name: Render the scoped CPU runtime project
+  ansible.builtin.template:
+    src: "{{ swarm_stack_src }}/templates/inference-compose.yml.j2"
+    dest: "{{ ov_runtime_root }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Install the generation alias recipe
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/recipes/generation.Modelfile"
+    dest: "{{ ov_runtime_root }}/Modelfile"
+    owner: root
+    group: root
+    mode: "0444"
+  when: ov_provider.key == 'generation'
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Start only this inference runtime with explicit zero swap allowance
+  community.docker.docker_compose_v2:
+    project_src: "{{ ov_runtime_root }}"
+    files: [compose.yml]
+    project_name: "openviking-{{ ov_provider.key }}"
+    state: present
+    wait: true
+    wait_timeout: 120
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Verify the running CPU container has the qualified hard limits
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "--format={{ '{{json .HostConfig}}' }}"
+      - "openviking-{{ ov_provider.key }}"
+  register: ov_runtime_limits
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true
+
+- name: Refuse a runtime without the measured memory CPU and swap limits
+  ansible.builtin.assert:
+    that:
+      - (ov_runtime_limits.stdout | from_json).Memory == 2147483648
+      - (ov_runtime_limits.stdout | from_json).MemorySwap == 2147483648
+      - (ov_runtime_limits.stdout | from_json).NanoCpus == 2000000000
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Create the generation alias using the pinned base
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - openviking-generation
+      - ollama
+      - create
+      - ov-gen-4k
+      - -f
+      - /recipe/Modelfile
+  # Alias parameters and context are source-managed in the mounted Modelfile.
+  changed_when: true
+  when:
+    - ov_provider.key == 'generation'
+    - not ansible_check_mode
+  delegate_to: "{{ ov_provider.value.host }}"
+  become: true

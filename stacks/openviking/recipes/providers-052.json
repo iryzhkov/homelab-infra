@@ -1,0 +1,66 @@
+{
+  "embedding": {
+    "max_concurrent": 1,
+    "max_retries": 0,
+    "max_input_tokens": 65536,
+    "text_source": "content_only",
+    "dense": {
+      "provider": "openai",
+      "model": "qwen3-embedding:0.6b",
+      "dimension": 1024,
+      "batch_size": 1,
+      "input": "text",
+      "query_param": "query",
+      "document_param": "document",
+      "encoding_format": "float",
+      "failback_timeout_seconds": 30,
+      "failback_request_count": 5,
+      "credentials": [
+        {
+          "id": "pc",
+          "api_base": "http://embedding-adapter:8000/pc/v1",
+          "api_key": "internal-unused"
+        },
+        {
+          "id": "cpu",
+          "api_base": "http://embedding-adapter:8000/cpu/v1",
+          "api_key": "internal-unused"
+        }
+      ]
+    }
+  },
+  "vlm": {
+    "provider": "openai",
+    "model": "local:latest",
+    "temperature": 0,
+    "max_tokens": 512,
+    "max_retries": 0,
+    "max_concurrent": 1,
+    "timeout": 480,
+    "failback_timeout_seconds": 30,
+    "failback_request_count": 5,
+    "credentials": [
+      {
+        "id": "pc",
+        "provider": "openai",
+        "model": "local:latest",
+        "api_key": "internal-unused",
+        "api_base": "http://192.168.90.212:11434/v1",
+        "reasoning_effort": "none",
+        "extra_request_body": {
+          "presence_penalty": 0
+        }
+      },
+      {
+        "id": "homelab",
+        "provider": "openai",
+        "model": "ov-gen-4k",
+        "api_key": "internal-unused",
+        "api_base": "http://generation:11434/v1"
+      }
+    ]
+  },
+  "retrieval": {
+    "enable_intent": false
+  }
+}

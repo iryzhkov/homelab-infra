@@ -1,0 +1,174 @@
+---
+- name: Require the exact host and explicit restart authority
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'gaming-pc'
+      - ov_pc_apply | bool
+      - ov_pc_allow_restart | bool
+    fail_msg: This scoped play restarts only gaming-pc Ollama. Set both ov_pc_apply and ov_pc_allow_restart after the rollout window is approved.
+    quiet: true
+
+- name: Read the existing system service custody
+  ansible.builtin.command:
+    argv: [systemctl, show, ollama, --property=User, --property=Group, --property=ExecStart, --property=Environment, --property=FragmentPath, --property=DropInPaths, --property=ActiveState]
+  register: ov_pc_service
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Preserve the known service owner runtime and settings
+  ansible.builtin.assert:
+    that:
+      - "'User=ollama' in ov_pc_service.stdout_lines"
+      - "'Group=ollama' in ov_pc_service.stdout_lines"
+      - "'FragmentPath=/usr/lib/systemd/system/ollama.service' in ov_pc_service.stdout_lines"
+      - "'ActiveState=active' in ov_pc_service.stdout_lines"
+      - "'/opt/ollama/bin/ollama serve' in ov_pc_service.stdout"
+      - "'OLLAMA_MODELS=/var/lib/ollama' in ov_pc_service.stdout"
+      - "'OLLAMA_CONTEXT_LENGTH=65536' in ov_pc_service.stdout"
+    fail_msg: The PC Ollama service no longer matches the inspected owner/runtime. Inspect it before rollout.
+    quiet: true
+
+- name: Read the installed runtime version without inference
+  ansible.builtin.uri:
+    url: http://127.0.0.1:11434/api/version
+    return_content: true
+    timeout: 3
+  register: ov_pc_version
+  check_mode: false
+
+- name: Require the measured PC runtime
+  ansible.builtin.assert:
+    that: ov_pc_version.json.version == '0.40.5'
+    quiet: true
+
+- name: Check game VRAM and existing local generation residency without inference
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/preflight.py --expected-local-digest {{ ov_pc_local_digest }}"
+    executable: /usr/bin/python3
+  changed_when: false
+  check_mode: false
+  register: ov_pc_preflight
+
+- name: Inspect the dedicated drop-in without following links
+  ansible.builtin.stat:
+    path: "{{ ov_pc_dropin }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: ov_pc_dropin_before
+
+- name: Refuse to replace an unowned drop-in
+  ansible.builtin.assert:
+    that:
+      - not ov_pc_dropin_before.stat.exists or (ov_pc_dropin_before.stat.isreg | default(false) and not ov_pc_dropin_before.stat.islnk | default(false))
+      - not ov_pc_dropin_before.stat.exists or ov_pc_dropin_before.stat.checksum == lookup('file', role_path ~ '/files/zz-openviking-coexistence.conf', rstrip=false) | hash('sha256')
+    quiet: true
+
+- name: Create the root-only rollout record directory
+  ansible.builtin.file:
+    path: "{{ ov_pc_backup }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Retain the original service settings before any change
+  ansible.builtin.copy:
+    content: "{{ ov_pc_service.stdout }}\n"
+    dest: "{{ ov_pc_backup }}/service-before.txt"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  no_log: true
+
+- name: Load the shared matched embedding recipe
+  ansible.builtin.set_fact:
+    ov_recipe: "{{ (lookup('file', swarm_stack_src ~ '/recipes/models.json') | from_json).embeddings }}"
+
+- name: Install only the matched embedding model into the existing service cache
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/model-prepare.yml"
+  vars:
+    ov_model_root: /var/lib/ollama
+    ov_model_owner: ollama
+    ov_model_host: gaming-pc
+    ov_model_source: "{{ ov_pc_model_source }}"
+
+- name: Apply only the coexistence setting with rollback on failed restart
+  when: not ansible_check_mode
+  block:
+    - name: Install the owned coexistence drop-in with a backup
+      ansible.builtin.copy:
+        src: zz-openviking-coexistence.conf
+        dest: "{{ ov_pc_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      register: ov_pc_changed
+
+    - name: Restart only Ollama when the owned setting changes
+      ansible.builtin.systemd_service:
+        name: ollama
+        daemon_reload: true
+        state: restarted
+      when: ov_pc_changed.changed
+
+    - name: Wait for Ollama metadata API
+      ansible.builtin.uri:
+        url: http://127.0.0.1:11434/api/version
+        timeout: 3
+      register: ov_pc_ready
+      retries: 10
+      delay: 2
+      until: ov_pc_ready.status == 200
+
+    - name: Read effective settings after restart
+      ansible.builtin.command:
+        argv: [systemctl, show, ollama, --property=Environment]
+      register: ov_pc_after
+      changed_when: false
+      no_log: true
+
+    - name: Verify coexistence is effective and generation context is preserved
+      ansible.builtin.assert:
+        that:
+          - "'OLLAMA_MAX_LOADED_MODELS=2' in ov_pc_after.stdout"
+          - "'OLLAMA_CONTEXT_LENGTH=65536' in ov_pc_after.stdout"
+          - "'OLLAMA_KV_CACHE_TYPE=q4_0' in ov_pc_after.stdout"
+          - "'OLLAMA_FLASH_ATTENTION=1' in ov_pc_after.stdout"
+        quiet: true
+  rescue:
+    - name: Remove only our newly installed setting on failure
+      ansible.builtin.file:
+        path: "{{ ov_pc_dropin }}"
+        state: absent
+      when:
+        - ov_pc_changed is defined
+        - ov_pc_changed.changed | default(false)
+        - not ov_pc_dropin_before.stat.exists
+
+    - name: Restore the prior owned setting on failure
+      ansible.builtin.copy:
+        src: "{{ ov_pc_changed.backup_file }}"
+        dest: "{{ ov_pc_dropin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - ov_pc_changed is defined
+        - ov_pc_changed.backup_file is defined
+
+    - name: Restart the restored service
+      ansible.builtin.systemd_service:
+        name: ollama
+        daemon_reload: true
+        state: restarted
+      when: ov_pc_changed is defined and ov_pc_changed.changed | default(false)
+
+    - name: Stop rollout after restoring the previous service configuration
+      ansible.builtin.fail:
+        msg: Coexistence rollout failed. Original service configuration restored; inspect Ollama and the retained service-before.txt before retrying.
