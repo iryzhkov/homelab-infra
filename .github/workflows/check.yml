@@ -170,10 +170,13 @@ jobs:
           printf 'PYTHONDONTWRITEBYTECODE=1\n' >>"$GITHUB_ENV"
       - name: Install pinned deployment and upstream importer dependencies
         run: pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0 cryptography==46.0.3 Django==5.2.17 djangorestframework==3.17.1
-      - name: Test receipt-bound operator recovery and pinned importer semantics
+      - name: Test receipt-bound recovery and pinned importer and mapping-reference semantics
         run: |
           python3 -B roles/authentik_jocasta_operator/tests/test_importer_semantics.py -v
           python3 -B roles/authentik_jocasta_operator/tests/test_operator.py -v
+          managed_fixture_home=/root/.cache/webmcp-managed-tests/home
+          install -d -m 0700 "$managed_fixture_home" "$managed_fixture_home/tmp"
+          env HOME="$managed_fixture_home" TMPDIR="$managed_fixture_home/tmp" WEBMCP_TEST_HOME="$managed_fixture_home" python3 -B scripts/test-webmcp-managed-interactive.py -v
           python3 -B scripts/test-jocasta-mcp-config.py -v
 
   authentik-machine-identities:

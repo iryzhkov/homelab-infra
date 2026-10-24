@@ -1,5 +1,10 @@
 # Jocasta working documents
 
+A separate disabled [managed interactive capability](managed-interactive-webmcp.md)
+supplies dedicated host enrollment and an opt-in selector for the existing
+operator verifier. This is source only. Its merge activates neither the verifier
+nor host registrations. Laptop qualification gates the remaining adopted hosts.
+
 Jocasta runs as a Docker Compose container on homelab, served by the existing
 Traefik TLS ingress at https://jocasta.ryzhkov.dev. No Cloudflare Tunnel
 hostname is added. The server validates per-host bearer tokens itself; Traefik
