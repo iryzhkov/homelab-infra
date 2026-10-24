@@ -15,12 +15,16 @@ vars/akasha-runtime.yml supplies separate per-call preserve lists: the runtime c
 uses chaldea_host_artifact_preserve_versions and the shared-trust include uses
 akasha_trust_preserve_versions. Global vars/chaldea-runtime.yml/shared trust remain022.
 The artifact role accepts at most seven unique exact preserved versions. For the
-measured nine-release set 022/023/024/026/027/028/029/0210/0211, a future runtime0211
-call needs explicit 022/023/024/026/027/028/029 plus newest prior0210. A later shared022
-call separately needs explicit 023/024/026/027/028/029/0210 plus newest prior0211.
-Seven is the measured minimum for each call. This bound changes no runtime pin or
-preserve list and leaves default selected-plus-newest-prior retention unchanged.
-Fresh directory/mtime evidence and exact artifact qualification still gate each call.
+nine-member set 022/023/024/026/027/028/029/0210/013, runtime013 needs explicit
+022/023/024/026/027/028/029 plus newest prior0210. The subsequent shared022 call
+needs explicit 023/024/026/027/028/029/0210 plus newest prior013. Seven is the actual
+maximum and the minimum needed here; selected plus newest prior remain implicit.
+Before EACH call, obtain fresh release and matching archive/manifest cache
+membership, root ownership, no-symlink and directory mtime evidence. Stop on a
+different set or newest prior. Preserve all eight old releases and their cache
+entries. Never install missing old versions or alter target mtimes.
+ROOT must compare the official host-v0.2.13 publication against the qualified
+candidate before source activation, merge or apply.
 vars/mission-control-homelab.yml retains explicit existing permission and activation
 gates without duplicating the runtime pin or artifact preservation.
 
@@ -38,13 +42,27 @@ changes only the existing reader flag/kinds, keeping its four status sources. Th
 equality. The separate proposal remains empty/unused; do not request its validator
 option or invent grants. No signing/publication/publisher work belongs to this cleanup.
 
-For Normandy, follow mission-control-hosted.md. The composition requires the exact
-qualified fleet dependency selected by roles/mission_control/defaults/main.yml.
-The old live dependency
-remains valid for the deployed old composition until a reviewed source update.
-The previous qualified client-v0.4.9 archive SHA was
-4029833d7b013571ff375a8bb58d355fcab3ab54e682038a2a65a598751a1535.
-Its explicit runtime selection remains independent of helper040/Node26.12 and user clients.
+For the Normandy repair, use the canonical playbooks/mission-control.yml with a
+clean fleet checkout at exact revision bc3d4c9c1ae3e2f0c88315c3c3d179a3b82944bf.
+It imports the canonical mission_control_runtime and mission_control_reader roles.
+Pass the new two-key vars/mission-control-repair-runtime.yml packet explicitly;
+it is never auto-imported and carries no enablement, activation or permission flags.
+After ROOT's official client-v0.4.19 comparison, the operator appends these arguments
+to the existing invocation, preserving its current flags and configuration:
+
+```sh
+ANSIBLE_LIBRARY="$F/library" ansible-playbook -i inventory/hosts.yml \
+  playbooks/mission-control.yml --limit omarchy-normandy \
+  -e "mission_control_fleet_checkout=$F" \
+  -e mission_control_fleet_revision=bc3d4c9c1ae3e2f0c88315c3c3d179a3b82944bf \
+  -e @vars/mission-control-repair-runtime.yml
+```
+
+Here F is the absolute clean checkout of that exact dependency. Retain the existing
+explicit flags/config arguments in the command above. The packet only changes the
+reader and web's existing independent client runtime from client-v0.4.14 to
+client-v0.4.19. It selects no fleet site ownership, new grants, Node pin or helper
+runtime. ROOT owns review, CI and separately authorized deployment.
 Source fixtures do not substitute for actual target SYSTEM verification, namespace/DAC,
 BPF, live broker, real thread transition or outage qualification. Root owns combined
 reviews, native CI, exact reviewed merges and all separately authorized live actions.
