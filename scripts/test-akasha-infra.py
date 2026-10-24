@@ -396,9 +396,9 @@ class SnapshotTest(unittest.TestCase):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
         self.assertEqual(shared["chaldea_host_version"], "host-v0.2.2")
-        self.assertEqual(pin["akasha_host_version"], "host-v0.2.13")
+        self.assertEqual(pin["akasha_host_version"], "host-v0.2.14")
         self.assertEqual(pin["akasha_host_sha256"],
-                         "0bcb188508832c42bb3b0c2a44120bb66991149dd485781d042b1a6d0a2a344f")
+                         "969319cb2dbde4978604edd109ce543711a6960c54d5e45cb1138d2a2f23c0ec")
         old_versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10)]
         versions = old_versions + [pin["akasha_host_version"]]
         self.assertEqual(shared["chaldea_clock_host_version"], "host-v0.2.12")
@@ -409,14 +409,14 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(clock_vars["chaldea_host_artifact_cache"], "/var/cache/chaldea-clock-host")
         self.assertEqual(clock_vars["chaldea_host_artifact_preserve_versions"], [])
         old_root = "/opt/chaldea-host/releases/host-v0.2.2/host"
-        new_root = "/opt/chaldea-host/releases/host-v0.2.13/host"
+        new_root = "/opt/chaldea-host/releases/host-v0.2.14/host"
         checks = {
             "chaldea_node": [
                 "chaldea_host_version == 'host-v0.2.2'",
                 "chaldea_node_version == '26.10.0'",
                 "chaldea_node_sha256 == 'ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022'"],
             "chaldea_host_artifact": [
-                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.13')",
+                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.14')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
                 "chaldea_host_artifact_preserve_versions == (fixture_old_versions[1:] if fixture_artifact_calls | default([]) | length else fixture_old_versions[:-1])",
                 "chaldea_host_artifact_preserve_versions | length == 7",
@@ -427,7 +427,7 @@ class SnapshotTest(unittest.TestCase):
                 "chaldea_host_artifact_root == '" + old_root + "'",
                 "chaldea_access_trust_runtime == '/opt/chaldea-clock-host/releases/" + shared["chaldea_clock_host_version"] + "/host/access-maintenance.mjs'"],
             "akasha": [
-                "chaldea_host_version == 'host-v0.2.13'",
+                "chaldea_host_version == 'host-v0.2.14'",
                 "chaldea_host_artifact_root == '" + new_root + "'",
                 "'" + new_root + "/akasha-service.mjs' in akasha_exec_start"],
         }
@@ -436,9 +436,9 @@ class SnapshotTest(unittest.TestCase):
             releases, cache = root / "releases", root / "cache"
             releases.mkdir()
             cache.mkdir()
-            # All eight actual old releases plus selected013 must survive EACH call.
+            # All eight actual old releases plus selected014 must survive EACH call.
             # The obsolete021 fixture proves GC runs. Controlled fixture mtimes make
-            # prior0210 then prior013 explicit; live evidence remains an operator gate.
+            # prior0210 then prior014 explicit; live evidence remains an operator gate.
             for index, version in enumerate(["host-v0.2.1"] + versions):
                 release = releases / version
                 release.mkdir()
@@ -522,7 +522,7 @@ class SnapshotTest(unittest.TestCase):
                                   for path in play["vars_files"]]
             play["post_tasks"] = [{"ansible.builtin.assert": {"that": [
                 "chaldea_host_version == 'host-v0.2.2'",
-                "fixture_artifact_calls == ['host-v0.2.13', 'host-v0.2.2']",
+                "fixture_artifact_calls == ['host-v0.2.14', 'host-v0.2.2']",
                 "chaldea_host_artifact_root == '" + old_root + "'"], "quiet": True}}]
             path = root / "play.yml"
             path.write_text(yaml.safe_dump([play]))

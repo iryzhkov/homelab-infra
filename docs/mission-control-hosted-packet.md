@@ -15,15 +15,15 @@ vars/akasha-runtime.yml supplies separate per-call preserve lists: the runtime c
 uses chaldea_host_artifact_preserve_versions and the shared-trust include uses
 akasha_trust_preserve_versions. Global vars/chaldea-runtime.yml/shared trust remain022.
 The artifact role accepts at most seven unique exact preserved versions. For the
-nine-member set 022/023/024/026/027/028/029/0210/013, runtime013 needs explicit
+nine-member set 022/023/024/026/027/028/029/0210/014, runtime014 needs explicit
 022/023/024/026/027/028/029 plus newest prior0210. The subsequent shared022 call
-needs explicit 023/024/026/027/028/029/0210 plus newest prior013. Seven is the actual
+needs explicit 023/024/026/027/028/029/0210 plus newest prior014. Seven is the actual
 maximum and the minimum needed here; selected plus newest prior remain implicit.
 Before EACH call, obtain fresh release and matching archive/manifest cache
 membership, root ownership, no-symlink and directory mtime evidence. Stop on a
 different set or newest prior. Preserve all eight old releases and their cache
 entries. Never install missing old versions or alter target mtimes.
-ROOT must compare the official host-v0.2.13 publication against the qualified
+ROOT must compare the official host-v0.2.14 publication against the qualified
 candidate before source activation, merge or apply.
 vars/mission-control-homelab.yml retains explicit existing permission and activation
 gates without duplicating the runtime pin or artifact preservation.
