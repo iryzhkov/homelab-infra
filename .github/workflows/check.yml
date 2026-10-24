@@ -100,6 +100,35 @@ jobs:
       - run: shellcheck -S warning roles/backup/files/homelab-bulk-backup roles/backup/files/homelab-backup-run roles/backup/files/homelab-restore-verify roles/offsite_phone/files/homelab-offsite-run roles/offsite_phone/files/homelab-offsite-bundle roles/fleet_helpers/files/zigbee-watchdog.sh
       - run: python3 -m py_compile roles/drift_check/files/homelab-drift-check
 
+  openviking-native-providers:
+    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    container:
+      options: --memory=2g --cpus=2
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated native provider checks
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/native-home"
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/native-home"
+          mkdir -p "$HOME/tmp"
+          printf 'HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'TMPDIR=%s/tmp\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'OPENVIKING_INFERENCE_TEST_HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'OPENVIKING_NATIVE_TEST=1\n' >>"$GITHUB_ENV"
+          printf 'PYTHONDONTWRITEBYTECODE=1\n' >>"$GITHUB_ENV"
+      - name: Install pinned native provider and deployment schemas
+        run: pip install --disable-pip-version-check openviking==0.5.2 ansible-core==2.19.13
+      - name: Exercise native provider failover and recovery
+        run: python3 scripts/test-openviking-inference.py NativeOV -v
+      - name: Check scoped inference playbooks
+        run: |
+          ansible-playbook playbooks/ov-inference.yml --syntax-check
+          ansible-playbook playbooks/ov-pc-coexistence.yml --syntax-check
+
   authentik-machine-identities:
     runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
     timeout-minutes: 60
