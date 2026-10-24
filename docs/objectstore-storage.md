@@ -62,8 +62,11 @@ by its real path under `/mnt/docker-data/swarm`. The mount target, the store
 path and the `meta` and `config` children must match the expected findmnt
 identity and options, and sit on the mount root's device, so a missing mount
 or an overmount refuses instead of falling back to the underlying directory.
-The data directory and `meta` must be owned by the Garage uid with no group or
-other access. Before privileged configuration rendering, the metadata parent,
+The data directory must be owned by the Garage uid, or by both numeric IDs
+in an explicit qualified data identity mapping as described below. It must
+have no group or other access. The local `meta` directory always requires
+the Garage process uid with no group or other access.
+Before privileged configuration rendering, the metadata parent,
 `meta`, `config` and every ancestor back through `/` must be directories
 owned by root or the selected Garage uid. An unrelated owner refuses even at
 0755 because it can chmod the directory and replace its children. The Garage
@@ -79,6 +82,51 @@ users. This exception never applies to the metadata parent, `meta` or
 without replacing the directory. A selected-uid-owned writable sticky
 ancestor conservatively refuses too. A missing directory refuses; the
 preflight never creates one.
+
+## Optional data owner mapping
+
+NFS can map a process identity to different numeric owners. An optional
+`data.identity_mapping` object declares the expected observed owner of the
+data directory. It must contain exactly `owner_uid`, `owner_gid` and
+`evidence`. Both IDs must be positive non-root integers, excluding booleans.
+Evidence must be a nonblank string referencing qualification of the mapping
+for the selected process uid/gid and NFS layout.
+
+This inert schema example uses the test fixture's observed IDs. It is not
+a production selection or qualification. The null evidence deliberately
+refuses enabled validation until actual evidence is supplied:
+
+```yaml
+data:
+  # Other required data fields omitted from this schema example.
+  identity_mapping:
+    owner_uid: 977
+    owner_gid: 988
+    evidence: null
+```
+
+The fixture uses process 1000:1000 and observed data ownership 977:988.
+With a mapping, the preflight checks both observed IDs and still refuses
+any group or other access. A null object, incomplete object, unknown field,
+invalid ID or missing evidence refuses before host inspection. Omitting
+`identity_mapping` preserves the legacy check of the process uid alone,
+without a group-owner comparison. It also preserves the existing
+configuration digest. Adding, removing or changing a declaration requires
+the existing exact-digest requalification, as does changing the process
+identity. Both data acceptance modes support this declaration.
+
+Metadata refuses `identity_mapping`, including null. Its parent, config
+directory and ancestors still trust only root or the selected process uid;
+`meta` still belongs to the process uid alone. A data mapping grants no
+metadata custody. Deployment environment binding still uses the process
+uid/gid, never the mapped owner IDs. Physical metadata caps and all live
+qualification gates remain mandatory.
+
+This declaration only checks observed ownership. It does not change NFS
+server mapping, exports, ownership, accounts, group membership or ACLs.
+Traversal, write behaviour and mapping qualification need their own
+evidence. The canonical configuration leaves this declaration absent,
+all live facts null, and the source disabled.
 
 ## Capacity
 
@@ -148,13 +196,16 @@ still apply.
 
 ## The existing ML export
 
-The homelab NAS mount is `/mnt/nas/ml` from
-`192.168.40.40:/var/nfs/shared/machine_learning`, NFSv3, soft, `sec=sys`, root
-owned 988:988 mode 0770. Existing folders there (jobs, datasets, registry, big
-data, runs, dsh-workspace) are unrelated, and no blob directory exists. The
+The original read-only survey recorded the homelab NAS mount at
+`/mnt/nas/ml` from `192.168.40.40:/var/nfs/shared/machine_learning`,
+NFSv3, soft, `sec=sys`, with export-root ownership 988:988 mode 0770.
+The surveyed folders (jobs, datasets, registry, big data, runs,
+dsh-workspace) are unrelated. These observations do not populate the
+canonical configuration or qualify a production blob namespace. The
 preflight does not ban this export by name. A blob namespace there can pass
 only as a dedicated top-level directory (for example `/mnt/nas/ml/garage-blobs`)
-owned by the Garage uid with no group or other access. Data acceptance must
+owned by the Garage uid or the explicitly qualified mapped data uid/gid,
+with no group or other access. Data acceptance must
 either reference a NAS-enforced hard quota scoped to exactly that directory
 or explicitly select operational budget acceptance with its risk evidence.
 The export root itself, a folder inside another consumer's folder, and a

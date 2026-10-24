@@ -20,8 +20,10 @@ objectstore_storage:
   data_fsync: true
   metadata_fsync: true
   # Blob blocks on NFS. path is a dedicated top-level directory of the mount,
-  # owned by uid with no group or other access. mount.options must list rw and
-  # exactly one of hard or soft.
+  # owned by uid or an explicitly qualified data.identity_mapping, with no
+  # group or other access. The optional mapping remains absent; its exact
+  # schema and inert example are in docs/objectstore-storage.md.
+  # mount.options must list rw and exactly one of hard or soft.
   data:
     path: null
     mount: {target: null, source: null, fstype: null, fsroot: null, options: []}
