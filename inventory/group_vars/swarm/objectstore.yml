@@ -23,6 +23,9 @@ objectstore_storage:
   # owned by uid or an explicitly qualified data.identity_mapping, with no
   # group or other access. The optional mapping remains absent; its exact
   # schema and inert example are in docs/objectstore-storage.md.
+  # Managed DATA access_profile is also omitted. Its fixed inert schema and
+  # unresolved acceptance boundary are in docs/objectstore-storage.md. No
+  # acceptance reference or normal live gate is adopted by this source.
   # mount.options must list rw and exactly one of hard or soft.
   data:
     path: null

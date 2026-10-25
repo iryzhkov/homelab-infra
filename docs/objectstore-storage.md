@@ -87,11 +87,12 @@ It cannot substitute for the qualified normal guard.
 
 Consumer boundaries: `storage-validate.yml`, the Swarm wrapper and inert render
 example consume preflight schema/digests and still require all live gates.
-Chaldea's separate `src/exec/blob-maintenance.ts` headroom check still requires
-NAS free inodes and can refuse this same observation. Its `src/exec/blob_pair.py`
-checks current bytes and available inodes only at the local ext4 backup destination.
-Neither consumer changes here. This proposal clears only native/bootstrap
-admission with explicit risk evidence, not maintenance or deployment acceptance.
+Chaldea's `src/exec/blob-maintenance.ts` uses the hash-bound native
+`check()` producer, including explicit UNKNOWN semantics. Its
+`src/exec/blob_pair.py` checks strict current bytes and available inodes at
+the local ext4 backup destination. The managed profile described below also
+requires coordinated version 3 pair/consumer source. Neither this configuration
+nor source checks establish maintenance or deployment acceptance.
 
 Using this proposal on a host requires separately reviewed replacement guard,
 preflight, candidate annex and storage bytes, new hashes/digest and explicit
@@ -100,6 +101,51 @@ not cover them. The 2e12-byte aggregate unquotaed NAS budget, 16 GiB metadata bu
 local backups, manual cleanup/publication, 14-day retention and 1-day multipart
 expiry remain unchanged. Fullness, mount-loss, restore and other live gates are
 neither supplied nor waived by this source change.
+
+
+### Inert managed DATA profile
+
+A separately adopted shared-access contract may select this fixed DATA-only
+field. It is omitted from canonical inventory. This example is a JSON fragment,
+not a usable acceptance record:
+
+```json
+"access_profile": {
+  "name": "managed_nfs_data_v1",
+  "acceptance_reference": null
+}
+```
+
+A real selection requires a bounded immutable `jocasta:32-lowercase-hex@revision`
+reference, `operating_contract: operator_budget_v1`, operational-budget NFS DATA
+and the existing explicit `identity_mapping`. Exact DATA and profile keys reject
+typos and unknown fields. The preflight checks the DATA root as exactly 0700 or
+0770, still owned by the declared mapped uid/gid. It does not walk entries or
+normalize ownership/modes. Chaldea maintenance bounds the whole DATA inventory:
+directories exactly 0700/0770 and files exactly 0600/0660, no other or special
+bits. The first implementation refuses every observed mode/ctime change during
+copy or scan, including transitions between allowed modes. Preserve partial
+state and obtain a new operator assessment; no automatic retry is implied.
+
+Omission keeps strict private legacy checks. Metadata/config/credentials and
+local backups retain their existing private custody requirements. The digest
+covers the profile and acceptance reference, but the preflight validates only
+reference shape. It neither fetches Jocasta nor establishes that acceptance is
+true. This profile is outside the old S2 selector-plus-UNKNOWN-reference
+difference allowlist. A future immutable composite difference receipt must
+mechanically identify the profile/reference addition, owner/mode semantics and
+exact qualifying bytes with the existing composite record fields. Old measured
+digests and restore path-derived digests remain separate. No production digest,
+adopted acceptance or live gate is supplied here.
+
+The proposed boundary is nonsecret, replaceable artifact/result DATA. NAS mode
+actors, ACLs and underlying client restrictions remain UNKNOWN. Authorized
+share clients may read, alter, delete or replace DATA regardless of S3 grants.
+Hashes cannot authenticate simultaneous object and manifest replacement. The
+2e12-byte budget is TOTAL across artifacts/results and is not a quota. Separate
+16 GiB local metadata, UNKNOWN all-zero filecounts, point-in-time headroom and
+manual capacity limits remain unchanged. This source proves no actual NAS
+security, shared fullness/outage, power-loss durability or full-scale restore.
 
 ### Inert installation and credential mutations
 

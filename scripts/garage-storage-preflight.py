@@ -157,10 +157,43 @@ def below(path, root):
     return path.startswith(root + "/")
 
 
+
+# Fixed DATA-only opt-in. Acceptance is structurally bound, never fetched or
+# treated here as proof of Jocasta's truth or authorization.
+MANAGED_DATA_PROFILE = "managed_nfs_data_v1"
+DATA_KEYS = {"path", "mount", "acceptance_mode", "operational_budget", "physical_cap",
+             "identity_mapping", "unknown_filecount_risk_acceptance", "access_profile"}
+
+
+def data_profile(config):
+    data = config.get("data")
+    require(isinstance(data, dict), "data storage is required")
+    if config.get("operating_contract") == "operator_budget_v1":
+        require(set(data) <= DATA_KEYS, "unexpected operator-contract data keys")
+    require("access_profile" not in config.get("metadata", {}),
+            "access_profile is allowed only on data")
+    if "access_profile" not in data:
+        return None
+    profile = data["access_profile"]
+    require(config.get("operating_contract") == "operator_budget_v1"
+            and data.get("acceptance_mode") == "operational_budget"
+            and data.get("mount", {}).get("fstype") in NFS
+            and isinstance(data.get("identity_mapping"), dict),
+            "managed data requires operator_budget_v1, operational-budget NFS and explicit mapping")
+    require(isinstance(profile, dict)
+            and set(profile) == {"name", "acceptance_reference"}
+            and profile["name"] == MANAGED_DATA_PROFILE,
+            "unknown data access_profile or fields")
+    require(immutable_reference(profile["acceptance_reference"]),
+            "managed data requires a bounded immutable Jocasta acceptance_reference")
+    return profile
+
+
 def expected_store(config, label):
     """Validate one store's declared identity without touching the host."""
     store = config.get(label)
     require(isinstance(store, dict), label + " storage is required")
+    profile = data_profile(config) if label == "data" else None
     mapping = store.get("identity_mapping")
     if "identity_mapping" in store:
         require(label == "data", "identity_mapping is allowed only on data, never metadata")
@@ -219,7 +252,7 @@ def expected_store(config, label):
         require(text(budget["risk_acceptance"]),
                 label + " operational budget risk_acceptance evidence reference is required")
         return {"label": label, "mount": mount, "root": root, "path": path,
-                "cap": None, "mode": mode, "budget": budget, "identity_mapping": mapping}
+                "cap": None, "mode": mode, "budget": budget, "identity_mapping": mapping, "profile": profile}
     require("operational_budget" not in store,
             label + " physical_cap mode must not declare an operational_budget")
     cap = store.get("physical_cap")
@@ -326,8 +359,12 @@ def probe_store(probe, store, uid):
                         and info.st_gid == mapping["owner_gid"],
                         label + ": " + directory + " must be owned by mapped uid:gid "
                         + str(mapping["owner_uid"]) + ":" + str(mapping["owner_gid"]))
-                require(not info.st_mode & 0o077,
-                        label + ": " + directory + " must have no group or other access")
+                if store.get("profile") is not None:
+                    require(stat.S_IMODE(info.st_mode) in (0o700, 0o770),
+                            "managed data directory must be exactly 0700 or 0770")
+                else:
+                    require(not info.st_mode & 0o077,
+                            label + ": " + directory + " must have no group or other access")
             else:
                 require(info.st_uid == uid and not info.st_mode & 0o077,
                         label + ": " + directory + " must be owned by uid " + str(uid)
@@ -375,6 +412,7 @@ def validate(config, probe=None):
             require(text(qualifications.get(key)), "unqualified live gate: " + key)
         require(qualifications.get("configuration") == digest(config),
                 "qualifications must name this exact configuration digest")
+    data_profile(config)  # Reject misplaced/unknown opt-ins before any host observation.
     stores = [expected_store(config, label) for label in ("data", "metadata")]
     data, metadata = stores
     require(data["root"] != metadata["root"] and not below(data["path"], metadata["path"])
