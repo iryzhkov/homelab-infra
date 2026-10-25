@@ -77,11 +77,11 @@ local_mounts:
 # /var/lib/docker is kept on the root disk as the rollback copy.
 docker_data_root: /mnt/docker-data/docker
 
-# Desired operator-capable image: reviewed source 295d9a2, exact-head CI
-# 40082520891, checked artifact 12555901461, and published matching OCI digest.
+# Desired capacity-fix image: reviewed source d473d2b, exact-head CI
+# 40146155685, retained artifact 12581331195, published without a rebuild.
 # This is desired source state, not a receipt of homelab/native convergence.
 # The old a3e83c5 image remains allowed for limited-only rollback; docs/jocasta.md.
-jocasta_image: git.ryzhkov.dev/igor/jocasta:295d9a221867f219c33b6a76d09a6e0320f3d774@sha256:71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a
+jocasta_image: git.ryzhkov.dev/igor/jocasta:d473d2be609b27b4b229eb6d077352850e3b4a57@sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9
 
 # The iGPU passed through to this VM (UHD 770, hostpci0 0000:00:02 on
 # proxmox-a), as Compose stacks that may land here need it: the render and

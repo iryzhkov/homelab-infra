@@ -201,7 +201,7 @@ acceptance sooner.
 
 Jocasta inventory stages the exact public JOCASTA_OPERATOR_OIDC_ISSUER,
 JOCASTA_OPERATOR_OIDC_JWKS_URL and JOCASTA_OPERATOR_OIDC_CLIENT_ID trio with
-the reviewed/published 295d9a2 source image pinned by qualified digest, as
+the reviewed/published d473d2b capacity-fix image pinned by qualified digest, as
 documented in [jocasta.md](jocasta.md). Source/image acceptance does not imply
 runtime/native qualification or permission to apply. Root owns final infra
 review/CI, Auth readiness and authorized convergence. This Authentik playbook
