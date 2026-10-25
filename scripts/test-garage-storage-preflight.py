@@ -1310,5 +1310,81 @@ class SourceTest(Scratch):
                 self.assertEqual(snapshot(fixture.base), before)
 
 
+
+class ManagedDataTest(Scratch):
+    """Mode/uid/gid are recording-probe observations, not NFS or privilege tests."""
+
+    def setUp(self):
+        super().setUp()
+        self.fixture = Fixture(self.base)
+        self.config = self.fixture.budget_config(("data", "metadata"))
+        self.config["gid"] = 1000
+        self.config["data"]["identity_mapping"] = {
+            "owner_uid": 977, "owner_gid": 988, "evidence": "fixture:mapping-only"}
+        self.config["data"]["access_profile"] = {
+            "name": "managed_nfs_data_v1", "acceptance_reference": FIXTURE_REFERENCE}
+        operator_qualify(self.config, True)
+
+    def probe(self, mode=0o770):
+        path = str(self.fixture.blobs)
+        return self.fixture.probe(owners={path: 977}, groups={path: 988}, modes={path: mode})
+
+    def test_stable_exact_modes_pass_root_check_without_repair_or_entry_walk(self):
+        child = self.fixture.blobs / "not-inspected-at-start"
+        child.write_bytes(b"maintenance checks entries separately")
+        child.chmod(0o666)
+        before = snapshot(self.base)
+        for mode in (0o700, 0o770):
+            self.assertEqual(preflight.validate(self.config, self.probe(mode))["status"],
+                             "passed-startup-preflight")
+        self.assertEqual(snapshot(self.base), before)
+
+    def test_wrong_mode_bits_owner_and_local_custody_refuse(self):
+        for mode in (0o750, 0o710, 0o777, 0o1770, 0o2770, 0o4700):
+            with self.subTest(mode=mode), self.assertRaises(preflight.Refusal):
+                preflight.validate(self.config, self.probe(mode))
+        for uid, gid in ((1000, 988), (977, 1000), (0, 0)):
+            path = str(self.fixture.blobs)
+            with self.assertRaises(preflight.Refusal):
+                preflight.validate(self.config, self.fixture.probe(
+                    owners={path: uid}, groups={path: gid}, modes={path: 0o770}))
+        probe = self.probe()
+        probe.modes[str(self.fixture.objectstore / "meta")] = 0o770
+        with self.assertRaises(preflight.Refusal):
+            preflight.validate(self.config, probe)
+
+    def test_profile_mapping_contract_and_exact_keys_refuse_before_io(self):
+        changes = [
+            lambda c: c.pop("operating_contract"),
+            lambda c: c["data"].pop("identity_mapping"),
+            lambda c: c["data"]["access_profile"].update(name="managed-nfs-typo"),
+            lambda c: c["data"]["access_profile"].update(extra=True),
+            lambda c: c["data"]["access_profile"].update(acceptance_reference="jocasta:latest"),
+            lambda c: c["data"]["access_profile"].update(acceptance_reference="jocasta:" + "a"*32 + "@" + "9"*100),
+            lambda c: c["data"].update(access_proflie={}),
+            lambda c: c["data"].update(unknown=True),
+            lambda c: c["metadata"].update(access_profile=c["data"]["access_profile"]),
+        ]
+        for change in changes:
+            config = copy.deepcopy(self.config)
+            change(config)
+            if "operating_contract" in config:
+                operator_qualify(config, True)
+            else:
+                qualify(config)
+            with self.subTest(change=change), self.assertRaises(preflight.Refusal):
+                preflight.validate(config, Exploding())
+
+    def test_omission_preserves_strict_legacy_and_profile_changes_digest(self):
+        before = preflight.digest(self.config)
+        self.config["data"].pop("access_profile")
+        operator_qualify(self.config, True)
+        self.assertNotEqual(before, preflight.digest(self.config))
+        with self.assertRaises(preflight.Refusal):
+            preflight.validate(self.config, self.probe())
+        self.assertEqual(preflight.validate(self.config, self.probe(0o700))["status"],
+                         "passed-startup-preflight")
+
+
 if __name__ == "__main__":
     unittest.main()
