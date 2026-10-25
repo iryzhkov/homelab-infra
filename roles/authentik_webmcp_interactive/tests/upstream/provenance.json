@@ -22,6 +22,26 @@
     "policy_models.py.txt": {
       "source": "authentik/policies/models.py",
       "sha256": "82615300e81556b7869b1af562d5885ba91035139a577df4485a52379a747c41"
+    },
+    "provider_api.py.txt": {
+      "source": "authentik/core/api/providers.py",
+      "sha256": "04b5e77abf7430f84728ae10c45db10b7ede766c4b7d1d0b2b2ed0a88bf633c8"
+    },
+    "application_api.py.txt": {
+      "source": "authentik/core/api/applications.py",
+      "sha256": "a189b3f73f2b05c1d75d74bdf406d615a9515c40b1fd939fa4038b3791a53da0"
+    },
+    "oauth2_provider_api.py.txt": {
+      "source": "authentik/providers/oauth2/api/providers.py",
+      "sha256": "53051b80bb110a72ba42fc0df970d32d0cd22b03008ee8934d583e8ec48c7b57"
+    },
+    "api_utils.py.txt": {
+      "source": "authentik/core/api/utils.py",
+      "sha256": "81118aaacedfc96e9c27beebae611f4dea6cff7066481ddf5bd120f6994141ab"
+    },
+    "core_urls.py.txt": {
+      "source": "authentik/core/urls.py",
+      "sha256": "8d5f37ba44a3687167f972e395496e78ffb78f0fdc0d133a7be3fe1cc4eb2eb1"
     }
   }
 }

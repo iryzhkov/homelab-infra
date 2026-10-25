@@ -173,9 +173,11 @@ class APIClient:
                             for value in row.values()) for row in result))
         return result
 
-    def rows(self, kind):
-        # Complete bounded lists are required; no silent pagination or omissions.
-        path = PATHS[kind] + "?page_size=500"
+    def rows(self, kind, owned=None):
+        # Complete public discovery; never list secret-bearing OAuth2 bodies.
+        path = ("/providers/all/" if kind == "provider" else PATHS[kind]) + "?page_size=500"
+        if kind == "provider":
+            self.require_superuser()
         if kind == "application":
             # A matching pagination count is not completeness evidence when
             # Authentik silently filters applications for a non-superuser.
@@ -186,6 +188,21 @@ class APIClient:
         rows = result["results"]
         require(len(rows) <= 500 and not result.get("pagination", {}).get("next"))
         require(result.get("pagination", {}).get("count") == len(rows))
+        if kind == "provider":
+            # Only the original receipt ID permits an OAuth2 detail read.
+            # Check all public name/ID collisions before opening any such body.
+            records = [r for r in (owned or {}).values() if r["kind"] == kind]
+            for record in records:
+                pk = record["pk"]
+                require(type(pk) is int and pk > 0 and record["lookup"] == pk)
+                found = [r for r in rows if r.get("pk") == pk]
+                named = [r for r in rows if r.get("name") == record["body"]["name"]]
+                require(len(found) == len(named) == 1 and found[0] == named[0])
+            for record in records:
+                detail = self.request("GET", PATHS[kind] + str(record["pk"]) + "/")
+                require(isinstance(detail, dict) and detail.get("pk") == record["pk"]
+                        and matches(detail, record["body"]))
+                rows = [detail if r.get("pk") == record["pk"] else r for r in rows]
         return rows
 
 
@@ -247,7 +264,7 @@ class Enrollment:
             self.receipt = {"version": 1, "owner": owner, "objects": {}, "pending": None, "generations": {}}
             self.save()
         self.changed = False
-        self.rows = {k: api.rows(k) for k in PATHS}
+        self.rows = {k: api.rows(k, owned=self.receipt["objects"]) for k in PATHS}
         self.verify_owned()
 
     def save(self):
@@ -458,7 +475,7 @@ class Enrollment:
             for key in ("binding", "application", "provider", "read", "write", "policy"):
                 self.remove(key)
         # Re-read all owned objects and all references before opening any key.
-        self.rows = {k: self.api.rows(k) for k in PATHS}
+        self.rows = {k: self.api.rows(k, owned=self.receipt["objects"]) for k in PATHS}
         self.verify_owned()
         self.no_foreign_references()
         for item in hosts:
