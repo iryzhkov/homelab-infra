@@ -510,7 +510,8 @@ def machine_identity_existing_provider(spec, instance, baseline, inventory, appl
     """
     if (not isinstance(baseline, dict)
             or set(baseline) != {"provider_pk", "application_pk", "content_sha512"}
-            or type(baseline["provider_pk"]) is not int or baseline["provider_pk"] <= 0
+            or not isinstance(baseline["provider_pk"], int) or isinstance(baseline["provider_pk"], bool)
+            or baseline["provider_pk"] <= 0
             or not isinstance(baseline["application_pk"], str)
             or not UUID.fullmatch(baseline["application_pk"])
             or not isinstance(baseline["content_sha512"], str)

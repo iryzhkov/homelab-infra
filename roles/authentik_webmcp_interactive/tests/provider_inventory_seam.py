@@ -9,7 +9,17 @@ import ast
 import copy
 from types import SimpleNamespace as NS
 
-from used_by_seam import FIXTURES  # verifies all provenance hashes first
+# Keep this plain-data serializer seam independent of the Django relation seam
+# so the machine-identity fixture can reuse the exact response contract.
+import hashlib
+import json
+from pathlib import Path
+
+FIXTURES = Path(__file__).with_name("upstream")
+_provenance = json.loads((FIXTURES / "provenance.json").read_text())
+assert _provenance["revision"] == "410f46e5cf18f97a1f0056b30984a145242df55d"
+for _filename, _evidence in _provenance["files"].items():
+    assert hashlib.sha256((FIXTURES / _filename).read_bytes()).hexdigest() == _evidence["sha256"]
 
 
 def declaration(filename, name):
