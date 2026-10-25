@@ -1,0 +1,76 @@
+---
+# The OV HTTP a63e197f machine identities, enrolled only by
+# playbooks/authentik-ov-http-identities.yml (docs/authentik-machine-identities.md,
+# "Isolated OV HTTP identities"). Public values only: the role reads each app
+# password on the controller under no_log and writes it to its bound host.
+#
+# This is the existing owned blueprint created for the OV canary, separate from
+# the shared "homelab-infra machine identities" blueprint, the Jocasta tooling
+# blueprint and the access blueprint. playbooks/vars/authentik.yml keeps
+# authentik_machine_identities_enabled false, so playbooks/authentik.yml never
+# touches these objects. Never rename the blueprint: its stored content is the
+# ownership record.
+
+authentik_machine_identities_enabled: true
+# Existing provider/application only. Root must supply a confirmed prior public
+# baseline with provider_pk 42, application_pk
+# 3621ae7a-e719-4cdf-9cb4-26bf110cfd78 and the exact successful stored-content
+# SHA-512 before an online run. No unverified hash is populated here.
+authentik_machine_identity_existing_owned_only: true
+authentik_machine_identities_blueprint_name: homelab-infra ov http a63e197f identities
+# The entrypoint refuses API credentials for any other Authentik origin.
+ov_http_identities_authentik_origin: https://auth.ryzhkov.dev
+
+# The one OV application this blueprint owns, exactly as first enrolled.
+authentik_machine_services:
+  ov:
+    state: present
+    slug: ov-http-a63e197f
+    name: OV HTTP a63e197f machine access
+    group: ov-http-a63e197f-machine-identities
+    client_id: ov-http-a63e197f-machine
+    resource: https://ov.mcp.ryzhkov.dev/mcp
+    # kp_uuid of the existing RSA signing keypair; this role never creates a key.
+    signing_key: 8bbd6516-af33-4e64-a73b-caa39e692c29
+    scope: ov.read
+    token_seconds: 300
+    issuer: https://auth.ryzhkov.dev/application/o/ov-http-a63e197f/
+    jwks_url: https://auth.ryzhkov.dev/application/o/ov-http-a63e197f/jwks/
+
+# Each identity host's credential has exactly one machine and account. The
+# existing controller credential lives on gaming-pc as UID 1000; the laptop's
+# separate account is UID 1001. Both are user igor with home /home/igor, so the
+# names alone cannot tell them apart. The role compares `uname -n` and `id -u`
+# on each destination with these bindings before Authentik changes and again
+# before delivery. The operator's inventory supplies the connections.
+authentik_machine_identity_destinations:
+  controller:
+    hostname: omarchy-pc
+    uid: 1000
+  laptop:
+    hostname: omarchy-macbook-air-igor
+    uid: 1001
+
+# One account per host and preset. The controller identity is the existing
+# canary reader and must stay present and unchanged; the entrypoint refuses a
+# declaration that changes or drops it. The laptop identity is the limited
+# nondelegating Codex preset prepared, inactive, in chaldea-fleet-config's
+# docs/examples/laptop-ov-tooling-codex.yml. Both carry exactly one
+# documentation node and no wider namespace.
+authentik_machine_identities:
+  - host: controller
+    profile: ov-http-a63e197f-reader
+    service: ov
+    ov_namespaces:
+      - viking://resources/homeassistant-api/rest-api.md
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: ov-tooling-codex
+    service: ov
+    ov_namespaces:
+      - viking://resources/homeassistant-api/rest-api.md
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
