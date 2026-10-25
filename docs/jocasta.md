@@ -27,15 +27,16 @@ credentials alone are not a recovery copy.
 
 ## Deploy
 
-Build the server image from the exact Jocasta source commit that passed CI,
-load it onto homelab with the tag
-git.ryzhkov.dev/igor/jocasta:<full-source-commit>, and set jocasta_image in
-the homelab inventory to that immutable tag; then
-`ansible-playbook playbooks/swarm.yml --tags registry` pushes it to Forgejo
-and pre-pulls it on normandy. Use the registry name, not a local-only tag such
-as jocasta:<commit>: the weekly image prune removed that one on 2026-10-03.
-Alternatively use an immutable registry digest. The playbook refuses mutable
-tags.
+The current desired capacity-fix image is already published from exact retained
+CI artifact 12581331195, run 40146155685. Use the complete source-tag/digest pin
+under Interactive operator source integration below. Do not rebuild, republish
+or substitute a bare source tag or digest. Publication and this inventory change
+grant no deployment authority; root owns review/CI and the later authorized
+convergence and native qualification.
+
+The older limited-only bootstrap procedure below retains its a3e83c5 image.
+Use the registry name rather than a local-only tag such as jocasta:<commit>;
+the weekly image prune removed that one on 2026-10-03. Mutable tags are refused.
 
 Run from this repository with the controller's existing SOPS age key:
 
@@ -75,7 +76,7 @@ Its four settings remain unchanged: the REST audience is
 jocasta-rest-persistent-tooling, identities come from
 playbooks/authentik-jocasta-tooling.yml, and the route comes from
 playbooks/vars/web-mcp-route-jocasta.yml. The desired homelab image now pins
-the reviewed, published 295d9a2 operator-capable image by tag and digest and
+the reviewed, published d473d2b capacity-fix image by tag and digest and
 appends the public operator trio below. This is staged inventory source;
 runtime convergence and native acceptance remain pending with root.
 The same database, server, limited verifier and route are retained.
@@ -187,28 +188,38 @@ unchanged. No route, port, service unit, data path, runtime UID, mount, REST
 credential or filesystem protection changes are included. The Authentik
 operator playbook remains a separate disabled-by-default opt-in.
 
-Root accepted source `295d9a221867f219c33b6a76d09a6e0320f3d774`,
-tree `efd8637c9a8af2b694b570f50056da5e452e6cc0`, after independent
-Opus 5.5 high and Sol 6.1 high ACCEPT and exact-head CI run 40082520891 SUCCESS.
-PR3 merged as `6d26b9d592becc1d84321a5602c07db7a6d41bf0`.
-The checked amd64/UID10001 image artifact 12555901461 has archive SHA256
-`4da0bee3ff1b6010dc18bbebcf96aa961d60b504730dbba90202c15a54dcda99`,
-OCI manifest
-`71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a`,
-and config
-`4608bafc9d3b27c93037ca97501d6f1066000b33639981b4de549041bdaac9e8`.
-Root verified all layers/config hashes and embedded source provenance, then
-published the exact tag through the existing controlled registry auth path.
-Its registry digest matches that checked OCI manifest. Root's
-`jocasta-image-295d9a2/{qualification,publication}.json` receipts distinguish
-image qualification/publication from pending runtime and native acceptance.
+Root accepted capacity-fix source `d473d2be609b27b4b229eb6d077352850e3b4a57`,
+tree `27f8a2d269395bab9d7e43b3964d932d530c43f4`, after independent
+Opus 5.5 high and Sol 6.1 high ACCEPT, full tests/race and exact-head CI run
+40146155685 SUCCESS. PR4 merged as `ffe2290841c876b3d60b4f0724470b32ec049aa2`
+with the same accepted tree. Root published the exact retained CI artifact
+12581331195 without a rebuild. The linux/amd64 image runs as `10001:10001`.
+Its archive SHA256 is
+`241d963c8a2deedfc0f722f404f7e46eb5d516c156ed766e8abf70cdbd444cd5`,
+registry manifest digest is
+`sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9`,
+and config digest is
+`sha256:e9f2e6e0c4a346903171c3e97c140a1117ff77959962dc360e0983f1eebf6c8a`.
+Root verified retained archive bytes, layer/config hashes, embedded source
+provenance and the matching registry manifest. Root's
+`jocasta-image-d473d2b/{RESULT.md,qualification.json,publication.json}` receipts
+record publication, with native qualification and deployment still false.
+No signed provenance attestation is claimed.
 
-The separate `OPERATOR_IMAGE_REVISIONS` source gate admits only 295d9a2.
-Operator mode additionally requires the exact
-`git.ryzhkov.dev/igor/jocasta` repository. The old limited-only image, blocked
-acd4ba5 candidate, mutable tags, and digests without an admitted full source tag
-cannot enable operator mode. Tests now exercise the actual unmodified source
-filter and renderer; no synthetic source allowlist is substituted.
+The separate `OPERATOR_IMAGE_REVISIONS` source gate admits only d473d2b.
+`OPERATOR_IMAGE_PIN` additionally requires the exact published repository,
+full source tag and digest whenever that source serves MCP, even with operator
+trust off. The previous 295d9a2 operator image, blocked acd4ba5 candidate,
+mutable or bare source tags, arbitrary digests and mixed tag/digest pairs are
+refused. The a3e83c5 limited-only rollback path remains unchanged and cannot
+enable operator mode. Tests exercise the actual source filter and renderer;
+no synthetic source allowlist is substituted.
+
+At this source handoff, the running image remains the previous 295d9a2.
+Live attempt 82d2 is CLOSED/CLEANED/RELEASED after full native create failed
+with HTTP 503. This source pin incorporates the reviewed server capacity fix;
+it does not turn that failed native attempt into an acceptance result.
+Root owns later deployment and native qualification.
 
 The existing Jocasta stack's desired configuration pins the published digest
 and appends only the three public values below. Root owns final infra
@@ -217,7 +228,7 @@ Publication alone grants no authority to apply.
 
 ```yaml
 # Published source/image pin; homelab/runtime/native convergence is still pending.
-jocasta_image: git.ryzhkov.dev/igor/jocasta:295d9a221867f219c33b6a76d09a6e0320f3d774@sha256:71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a
+jocasta_image: git.ryzhkov.dev/igor/jocasta:d473d2be609b27b4b229eb6d077352850e3b4a57@sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9
 # Appended to the existing Jocasta stack's env_extra:
 JOCASTA_OPERATOR_OIDC_ISSUER: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/
 JOCASTA_OPERATOR_OIDC_JWKS_URL: https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/

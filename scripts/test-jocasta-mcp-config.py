@@ -35,9 +35,11 @@ web_mcp = load("web_mcp_filter", "filter_plugins/web_mcp.py")
 ACCEPTED = "a3e83c55e73661fc50d92a9ca328236a86f291fd"
 OLD_PIN = "git.ryzhkov.dev/igor/jocasta:37ce657515092be80c5d49b4a3b30f482d86ed63"
 IMAGE = "git.ryzhkov.dev/igor/jocasta:" + ACCEPTED
-OPERATOR_SOURCE = "295d9a221867f219c33b6a76d09a6e0320f3d774"
+OPERATOR_SOURCE = "d473d2be609b27b4b229eb6d077352850e3b4a57"
+PREVIOUS_OPERATOR_SOURCE = "295d9a221867f219c33b6a76d09a6e0320f3d774"
+PREVIOUS_OPERATOR_DIGEST = "71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a"
 BLOCKED_OPERATOR_SOURCE = "acd4ba57001559ef0e795ccf47f34413c9420c59"
-OPERATOR_DIGEST = "71a7aadc705be31e4018f6a6926489cb6ce4bf99962dd5cdece74562cf886e9a"
+OPERATOR_DIGEST = "3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9"
 OPERATOR_TAG = "git.ryzhkov.dev/igor/jocasta:" + OPERATOR_SOURCE
 OPERATOR_IMAGE = OPERATOR_TAG + "@sha256:" + OPERATOR_DIGEST
 OPERATOR = {
@@ -141,8 +143,12 @@ class OperatorFilterTest(unittest.TestCase):
         self.assertNotIn(ACCEPTED, jocasta.OPERATOR_IMAGE_REVISIONS)
         self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled()), MCP | OPERATOR)
         self.assertEqual(jocasta.jocasta_mcp_env(enabled(JOCASTA_IMAGE=OPERATOR_IMAGE)), MCP)
-        self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled(
-            JOCASTA_IMAGE=OPERATOR_TAG)), MCP | OPERATOR)
+        for image in (OPERATOR_TAG, OPERATOR_TAG + "@sha256:" + "a" * 64,
+                      OPERATOR_TAG + "@sha256:" + PREVIOUS_OPERATOR_DIGEST,
+                      "git.ryzhkov.dev/igor/jocasta:" + PREVIOUS_OPERATOR_SOURCE + "@sha256:" + OPERATOR_DIGEST):
+            for env in (enabled(JOCASTA_IMAGE=image), operator_enabled(JOCASTA_IMAGE=image)):
+                with self.subTest(image=image, operator=bool(env.keys() & OPERATOR.keys())), self.assertRaises(REFUSED):
+                    jocasta.jocasta_mcp_env(env)
         empty = dict.fromkeys(OPERATOR, "")
         self.assertEqual(jocasta.jocasta_mcp_env(enabled(**empty)), MCP)
         self.assertEqual(jocasta.jocasta_mcp_env({"JOCASTA_IMAGE": OLD_PIN, **empty}), {})
@@ -275,9 +281,13 @@ class StackTest(unittest.TestCase):
 
     def test_production_operator_gate_refuses_unaccepted_sources(self):
         self.assertEqual(jocasta.OPERATOR_IMAGE_REVISIONS, frozenset({OPERATOR_SOURCE}))
-        for revision in (BLOCKED_OPERATOR_SOURCE, "b" * 40, ACCEPTED):
-            result, dotenv = self.run_prepare(operator_enabled(
-                JOCASTA_IMAGE="git.ryzhkov.dev/igor/jocasta:" + revision))
+        images = ["git.ryzhkov.dev/igor/jocasta:" + revision
+                  for revision in (BLOCKED_OPERATOR_SOURCE, PREVIOUS_OPERATOR_SOURCE, "b" * 40, ACCEPTED)]
+        images += [OPERATOR_TAG, OPERATOR_TAG + "@sha256:" + "a" * 64,
+                   OPERATOR_TAG + "@sha256:" + PREVIOUS_OPERATOR_DIGEST,
+                   "git.ryzhkov.dev/igor/jocasta:" + PREVIOUS_OPERATOR_SOURCE + "@sha256:" + OPERATOR_DIGEST]
+        for image in images:
+            result, dotenv = self.run_prepare(operator_enabled(JOCASTA_IMAGE=image))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("accepted", result.stdout + result.stderr)
             self.assertIsNone(dotenv)

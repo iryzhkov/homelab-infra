@@ -29,12 +29,13 @@ KNOWN_KEYS = ("JOCASTA_IMAGE",) + MCP_KEYS + OPERATOR_KEYS
 # 37ce657 has no MCP support and is still refused.
 MCP_IMAGE_REVISIONS = frozenset({"a3e83c55e73661fc50d92a9ca328236a86f291fd"})
 
-# Reviewed operator source: independent Opus/Sol ACCEPT, exact-head CI SUCCESS
-# 40082520891, checked image artifact 12555901461, and matching registry
-# publication. Inventory pins its qualified manifest digest. These are source/
-# image receipts, not native/runtime qualification or authority to apply.
-OPERATOR_IMAGE_REVISIONS = frozenset({"295d9a221867f219c33b6a76d09a6e0320f3d774"})
+# Reviewed capacity-fix source: independent Opus/Sol ACCEPT, exact-head CI SUCCESS
+# 40146155685, retained image artifact 12581331195, published without a rebuild.
+# These are source/image receipts, not native/runtime qualification or authority
+# to apply. Require this exact published tag/digest even with operator trust off.
+OPERATOR_IMAGE_REVISIONS = frozenset({"d473d2be609b27b4b229eb6d077352850e3b4a57"})
 OPERATOR_IMAGE_REPOSITORY = "git.ryzhkov.dev/igor/jocasta"
+OPERATOR_IMAGE_PIN = "git.ryzhkov.dev/igor/jocasta:d473d2be609b27b4b229eb6d077352850e3b4a57@sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9"
 OPERATOR_ISSUER = "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/"
 OPERATOR_JWKS = OPERATOR_ISSUER + "jwks/"
 OPERATOR_CLIENT_ID = "jocasta-laptop-interactive"
@@ -106,6 +107,9 @@ def jocasta_mcp_env(env_extra):
     found = IMAGE.fullmatch(image) if isinstance(image, str) else None
     _require(found is not None and found.group(1) in (MCP_IMAGE_REVISIONS | OPERATOR_IMAGE_REVISIONS),
              "MCP needs a jocasta:<commit> image from an accepted MCP-capable source commit")
+    if found.group(1) in OPERATOR_IMAGE_REVISIONS:
+        _require(image == OPERATOR_IMAGE_PIN,
+                 "MCP needs the exact accepted published operator image source, repository and digest")
     settings = {key: env_extra[key] for key in MCP_KEYS}
     if operator_on:
         selected = tuple(env_extra[key] for key in OPERATOR_KEYS)
