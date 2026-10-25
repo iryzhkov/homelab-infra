@@ -376,7 +376,11 @@ client enrollment or host grant is enabled here.
 tooling accounts, `chaldea-laptop-jocasta-tooling-codex`,
 `chaldea-laptop-jocasta-tooling-claude` and
 `chaldea-laptop-jocasta-tooling-opencode`, declared in
-`playbooks/vars/authentik-jocasta-tooling.yml`. It owns its own blueprint,
+`playbooks/vars/authentik-jocasta-tooling.yml`. The same declaration also adds
+`chaldea-agent-a-jocasta-tooling-opencode`,
+`chaldea-agent-b-jocasta-tooling-opencode` and
+`chaldea-omarchy-pc-jocasta-tooling-opencode`, retaining all three laptop
+accounts. It owns its own blueprint,
 "homelab-infra Jocasta tooling laptop", with the application `chaldea-jocasta`
 ("Chaldea Jocasta tooling access"), client ID `chaldea-jocasta-tooling`, group
 `chaldea-jocasta-tooling-identities`, the existing RSA signing key
@@ -390,12 +394,19 @@ The entrypoint loads the existing controller SOPS API credential the way
 `authentik_config` does, refuses any origin other than
 https://auth.ryzhkov.dev, and runs only this role. It never converges the
 access blueprint, the shared "homelab-infra machine identities" blueprint or
-anything else, and grants nothing fleet-wide. Run it on the laptop, which is
-the inventory host receiving the files:
+anything else. The operator inventory must retain the laptop's existing
+connection and destination and define the three added hosts as user `igor`,
+home `/home/igor`, with `authentik_machine_identity_home: /home/igor`.
+Use the approved transports `igor@192.168.130.2` for `agent-a`,
+`igor@192.168.130.3` for `agent-b` and SSH alias `gaming-pc` for `omarchy-pc`.
+Each added host receives only its own app password at
+`/home/igor/.config/chaldea/authentik/jocasta-tooling-opencode.app-password`.
+The role derives this path from inventory; home and path are not account
+fields. Run the entrypoint with that operator inventory, never a remapping of
+the laptop or the repository's bare DNS aliases:
 
 ```sh
-ansible-playbook playbooks/authentik-jocasta-tooling.yml --check --diff
-ansible-playbook playbooks/authentik-jocasta-tooling.yml
+ansible-playbook -i <operator-inventory> playbooks/authentik-jocasta-tooling.yml --check --diff
 ```
 
 Check mode without API facts is the offline plan. It skips SOPS loading,
@@ -406,27 +417,24 @@ Neither online check nor enrollment is authorized by this source change.
 A second real run is intended to change nothing. The ownership, refusal and
 recovery rules above apply unchanged: never replay an uncertain apply.
 
-The two existing app passwords and the prepared OpenCode declaration expire
-at 2026-11-23T00:00:00Z. Manual rotation remains due before November 22;
-this change preserves Codex and Claude generation 1, their `tooling` grants,
-expiry and credential paths. An expiry extension preserves the existing key;
-a higher generation rotates it. No extension or rotation is performed here.
+All six declarations expire at 2026-11-23T00:00:00Z. Manual rotation
+remains due before November 22; this change preserves all three laptop
+accounts at generation 1, their `tooling` grants, expiry and credential paths.
+An expiry extension preserves the existing key; a higher generation rotates
+it. No extension or rotation is performed here.
 
 The root owns live enrollment, acceptance and rollback. Before an authorized
 run, retain the last successful blueprint content and the existing accounts'
-public generation, expiry and grant evidence. If OpenCode has never been
-enrolled, withdrawing its prepared source needs no live cleanup. After a
-confirmed enrollment, remove only the new account by setting only
-`jocasta-tooling-opencode` to `state: absent`, keeping both existing identities,
-the application and blueprint name unchanged, and using the same entrypoint.
-Confirm removal of `chaldea-laptop-jocasta-tooling-opencode`, its `-g1` app
-password and `~/.config/chaldea/authentik/jocasta-tooling-opencode.app-password`.
-Verify both existing accounts, credentials and grants are preserved. Retain the
-absent declaration until cleanup is confirmed; do not restore a two-account
-blueprint over uncertain partial state. Root separately removes any newly
-installed OpenCode profile/helper policy, if separately authorized and installed.
-For an uncertain apply, reconcile the original operation and ownership record
-before any retry or rollback. Offline tokens remain valid for up to 300 seconds.
+public generation, expiry and grant evidence. Withdrawing never-enrolled rows
+needs no live cleanup. After confirmed enrollment, rollback marks only the
+three added hosts' OpenCode rows absent, retaining every laptop row and the
+existing provider/application and blueprint name. Confirm each new account,
+its `-g1` app password and its host file is removed, with all prior credentials
+and grants unchanged. Retain absent rows until cleanup is confirmed.
+Root separately removes any newly installed OpenCode selection, if authorized
+and installed. For an uncertain apply, reconcile the original operation and
+ownership record before any retry or rollback. Offline tokens remain valid
+for up to 300 seconds.
 Full removal of all identities and the application is a separate root decision.
 
 ### Existing-only provider custody gate
@@ -439,7 +447,7 @@ its secret before ownership refusal. `no_log` protects output, not custody.
 The pinned serializer exposes no supported caller-selected field exclusion;
 permission-dependent redaction is insufficient for this administrative actor.
 
-The laptop declaration enables `authentik_machine_identity_existing_owned_only`,
+The tooling declaration enables `authentik_machine_identity_existing_owned_only`,
 which defaults off for other callers. It replaces both secret-bearing collection
 queries with public `/providers/all/` summaries and one exact owned-PK OAuth2
 detail read. Before any such detail or write, it requires:
@@ -474,7 +482,11 @@ removing the OpenCode account while preserving the existing service. Generic
 bootstrap is outside this path's custody qualification.
 
 Root must qualify acquisition and provenance of the protected public baseline
-and the installed schema before any online check or enrollment. Never derive
+and the installed schema before any online check or enrollment. The retained
+operator-confirmed three-account baseline is historical evidence. Before the
+six-account enrollment, root must independently reread and confirm the current
+successful issuer content against the prior baseline; neither a new offline
+render nor discovery may supply its own accepted hash. Never derive
 an accepted hash from the response being checked. After a confirmed successful
 content change, root must explicitly confirm the new public baseline hash for
 the next operation; the role never refreshes it automatically. Pending or

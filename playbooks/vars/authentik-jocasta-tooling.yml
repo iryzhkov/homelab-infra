@@ -1,8 +1,8 @@
 ---
-# The laptop's persistent Jocasta tooling machine identities, enrolled only by
+# Persistent Jocasta tooling machine identities, enrolled only by
 # playbooks/authentik-jocasta-tooling.yml (docs/authentik-machine-identities.md,
 # "Isolated Jocasta tooling enrollment"). Public values only: the role reads
-# each app password on the controller under no_log and writes it to the laptop.
+# each app password on the controller under no_log and writes it to its host.
 #
 # This is a separate blueprint from the shared "homelab-infra machine
 # identities" one and from the access blueprint. playbooks/vars/authentik.yml
@@ -36,8 +36,11 @@ authentik_jocasta_machine_access:
 
 # Codex and Claude are natively qualified. OpenCode is a separate pending
 # enrollment/profile; source presence does not establish native acceptance.
-# One account per laptop profile, matching chaldea-fleet-config's
-# inventory/host_vars/laptop/chaldea-jocasta-tooling.yml presets. Raise
+# One account per host/profile, matching chaldea-fleet-config's host presets.
+# The operator inventory must bind agent-a, agent-b and omarchy-pc to igor,
+# home /home/igor. Each receives exactly
+# /home/igor/.config/chaldea/authentik/jocasta-tooling-opencode.app-password.
+# Keep the existing laptop destinations and all prior accounts. Raise
 # generation to rotate; extend expires before it is less than a day away, or
 # the role refuses the run and the sessions lose token issuance at expiry.
 authentik_machine_identities:
@@ -54,6 +57,24 @@ authentik_machine_identities:
     expires: "2026-11-23T00:00:00Z"
     state: present
   - host: laptop
+    profile: jocasta-tooling-opencode
+    project: tooling
+    generation: 1
+    expires: "2026-11-23T00:00:00Z"
+    state: present
+  - host: agent-a
+    profile: jocasta-tooling-opencode
+    project: tooling
+    generation: 1
+    expires: "2026-11-23T00:00:00Z"
+    state: present
+  - host: agent-b
+    profile: jocasta-tooling-opencode
+    project: tooling
+    generation: 1
+    expires: "2026-11-23T00:00:00Z"
+    state: present
+  - host: omarchy-pc
     profile: jocasta-tooling-opencode
     project: tooling
     generation: 1
