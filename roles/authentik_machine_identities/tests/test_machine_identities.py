@@ -954,6 +954,7 @@ class ToolingExistingRoleTest(unittest.TestCase):
 
         before = existing_snapshot()
         original = baseline()
+        existing_users = set(x.state.users)
         x.state.providers["Foreign"] = {"pk": 999, "name": "Foreign", "client_id": "foreign-client",
                                        "meta_model_name": "authentik_providers_oauth2.oauth2provider",
                                        "client_secret": "FOREIGN-SECRET-SENTINEL"}
@@ -962,7 +963,8 @@ class ToolingExistingRoleTest(unittest.TestCase):
         run(items, original)
         self.assertEqual(x.state.providers[access["name"]], owned_provider)
         self.assertEqual(x.state.apps[access["slug"]], owned_app)
-        self.assertEqual(set(x.state.users), {"chaldea-" + i["host"] + "-" + i["profile"] for i in items})
+        self.assertEqual(set(x.state.users), existing_users |
+                         {"chaldea-" + i["host"] + "-" + i["profile"] for i in items[3:]})
         for item in items[3:]:
             self.assertTrue(x.secret(item["host"], item["profile"]).is_file())
             self.assertIn("chaldea-" + item["host"] + "-" + item["profile"] + "-g1", x.state.tokens)
