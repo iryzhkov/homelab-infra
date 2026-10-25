@@ -53,10 +53,14 @@ authentik_machine_identity_destinations:
 
 # One account per host and preset. The controller identity is the existing
 # canary reader and must stay present and unchanged; the entrypoint refuses a
-# declaration that changes or drops it. The laptop identity is the limited
-# nondelegating Codex preset prepared, inactive, in chaldea-fleet-config's
-# docs/examples/laptop-ov-tooling-codex.yml. Both carry exactly one
-# documentation node and no wider namespace.
+# declaration that changes or drops it. The first laptop identity is the
+# limited nondelegating Codex preset prepared, inactive, in
+# chaldea-fleet-config's docs/examples/laptop-ov-tooling-codex.yml; it too must
+# stay unchanged. The second laptop identity is separate: it belongs to the
+# laptop's ordinary interactive Codex through the fleet's closed native headers
+# helper (`webmcp-interactive-headers ov laptop`), never to a Chaldea preset,
+# and neither credential is ever read by the other consumer. All three carry
+# exactly one documentation node and no wider namespace.
 authentik_machine_identities:
   - host: controller
     profile: ov-http-a63e197f-reader
@@ -68,6 +72,14 @@ authentik_machine_identities:
     state: present
   - host: laptop
     profile: ov-tooling-codex
+    service: ov
+    ov_namespaces:
+      - viking://resources/homeassistant-api/rest-api.md
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: ov-interactive-codex
     service: ov
     ov_namespaces:
       - viking://resources/homeassistant-api/rest-api.md

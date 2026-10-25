@@ -29,6 +29,11 @@ CONTROLLER = {"host": "controller", "profile": "ov-http-a63e197f-reader", "servi
               "ov_namespaces": [NODE], "generation": 1, "expires": "2027-01-15T00:00:00Z", "state": "present"}
 LAPTOP = {"host": "laptop", "profile": "ov-tooling-codex", "service": "ov",
           "ov_namespaces": [NODE], "generation": 1, "expires": "2027-01-15T00:00:00Z", "state": "present"}
+# The laptop's separate ordinary interactive Codex identity (fleet helper
+# `webmcp-interactive-headers ov laptop`), never the limited preset's account.
+INTERACTIVE = {"host": "laptop", "profile": "ov-interactive-codex", "service": "ov",
+               "ov_namespaces": [NODE], "generation": 1, "expires": "2027-01-15T00:00:00Z", "state": "present"}
+COHORT = [CONTROLLER, LAPTOP, INTERACTIVE]
 HOSTS = {"controller": {"ssh_user": "igor", "home": "/home/igor", "connection": "local"},
          "laptop": {"ssh_user": "igor", "home": "", "connection": "ssh"}}
 BINDINGS = {"controller": {"hostname": "omarchy-pc", "uid": 1000},
@@ -51,7 +56,7 @@ class DeclarationTest(unittest.TestCase):
     def test_source_declaration_is_exact_isolated_and_bound(self):
         values = yaml.safe_load(VARS.read_text())
         self.assertEqual(values["authentik_machine_services"], {"ov": OV})
-        self.assertEqual(values["authentik_machine_identities"], [CONTROLLER, LAPTOP])
+        self.assertEqual(values["authentik_machine_identities"], COHORT)
         self.assertEqual(values["authentik_machine_identity_destinations"], BINDINGS)
         self.assertEqual(values["authentik_machine_identities_blueprint_name"], BLUEPRINT)
         self.assertIs(values["authentik_machine_identity_existing_owned_only"], True)
@@ -72,21 +77,29 @@ class DeclarationTest(unittest.TestCase):
                          ["authentik_machine_identities"])
 
         s = spec(values["authentik_machine_identities"], destinations=values["authentik_machine_identity_destinations"])
-        controller, laptop = s["identities"]
+        controller, laptop, interactive = s["identities"]
         self.assertEqual(controller["username"], "chaldea-controller-ov-http-a63e197f-reader")
         self.assertEqual(laptop["username"], "chaldea-laptop-ov-tooling-codex")
         self.assertEqual(laptop["secret_path"], "/home/igor/.config/chaldea/authentik/ov-tooling-codex.app-password")
-        self.assertEqual((controller["destination"], laptop["destination"]),
-                         (BINDINGS["controller"], BINDINGS["laptop"]))
+        # A separate ordinary account and file: the interactive helper's fixed path.
+        self.assertEqual(interactive["username"], "chaldea-laptop-ov-interactive-codex")
+        self.assertEqual(interactive["secret_path"],
+                         "/home/igor/.config/chaldea/authentik/ov-interactive-codex.app-password")
+        self.assertNotEqual(interactive["token"], laptop["token"])
+        self.assertEqual((controller["destination"], laptop["destination"], interactive["destination"]),
+                         (BINDINGS["controller"], BINDINGS["laptop"], BINDINGS["laptop"]))
         self.assertNotEqual(controller["destination"], laptop["destination"])
         self.assertEqual(s["services"]["ov"]["account_grants"], {
-            controller["username"]: {"ov_namespaces": [NODE]}, laptop["username"]: {"ov_namespaces": [NODE]}})
-        # Ownership names exactly the existing objects plus the laptop account and token.
+            controller["username"]: {"ov_namespaces": [NODE]}, laptop["username"]: {"ov_namespaces": [NODE]},
+            interactive["username"]: {"ov_namespaces": [NODE]}})
+        # Ownership names exactly the existing objects plus the two laptop accounts and tokens.
         self.assertEqual(sorted(tuple(o) for o in s["objects"]), sorted([
             ("application", OV["slug"], "present"), ("group", OV["group"], "present"),
             ("provider", OV["name"], "present"), ("scopemapping", OV["name"] + ": ov.read", "present"),
             ("token", controller["token"], "present"), ("token", laptop["token"], "present"),
-            ("user", controller["username"], "present"), ("user", laptop["username"], "present")]))
+            ("token", interactive["token"], "present"),
+            ("user", controller["username"], "present"), ("user", laptop["username"], "present"),
+            ("user", interactive["username"], "present")]))
 
     def test_destination_bindings_are_exact(self):
         for bad in ({"controller": BINDINGS["controller"]},
@@ -98,8 +111,8 @@ class DeclarationTest(unittest.TestCase):
                     BINDINGS | {"laptop": {"hostname": "bad host;", "uid": 1001}},
                     BINDINGS | {"laptop": BINDINGS["laptop"] | {"home": "/root"}}, ["controller"]):
             with self.subTest(bad=bad), self.assertRaises(mi.AnsibleFilterError):
-                spec([CONTROLLER, LAPTOP], destinations=bad)
-        unbound = spec([CONTROLLER, LAPTOP])
+                spec(COHORT, destinations=bad)
+        unbound = spec(COHORT)
         self.assertTrue(all("destination" not in i for i in unbound["identities"]))
 
     def test_existing_only_accepts_exactly_one_owned_application(self):
@@ -124,10 +137,10 @@ class DeclarationTest(unittest.TestCase):
             applications={"status": 200, "json": fake.page([
                 {"pk": baseline["application_pk"], "slug": OV["slug"], "provider": 42}])},
             actor={"status": 200, "json": {"user": {"is_superuser": True}}})
-        proof = mi.machine_identity_existing_provider(spec([CONTROLLER, LAPTOP]), **args)
+        proof = mi.machine_identity_existing_provider(spec(COHORT), **args)
         self.assertEqual(proof, {"kind": "owned_provider", "id": OV["name"], "pk": 42,
                                  "client_id": OV["client_id"], "path": "/providers/oauth2/42/"})
-        queries = mi.machine_identity_queries(spec([CONTROLLER, LAPTOP]), mi.machine_identity_owned(content), proof)
+        queries = mi.machine_identity_queries(spec(COHORT), mi.machine_identity_owned(content), proof)
         self.assertEqual([q["path"] for q in queries if q["path"].startswith("/providers/")],
                          ["/providers/oauth2/42/"])
         both = spec([CONTROLLER, base.identity(host="laptop")], {"jocasta": base.ACCESS, "ov": OV})
@@ -226,6 +239,7 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual((self.x.writes(), self.x.key_reads()), ([], []))
         self.assertEqual(self.controller_snapshot(), before)
         self.assertFalse(self.secret("laptop", LAPTOP).exists())
+        self.assertFalse(self.secret("laptop", INTERACTIVE).exists())
 
     def test_laptop_addition_preserves_controller_custody_and_converges(self):
         x = self.x
@@ -248,11 +262,28 @@ class EntrypointTest(unittest.TestCase):
         # The existing application, controller identity and bindings cannot be
         # changed or dropped through extra vars.
         guard = "keeps its controller identity present and unchanged"
+        wider = [NODE, "viking://resources/other"]
         for overrides in (
-                {"authentik_machine_identities": [CONTROLLER | {"state": "absent"}, LAPTOP]},
-                {"authentik_machine_identities": [LAPTOP]},
-                {"authentik_machine_identities": [CONTROLLER | {"generation": 2}, LAPTOP]},
-                {"authentik_machine_identities": [CONTROLLER | {"ov_namespaces": ["viking://resources"]}, LAPTOP]},
+                {"authentik_machine_identities": [CONTROLLER | {"state": "absent"}, LAPTOP, INTERACTIVE]},
+                {"authentik_machine_identities": [LAPTOP, INTERACTIVE]},
+                {"authentik_machine_identities": [CONTROLLER | {"generation": 2}, LAPTOP, INTERACTIVE]},
+                {"authentik_machine_identities": [CONTROLLER | {"ov_namespaces": ["viking://resources"]}, LAPTOP,
+                                                  INTERACTIVE]},
+                # The limited laptop identity is preserved exactly as well.
+                {"authentik_machine_identities": [CONTROLLER, INTERACTIVE]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP | {"state": "absent"}, INTERACTIVE]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP | {"generation": 2}, INTERACTIVE]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP | {"ov_namespaces": wider}, INTERACTIVE]},
+                # The interactive identity cannot widen, move or multiply.
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP, INTERACTIVE | {"ov_namespaces": wider}]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP,
+                                                  INTERACTIVE | {"ov_namespaces": ["viking://resources"]}]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP, INTERACTIVE | {"host": "controller"}]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP, INTERACTIVE | {"profile": "ov-tooling-codex"}]},
+                {"authentik_machine_identities": [CONTROLLER, LAPTOP, INTERACTIVE,
+                                                  INTERACTIVE | {"profile": "ov-interactive-claude"}]},
+                {"authentik_machine_identities": [CONTROLLER, INTERACTIVE, LAPTOP]},
                 {"authentik_machine_services": {"ov": self.ov | {"state": "absent"}}},
                 {"authentik_machine_services": {"ov": self.ov, "jocasta": base.ACCESS}},
                 {"authentik_machine_identity_existing_owned_only": False},
@@ -286,24 +317,35 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual((x.state.providers[OV["name"]]["pk"], x.state.apps[OV["slug"]]["pk"]),
                          (original["provider_pk"], original["application_pk"]))
         username = "chaldea-laptop-" + LAPTOP["profile"]
+        interactive = "chaldea-laptop-" + INTERACTIVE["profile"]
+        self.assertEqual(interactive, "chaldea-laptop-ov-interactive-codex")
         user = x.state.users[username]
         self.assertEqual(user["attributes"]["chaldea_ov"], {"ov_namespaces": [NODE]})
+        self.assertEqual(x.state.users[interactive]["attributes"]["chaldea_ov"], {"ov_namespaces": [NODE]})
         self.assertEqual(sorted(x.state.groups[OV["group"]]["users"]),
-                         sorted([username, "chaldea-controller-" + CONTROLLER["profile"]]))
-        secret = self.secret("laptop", LAPTOP)
-        self.assertEqual(secret.read_text(), x.state.tokens[username + "-g1"]["key"])
-        self.assertEqual((secret.stat().st_mode & 0o777, secret.stat().st_nlink), (0o600, 1))
-        self.assertNotEqual(secret.read_bytes(), before[2])
+                         sorted([username, interactive, "chaldea-controller-" + CONTROLLER["profile"]]))
+        secrets = {}
+        for name, item in ((username, LAPTOP), (interactive, INTERACTIVE)):
+            secret = self.secret("laptop", item)
+            self.assertEqual(secret.read_text(), x.state.tokens[name + "-g1"]["key"])
+            self.assertEqual((secret.stat().st_mode & 0o777, secret.stat().st_nlink), (0o600, 1))
+            self.assertEqual(secret.parent.stat().st_mode & 0o777, 0o700)
+            self.assertNotEqual(secret.read_bytes(), before[2])
+            secrets[name] = secret
+        # Separate accounts hold separate app passwords in separate files.
+        self.assertNotEqual(secrets[username].read_bytes(), secrets[interactive].read_bytes())
+        self.assertEqual(secrets[interactive].name, "ov-interactive-codex.app-password")
         mapping = x.state.mappings[OV["name"] + ": ov.read"]["expression"]
-        for name in (username, "chaldea-controller-" + CONTROLLER["profile"]):
+        for name in (username, interactive, "chaldea-controller-" + CONTROLLER["profile"]):
             account = types.SimpleNamespace(**x.state.users[name])
             self.assertEqual(evaluate(mapping, account, OV["group"]), {"aud": OV["resource"], "ov_namespaces": [NODE]})
-        widened = copy.deepcopy(user)
-        widened["attributes"]["chaldea_ov"] = {"ov_namespaces": [NODE, "viking://resources/other"]}
-        self.assertEqual(evaluate(mapping, types.SimpleNamespace(**widened), OV["group"]), {})
-        for slug, app in x.state.apps.items():
-            self.assertIs(bool(x.state.passing(app, user)), slug == OV["slug"])
-        laptop_bytes = (secret.read_bytes(), secret.stat().st_ino, secret.stat().st_mtime_ns)
+        for name in (username, interactive):
+            widened = copy.deepcopy(x.state.users[name])
+            widened["attributes"]["chaldea_ov"] = {"ov_namespaces": [NODE, "viking://resources/other"]}
+            self.assertEqual(evaluate(mapping, types.SimpleNamespace(**widened), OV["group"]), {})
+            for slug, app in x.state.apps.items():
+                self.assertIs(bool(x.state.passing(app, x.state.users[name])), slug == OV["slug"])
+        laptop_bytes = [(s.read_bytes(), s.stat().st_ino, s.stat().st_mtime_ns) for s in secrets.values()]
 
         # Changed content is never auto-accepted as the next baseline.
         self.refused(gate, original)
@@ -314,7 +356,8 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual(x.changed(self.ok(confirmed)), 0)
         self.assertEqual(set(self.private_reads()), {expected_path})
         self.assertEqual(self.controller_snapshot(), before)
-        self.assertEqual((secret.read_bytes(), secret.stat().st_ino, secret.stat().st_mtime_ns), laptop_bytes)
+        self.assertEqual([(s.read_bytes(), s.stat().st_ino, s.stat().st_mtime_ns) for s in secrets.values()],
+                         laptop_bytes)
         self.assertIn("budget", x.state.apps)
 
 

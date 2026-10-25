@@ -499,20 +499,41 @@ blueprint "homelab-infra ov http a63e197f identities", declared in
 `ov-http-a63e197f-machine`, group `ov-http-a63e197f-machine-identities`,
 signing key `8bbd6516-af33-4e64-a73b-caa39e692c29`, scope `ov.read`,
 300-second tokens). It keeps the existing canary reader,
-`chaldea-controller-ov-http-a63e197f-reader`, unchanged and adds one ordinary
-account for the laptop's limited Codex preset,
-`chaldea-laptop-ov-tooling-codex`. Both accounts hold exactly
+`chaldea-controller-ov-http-a63e197f-reader`, unchanged and adds two ordinary
+laptop accounts:
+
+- `chaldea-laptop-ov-tooling-codex` for the laptop's limited Chaldea Codex
+  preset, at `/home/igor/.config/chaldea/authentik/ov-tooling-codex.app-password`;
+- `chaldea-laptop-ov-interactive-codex`, a separate identity for the laptop's
+  ordinary interactive Codex, at
+  `/home/igor/.config/chaldea/authentik/ov-interactive-codex.app-password`.
+  Only chaldea-fleet-config's closed native headers helper,
+  `/usr/local/libexec/webmcp-interactive-headers ov laptop`, reads it.
+
+The two laptop credentials are never shared: the limited preset never points
+at the interactive file, and the interactive helper never reads the limited
+one. All three accounts hold exactly
 `ov_namespaces: [viking://resources/homeassistant-api/rest-api.md]`, expire at
 2027-01-15T00:00:00Z and are generation 1. It is the same blueprint and
-provider, not a second issuer.
+provider, not a second issuer or verifier. The interactive account adds no
+signed identity claim: the OV scope mapping emits only `aud` and
+`ov_namespaces`, as for the other two accounts, and the OV verifier
+(`ov-mcp` `ov_http/auth.py`) authorizes by those signed roots, with a nonempty
+subject, not by account name. The helper therefore binds the credential by its
+fixed file and username and verifies the signed contract, not which of the
+three accounts was issued the token.
 
 The entrypoint runs only this role, like the Jocasta tooling one, and is off
 unless explicitly requested. A real run needs `-e ov_http_identities_apply=true`;
 `--check` is the offline plan, and `-e ov_http_identities_online_check=true`
 adds the read-only preflight. Before loading any credential it refuses a
 declaration that is not exactly the one owned OV application, that changes or
-drops the controller identity, that disables the existing-only gate or that
-leaves destinations unbound. It loads the same controller SOPS API credential
+drops the controller identity or the limited laptop identity, that declares
+any account other than these two and the interactive laptop account, that
+moves the interactive account to another host, service or node, that disables
+the existing-only gate or that leaves destinations unbound. The interactive
+account's generation, expiry and state follow the role's usual lifecycle
+rules. It loads the same controller SOPS API credential
 and refuses any origin other than https://auth.ryzhkov.dev.
 
 The existing-only provider custody gate described above now accepts exactly one
@@ -552,17 +573,19 @@ other callers keep the name-only behavior.
 Every run rereads the controller identity's app password and writes it back to
 the controller destination unchanged, as the role does for every present
 identity. With the binding, that write can only reach gaming-pc as UID 1000,
-and the laptop key can only reach the laptop as UID 1001. Use an operator
+and the two laptop keys can only reach the laptop as UID 1001. Use an operator
 inventory outside this repository that defines exactly `controller` and
 `laptop` with their real connections, for example the controller as a local
 connection on gaming-pc and the laptop over SSH as `igor`. The binding check
 refuses any other mapping, including running the play on the laptop with the
 controller mapped to its local connection.
 
-Removing the laptop account later uses the same entrypoint with only the laptop
-identity set to `state: absent`; the controller identity, application and
-blueprint name stay unchanged. Offline tokens remain valid for up to 300
-seconds after removal.
+Removing the interactive laptop account later uses the same entrypoint with
+only `ov-interactive-codex` set to `state: absent`, after its fleet native
+registration has been removed; the controller and limited laptop identities,
+application and blueprint name stay unchanged. Removing the limited laptop
+account needs a reviewed change to the entrypoint's literal guard first.
+Offline tokens remain valid for up to 300 seconds after removal.
 
 ## Tests
 
@@ -589,10 +612,12 @@ fixtures; they prove the role's logic, not Authentik's behaviour.
 OV entrypoint with a SOPS sentinel that returns only the fake admin token. It
 checks the exact source declaration, the destination binding refusals, the
 existing-only gate for one OV application, extra-vars attempts to drop or
-change the controller identity, refusal without a baseline, refusal of a
-remapped destination before any write or key read, addition of the laptop
-account with the controller account, token and file byte-identical, refusal of
-the stale baseline, and a confirmed second run with no changes.
+change the controller or limited laptop identity or to widen, move or add an
+interactive account, refusal without a baseline, refusal of a remapped
+destination before any write or key read, addition of both separate laptop
+accounts and files with the controller account, token and file
+byte-identical, refusal of the stale baseline, and a confirmed second run with
+no changes.
 
 ## Not yet known: qualify before enabling
 

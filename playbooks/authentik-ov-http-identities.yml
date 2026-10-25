@@ -7,7 +7,9 @@
 # machine identity blueprints or any other host convergence.
 #
 # Use an operator inventory outside this repository that defines exactly the
-# declared hosts (controller, laptop) with their real connections. Every
+# declared hosts (controller, laptop) with their real connections. The laptop
+# receives two separate credentials: the limited Chaldea preset's and the
+# ordinary interactive Codex helper's. Every
 # destination is checked against its machine and UID binding before Authentik
 # changes. Off unless explicitly requested:
 #
@@ -35,7 +37,8 @@
         quiet: true
 
     # Literal values, so an extra-vars file cannot drop or change the existing
-    # canary reader or widen this run beyond the one owned OV application.
+    # canary reader or the limited laptop identity, add another account, or
+    # widen this run beyond the one owned OV application and its single node.
     - name: Preserve the existing OV application and controller identity exactly
       ansible.builtin.assert:
         that:
@@ -54,10 +57,28 @@
             [{'host': 'controller', 'profile': 'ov-http-a63e197f-reader', 'service': 'ov',
               'ov_namespaces': ['viking://resources/homeassistant-api/rest-api.md'],
               'generation': 1, 'expires': '2027-01-15T00:00:00Z', 'state': 'present'}]
+          - >-
+            authentik_machine_identities | selectattr('profile', 'equalto', 'ov-tooling-codex') | list ==
+            [{'host': 'laptop', 'profile': 'ov-tooling-codex', 'service': 'ov',
+              'ov_namespaces': ['viking://resources/homeassistant-api/rest-api.md'],
+              'generation': 1, 'expires': '2027-01-15T00:00:00Z', 'state': 'present'}]
+          # The separate ordinary interactive laptop account: its generation,
+          # expiry and state follow the role's own lifecycle rules, but its
+          # host, service and single node are fixed.
+          - >-
+            authentik_machine_identities | map(attribute='profile') | list ==
+            ['ov-http-a63e197f-reader', 'ov-tooling-codex', 'ov-interactive-codex']
+          - >-
+            (authentik_machine_identities | last | dict2items
+            | rejectattr('key', 'in', ['generation', 'expires', 'state']) | items2dict) ==
+            {'host': 'laptop', 'profile': 'ov-interactive-codex', 'service': 'ov',
+             'ov_namespaces': ['viking://resources/homeassistant-api/rest-api.md']}
           - authentik_machine_identity_destinations | default({}) | length > 0
         fail_msg: >-
           This entrypoint only adds to the existing owned OV application and keeps
           its controller identity present and unchanged, with every destination bound.
+          The limited laptop identity stays unchanged and the only other account is
+          the laptop's interactive OV identity on the same single node.
         quiet: true
 
     # Check mode stays offline unless explicitly asked for the read-only preflight.
