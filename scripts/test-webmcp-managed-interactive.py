@@ -14,6 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "roles/authentik_webmcp_interactive/tests"))
 import used_by_seam as seam
+import provider_inventory_seam as inventory
 spec = importlib.util.spec_from_file_location("managed", ROOT / "roles/authentik_webmcp_interactive/library/webmcp_managed_enrollment.py")
 assert spec and spec.loader
 m = importlib.util.module_from_spec(spec)
@@ -38,7 +39,7 @@ class FakeAPI:
     require_superuser = m.APIClient.require_superuser
     mapping_uses = m.APIClient.mapping_uses
 
-    def rows(self, kind):
+    def rows(self, kind, owned=None):
         return copy.deepcopy(self.data[kind])
 
     def request(self, method, path, body=None, public=False):
@@ -89,6 +90,52 @@ class FakeAPI:
         assert method == "DELETE"
         self.data[kind].remove(found)
         return {}
+
+
+FOREIGN_SECRET = "SYNTHETIC-foreign-provider-secret"
+
+
+class InventoryAPI(FakeAPI):
+    """Real collection consumer against the pinned public/detail producer contract."""
+    rows = m.APIClient.rows
+
+    def __init__(self):
+        super().__init__()
+        self.allowed_provider_ids = set()
+        self.data["provider"].append({
+            "pk": 999, "name": "foreign OAuth2 provider", "property_mappings": [],
+            "client_id": "foreign-client", "client_secret": FOREIGN_SECRET,
+            "meta_model_name": "authentik_providers_oauth2.oauth2provider",
+        })
+        self.data["application"].append({
+            "pk": "foreign-app", "slug": "foreign-app", "provider": 999,
+            "backchannel_providers": [999],
+        })
+
+    def request(self, method, path, body=None, public=False):
+        if method == "GET" and path.startswith("/providers/oauth2/"):
+            # A forbidden request fails the regression, before producing a body.
+            assert path in {f"/providers/oauth2/{pk}/" for pk in self.allowed_provider_ids}, path
+            self.calls.append((method, path, copy.deepcopy(body), public))
+            pk = int(path.split("/")[3])
+            return inventory.oauth_provider(next(r for r in self.data["provider"] if r["pk"] == pk))
+        if method == "GET" and path == "/providers/all/?page_size=500":
+            rows = [inventory.public_provider(row) for row in self.data["provider"]]
+        elif method == "GET" and path == "/core/applications/?page_size=500&superuser_full_list=true":
+            rows = [inventory.application_row(row, self.data["provider"])
+                    for row in self.data["application"]]
+        elif method == "GET" and path in {
+                prefix + "?page_size=500" for kind, prefix in m.PATHS.items()
+                if kind not in ("provider", "application")}:
+            kind = next(k for k, prefix in m.PATHS.items() if path == prefix + "?page_size=500")
+            rows = copy.deepcopy(self.data[kind])
+        else:
+            result = super().request(method, path, body, public)
+            if method == "POST" and path == m.PATHS["provider"]:
+                self.allowed_provider_ids.add(result["pk"])
+            return result
+        self.calls.append((method, path, copy.deepcopy(body), public))
+        return {"results": rows, "pagination": {"count": len(rows), "next": 0}}
 
 
 def hosts(generation=1, state="present"):
@@ -306,28 +353,140 @@ class Tests(unittest.TestCase):
                 {"results": [], "pagination": {"count": 0, "next": 2}},
                 {"results": [], "pagination": {}},
                 {"results": [{}] * 501, "pagination": {"count": 501, "next": 0}}):
-            api.request = lambda *args: result
+            api.request = lambda method, path: (
+                {"user": {"is_superuser": True}} if path == "/core/users/me/" else result)
             with self.assertRaises(m.Refused):
                 api.rows("provider")
 
-    def test_application_collection_requires_verified_superuser(self):
+    def test_inventory_collections_require_verified_superuser(self):
         api = m.APIClient("synthetic-admin-token")
-        for flag in (False, None, "true", 1, True):
-            with self.subTest(flag=flag):
-                calls = []
-                def request(method, path):
-                    calls.append((method, path))
-                    if path == "/core/users/me/":
-                        return {"user": {"is_superuser": flag}}
-                    return {"results": [], "pagination": {"count": 0, "next": 0}}
-                api.request = request
-                if flag is True:
-                    self.assertEqual(api.rows("application"), [])
-                    self.assertEqual(calls[-1], ("GET", "/core/applications/?page_size=500&superuser_full_list=true"))
+        for kind, path in (
+                ("provider", "/providers/all/?page_size=500"),
+                ("application", "/core/applications/?page_size=500&superuser_full_list=true")):
+            for flag in (False, None, "true", 1, True):
+                with self.subTest(kind=kind, flag=flag):
+                    calls = []
+                    def request(method, path):
+                        calls.append((method, path))
+                        if path == "/core/users/me/":
+                            return {"user": {"is_superuser": flag}}
+                        return {"results": [], "pagination": {"count": 0, "next": 0}}
+                    api.request = request
+                    if flag is True:
+                        self.assertEqual(api.rows(kind), [])
+                        self.assertEqual(calls[-1], ("GET", path))
+                    else:
+                        with self.assertRaises(m.Refused):
+                            api.rows(kind)
+                        self.assertEqual(calls, [("GET", "/core/users/me/")])
+
+
+    def test_public_inventory_and_nested_applications_never_request_foreign_secret(self):
+        self.api = InventoryAPI()
+        # The pinned privileged OAuth2 producer would expose the sentinel.
+        self.assertEqual(inventory.oauth_provider(self.api.data["provider"][0])["client_secret"],
+                         FOREIGN_SECRET)
+        rows = self.api.rows("provider")
+        self.assertEqual([r["pk"] for r in rows], [999])
+        self.assertNotIn("client_secret", rows[0])
+        self.assertNotIn("client_id", rows[0])
+        apps = self.api.rows("application")
+        self.assertEqual(apps[0]["provider_obj"]["pk"], 999)
+        self.assertEqual(apps[0]["backchannel_providers_obj"][0]["pk"], 999)
+        self.assertNotIn(FOREIGN_SECRET, json.dumps([rows, apps]))
+        self.assertFalse(any("/providers/oauth2/" in c[1] for c in self.api.calls))
+
+    def test_public_foreign_name_collision_never_authorizes_detail(self):
+        self.api = InventoryAPI()
+        self.api.data["provider"][0]["name"] = m.CLIENT
+        with self.assertRaises(m.Refused):
+            self.enroll().converge(hosts(), "present")
+        self.assertFalse(any("/providers/oauth2/" in c[1] for c in self.api.calls))
+        self.assertNotIn(FOREIGN_SECRET, (self.path / "receipt.json").read_text())
+
+    def test_owned_detail_noop_rotation_cohort_and_global_removal(self):
+        self.api = InventoryAPI()
+        self.assertTrue(self.enroll().converge(hosts(3), "present"))
+        owned = json.loads((self.path / "receipt.json").read_text())["objects"]
+        pk = owned["provider"]["pk"]
+        before = len(self.api.calls)
+        self.assertFalse(self.enroll().converge(hosts(3), "present"))
+        self.assertTrue(any(c[1] == f"/providers/oauth2/{pk}/" for c in self.api.calls[before:]))
+        self.assertFalse(any(c[0] != "GET" for c in self.api.calls[before:]))
+        self.assertTrue(self.enroll().converge(hosts(4), "present"))
+        laptop = (self.path / "laptop.json").read_bytes()
+        laptop_stat = (self.path / "laptop.json").stat()
+        laptop_user = copy.deepcopy(next(r for r in self.api.data["user"]
+                                        if r["username"] == "webmcp-interactive-laptop"))
+        laptop_token = copy.deepcopy(next(r for r in self.api.data["token"]
+                                         if r["identifier"] == "webmcp-interactive-laptop-g4"))
+        cohort = hosts(4) + [dict(hosts()[0], host=h) for h in ("agent-a", "agent-b", "omarchy-pc")]
+        m.declaration(cohort, OWNER, True, NOW)
+        before = len(self.api.calls)
+        self.assertTrue(self.enroll().converge(cohort, "present"))
+        self.assertEqual((self.path / "laptop.json").read_bytes(), laptop)
+        after_stat = (self.path / "laptop.json").stat()
+        self.assertEqual((after_stat.st_ino, after_stat.st_mtime_ns),
+                         (laptop_stat.st_ino, laptop_stat.st_mtime_ns))
+        self.assertIn(laptop_user, self.api.data["user"])
+        self.assertIn(laptop_token, self.api.data["token"])
+        laptop_paths = (f"/core/users/{laptop_user['pk']}/",
+                        "/core/tokens/webmcp-interactive-laptop-g4/")
+        self.assertFalse(any(c[0] != "GET" and c[1] in laptop_paths
+                             for c in self.api.calls[before:]))
+        self.assertEqual(json.loads((self.path / "receipt.json").read_text())["objects"]["provider"]["pk"], pk)
+        self.assertFalse(self.enroll().converge(cohort, "present"))
+        self.assertNotIn(FOREIGN_SECRET, (self.path / "receipt.json").read_text())
+        self.assertTrue(self.enroll().converge(cohort, "absent"))
+        self.assertEqual([r["pk"] for r in self.api.data["provider"]], [999])
+        self.assertFalse(self.enroll().converge(cohort, "absent"))
+
+    def test_owned_inventory_collision_identity_and_body_drift_refuse(self):
+        self.api = InventoryAPI()
+        self.enroll().converge(hosts(), "present")
+        receipt = json.loads((self.path / "receipt.json").read_text())
+        owned = receipt["objects"]
+        record = owned["provider"]
+        pk = record["pk"]
+        provider = next(r for r in self.api.data["provider"] if r["pk"] == pk)
+        for change in ("foreign-name", "renamed", "missing-id", "lookup", "body"):
+            with self.subTest(change=change):
+                saved = copy.deepcopy(self.api.data["provider"])
+                context = copy.deepcopy(owned)
+                if change == "foreign-name":
+                    self.api.data["provider"][0]["name"] = m.CLIENT
+                elif change == "renamed":
+                    provider["name"] = "renamed owned provider"
+                elif change == "missing-id":
+                    provider["pk"] = 998
+                elif change == "lookup":
+                    context["provider"]["lookup"] = 999
                 else:
-                    with self.assertRaises(m.Refused):
-                        api.rows("application")
-                    self.assertEqual(calls, [("GET", "/core/users/me/")])
+                    provider["grant_types"] = ["authorization_code"]
+                before = len(self.api.calls)
+                with self.assertRaises(m.Refused):
+                    self.api.rows("provider", owned=context)
+                details = [c[1] for c in self.api.calls[before:] if "/providers/oauth2/" in c[1]]
+                self.assertEqual(details, [f"/providers/oauth2/{pk}/"] if change == "body" else [])
+                self.api.data["provider"] = saved
+                provider = next(r for r in saved if r["pk"] == pk)
+        self.assertEqual(json.loads((self.path / "receipt.json").read_text()), receipt)
+
+    def test_public_inventory_keeps_reference_and_pending_refusals(self):
+        self.api = InventoryAPI()
+        self.enroll().converge(hosts(), "present")
+        self.api.data["provider"][0]["property_mappings"] = [self.api.data["mapping"][0]["pk"]]
+        self.assert_reference_refusal()
+        self.api.data["provider"][0]["property_mappings"] = []
+        # A failed confirmed-ID PATCH leaves pending and prevents even discovery.
+        self.api.fail_next = True
+        with self.assertRaises(m.Refused):
+            self.enroll().converge(hosts(state="absent"), "present")
+        self.assertEqual(json.loads((self.path / "receipt.json").read_text())["pending"]["method"], "PATCH")
+        before = len(self.api.calls)
+        with self.assertRaises(m.Refused):
+            self.enroll()
+        self.assertEqual(len(self.api.calls), before)
 
     def test_unsafe_shared_scratch_ancestor_is_rejected(self):
         shared = self.path / "shared"

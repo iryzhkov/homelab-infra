@@ -53,8 +53,25 @@ with an API-returned PK is accepted. No blueprint or UUID importer is used.
 Receipt fields are declared public attributes and IDs, never app passwords or
 returned client secrets.
 
+Provider discovery uses the complete bounded /providers/all/ collection. Pinned
+Authentik2026.8.4 binds it to the base ProviderSerializer, whose declared fields
+exclude client_secret and client_id. Application provider_obj and
+backchannel_providers_obj also use that base serializer. No unscoped OAuth2 list
+or foreign OAuth2 detail is requested. Only the original receipt-owned integer
+provider PK permits /providers/oauth2/PK/ detail, after public ID/name collision
+checks. Its body must still match the original receipt before reuse.
+The OAuth2 serializer can return that owned provider's client_secret to the
+privileged actor; this fix prevents foreign provider secret retrieval.
+
+APIClient.rows(kind, owned=None) accepts the already validated receipt objects
+dictionary. Enrollment passes receipt["objects"] on both initial and final
+inventory loads. Imported guard consumers needing owned OAuth2 body fields must
+also call rows(kind, owned=receipt["objects"]) after their existing owner/pending/
+custody validation. With no context, provider rows contain public metadata only.
+The receipt context is permission by original ID, never by a matching name.
+
 The API actor must report user.is_superuser as the JSON boolean true through
-/core/users/me/ before each application collection and each mapping used_by read.
+/core/users/me/ before each provider or application collection and each mapping used_by read.
 A matching filtered pagination count is not sufficient. Reference authority is
 checked directly, independently of any previous application collection load.
 
@@ -83,6 +100,12 @@ extracts relevant actual model declarations from hash-checked upstream snapshots
 It qualifies producer shape and consumer refusal, including direct ScopeMapping
 DCR relations. Its guardian stand-in requires a strict superuser and returns the
 real queryset; it does not qualify live RBAC or a full Authentik runtime.
+The inventory seam checks hash-bound provider/application view and serializer
+declarations and executes the pinned permission-dependent secret-field method.
+Dictionary fixtures replace ORM loading and field serialization. Real APIClient
+collection reads exercise discovery, exact owned detail, repeat/rotation/cohort
+and refusal paths; this is not full Authentik or live RBAC qualification.
+
 An uncertain write leaves pending set. Further runs refuse before API
 requests. Root must reconcile that original operation separately. Never delete
 the receipt, invent an acknowledgement or replay a POST. No automatic adoption
