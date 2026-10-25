@@ -861,26 +861,64 @@ class ExistingProviderTest(unittest.TestCase):
         self.assertNotIn("client_id", fake.provider_seam.PUBLIC_FIELDS)
 
 
+class ToolingDeclarationTest(unittest.TestCase):
+    def test_exact_cohort_paths_grants_and_existing_only_gate(self):
+        config = yaml.safe_load((ROOT / "playbooks/vars/authentik-jocasta-tooling.yml").read_text())
+        pairs = [("laptop", "jocasta-tooling-codex"), ("laptop", "jocasta-tooling-claude"),
+                 ("laptop", "jocasta-tooling-opencode"), ("agent-a", "jocasta-tooling-opencode"),
+                 ("agent-b", "jocasta-tooling-opencode"), ("omarchy-pc", "jocasta-tooling-opencode")]
+        items = config["authentik_machine_identities"]
+        self.assertEqual(items, [{"host": host, "profile": profile, "project": "tooling",
+                                 "generation": 1, "expires": "2026-11-23T00:00:00Z", "state": "present"}
+                                for host, profile in pairs])
+        self.assertIs(config["authentik_machine_identity_existing_owned_only"], True)
+        self.assertNotIn("authentik_machine_identity_existing_provider_baseline", config)
+        self.assertEqual(config["authentik_machine_identities_blueprint_name"],
+                         "homelab-infra Jocasta tooling laptop")
+        self.assertEqual(config["authentik_machine_services"], {})
+        access = {"state": "present", "slug": "chaldea-jocasta",
+                  "name": "Chaldea Jocasta tooling access", "group": "chaldea-jocasta-tooling-identities",
+                  "client_id": "chaldea-jocasta-tooling", "resource": "https://jocasta.mcp.ryzhkov.dev/mcp",
+                  "signing_key": "8bbd6516-af33-4e64-a73b-caa39e692c29",
+                  "scope": "jocasta.read", "token_seconds": 300}
+        self.assertEqual(config["authentik_jocasta_machine_access"], access)
+        hosts = {host: {"ssh_user": "igor", "home": "/home/igor", "connection": "ssh"}
+                 for host, _ in pairs}
+        # Fixed source qualification date keeps lifecycle expiry assertions reproducible.
+        s = mi.machine_identity_spec(items, access, hosts, 180, "2026-10-25T00:00:00Z")
+        self.assertEqual(set(s["services"]), {"jocasta"})
+        for item, (host, profile) in zip(s["identities"], pairs):
+            self.assertEqual((item["username"], item["token"]),
+                             (f"chaldea-{host}-{profile}", f"chaldea-{host}-{profile}-g1"))
+            self.assertEqual((item["owner"], item["home"], item["secret_path"]),
+                             ("igor", "/home/igor",
+                              f"/home/igor/.config/chaldea/authentik/{profile}.app-password"))
+            self.assertEqual((item["service"], item["grant"], item["grant_attributes"]),
+                             ("jocasta", {"project": "tooling"}, {"chaldea_jocasta": {"project": "tooling"}}))
+        prior = mi.machine_identity_spec(items[:3], access, hosts, 180, "2026-10-25T00:00:00Z")
+        self.assertEqual(s["identities"][:3], prior["identities"])
+        self.assertEqual(s["services"], prior["services"])
+        self.assertEqual([o for o in s["objects"] if o not in prior["objects"]],
+                         sorted([kind, f"chaldea-{host}-{profile}" + ("-g1" if kind == "token" else ""), "present"]
+                                for host, profile in pairs[3:] for kind in ("user", "token")))
+
+
 class ToolingExistingRoleTest(unittest.TestCase):
-    def test_actual_three_accounts_preserve_existing_credentials_and_custody(self):
+    def test_actual_expanded_cohort_preserves_existing_credentials_and_custody(self):
         import copy
         x = Scratch(self)
         config = yaml.safe_load((ROOT / "playbooks/vars/authentik-jocasta-tooling.yml").read_text())
         items = config.pop("authentik_machine_identities")
         access = config["authentik_jocasta_machine_access"]
         self.assertTrue(config["authentik_machine_identity_existing_owned_only"])
-        self.assertEqual([i["profile"] for i in items],
-                         ["jocasta-tooling-codex", "jocasta-tooling-claude", "jocasta-tooling-opencode"])
-        self.assertTrue(all(i["generation"] == 1 and i["project"] == "tooling"
-                            and i["expires"] == "2026-11-23T00:00:00Z" for i in items))
         x.state.keypairs[access["signing_key"]] = dict(x.state.keypairs[fake.KEYPAIR], pk=access["signing_key"])
-        laptop = x.base / "laptop"
-        laptop.mkdir(mode=0o755)
-        x.homes = {"laptop": laptop}
-        x.inventory.write_text(yaml.safe_dump({"all": {"hosts": {"laptop": {
+        x.homes = {host: x.base / host for host in ("laptop", "agent-a", "agent-b", "omarchy-pc")}
+        for home in x.homes.values():
+            home.mkdir(mode=0o755)
+        x.inventory.write_text(yaml.safe_dump({"all": {"hosts": {host: {
             "ansible_connection": "local", "ssh_user": USER,
-            "authentik_machine_identity_home": str(laptop),
-            "ansible_python_interpreter": sys.executable}}}}))
+            "authentik_machine_identity_home": str(home),
+            "ansible_python_interpreter": sys.executable} for host, home in x.homes.items()}}}))
 
         def run(declarations, baseline=None, existing=True, success=True):
             extra = config | {"authentik_machine_identity_existing_owned_only": existing,
@@ -896,7 +934,7 @@ class ToolingExistingRoleTest(unittest.TestCase):
         # or app-password read is allowed. Generic setup below is fixture-only.
         run(items, success=False)
         self.assertEqual((private_reads(), x.writes(), x.key_reads()), ([], [], []))
-        run(items[:2], existing=False)
+        run(items[:3], existing=False)
 
         def baseline():
             provider = x.state.providers[access["name"]]
@@ -907,7 +945,7 @@ class ToolingExistingRoleTest(unittest.TestCase):
 
         def existing_snapshot():
             result = []
-            for item in items[:2]:
+            for item in items[:3]:
                 user = "chaldea-laptop-" + item["profile"]
                 path = x.secret("laptop", item["profile"])
                 result.append((copy.deepcopy(x.state.users[user]), copy.deepcopy(x.state.tokens[user + "-g1"]),
@@ -919,7 +957,15 @@ class ToolingExistingRoleTest(unittest.TestCase):
         x.state.providers["Foreign"] = {"pk": 999, "name": "Foreign", "client_id": "foreign-client",
                                        "meta_model_name": "authentik_providers_oauth2.oauth2provider",
                                        "client_secret": "FOREIGN-SECRET-SENTINEL"}
+        owned_provider = copy.deepcopy(x.state.providers[access["name"]])
+        owned_app = copy.deepcopy(x.state.apps[access["slug"]])
         run(items, original)
+        self.assertEqual(x.state.providers[access["name"]], owned_provider)
+        self.assertEqual(x.state.apps[access["slug"]], owned_app)
+        self.assertEqual(set(x.state.users), {"chaldea-" + i["host"] + "-" + i["profile"] for i in items})
+        for item in items[3:]:
+            self.assertTrue(x.secret(item["host"], item["profile"]).is_file())
+            self.assertIn("chaldea-" + item["host"] + "-" + item["profile"] + "-g1", x.state.tokens)
         self.assertEqual(existing_snapshot(), before)
         expected_path = "/api/v3/providers/oauth2/" + str(original["provider_pk"]) + "/"
         self.assertTrue(private_reads())
@@ -932,13 +978,15 @@ class ToolingExistingRoleTest(unittest.TestCase):
         self.assertEqual(x.changed(run(items, confirmed)), 0)
         self.assertEqual(set(private_reads()), {expected_path})
         absent = copy.deepcopy(items)
-        absent[-1]["state"] = "absent"
+        for item in absent[3:]:
+            item["state"] = "absent"
         run(absent, confirmed)
         self.assertEqual(existing_snapshot(), before)
-        user = "chaldea-laptop-jocasta-tooling-opencode"
-        self.assertNotIn(user, x.state.users)
-        self.assertNotIn(user + "-g1", x.state.tokens)
-        self.assertFalse(x.secret("laptop", "jocasta-tooling-opencode").exists())
+        for item in items[3:]:
+            user = "chaldea-" + item["host"] + "-" + item["profile"]
+            self.assertNotIn(user, x.state.users)
+            self.assertNotIn(user + "-g1", x.state.tokens)
+            self.assertFalse(x.secret(item["host"], item["profile"]).exists())
         self.assertIn(access["name"], x.state.providers)
         self.assertIn(access["slug"], x.state.apps)
 
