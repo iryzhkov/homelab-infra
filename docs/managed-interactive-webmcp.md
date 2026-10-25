@@ -59,13 +59,16 @@ A matching filtered pagination count is not sufficient. Reference authority is
 checked directly, independently of any previous application collection load.
 
 No name-only adoption occurs. Matching names without receipts refuse; existing
-objects must match original IDs/attributes. Privilege and foreign-reference drift
-refuse. Each recorded scope mapping is inspected through
-/propertymappings/all/UUID/used_by/ on the concrete ScopeMapping. Pinned Authentik
-2026.8.4 enumerates reverse managers without pagination; verified superuser access
-is required for unfiltered evidence. This covers base and subclass relations,
-including DCR, Source user/group, provider group and RAC consumers, without
-enumerating those endpoint collections in the controller.
+objects must match original IDs/attributes. Privilege drift, primary application
+links and foreign mapping references refuse. Each recorded scope mapping is
+inspected through /propertymappings/all/UUID/used_by/ on the concrete ScopeMapping.
+Pinned Authentik2026.8.4 enumerates reverse managers without pagination; verified
+superuser access is required for unfiltered evidence. The seam executes mapping
+and DCR relations; enterprise/RAC coverage is mechanism inference, not executed proof.
+Before provider reuse or global removal, root separately requires complete
+strict-superuser application/backchannel and provider-filtered DCR evidence with
+no foreign dependents. Missing or unavailable evidence refuses. Serialize other
+administrative writers; this operator gate is not enforced by the module.
 
 Only the exact common Provider row and ProviderPropertyMapping through row for
 the receipt-bound OAuth2 provider/mapping IDs are accepted for an attached mapping;
@@ -145,7 +148,11 @@ Rotation raises generation in the same declaration/receipt, then uses protected
 fleet delivery with the exact prior credential digest supplied privately.
 Revocation/rollback sets selected host state=absent in the same declaration;
 global withdrawal additionally sets webmcp_managed_state=absent. Preserve existing
-hosts. Restore the exact previous verifier/native definitions and only owned files.
+hosts. Persistent rollback also reverts the owning homelab selector on infra main
+and the companion laptop selection on fleet main, so ordinary convergence cannot
+reapply them. Coordinate both repositories: apply the infra verifier inverse first,
+then restore only affected public native definitions and owned files. Keep the
+single verifier slot aligned with the selected native credential path.
 Issued JWTs may remain valid through <=300s expiry plus accepted server leeway,
 unless managed issuer trust is withdrawn first. Preserve account tombstones.
 
