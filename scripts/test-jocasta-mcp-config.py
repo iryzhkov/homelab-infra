@@ -209,8 +209,10 @@ class ManagedOperatorTest(unittest.TestCase):
         values = yaml.safe_load((REPO / "inventory/host_vars/homelab.yml").read_text())
         stack = next(s for s in values["host_stacks"] if s["name"] == "jocasta")
         managed = dict(zip(jocasta.OPERATOR_KEYS, (jocasta.MANAGED_OPERATOR_ISSUER, jocasta.MANAGED_OPERATOR_ISSUER + "jwks/", "jocasta-managed-interactive")))
-        for active, expected in ((False, OPERATOR), (True, managed)):
-            rendered = {key: renderer.from_string(stack["env_extra"][key]).render(jocasta_managed_interactive_verifier_enabled=active) for key in OPERATOR}
+        for context, expected in (({}, OPERATOR),
+                                  ({"jocasta_managed_interactive_verifier_enabled": False}, OPERATOR),
+                                  ({"jocasta_managed_interactive_verifier_enabled": True}, managed)):
+            rendered = {key: renderer.from_string(stack["env_extra"][key]).render(**context) for key in OPERATOR}
             self.assertEqual(rendered, expected)
             self.assertEqual(jocasta.jocasta_mcp_env(operator_enabled(**rendered)), MCP | expected)
         for key in OPERATOR:
@@ -355,8 +357,10 @@ class PersistentToolingTest(unittest.TestCase):
         renderer = Environment()
         renderer.filters["bool"] = bool
         for key in OPERATOR:
-            env_extra[key] = renderer.from_string(env_extra[key]).render()
-        expected = dict(MCP, JOCASTA_OIDC_AUDIENCE="jocasta-rest-persistent-tooling") | OPERATOR
+            env_extra[key] = renderer.from_string(env_extra[key]).render(**values)
+        managed = dict(zip(jocasta.OPERATOR_KEYS, (jocasta.MANAGED_OPERATOR_ISSUER,
+                           jocasta.MANAGED_OPERATOR_ISSUER + "jwks/", "jocasta-managed-interactive")))
+        expected = dict(MCP, JOCASTA_OIDC_AUDIENCE="jocasta-rest-persistent-tooling") | managed
         self.assertEqual(jocasta.jocasta_mcp_env(env_extra), expected)
         result, dotenv = self.run_prepare(env_extra)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

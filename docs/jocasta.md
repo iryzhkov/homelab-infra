@@ -1,9 +1,11 @@
 # Jocasta working documents
 
-A separate disabled [managed interactive capability](managed-interactive-webmcp.md)
-supplies dedicated host enrollment and an opt-in selector for the existing
-operator verifier. This is source only. Its merge activates neither the verifier
-nor host registrations. Laptop qualification gates the remaining adopted hosts.
+The [managed interactive capability](managed-interactive-webmcp.md) supplies
+dedicated host enrollment and the existing operator-verifier selector. Owning
+homelab inventory selects the managed trio; merging it can affect ordinary
+convergence. Root must qualify both laptop native clients before merging this
+selection. Companion fleet inventory selects laptop registrations only;
+other hosts remain gated on separate accepted enrollment and qualification.
 
 Jocasta runs as a Docker Compose container on homelab, served by the existing
 Traefik TLS ingress at https://jocasta.ryzhkov.dev. No Cloudflare Tunnel
@@ -34,7 +36,8 @@ or substitute a bare source tag or digest. Publication and this inventory change
 grant no deployment authority; root owns review/CI and the later authorized
 convergence and native qualification.
 
-The older limited-only bootstrap procedure below retains its a3e83c5 image.
+The historical limited-only bootstrap used the a3e83c5 image. The commands below
+use the current inventory image; they do not select that historical version.
 Use the registry name rather than a local-only tag such as jocasta:<commit>;
 the weekly image prune removed that one on 2026-10-03. Mutable tags are refused.
 
@@ -102,8 +105,9 @@ To enable it, an explicitly approved deployment packet:
 1. Loads the image built from a3e83c5, for example Jocasta CI's retained
    jocasta-image artifact, as
    git.ryzhkov.dev/igor/jocasta:a3e83c55e73661fc50d92a9ca328236a86f291fd and
-   points jocasta_image in inventory/host_vars/homelab.yml at it, optionally
-   with @sha256:<digest>, as described under Deploy.
+   points jocasta_image in inventory/host_vars/homelab.yml at that historical
+   limited-only tag, optionally with its verified @sha256:<digest>. The current
+   operator-capable image instead requires its complete fixed tag/digest pin.
 2. Adds all four MCP keys to the jocasta entry's env_extra:
 
 ```yaml
@@ -239,7 +243,9 @@ These environment names correspond exactly to daemon flags
 `--operator-oidc-issuer`, `--operator-oidc-jwks-url` and
 `--operator-oidc-client-id`. The trio is absent or all-or-none. All three empty
 strings also mean disabled; partial keys or a mix of empty and nonempty values
-are refused. Enabled values must equal the literal URLs/client ID above.
+are refused. Enabled values must equal either the complete public trio above or
+its fixed managed counterpart selected by jocasta_managed_interactive_verifier_enabled;
+mixed public/managed values are refused.
 The limited verifier and canonical MCP resource must already be configured,
 the limited issuer must share the fixed `https://auth.ryzhkov.dev` origin,
 and its issuer must differ from the operator issuer. No additional audience,
