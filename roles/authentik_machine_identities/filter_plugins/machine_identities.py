@@ -35,6 +35,7 @@ NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}\Z")
 CLIENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}\Z")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 LOGIN = re.compile(r"[a-z_][a-z0-9_-]{0,31}\Z")
+NODENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}\Z")
 HOME = re.compile(r"/[A-Za-z0-9._/-]{1,255}\Z")
 
 # Fields every service application and every account declaration has. The
@@ -367,11 +368,36 @@ def _service_specs(spec):
 
 # --- Accounts, app passwords and their host files: service-independent -----
 
-def machine_identity_spec(identities, access, hosts, max_days, now, services=None):
+def _destinations(value, identities):
+    """Optional operator binding of each identity host to one machine and account.
+
+    Inventory names and ssh_user names alone cannot tell two machines apart:
+    the same login and home can exist on both, and a local connection means
+    whichever machine runs the play. When bound, the role checks the actual
+    node name and numeric user ID on the destination before any change.
+    """
+    if value is None or value == {}:
+        return {}
+    if not isinstance(value, dict):
+        _refuse("authentik_machine_identity_destinations must be a mapping")
+    declared = {item["host"] for item in identities}
+    if set(value) != declared:
+        _refuse("destination bindings must name exactly the declared identity hosts")
+    for host, binding in value.items():
+        _keys(binding, {"hostname", "uid"}, f"destination {host}")
+        _match(NODENAME, binding["hostname"], f"destination {host} hostname")
+        uid = binding["uid"]
+        if not isinstance(uid, int) or isinstance(uid, bool) or not 0 <= uid <= 2147483646:
+            _refuse(f"destination {host} uid must be a numeric user ID")
+    return value
+
+
+def machine_identity_spec(identities, access, hosts, max_days, now, services=None, destinations=None):
     """Validate the declared identities and derive every name the role uses.
 
     hosts maps each inventory host an identity names to its ssh_user, an
-    optional home override and its connection.
+    optional home override and its connection. destinations optionally binds
+    each of those hosts to an expected node name and numeric user ID.
     """
     if services is None or services == {}:
         services = {"jocasta": access}
@@ -455,6 +481,10 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
             "attributes": grant_attributes | {MAX_LIFETIME: f"days={max_days}",
                                               "homelab-infra": {"host": host, "profile": profile}},
         })
+    for host, binding in _destinations(destinations, out).items():
+        for item in out:
+            if item["host"] == host:
+                item["destination"] = dict(binding)
 
     objects = []
     for service, access in services.items():
@@ -522,8 +552,10 @@ def machine_identity_existing_provider(spec, instance, baseline, inventory, appl
             or not isinstance(actor["json"].get("user"), dict)
             or actor["json"]["user"].get("is_superuser") is not True):
         _refuse("existing-only public discovery requires a superuser")
-    if set(spec["services"]) != {"jocasta"} or spec["access"]["state"] != "present":
-        _refuse("existing-only mode requires the unchanged present Jocasta application")
+    # Exactly one closed service profile: the one existing application this
+    # blueprint owns. The mode cannot create, add or remove an application.
+    if len(spec["services"]) != 1 or spec["access"]["state"] != "present":
+        _refuse("existing-only mode requires exactly one unchanged present application")
     access = spec["access"]
     content = instance.get("content", "") if isinstance(instance, dict) else ""
     if (not content or sha512(content.encode()).hexdigest() != baseline["content_sha512"]

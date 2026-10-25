@@ -225,6 +225,8 @@ jobs:
           pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
             -s roles/authentik_machine_identities/tests -p test_service_profiles.py -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+            -s roles/authentik_machine_identities/tests -p test_ov_http_identities.py -v
 
   akasha:
     runs-on: ubuntu-24.04

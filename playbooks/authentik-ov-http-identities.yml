@@ -1,0 +1,88 @@
+---
+# Isolated enrollment of the OV HTTP a63e197f machine identities:
+# docs/authentik-machine-identities.md, "Isolated OV HTTP identities".
+# Runs only roles/authentik_machine_identities, with the existing owned OV
+# blueprint and the declaration in vars/authentik-ov-http-identities.yml. It
+# never runs authentik_config, the access blueprint, the shared or Jocasta
+# machine identity blueprints or any other host convergence.
+#
+# Use an operator inventory outside this repository that defines exactly the
+# declared hosts (controller, laptop) with their real connections. Every
+# destination is checked against its machine and UID binding before Authentik
+# changes. Off unless explicitly requested:
+#
+#   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-ov-http-identities.yml --check --diff
+#   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-ov-http-identities.yml --check --diff \
+#     -e ov_http_identities_online_check=true -e @PROTECTED_BASELINE
+#   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-ov-http-identities.yml \
+#     -e ov_http_identities_apply=true -e @PROTECTED_BASELINE
+
+- name: Enrol only the owned OV HTTP a63e197f machine identities
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  # As in playbooks/authentik.yml: the inventory's ansible_user is
+  # "{{ ssh_user }}", which localhost lacks.
+  vars:
+    ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
+  vars_files:
+    - vars/authentik-ov-http-identities.yml
+  pre_tasks:
+    - name: Require an explicit apply outside check mode
+      ansible.builtin.assert:
+        that: ansible_check_mode or (ov_http_identities_apply | default(false) | bool)
+        fail_msg: Real runs need -e ov_http_identities_apply=true; use --check for the plan.
+        quiet: true
+
+    # Literal values, so an extra-vars file cannot drop or change the existing
+    # canary reader or widen this run beyond the one owned OV application.
+    - name: Preserve the existing OV application and controller identity exactly
+      ansible.builtin.assert:
+        that:
+          - authentik_machine_identities_enabled | bool
+          - authentik_machine_identity_existing_owned_only | bool
+          - authentik_machine_identities_blueprint_name == 'homelab-infra ov http a63e197f identities'
+          - authentik_machine_services.keys() | list == ['ov']
+          - >-
+            (authentik_machine_services.ov | dict2items | rejectattr('key', 'in', ['issuer', 'jwks_url'])
+            | items2dict) == {'state': 'present', 'slug': 'ov-http-a63e197f',
+            'name': 'OV HTTP a63e197f machine access', 'group': 'ov-http-a63e197f-machine-identities',
+            'client_id': 'ov-http-a63e197f-machine', 'resource': 'https://ov.mcp.ryzhkov.dev/mcp',
+            'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29', 'scope': 'ov.read', 'token_seconds': 300}
+          - >-
+            authentik_machine_identities | selectattr('host', 'equalto', 'controller') | list ==
+            [{'host': 'controller', 'profile': 'ov-http-a63e197f-reader', 'service': 'ov',
+              'ov_namespaces': ['viking://resources/homeassistant-api/rest-api.md'],
+              'generation': 1, 'expires': '2027-01-15T00:00:00Z', 'state': 'present'}]
+          - authentik_machine_identity_destinations | default({}) | length > 0
+        fail_msg: >-
+          This entrypoint only adds to the existing owned OV application and keeps
+          its controller identity present and unchanged, with every destination bound.
+        quiet: true
+
+    # Check mode stays offline unless explicitly asked for the read-only preflight.
+    - name: Load only the existing controller API credential
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/authentik-api.sops.yaml"
+        name: authentik_api
+      no_log: true
+      when: not ansible_check_mode or ov_http_identities_online_check | default(false) | bool
+
+    - name: Describe the API exactly as authentik_config does
+      ansible.builtin.set_fact:
+        authentik_url: "{{ authentik_api.authentik_api_url }}"
+        authentik_headers:
+          Authorization: "Bearer {{ authentik_api.authentik_api_token }}"
+      no_log: true
+      when: not ansible_check_mode or ov_http_identities_online_check | default(false) | bool
+
+    - name: Refuse API credentials for another Authentik origin
+      ansible.builtin.assert:
+        that: authentik_url | regex_replace('/api/v3/?$', '') == ov_http_identities_authentik_origin
+        quiet: true
+      no_log: true
+      when: not ansible_check_mode or ov_http_identities_online_check | default(false) | bool
+  tasks:
+    - name: Enrol through the maintained ownership checks and bound private delivery
+      ansible.builtin.include_role:
+        name: authentik_machine_identities

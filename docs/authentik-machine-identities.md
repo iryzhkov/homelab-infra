@@ -4,9 +4,11 @@
 web MCP access tokens from Authentik without holding any administrative
 credential. It is off in the integrated playbook: `playbooks/vars/authentik.yml`
 sets `authentik_machine_identities_enabled: false`, and `playbooks/authentik.yml`
-includes the role only when that is true. The one enabled declaration is the
-laptop's Jocasta tooling enrollment, run only by its own entrypoint; see
-[Isolated Jocasta tooling enrollment](#isolated-jocasta-tooling-enrollment).
+includes the role only when that is true. The declarations in this repository
+are the laptop's Jocasta tooling enrollment and the OV HTTP a63e197f
+identities, each run only by its own entrypoint; see
+[Isolated Jocasta tooling enrollment](#isolated-jocasta-tooling-enrollment) and
+[Isolated OV HTTP identities](#isolated-ov-http-identities).
 Complete infra identity creation and host credential delivery before enabling the
 fleet enrollment.
 
@@ -339,10 +341,14 @@ force for the whole blueprint.
 
 ### Client enrollment contract still required
 
-The installed Chaldea credential helper and fleet enrollment are Jocasta-only.
-This source change does not make those clients support OV, homelab or HA. Before
-integration, extend their closed enrollment parser, fleet renderer and private
-helper together. They must accept a fixed named preset with `form: app_password`,
+When this section was written the installed Chaldea credential helper and fleet
+enrollment were Jocasta-only. chaldea-fleet-config's closed enrollment and
+profile validators now accept OV, homelab, HA and HoloNet presets, and on
+2026-10-25 the laptop's installed waits runtime (client-v0.4.18) answered
+`session headers --preset NAME --audience jocasta|ov|homelab|ha`. Each other
+host's installed runtime must still be checked, and token issuance, verifier
+acceptance and native renewal remain qualification steps. The client contract
+is that they accept a fixed named preset with `form: app_password`,
 `issuer`, `tokenUrl`, `jwksUrl`, `clientId`, `username`, `secretFile`,
 `scope`, `resource` and `maxTokenSeconds: 300`; replace the Jocasta
 `project` field with exactly `ov_namespaces`, or with both
@@ -484,6 +490,80 @@ The nightly drift check compares applications only with the access
 blueprint's manifest, so it reports `chaldea-jocasta` as not managed by the
 repository until that manifest is extended (see the end of this document).
 
+## Isolated OV HTTP identities
+
+`playbooks/authentik-ov-http-identities.yml` manages the existing owned OV
+blueprint "homelab-infra ov http a63e197f identities", declared in
+`playbooks/vars/authentik-ov-http-identities.yml`. It owns the application
+`ov-http-a63e197f` ("OV HTTP a63e197f machine access", client ID
+`ov-http-a63e197f-machine`, group `ov-http-a63e197f-machine-identities`,
+signing key `8bbd6516-af33-4e64-a73b-caa39e692c29`, scope `ov.read`,
+300-second tokens). It keeps the existing canary reader,
+`chaldea-controller-ov-http-a63e197f-reader`, unchanged and adds one ordinary
+account for the laptop's limited Codex preset,
+`chaldea-laptop-ov-tooling-codex`. Both accounts hold exactly
+`ov_namespaces: [viking://resources/homeassistant-api/rest-api.md]`, expire at
+2027-01-15T00:00:00Z and are generation 1. It is the same blueprint and
+provider, not a second issuer.
+
+The entrypoint runs only this role, like the Jocasta tooling one, and is off
+unless explicitly requested. A real run needs `-e ov_http_identities_apply=true`;
+`--check` is the offline plan, and `-e ov_http_identities_online_check=true`
+adds the read-only preflight. Before loading any credential it refuses a
+declaration that is not exactly the one owned OV application, that changes or
+drops the controller identity, that disables the existing-only gate or that
+leaves destinations unbound. It loads the same controller SOPS API credential
+and refuses any origin other than https://auth.ryzhkov.dev.
+
+The existing-only provider custody gate described above now accepts exactly one
+declared closed service profile with its application present, so this
+blueprint's provider is read only by its baseline-proven PK. It still refuses
+a second service, an absent application, bootstrap and every condition listed
+there. Root must supply the prior public baseline:
+
+```yaml
+authentik_machine_identity_existing_provider_baseline:
+  provider_pk: 42
+  application_pk: 3621ae7a-e719-4cdf-9cb4-26bf110cfd78
+  content_sha512: <128 hex digits of the exact successful stored content>
+```
+
+No hash is populated in source and the original enrollment receipts retain
+none. The template and OV scope mapping code are unchanged since the original
+enrollment's source, ebbde2778ea776acfaa6db43e24f9d0e4d723ca4, so root can
+render the original controller-only declaration offline and compare its hash
+with the stored blueprint. Never take the hash from the response being checked.
+
+### Destination binding
+
+Inventory names and `ssh_user` cannot tell the two destinations apart: the
+controller credential lives on gaming-pc (`omarchy-pc`) as UID 1000 and the
+laptop's would live on `omarchy-macbook-air-igor` as UID 1001, both user `igor`
+with home `/home/igor`, and a `local` connection means whichever machine runs
+the play. The repository inventory marks the laptop `local`. The role variable
+`authentik_machine_identity_destinations` binds each identity host to a node
+name and numeric UID. When it is set, it must name exactly the declared
+identity hosts. Before Authentik changes, and again immediately before
+delivery, the role runs `id -u` and `uname -n` on each destination as its
+configured user and requires the home's owner UID to match. A mismatch stops
+the run before any app password is read. This entrypoint requires the binding;
+other callers keep the name-only behavior.
+
+Every run rereads the controller identity's app password and writes it back to
+the controller destination unchanged, as the role does for every present
+identity. With the binding, that write can only reach gaming-pc as UID 1000,
+and the laptop key can only reach the laptop as UID 1001. Use an operator
+inventory outside this repository that defines exactly `controller` and
+`laptop` with their real connections, for example the controller as a local
+connection on gaming-pc and the laptop over SSH as `igor`. The binding check
+refuses any other mapping, including running the play on the laptop with the
+controller mapped to its local connection.
+
+Removing the laptop account later uses the same entrypoint with only the laptop
+identity set to `state: absent`; the controller identity, application and
+blueprint name stay unchanged. Offline tokens remain valid for up to 300
+seconds after removal.
+
 ## Tests
 
 `roles/authentik_machine_identities/tests` runs in CI. The existing Jocasta
@@ -505,6 +585,14 @@ rotation, absent identities, full removal, owner drift, dropping a declared
 identity, and an application open to every account. Every run asserts that
 neither the admin token nor any app password appears in the output. These are
 fixtures; they prove the role's logic, not Authentik's behaviour.
+`test_ov_http_identities.py`, in the `machine-profiles` job, plays the actual
+OV entrypoint with a SOPS sentinel that returns only the fake admin token. It
+checks the exact source declaration, the destination binding refusals, the
+existing-only gate for one OV application, extra-vars attempts to drop or
+change the controller identity, refusal without a baseline, refusal of a
+remapped destination before any write or key read, addition of the laptop
+account with the controller account, token and file byte-identical, refusal of
+the stale baseline, and a confirmed second run with no changes.
 
 ## Not yet known: qualify before enabling
 

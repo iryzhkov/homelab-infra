@@ -58,6 +58,16 @@ authentik_machine_services: {}
 # authentik_machine_identity_home.
 authentik_machine_identities: []
 
+# Optional binding of every identity host to the machine and account that must
+# receive its file, for example:
+#   controller: {hostname: omarchy-pc, uid: 1000}
+# When nonempty it must name exactly the declared identity hosts. Before any
+# change and again before delivery, the role compares the destination's actual
+# `uname -n` and `id -u` (and its home's owner UID) with the binding, so an
+# inventory that maps a host name onto another machine or account refuses.
+# Empty keeps the name-only behavior.
+authentik_machine_identity_destinations: {}
+
 # Upper bound for an app password's expiry, in days from the run. Also set on
 # each account as its maximum token lifetime, so Authentik accepts the expiry.
 authentik_machine_identity_max_days: 180

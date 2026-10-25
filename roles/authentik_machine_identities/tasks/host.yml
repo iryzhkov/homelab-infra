@@ -4,6 +4,39 @@
 # `inspect` only reads; phase `deliver` writes or removes the file. Never runs
 # in check mode.
 
+# Runs in both phases, so delivery rechecks the destination immediately before
+# writing. Only when the operator bound the host to a machine and account.
+- name: Confirm {{ machine_identity.host }} is its bound machine and account
+  when: machine_identity.destination is defined
+  delegate_to: "{{ machine_identity.host }}"
+  connection: "{{ machine_identity.connection }}"
+  become: false
+  vars:
+    ansible_user: "{{ machine_identity.owner }}"
+  block:
+    - name: Read the executing numeric user ID
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: machine_identity_actual_uid
+      changed_when: false
+
+    - name: Read the node name
+      ansible.builtin.command:
+        argv: [uname, -n]
+      register: machine_identity_actual_node
+      changed_when: false
+
+    - name: Refuse a destination remapped to another machine or account
+      ansible.builtin.assert:
+        that:
+          - machine_identity_actual_uid.stdout == machine_identity.destination.uid | string
+          - machine_identity_actual_node.stdout == machine_identity.destination.hostname
+        fail_msg: >-
+          {{ machine_identity.host }} does not reach its bound destination
+          {{ machine_identity.destination.hostname }} uid {{ machine_identity.destination.uid }};
+          the inventory connection must not map this identity onto another machine or account.
+        quiet: true
+
 - name: Inspect {{ machine_identity.host }} as its configured user
   delegate_to: "{{ machine_identity.host }}"
   # The play's `connection: local` would otherwise apply to delegated tasks.
@@ -27,6 +60,9 @@
           - item.stat.exists or item.item != machine_identity.home
           - not item.stat.exists or (item.stat.isdir and not item.stat.islnk)
           - not item.stat.exists or item.stat.pw_name == machine_identity.owner
+          - >-
+            machine_identity.destination is not defined or not item.stat.exists
+            or item.stat.uid == machine_identity.destination.uid
           - not item.stat.exists or item.stat.mode[-2] not in ['2', '3', '6', '7']
           - not item.stat.exists or item.stat.mode[-1] not in ['2', '3', '6', '7']
         fail_msg: >-

@@ -36,7 +36,8 @@
       {{ authentik_machine_identities | machine_identity_spec(
            authentik_jocasta_machine_access, machine_identity_hosts,
            authentik_machine_identity_max_days | int,
-           now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), authentik_machine_services) }}
+           now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), authentik_machine_services,
+           authentik_machine_identity_destinations) }}
   vars:
     # Only what the inventory says about each named host: its user, an
     # optional home and its connection. A host missing here is refused.
