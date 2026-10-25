@@ -9,7 +9,7 @@ services:
       - /home/iryzhkov/app/openviking/ov.conf:/app/ov.conf
       - /home/iryzhkov/app/openviking/data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:1933/health', headers={'Authorization': 'Bearer ov-homelab-7f3k9x2m4p8q'}))\" || exit 1"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:1933/health'))\" || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

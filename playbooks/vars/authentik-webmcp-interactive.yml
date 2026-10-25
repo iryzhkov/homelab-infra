@@ -1,0 +1,11 @@
+---
+# No host enrollment or verifier activation follows from a source merge.
+webmcp_managed_enabled: false
+webmcp_managed_laptop_qualified: false
+webmcp_managed_owner: ""
+webmcp_managed_receipt_dir: ""
+webmcp_managed_state: present
+webmcp_managed_hosts: []
+# Root supplies a protected private vars file with a random UUID owner, existing
+# controller-owned 0700 receipt_dir and hosts with host/generation/expires/state.
+# Start with laptop. agent-a/agent-b/omarchy-pc require actual laptop acceptance.

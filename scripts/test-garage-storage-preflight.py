@@ -133,12 +133,13 @@ class Fixture:
             config["qualifications"][gate] = "evidence:" + gate
         return qualify(config)
 
-    def budget_config(self):
+    def budget_config(self, stores=("data",)):
         config = self.config()  # Keep the legacy hard-cap fixtures independent.
-        config["data"].update(
-            acceptance_mode="operational_budget", physical_cap=None,
-            operational_budget={"bytes": 2_000_000_000_000,
-                                "risk_acceptance": "evidence:unquotaed-data-risk-acceptance"})
+        for label in stores:
+            config[label].update(
+                acceptance_mode="operational_budget", physical_cap=None,
+                operational_budget={"bytes": 2_000_000_000_000 if label == "data" else 17_179_869_184,
+                                    "risk_acceptance": "evidence:unquotaed-" + label + "-risk"})
         return qualify(config)
 
     def mapped_config(self, budget=True):
@@ -157,12 +158,213 @@ def qualify(config):
     return config
 
 
+# Synthetic immutable-shaped references only. No document or live pass is asserted.
+FIXTURE_REFERENCE = "jocasta:" + "0" * 32 + "@1"
+
+
+def operator_qualify(config, composite=False):
+    config["operating_contract"] = "operator_budget_v1"
+    current = preflight.digest(config)
+    records = {"configuration": current}
+    for gate in preflight.DURABILITY_GATES:
+        kind = ("accepted_risk" if gate in ("full_volume", "mount_loss") else
+                "composite" if composite and gate != "last_copy_policy" else "measured")
+        record = {"type": kind, "references": [FIXTURE_REFERENCE],
+                  "limitation": "Synthetic fixture only; no live evidence or operational authority."}
+        if kind == "composite":
+            record.update(measured_configuration="sha256:" + "a" * 64,
+                          qualifying_configuration=current, difference_reference=FIXTURE_REFERENCE)
+        else:
+            record["configuration"] = current
+        records[gate] = record
+    config["qualifications"] = records
+    return config
+
+
 class Scratch(unittest.TestCase):
     def setUp(self):
         self.home = scratch_home()
         self.temp = tempfile.TemporaryDirectory(dir=self.home)
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name).resolve()
+
+
+class OperatorContractTest(Scratch):
+    def setUp(self):
+        super().setUp()
+        self.fixture = Fixture(self.base)
+        self.config = operator_qualify(self.fixture.budget_config(("data", "metadata")), True)
+
+    def refused(self, config, message):
+        with self.assertRaisesRegex(preflight.Refusal, message):
+            preflight.validate(config, Exploding())
+
+    def test_opt_in_reports_each_class_and_local_validation_limits(self):
+        before = snapshot(self.base)
+        result = preflight.validate(self.config, self.fixture.probe())
+        self.assertEqual(result["status"], "passed-startup-preflight")
+        self.assertEqual(result["operating_contract"], "operator_budget_v1")
+        self.assertEqual(result["qualifications"], self.config["qualifications"])
+        self.assertIn("no evidence fetched or measured configuration bytes verified",
+                      result["qualification_validation"])
+        self.assertEqual(snapshot(self.base), before)
+        for composite in (False, True):
+            config = operator_qualify(copy.deepcopy(self.config), composite)
+            self.assertEqual(preflight.validate(config, self.fixture.probe())["configuration"],
+                             preflight.digest(config))
+
+    def test_selector_is_explicit_and_requires_both_budget_modes(self):
+        self.assertNotIn("operating_contract", CANONICAL)
+        for value in (None, "", "operator_budget_v2", True, 1, [], {}):
+            config = copy.deepcopy(self.config)
+            config["operating_contract"] = value
+            self.refused(config, "unknown operating_contract")
+            config["enabled"] = False
+            self.refused(config, "unknown operating_contract")
+        for label in ("data", "metadata"):
+            for value in (None, "physical_cap", "unknown", True, 1, [], {}):
+                config = copy.deepcopy(self.config)
+                config[label]["acceptance_mode"] = value
+                self.refused(config, "requires explicit data and metadata")
+            config = copy.deepcopy(self.config)
+            del config[label]["acceptance_mode"]
+            self.refused(config, "requires explicit data and metadata")
+        config = copy.deepcopy(self.config)
+        del config["operating_contract"]
+        qualify(config)
+        self.refused(config, "unqualified live gate")
+        # Legacy string gates remain valid with explicit or omitted physical-cap mode.
+        for config in (self.fixture.config(), self.fixture.budget_config(("data", "metadata"))):
+            result = preflight.validate(config, self.fixture.probe())
+            self.assertNotIn("operating_contract", result)
+            self.assertNotIn("qualifications", result)
+
+    def test_gate_matrix_and_required_envelope(self):
+        for gate in preflight.DURABILITY_GATES:
+            for value in (None, "", FIXTURE_REFERENCE, True, 1, [], {}):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate] = value
+                self.refused(config, "typed qualification|wrong qualification type")
+            config = copy.deepcopy(self.config)
+            del config["qualifications"][gate]
+            self.refused(config, "exactly configuration and all five gates")
+            for kind in ("measured", "composite", "accepted_risk", "unknown", None, [], {}):
+                allowed = (("accepted_risk",) if gate in ("full_volume", "mount_loss")
+                           else ("measured",) if gate == "last_copy_policy"
+                           else ("measured", "composite"))
+                if kind in allowed:
+                    continue
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate]["type"] = kind
+                self.refused(config, "wrong qualification type")
+        for value in (None, [], "", True, 1):
+            config = copy.deepcopy(self.config)
+            config["qualifications"] = value
+            self.refused(config, "exactly configuration and all five gates")
+        for key in ("configuration", "unexpected"):
+            config = copy.deepcopy(self.config)
+            if key == "configuration":
+                del config["qualifications"][key]
+            else:
+                config["qualifications"][key] = None
+            self.refused(config, "exactly configuration and all five gates")
+        config = copy.deepcopy(self.config)
+        config["qualifications"] = {key: None for key in config["qualifications"]}
+        self.refused(config, "exact configuration digest")
+        config["qualifications"]["configuration"] = preflight.digest(config)
+        self.refused(config, "typed qualification")
+
+    def test_exact_record_keys_and_binding_fields(self):
+        for gate in preflight.DURABILITY_GATES:
+            original = self.config["qualifications"][gate]
+            for key in (*original, "unexpected"):
+                config = copy.deepcopy(self.config)
+                record = config["qualifications"][gate]
+                if key in record:
+                    del record[key]
+                else:
+                    record[key] = None
+                self.refused(config, "fields|wrong qualification type")
+            binding = "qualifying_configuration" if original["type"] == "composite" else "configuration"
+            for value in (None, True, 1, [], {}, "sha256:" + "0" * 64, "SHA256:" + "a" * 64):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate][binding] = value
+                self.refused(config, "bind current qualifying configuration")
+        for value in (None, True, 1, [], {}, "", "a" * 64, "sha256:" + "A" * 64,
+                      "sha256:" + "a" * 63, "sha256:" + "a" * 64 + "\n"):
+            config = copy.deepcopy(self.config)
+            config["qualifications"]["consistent_restore"]["measured_configuration"] = value
+            self.refused(config, "canonical measured configuration digest")
+
+    def test_bounded_references_and_utf8_limitations(self):
+        invalid = (None, "", " ", True, 1, [], {}, "https://example.invalid/proof",
+                   "jocasta:" + "A" * 32 + "@1", "jocasta:" + "a" * 32,
+                   "jocasta:" + "a" * 32 + "@0", "jocasta:" + "a" * 32 + "@01",
+                   FIXTURE_REFERENCE + "\n", FIXTURE_REFERENCE + " ",
+                   "jocasta:" + "a" * 32 + "@" + "1" * 56)
+        for gate in preflight.DURABILITY_GATES:
+            for value in (None, "", True, 1, {}, [], [FIXTURE_REFERENCE] * 9,
+                          *([item] for item in invalid)):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate]["references"] = value
+                self.refused(config, "1..8 immutable Jocasta references")
+            for value in (None, "", " \n\t", True, 1, [], {}, "x" * 4097, "é" * 2049, "\ud800"):
+                config = copy.deepcopy(self.config)
+                config["qualifications"][gate]["limitation"] = value
+                self.refused(config, "nonblank limitation")
+        for value in invalid:
+            config = copy.deepcopy(self.config)
+            config["qualifications"]["consistent_restore"]["difference_reference"] = value
+            self.refused(config, "immutable difference reference")
+        config = copy.deepcopy(self.config)
+        # Maximum reference length and UTF-8 byte count are inclusive.
+        reference = "jocasta:" + "a" * 32 + "@" + "1" * 54
+        self.assertEqual(len(reference), 95)
+        config["qualifications"]["consistent_restore"]["difference_reference"] = reference + "1"
+        for gate in preflight.DURABILITY_GATES:
+            config["qualifications"][gate]["references"] = [reference + "1"] * 8
+            config["qualifications"][gate]["limitation"] = "é" * 2048
+        preflight.validate(config, self.fixture.probe())
+
+    def test_discontinuous_composites_preserve_actual_measured_binding(self):
+        legacy = self.fixture.budget_config(("data", "metadata"))
+        legacy["data"]["unknown_filecount_risk_acceptance"] = "fixture:old-nonempty-risk"
+        old = preflight.digest(legacy)
+        current = copy.deepcopy(legacy)
+        current["data"]["unknown_filecount_risk_acceptance"] = "fixture:new-S3-risk"
+        operator_qualify(current, True)
+        new = preflight.digest(current)
+        self.assertNotEqual(old, new)
+        current["qualifications"]["fresh_client_roundtrip"]["measured_configuration"] = old
+        preflight.validate(current, self.fixture.probe())
+        # Startup checks syntax/bindings only; no receipt fetch or historical-byte comparison.
+        current["qualifications"]["consistent_restore"]["measured_configuration"] = "sha256:" + "b" * 64
+        preflight.validate(current, self.fixture.probe())
+        for change in (
+            lambda c: c["data"].update(unknown_filecount_risk_acceptance="fixture:drift"),
+            lambda c: c["metadata"]["operational_budget"].update(bytes=12345),
+            lambda c: c.update(data_fsync=False),
+        ):
+            config = copy.deepcopy(current)
+            change(config)
+            self.refused(config, "exact configuration digest")
+        # Removing fields does not recreate the old nonempty risk reference.
+        del current["operating_contract"]
+        del current["data"]["unknown_filecount_risk_acceptance"]
+        self.assertNotEqual(preflight.digest(current), old)
+
+    def test_typed_contract_preserves_mount_custody_and_io_refusals(self):
+        for change in ("source", "options", "custody", "io"):
+            probe = self.fixture.probe()
+            if change == "custody":
+                probe.modes[str(self.fixture.blobs)] = 0o777
+            elif change == "io":
+                probe.mount = lambda path: (_ for _ in ()).throw(OSError("injected"))
+            else:
+                probe.mounts[str(self.fixture.nas)][change] = (
+                    "wrong:/export" if change == "source" else "ro,soft")
+            with self.subTest(change=change), self.assertRaises((preflight.Refusal, OSError)):
+                preflight.validate(self.config, probe)
 
 
 class DefaultTest(Scratch):
@@ -176,7 +378,14 @@ class DefaultTest(Scratch):
         self.assertEqual(CANONICAL["data"]["operational_budget"],
                          {"bytes": 2_000_000_000_000, "risk_acceptance": None})
         self.assertIsNone(CANONICAL["data"]["physical_cap"])
-        self.assertEqual(set(CANONICAL["metadata"]["physical_cap"].values()), {None})
+        self.assertEqual(CANONICAL["metadata"]["acceptance_mode"], "operational_budget")
+        self.assertEqual(CANONICAL["metadata"]["operational_budget"],
+                         {"bytes": 17_179_869_184, "risk_acceptance": None})
+        self.assertIsNone(CANONICAL["metadata"]["physical_cap"])
+        for label in ("data", "metadata"):
+            self.assertEqual(CANONICAL[label]["mount"],
+                             {"target": None, "source": None, "fstype": None,
+                              "fsroot": None, "options": []})
         self.assertEqual(set(CANONICAL["qualifications"].values()), {None})
         self.assertIs(CANONICAL["data_fsync"], True)
         self.assertIs(CANONICAL["metadata_fsync"], True)
@@ -198,6 +407,22 @@ class DefaultTest(Scratch):
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 2)
         self.assertIn("storage preflight refused: explicit storage host", result.stderr)
+
+    def test_legacy_digest_golden_vector_excludes_only_qualifications(self):
+        # Fixed synthetic JSON bytes, independent of scratch paths and host facts.
+        config = {"enabled": True, "host": "fixture-only", "data_fsync": True,
+                  "metadata_fsync": True,
+                  "data": {"unknown_filecount_risk_acceptance": "fixture:legacy-nonempty"},
+                  "qualifications": {"mount_loss": "legacy string"}}
+        expected = "sha256:7c08e6c7a690acf3782c10a4b9dcbcc5c7babbb1ad6745bd2802adf58d92a8c9"
+        self.assertEqual(preflight.digest(config), expected)
+        config["qualifications"] = {"configuration": None}
+        self.assertEqual(preflight.digest(config), expected)
+        config["operating_contract"] = "operator_budget_v1"
+        self.assertNotEqual(preflight.digest(config), expected)
+        del config["operating_contract"]
+        config["data"]["unknown_filecount_risk_acceptance"] = "fixture:new-reference"
+        self.assertNotEqual(preflight.digest(config), expected)
 
     def test_digest_cli_names_the_exact_configuration(self):
         config = Fixture(self.base).config()
@@ -227,65 +452,68 @@ class PreflightTest(Scratch):
 
     def test_metadata_parent_and_config_require_trusted_custodians(self):
         fixture = Fixture(self.base)
-        for directory in (fixture.objectstore, fixture.objectstore / "config"):
-            path = str(directory)
-            for mode in (0o755, 0o1777):
-                with self.subTest(path=path, owner=2001, mode=oct(mode)):
-                    self.assert_refused(
-                        fixture, fixture.config(),
-                        fixture.probe(owners={path: 2001}, modes={path: mode}),
-                        "must be owned by root or uid 1000")
-            for owner in (0, 1000):
-                for mode in (0o775, 0o757, 0o1777):
-                    with self.subTest(path=path, owner=owner, mode=oct(mode)):
+        for stores in ((), ("metadata",), ("data", "metadata")):
+            for directory in (fixture.objectstore, fixture.objectstore / "config"):
+                path = str(directory)
+                for mode in (0o755, 0o1777):
+                    with self.subTest(path=path, owner=2001, mode=oct(mode)):
                         self.assert_refused(
-                            fixture, fixture.config(),
-                            fixture.probe(owners={path: owner}, modes={path: mode}),
-                            "must not be group or other writable")
+                            fixture, fixture.budget_config(stores),
+                            fixture.probe(owners={path: 2001}, modes={path: mode}),
+                            "must be owned by root or uid 1000")
+                for owner in (0, 1000):
+                    for mode in (0o775, 0o757, 0o1777):
+                        with self.subTest(path=path, owner=owner, mode=oct(mode)):
+                            self.assert_refused(
+                                fixture, fixture.budget_config(stores),
+                                fixture.probe(owners={path: owner}, modes={path: mode}),
+                                "must not be group or other writable")
 
     def test_every_metadata_ancestor_requires_custody(self):
         fixture = Fixture(self.base)
-        # Include /, ancestors above the mount, the mount and the Swarm root.
-        for directory in fixture.objectstore.parents:
-            path = str(directory)
-            for owner, mode, message in (
-                    (2001, 0o755, "must be owned by root or uid 1000"),
-                    (2001, 0o1777, "must be owned by root or uid 1000"),
-                    (0, 0o775, "must not be group or other writable"),
-                    (0, 0o757, "must not be group or other writable"),
-                    (1000, 0o1777, "must not be group or other writable")):
-                with self.subTest(path=path, owner=owner, mode=oct(mode)):
-                    self.assert_refused(
-                        fixture, fixture.config(),
-                        fixture.probe(owners={path: owner}, modes={path: mode}),
-                        "metadata: " + path + " " + message)
+        for stores in ((), ("metadata",), ("data", "metadata")):
+            # Include /, ancestors above the mount, the mount and the Swarm root.
+            for directory in fixture.objectstore.parents:
+                path = str(directory)
+                for owner, mode, message in (
+                        (2001, 0o755, "must be owned by root or uid 1000"),
+                        (2001, 0o1777, "must be owned by root or uid 1000"),
+                        (0, 0o775, "must not be group or other writable"),
+                        (0, 0o757, "must not be group or other writable"),
+                        (1000, 0o1777, "must not be group or other writable")):
+                    with self.subTest(path=path, owner=owner, mode=oct(mode)):
+                        self.assert_refused(
+                            fixture, fixture.budget_config(stores),
+                            fixture.probe(owners={path: owner}, modes={path: mode}),
+                            "metadata: " + path + " " + message)
 
     def test_root_and_selected_uid_custody_preserve_shared_nfs_traversal(self):
         fixture = Fixture(self.base)
-        ancestors = [str(path) for path in fixture.objectstore.parents]
-        custody = ancestors + [str(fixture.objectstore), str(fixture.objectstore / "config")]
-        # The known ML root stays 988:988 mode 0770; local custody rules must
-        # not turn this into a blanket refusal of the shared export.
-        fixture.nas.chmod(0o770)
-        for owner in (0, 1000):
-            with self.subTest(owner=owner):
-                owners = dict.fromkeys(custody, owner)
-                owners[str(fixture.nas)] = 988
-                probe = fixture.probe(owners=owners, modes=dict.fromkeys(custody, 0o755))
-                before = snapshot(self.base)
-                result = preflight.validate(fixture.config(), probe)
-                self.assertEqual(result["status"], "passed-startup-preflight")
-                self.assertTrue(set(custody) <= set(probe.inspected))
-                self.assertEqual(snapshot(self.base), before)
-        # Root-owned sticky strict ancestors protect the next trusted-owned
-        # component, including above the mount and at filesystem roots.
-        for path in ancestors:
-            with self.subTest(sticky_ancestor=path):
-                probe = fixture.probe(owners={path: 0}, modes={path: 0o1777})
-                before = snapshot(self.base)
-                self.assertEqual(preflight.validate(fixture.config(), probe)["status"],
-                                 "passed-startup-preflight")
-                self.assertEqual(snapshot(self.base), before)
+        for stores in ((), ("metadata",), ("data", "metadata")):
+            ancestors = [str(path) for path in fixture.objectstore.parents]
+            custody = ancestors + [str(fixture.objectstore), str(fixture.objectstore / "config")]
+            # The known ML root stays 988:988 mode 0770; local custody rules must
+            # not turn this into a blanket refusal of the shared export.
+            fixture.nas.chmod(0o770)
+            for owner in (0, 1000):
+                with self.subTest(owner=owner):
+                    owners = dict.fromkeys(custody, owner)
+                    owners[str(fixture.nas)] = 988
+                    probe = fixture.probe(owners=owners, modes=dict.fromkeys(custody, 0o755))
+                    before = snapshot(self.base)
+                    result = preflight.validate(fixture.budget_config(stores), probe)
+                    self.assertEqual(result["status"], "passed-startup-preflight")
+                    self.assertTrue(set(custody) <= set(probe.inspected))
+                    self.assertEqual(snapshot(self.base), before)
+            # Root-owned sticky strict ancestors protect the next trusted-owned
+            # component, including above the mount and at filesystem roots.
+            for path in ancestors:
+                with self.subTest(sticky_ancestor=path):
+                    probe = fixture.probe(owners={path: 0}, modes={path: 0o1777})
+                    before = snapshot(self.base)
+                    self.assertEqual(preflight.validate(fixture.budget_config(stores), probe)["status"],
+                                     "passed-startup-preflight")
+                    self.assertEqual(snapshot(self.base), before)
 
     def test_whole_mount_cap_passes_only_on_a_dedicated_mount(self):
         fixture = Fixture(self.base, dedicated=True)
@@ -514,46 +742,143 @@ class BudgetTest(Scratch):
                     self.assertIn(phrase, warning)
                 self.assertEqual(snapshot(self.base), before)
 
+    def test_shared_metadata_budget_and_mixed_modes_pass_without_writes(self):
+        fixture = Fixture(self.base)
+        (fixture.local / "swarm/other-stack").mkdir()
+        (fixture.local / "docker").mkdir()
+        for stores in (("metadata",), ("data", "metadata")):
+            for declared_null in (True, False):
+                with self.subTest(stores=stores, declared_null=declared_null):
+                    config = fixture.budget_config(stores)
+                    if not declared_null:
+                        del config["metadata"]["physical_cap"]
+                    qualify(config)
+                    original, before = copy.deepcopy(config), snapshot(self.base)
+                    probe = fixture.probe()
+                    result = preflight.validate(config, probe)
+                    self.assertEqual(result["metadata_acceptance"],
+                                     {"mode": "operational_budget",
+                                      "aggregate_budget_bytes": 17_179_869_184})
+                    self.assertEqual(result["data_acceptance"]["mode"],
+                                     "operational_budget" if "data" in stores else "physical_cap")
+                    warning = next(item for item in result["limitations"]
+                                   if "operational metadata budget only" in item)
+                    for phrase in ("no physical byte or inode enforcement", "no reserved space",
+                                   "exhaust the shared Docker filesystem", "point-in-time",
+                                   "not continuous admission or monitoring"):
+                        self.assertIn(phrase, warning)
+                    self.assertIn(str(fixture.objectstore / "config"), probe.asked)
+                    self.assertEqual(config, original)
+                    self.assertEqual(snapshot(self.base), before)
+
+    def test_metadata_budget_preserves_mount_device_alias_and_private_meta_checks(self):
+        fixture = Fixture(self.base)
+        config = fixture.budget_config(("data", "metadata"))
+        for mapping in (None, {}, fixture.mapped_config()["data"]["identity_mapping"]):
+            changed = copy.deepcopy(config)
+            changed["metadata"]["identity_mapping"] = mapping
+            self.assert_refused(fixture, qualify(changed), Exploding(),
+                                "allowed only on data, never metadata")
+        declarations = [
+            (lambda c: c["metadata"]["mount"].update(fstype="nfs"), "local filesystem"),
+            (lambda c: c["metadata"]["mount"].update(fsroot="/sub"), "bind or subtree"),
+            (lambda c: c["metadata"].update(path=str(fixture.local)), "strictly below"),
+            (lambda c: c["metadata"].update(path=str(fixture.local / "${META}")),
+             "Docker interpolation"),
+            (lambda c: (c["metadata"]["mount"].update(target=str(fixture.nas)),
+                        c["metadata"].update(path=str(fixture.nas / "garage-meta"))),
+             "separate mounts"),
+            (lambda c: c["metadata"].update(path=str(fixture.blobs / "meta"),
+                                            mount={**c["metadata"]["mount"],
+                                                   "target": str(fixture.nas)}),
+             "separate mounts"),
+        ]
+        for change, message in declarations:
+            changed = copy.deepcopy(config)
+            change(changed)
+            self.assert_refused(fixture, qualify(changed), Exploding(), message)
+        for directory in (fixture.objectstore, fixture.objectstore / "meta",
+                          fixture.objectstore / "config"):
+            path = str(directory)
+            self.assert_refused(fixture, config, fixture.probe(devices={path: -1}),
+                                "on another device")
+            probe = fixture.probe()
+            probe.mounts[path] = dict(probe.mounts[str(fixture.local)])
+            self.assert_refused(fixture, config, probe, "mount target")
+        for mode, message in ((0o710, "no group or other access"),
+                              (0o701, "no group or other access"),
+                              (0o770, "not be group or other writable")):
+            self.assert_refused(fixture, config,
+                                fixture.probe(modes={str(fixture.objectstore / "meta"): mode}),
+                                message)
+        for key, value, message in (("source", "/dev/wrong", "mount source"),
+                                    ("fstype", "xfs", "mount fstype"),
+                                    ("fsroot", "/sub", "mount fsroot"),
+                                    ("options", "ro", "lacks rw")):
+            probe = fixture.probe()
+            probe.mounts[str(fixture.local)][key] = value
+            self.assert_refused(fixture, config, probe, message)
+        probe = fixture.probe()
+        del probe.mounts[str(fixture.local)]
+        self.assert_refused(fixture, config, probe, "mount target")
+        alias = fixture.local / "srv-swarm"
+        alias.symlink_to(fixture.local / "swarm")
+        changed = copy.deepcopy(config)
+        changed["metadata"]["path"] = str(alias / "objectstore")
+        self.assert_refused(fixture, qualify(changed), fixture.probe(), "symlink at")
+        for child in ("meta", "config"):
+            original = fixture.objectstore / child
+            target = fixture.objectstore / (child + "-real")
+            original.rename(target)
+            original.symlink_to(target)
+            self.assert_refused(fixture, config, fixture.probe(), "symlink at")
+            original.unlink()
+            target.rename(original)
+        (fixture.objectstore / "meta").rmdir()
+        self.assert_refused(fixture, config, fixture.probe(), "cannot inspect")
+
     def test_malformed_budget_declarations_refuse_without_probing(self):
         fixture = Fixture(self.base)
-        cases = []
-        for value in (None, "", "budget", "operational_buget", True, {}, []):
-            cases.append(("mode " + repr(value),
-                          lambda c, v=value: c["data"].update(acceptance_mode=v),
-                          "acceptance_mode must be"))
-        for value in (None, 0, -1, True, 2.5, "2000000000000"):
-            cases.append(("bytes " + repr(value),
-                          lambda c, v=value: c["data"]["operational_budget"].update(bytes=v),
-                          "positive aggregate bytes"))
-        for value in (None, "", "  ", False, 1, {}, []):
-            cases.append(("ack " + repr(value),
-                          lambda c, v=value: c["data"]["operational_budget"].update(
-                              risk_acceptance=v),
-                          "risk_acceptance evidence reference"))
-        for value in (None, True, "accepted", {}, {"bytes": 2_000_000_000_000},
-                      {"risk_acceptance": "evidence:accepted"},
-                      {"bytes": 2_000_000_000_000, "risk_acceptance": "evidence:accepted",
-                       "acknowledged": True}):
-            cases.append(("budget " + repr(value),
-                          lambda c, v=value: c["data"].update(operational_budget=v),
-                          "requires exactly bytes and risk_acceptance"))
-        for value in ({}, {"bytes": None, "inodes": None, "mechanism": None,
-                           "scope": None, "evidence": None},
-                      fixture.config()["data"]["physical_cap"], False, "unquotaed"):
-            cases.append(("contradictory cap " + repr(value),
-                          lambda c, v=value: c["data"].update(physical_cap=v),
-                          "must not claim a physical cap"))
-        for name, change, message in cases:
-            with self.subTest(name):
-                config = fixture.budget_config()
-                change(config)
-                self.assert_refused(fixture, qualify(config), Exploding(), message)
-        config = fixture.budget_config()
-        config["enabled"] = False
-        config["data"]["acceptance_mode"] = "typo"
-        self.assertEqual(preflight.validate(config, Exploding()), {"status": "disabled"})
+        for label in ("data", "metadata"):
+            cases = []
+            for value in (None, "", "budget", "operational_buget", True, {}, []):
+                cases.append(("mode " + repr(value),
+                              lambda c, v=value: c[label].update(acceptance_mode=v),
+                              "acceptance_mode must be"))
+            for value in (None, 0, -1, True, 2.5, "2000000000000"):
+                cases.append(("bytes " + repr(value),
+                              lambda c, v=value: c[label]["operational_budget"].update(bytes=v),
+                              "positive aggregate bytes"))
+            for value in (None, "", "  ", False, 1, {}, []):
+                cases.append(("ack " + repr(value),
+                              lambda c, v=value: c[label]["operational_budget"].update(
+                                  risk_acceptance=v),
+                              "risk_acceptance evidence reference"))
+            for value in (None, True, "accepted", {}, {"bytes": 2_000_000_000_000},
+                          {"risk_acceptance": "evidence:accepted"},
+                          {"bytes": 2_000_000_000_000, "risk_acceptance": "evidence:accepted",
+                           "acknowledged": True},
+                          {"bytes": 100, "risk_acceptance": "evidence:accepted", "inodes": 100}):
+                cases.append(("budget " + repr(value),
+                              lambda c, v=value: c[label].update(operational_budget=v),
+                              "requires exactly bytes and risk_acceptance"))
+            for value in ({}, {"bytes": None, "inodes": None, "mechanism": None,
+                               "scope": None, "evidence": None},
+                          fixture.config()[label]["physical_cap"], False, "unquotaed"):
+                cases.append(("contradictory cap " + repr(value),
+                              lambda c, v=value: c[label].update(physical_cap=v),
+                              "must not claim a physical cap"))
+            for name, change, message in cases:
+                with self.subTest(name):
+                    config = fixture.budget_config((label,))
+                    change(config)
+                    self.assert_refused(fixture, qualify(config), Exploding(), message)
+            config = fixture.budget_config((label,))
+            config["enabled"] = False
+            config[label]["acceptance_mode"] = "typo"
+            self.assertEqual(preflight.validate(config, Exploding()), {"status": "disabled"})
 
-    def test_metadata_still_requires_hard_byte_and_inode_bounds(self):
+    def test_metadata_physical_mode_still_requires_hard_byte_and_inode_bounds(self):
         fixture = Fixture(self.base)
         changes = [
             (lambda c: c["metadata"].update(physical_cap=None), "physical cap is unqualified"),
@@ -564,9 +889,9 @@ class BudgetTest(Scratch):
             (lambda c: c["metadata"]["physical_cap"].update(mechanism="operational_budget"),
              "must bound physical allocation"),
             (lambda c: c["metadata"].update(acceptance_mode="operational_budget"),
-             "metadata requires physical caps"),
+             "must not claim a physical cap"),
             (lambda c: c["metadata"].update(operational_budget={"bytes": 100}),
-             "metadata requires physical caps"),
+             "physical_cap mode must not declare an operational_budget"),
         ]
         for change, message in changes:
             with self.subTest(message=message, change=change):
@@ -576,49 +901,52 @@ class BudgetTest(Scratch):
 
     def test_budget_mode_value_and_acknowledgment_are_digest_bound(self):
         fixture = Fixture(self.base)
-        for change in (
-                lambda c: c["data"].update(acceptance_mode="physical_cap"),
-                lambda c: c["data"]["operational_budget"].update(bytes=1),
-                lambda c: c["data"]["operational_budget"].update(risk_acceptance="evidence:other")):
-            config = fixture.budget_config()
-            change(config)
-            self.assert_refused(fixture, config, Exploding(), "exact configuration digest")
-        for gate in preflight.DURABILITY_GATES:
-            config = fixture.budget_config()
-            config["qualifications"][gate] = None
-            self.assert_refused(fixture, qualify(config), Exploding(), "unqualified live gate")
+        for label in ("data", "metadata"):
+            for change in (
+                    lambda c: c[label].update(acceptance_mode="physical_cap"),
+                    lambda c: c[label]["operational_budget"].update(bytes=1),
+                    lambda c: c[label]["operational_budget"].update(risk_acceptance="evidence:other")):
+                config = fixture.budget_config((label,))
+                change(config)
+                self.assert_refused(fixture, config, Exploding(), "exact configuration digest")
+            for gate in preflight.DURABILITY_GATES:
+                config = fixture.budget_config((label,))
+                config["qualifications"][gate] = None
+                self.assert_refused(fixture, qualify(config), Exploding(), "unqualified live gate")
 
     def test_mode_transitions_preserve_legacy_physical_cap_semantics(self):
         fixture = Fixture(self.base)
-        legacy = fixture.config()
-        original_digest = preflight.digest(legacy)
-        result = preflight.validate(legacy, fixture.probe())
-        self.assertEqual(result["data_acceptance"], {"mode": "physical_cap"})
-        self.assertNotIn("acceptance_mode", legacy["data"])
-        explicit = copy.deepcopy(legacy)
-        explicit["data"]["acceptance_mode"] = "physical_cap"
-        self.assertNotEqual(preflight.digest(explicit), original_digest)
-        self.assert_refused(fixture, explicit, Exploding(), "exact configuration digest")
-        preflight.validate(qualify(explicit), fixture.probe())
-        # Losing physical evidence never opts into the budget path.
-        legacy["data"]["physical_cap"] = None
-        self.assert_refused(fixture, qualify(legacy), Exploding(), "physical cap is unqualified")
-        budget = fixture.budget_config()
-        del budget["data"]["acceptance_mode"]
-        self.assert_refused(fixture, qualify(budget), Exploding(),
-                            "physical_cap mode must not declare an operational_budget")
-        # Both transitions require removing the incompatible declaration.
-        explicit["data"]["acceptance_mode"] = "operational_budget"
-        explicit["data"]["operational_budget"] = fixture.budget_config()["data"]["operational_budget"]
-        self.assert_refused(fixture, qualify(explicit), Exploding(), "must not claim a physical cap")
-        explicit["data"]["physical_cap"] = None
-        preflight.validate(qualify(explicit), fixture.probe())
-        explicit["data"]["acceptance_mode"] = "physical_cap"
-        explicit["data"]["physical_cap"] = fixture.config()["data"]["physical_cap"]
-        self.assert_refused(fixture, qualify(explicit), Exploding(),
-                            "must not declare an operational_budget")
-        del explicit["data"]["operational_budget"]
-        preflight.validate(qualify(explicit), fixture.probe())
+        for label in ("data", "metadata"):
+            legacy = fixture.config()
+            original_digest = preflight.digest(legacy)
+            result = preflight.validate(legacy, fixture.probe())
+            self.assertEqual(result[label + "_acceptance"], {"mode": "physical_cap"})
+            self.assertEqual(preflight.digest(legacy), original_digest)
+            self.assertNotIn("acceptance_mode", legacy[label])
+            explicit = copy.deepcopy(legacy)
+            explicit[label]["acceptance_mode"] = "physical_cap"
+            self.assertNotEqual(preflight.digest(explicit), original_digest)
+            self.assert_refused(fixture, explicit, Exploding(), "exact configuration digest")
+            preflight.validate(qualify(explicit), fixture.probe())
+            # Losing physical evidence never opts into the budget path.
+            legacy[label]["physical_cap"] = None
+            self.assert_refused(fixture, qualify(legacy), Exploding(), "physical cap is unqualified")
+            budget = fixture.budget_config((label,))
+            del budget[label]["acceptance_mode"]
+            self.assert_refused(fixture, qualify(budget), Exploding(),
+                                "physical_cap mode must not declare an operational_budget")
+            # Both transitions require removing the incompatible declaration.
+            explicit[label]["acceptance_mode"] = "operational_budget"
+            explicit[label]["operational_budget"] = fixture.budget_config((label,))[label]["operational_budget"]
+            self.assert_refused(fixture, qualify(explicit), Exploding(), "must not claim a physical cap")
+            explicit[label]["physical_cap"] = None
+            preflight.validate(qualify(explicit), fixture.probe())
+            explicit[label]["acceptance_mode"] = "physical_cap"
+            explicit[label]["physical_cap"] = fixture.config()[label]["physical_cap"]
+            self.assert_refused(fixture, qualify(explicit), Exploding(),
+                                "must not declare an operational_budget")
+            del explicit[label]["operational_budget"]
+            preflight.validate(qualify(explicit), fixture.probe())
 
     def test_namespace_mount_and_custody_invariants_apply_in_budget_mode(self):
         fixture = Fixture(self.base)
@@ -685,9 +1013,13 @@ class IdentityMappingTest(Scratch):
 
     def test_process_1000_1000_accepts_measured_data_977_988_in_both_modes(self):
         fixture = Fixture(self.base)
-        for budget in (False, True):
-            with self.subTest(budget=budget):
+        for budget, metadata_budget in ((False, False), (True, False),
+                                        (False, True), (True, True)):
+            with self.subTest(budget=budget, metadata_budget=metadata_budget):
                 config = fixture.mapped_config(budget=budget)
+                if metadata_budget:
+                    config["metadata"] = fixture.budget_config(("metadata",))["metadata"]
+                    qualify(config)
                 original, before = copy.deepcopy(config), snapshot(self.base)
                 probe = self.mapped_probe(fixture)
                 result = preflight.validate(config, probe)
@@ -777,18 +1109,22 @@ class IdentityMappingTest(Scratch):
 
     def test_data_mapping_never_trusts_nas_owner_for_local_metadata(self):
         fixture = Fixture(self.base)
-        config = fixture.mapped_config()
-        for path in (Path("/"), fixture.base, fixture.local, fixture.local / "swarm",
-                     fixture.objectstore, fixture.objectstore / "config",
-                     fixture.objectstore / "meta"):
-            with self.subTest(path=path):
-                probe = self.mapped_probe(fixture, owners={str(path): 977})
-                self.assert_refused(fixture, config, probe, "owned by root or uid 1000")
-        self.assert_refused(fixture, config, self.mapped_probe(
-            fixture, owners={str(fixture.objectstore / "meta"): 0}), "must be owned by uid 1000")
-        self.assert_refused(fixture, config, self.mapped_probe(
-            fixture, modes={str(fixture.objectstore / "config"): 0o777}),
-            "not be group or other writable")
+        for budget in (False, True):
+            config = fixture.mapped_config()
+            if budget:
+                config["metadata"] = fixture.budget_config(("metadata",))["metadata"]
+                qualify(config)
+            for path in (Path("/"), fixture.base, fixture.local, fixture.local / "swarm",
+                         fixture.objectstore, fixture.objectstore / "config",
+                         fixture.objectstore / "meta"):
+                with self.subTest(path=path):
+                    probe = self.mapped_probe(fixture, owners={str(path): 977})
+                    self.assert_refused(fixture, config, probe, "owned by root or uid 1000")
+            self.assert_refused(fixture, config, self.mapped_probe(
+                fixture, owners={str(fixture.objectstore / "meta"): 0}), "must be owned by uid 1000")
+            self.assert_refused(fixture, config, self.mapped_probe(
+                fixture, modes={str(fixture.objectstore / "config"): 0o777}),
+                "not be group or other writable")
 
     def test_mapping_preserves_data_namespace_mount_device_and_mode_refusals(self):
         fixture = Fixture(self.base)
@@ -927,6 +1263,12 @@ class SourceTest(Scratch):
         qualify(budget)
         cases += [("budget " + name, stack, budget, script, message)
                   for name, stack, storage, script, message in cases if storage is qualified]
+        for stores in (("metadata",), ("data", "metadata")):
+            storage = dict(fixture.budget_config(stores), host="localhost")
+            qualify(storage)
+            cases += [(str(stores) + " " + name, stack, storage, script, message)
+                      for name, stack, original, script, message in cases
+                      if original is qualified]
         mapped = dict(fixture.mapped_config(), host="localhost")
         qualify(mapped)
         mapped_env = {**env, "OBJECTSTORE_GID": "1000"}
@@ -966,6 +1308,82 @@ class SourceTest(Scratch):
                     self.assertNotIn("TASK [Lint", output)
                 self.assertFalse(effects.exists(), output)
                 self.assertEqual(snapshot(fixture.base), before)
+
+
+
+class ManagedDataTest(Scratch):
+    """Mode/uid/gid are recording-probe observations, not NFS or privilege tests."""
+
+    def setUp(self):
+        super().setUp()
+        self.fixture = Fixture(self.base)
+        self.config = self.fixture.budget_config(("data", "metadata"))
+        self.config["gid"] = 1000
+        self.config["data"]["identity_mapping"] = {
+            "owner_uid": 977, "owner_gid": 988, "evidence": "fixture:mapping-only"}
+        self.config["data"]["access_profile"] = {
+            "name": "managed_nfs_data_v1", "acceptance_reference": FIXTURE_REFERENCE}
+        operator_qualify(self.config, True)
+
+    def probe(self, mode=0o770):
+        path = str(self.fixture.blobs)
+        return self.fixture.probe(owners={path: 977}, groups={path: 988}, modes={path: mode})
+
+    def test_stable_exact_modes_pass_root_check_without_repair_or_entry_walk(self):
+        child = self.fixture.blobs / "not-inspected-at-start"
+        child.write_bytes(b"maintenance checks entries separately")
+        child.chmod(0o666)
+        before = snapshot(self.base)
+        for mode in (0o700, 0o770):
+            self.assertEqual(preflight.validate(self.config, self.probe(mode))["status"],
+                             "passed-startup-preflight")
+        self.assertEqual(snapshot(self.base), before)
+
+    def test_wrong_mode_bits_owner_and_local_custody_refuse(self):
+        for mode in (0o750, 0o710, 0o777, 0o1770, 0o2770, 0o4700):
+            with self.subTest(mode=mode), self.assertRaises(preflight.Refusal):
+                preflight.validate(self.config, self.probe(mode))
+        for uid, gid in ((1000, 988), (977, 1000), (0, 0)):
+            path = str(self.fixture.blobs)
+            with self.assertRaises(preflight.Refusal):
+                preflight.validate(self.config, self.fixture.probe(
+                    owners={path: uid}, groups={path: gid}, modes={path: 0o770}))
+        probe = self.probe()
+        probe.modes[str(self.fixture.objectstore / "meta")] = 0o770
+        with self.assertRaises(preflight.Refusal):
+            preflight.validate(self.config, probe)
+
+    def test_profile_mapping_contract_and_exact_keys_refuse_before_io(self):
+        changes = [
+            lambda c: c.pop("operating_contract"),
+            lambda c: c["data"].pop("identity_mapping"),
+            lambda c: c["data"]["access_profile"].update(name="managed-nfs-typo"),
+            lambda c: c["data"]["access_profile"].update(extra=True),
+            lambda c: c["data"]["access_profile"].update(acceptance_reference="jocasta:latest"),
+            lambda c: c["data"]["access_profile"].update(acceptance_reference="jocasta:" + "a"*32 + "@" + "9"*100),
+            lambda c: c["data"].update(access_proflie={}),
+            lambda c: c["data"].update(unknown=True),
+            lambda c: c["metadata"].update(access_profile=c["data"]["access_profile"]),
+        ]
+        for change in changes:
+            config = copy.deepcopy(self.config)
+            change(config)
+            if "operating_contract" in config:
+                operator_qualify(config, True)
+            else:
+                qualify(config)
+            with self.subTest(change=change), self.assertRaises(preflight.Refusal):
+                preflight.validate(config, Exploding())
+
+    def test_omission_preserves_strict_legacy_and_profile_changes_digest(self):
+        before = preflight.digest(self.config)
+        self.config["data"].pop("access_profile")
+        operator_qualify(self.config, True)
+        self.assertNotEqual(before, preflight.digest(self.config))
+        with self.assertRaises(preflight.Refusal):
+            preflight.validate(self.config, self.probe())
+        self.assertEqual(preflight.validate(self.config, self.probe(0o700))["status"],
+                         "passed-startup-preflight")
 
 
 if __name__ == "__main__":

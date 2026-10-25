@@ -1,0 +1,40 @@
+---
+- name: Read complete bounded object collections
+  ansible.builtin.uri:
+    url: "{{ operator_api }}{{ item.path }}"
+    headers: "{{ authentik_headers }}"
+    follow_redirects: none
+    use_proxy: false
+  loop:
+    - {kind: provider, path: "/providers/oauth2/?page_size=500"}
+    - {kind: application, path: "/core/applications/?superuser_full_list=true&page_size=500"}
+    - {kind: group, path: "/core/groups/?include_users=true&page_size=500"}
+    - {kind: mapping, path: "/propertymappings/provider/scope/?page_size=500"}
+    - {kind: policy, path: "/policies/expression/?page_size=500"}
+    - {kind: binding, path: "/policies/bindings/?page_size=500"}
+    - {kind: flow, path: "/flows/instances/?page_size=500"}
+  register: operator_seen
+  check_mode: false
+  no_log: true
+
+- name: Read the exact existing human PK
+  ansible.builtin.uri:
+    url: "{{ operator_api }}/core/users/{{ operator_spec.user_pk }}/"
+    headers: "{{ authentik_headers }}"
+    follow_redirects: none
+    use_proxy: false
+  register: operator_human
+  check_mode: false
+  no_log: true
+  when: operator_spec.state == 'present'
+
+- name: Read only signing key metadata
+  ansible.builtin.uri:
+    url: "{{ operator_api }}/crypto/certificatekeypairs/8bbd6516-af33-4e64-a73b-caa39e692c29/"
+    headers: "{{ authentik_headers }}"
+    follow_redirects: none
+    use_proxy: false
+  register: operator_key
+  check_mode: false
+  no_log: true
+  when: operator_spec.state == 'present'

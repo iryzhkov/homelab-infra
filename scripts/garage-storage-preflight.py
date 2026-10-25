@@ -5,8 +5,8 @@ Exit 0 means every check below passed at the moment it ran. It is a startup
 assertion, not fencing: nothing watches the mounts afterwards, so a mount
 lost or replaced after this returns is not detected (time of check to time
 of use). Physical caps and the live durability gates are operator evidence
-references that this script requires but cannot measure. Explicit data budget
-acceptance permits unquotaed data; it enforces no physical allocation limit.
+references that this script requires but cannot measure. Explicit budget
+acceptance permits unquotaed stores; it enforces no physical allocation limit.
 
 The script never creates, mounts, chowns or writes anything. It reads the
 configuration, lstat()s path components, lists a mount root when a
@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -85,6 +86,63 @@ def digest(config):
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def operator_qualifications(config):
+    """Validate local bindings only; reviewed receipts establish evidence truth."""
+    qualifications = config.get("qualifications")
+    require(isinstance(qualifications, dict)
+            and set(qualifications) == set(DURABILITY_GATES) | {"configuration"},
+            "operator qualifications require exactly configuration and all five gates")
+    current = digest(config)
+    require(qualifications["configuration"] == current,
+            "qualifications must name this exact configuration digest")
+    for gate in DURABILITY_GATES:
+        record = qualifications[gate]
+        require(isinstance(record, dict), "typed qualification required: " + gate)
+        kind = record.get("type")
+        allowed = (("accepted_risk",) if gate in ("full_volume", "mount_loss")
+                   else ("measured",) if gate == "last_copy_policy"
+                   else ("measured", "composite"))
+        require(kind in allowed, "wrong qualification type for " + gate)
+        if kind == "composite":
+            keys = {"type", "measured_configuration", "qualifying_configuration",
+                    "difference_reference", "references", "limitation"}
+            require(set(record) == keys, "invalid composite fields: " + gate)
+            require(isinstance(record["measured_configuration"], str)
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", record["measured_configuration"]),
+                    "canonical measured configuration digest required: " + gate)
+            require(record["qualifying_configuration"] == current,
+                    "qualification must bind current qualifying configuration: " + gate)
+            require(immutable_reference(record["difference_reference"]),
+                    "immutable difference reference required: " + gate)
+        else:
+            require(set(record) == {"type", "configuration", "references", "limitation"},
+                    "invalid qualification fields: " + gate)
+            require(record["configuration"] == current,
+                    "qualification must bind current qualifying configuration: " + gate)
+        references = record["references"]
+        require(isinstance(references, list) and 1 <= len(references) <= 8
+                and all(immutable_reference(item) for item in references),
+                "1..8 immutable Jocasta references required: " + gate)
+        require(bounded_limitation(record["limitation"]),
+                "nonblank limitation of at most 4096 UTF-8 bytes required: " + gate)
+    return qualifications
+
+
+def immutable_reference(value):
+    # Exact immutable revision, finite reference size; never dereference it here.
+    return (isinstance(value, str) and len(value) <= 96
+            and re.fullmatch(r"jocasta:[0-9a-f]{32}@[1-9][0-9]*", value) is not None)
+
+
+def bounded_limitation(value):
+    if not text(value):
+        return False
+    try:
+        return len(value.encode("utf-8")) <= 4096
+    except UnicodeEncodeError:
+        return False
+
+
 def canonical(value, what):
     require(isinstance(value, str) and value.startswith("/") and value != "/"
             and "//" not in value and os.path.normpath(value) == value,
@@ -99,10 +157,43 @@ def below(path, root):
     return path.startswith(root + "/")
 
 
+
+# Fixed DATA-only opt-in. Acceptance is structurally bound, never fetched or
+# treated here as proof of Jocasta's truth or authorization.
+MANAGED_DATA_PROFILE = "managed_nfs_data_v1"
+DATA_KEYS = {"path", "mount", "acceptance_mode", "operational_budget", "physical_cap",
+             "identity_mapping", "unknown_filecount_risk_acceptance", "access_profile"}
+
+
+def data_profile(config):
+    data = config.get("data")
+    require(isinstance(data, dict), "data storage is required")
+    if config.get("operating_contract") == "operator_budget_v1":
+        require(set(data) <= DATA_KEYS, "unexpected operator-contract data keys")
+    require("access_profile" not in config.get("metadata", {}),
+            "access_profile is allowed only on data")
+    if "access_profile" not in data:
+        return None
+    profile = data["access_profile"]
+    require(config.get("operating_contract") == "operator_budget_v1"
+            and data.get("acceptance_mode") == "operational_budget"
+            and data.get("mount", {}).get("fstype") in NFS
+            and isinstance(data.get("identity_mapping"), dict),
+            "managed data requires operator_budget_v1, operational-budget NFS and explicit mapping")
+    require(isinstance(profile, dict)
+            and set(profile) == {"name", "acceptance_reference"}
+            and profile["name"] == MANAGED_DATA_PROFILE,
+            "unknown data access_profile or fields")
+    require(immutable_reference(profile["acceptance_reference"]),
+            "managed data requires a bounded immutable Jocasta acceptance_reference")
+    return profile
+
+
 def expected_store(config, label):
     """Validate one store's declared identity without touching the host."""
     store = config.get(label)
     require(isinstance(store, dict), label + " storage is required")
+    profile = data_profile(config) if label == "data" else None
     mapping = store.get("identity_mapping")
     if "identity_mapping" in store:
         require(label == "data", "identity_mapping is allowed only on data, never metadata")
@@ -141,25 +232,27 @@ def expected_store(config, label):
     else:
         require(mount["fstype"] in LOCAL, "metadata and journals require a local filesystem")
     # Omitted mode preserves the original hard-cap contract and its digest.
-    # Budget acceptance is an explicit data-only opt-in, never a cap fallback.
+    # Budget acceptance is an explicit per-store opt-in, never a cap fallback.
     mode = store.get("acceptance_mode", "physical_cap")
     require(mode in ("physical_cap", "operational_budget"),
             label + " acceptance_mode must be physical_cap or operational_budget")
-    if label != "data":
-        require("acceptance_mode" not in store and "operational_budget" not in store,
-                "metadata requires physical caps; data acceptance fields are not allowed")
+    if "unknown_filecount_risk_acceptance" in store:
+        require(label == "data" and mount["fstype"] in NFS and mode == "operational_budget",
+                "unknown filecounts may be accepted only for operational-budget NFS data")
+        require(text(store["unknown_filecount_risk_acceptance"]),
+                "unknown_filecount_risk_acceptance must be a nonblank evidence reference")
     if mode == "operational_budget":
         require(store.get("physical_cap") is None,
-                "data operational budget must not claim a physical cap")
+                label + " operational budget must not claim a physical cap")
         budget = store.get("operational_budget")
         require(isinstance(budget, dict) and set(budget) == {"bytes", "risk_acceptance"},
-                "data operational_budget requires exactly bytes and risk_acceptance")
+                label + " operational_budget requires exactly bytes and risk_acceptance")
         require(positive(budget["bytes"]),
-                "data operational budget needs positive aggregate bytes")
+                label + " operational budget needs positive aggregate bytes")
         require(text(budget["risk_acceptance"]),
-                "data operational budget risk_acceptance evidence reference is required")
+                label + " operational budget risk_acceptance evidence reference is required")
         return {"label": label, "mount": mount, "root": root, "path": path,
-                "cap": None, "mode": mode, "budget": budget, "identity_mapping": mapping}
+                "cap": None, "mode": mode, "budget": budget, "identity_mapping": mapping, "profile": profile}
     require("operational_budget" not in store,
             label + " physical_cap mode must not declare an operational_budget")
     cap = store.get("physical_cap")
@@ -266,8 +359,12 @@ def probe_store(probe, store, uid):
                         and info.st_gid == mapping["owner_gid"],
                         label + ": " + directory + " must be owned by mapped uid:gid "
                         + str(mapping["owner_uid"]) + ":" + str(mapping["owner_gid"]))
-                require(not info.st_mode & 0o077,
-                        label + ": " + directory + " must have no group or other access")
+                if store.get("profile") is not None:
+                    require(stat.S_IMODE(info.st_mode) in (0o700, 0o770),
+                            "managed data directory must be exactly 0700 or 0770")
+                else:
+                    require(not info.st_mode & 0o077,
+                            label + ": " + directory + " must have no group or other access")
             else:
                 require(info.st_uid == uid and not info.st_mode & 0o077,
                         label + ": " + directory + " must be owned by uid " + str(uid)
@@ -288,6 +385,14 @@ def validate(config, probe=None):
     probe = probe or HostProbe()
     require(isinstance(config, dict), "configuration must be an object")
     require(type(config.get("enabled")) is bool, "enabled must be a boolean")
+    operator_contract = "operating_contract" in config
+    if operator_contract:
+        require(config["operating_contract"] == "operator_budget_v1",
+                "unknown operating_contract")
+        require(all(isinstance(config.get(label), dict)
+                    and config[label].get("acceptance_mode") == "operational_budget"
+                    for label in ("data", "metadata")),
+                "operator_budget_v1 requires explicit data and metadata operational_budget")
     if not config["enabled"]:
         # Disabled: no path, mount, host or qualification is inspected.
         return {"status": "disabled"}
@@ -298,12 +403,16 @@ def validate(config, probe=None):
             "explicit non-root uid and gid are required")
     for key in ("data_fsync", "metadata_fsync"):
         require(type(config.get(key)) is bool, key + " must be a boolean")
-    qualifications = config.get("qualifications")
-    require(isinstance(qualifications, dict), "live qualifications are required")
-    for key in DURABILITY_GATES:
-        require(text(qualifications.get(key)), "unqualified live gate: " + key)
-    require(qualifications.get("configuration") == digest(config),
-            "qualifications must name this exact configuration digest")
+    if operator_contract:
+        qualifications = operator_qualifications(config)
+    else:
+        qualifications = config.get("qualifications")
+        require(isinstance(qualifications, dict), "live qualifications are required")
+        for key in DURABILITY_GATES:
+            require(text(qualifications.get(key)), "unqualified live gate: " + key)
+        require(qualifications.get("configuration") == digest(config),
+                "qualifications must name this exact configuration digest")
+    data_profile(config)  # Reject misplaced/unknown opt-ins before any host observation.
     stores = [expected_store(config, label) for label in ("data", "metadata")]
     data, metadata = stores
     require(data["root"] != metadata["root"] and not below(data["path"], metadata["path"])
@@ -312,25 +421,47 @@ def validate(config, probe=None):
     options = probe_store(probe, data, config["uid"])
     probe_store(probe, metadata, config["uid"])
     limitations = [LIMITATION]
-    acceptance = {"mode": data["mode"]}
+    acceptances = {}
+    for store in stores:
+        acceptance = {"mode": store["mode"]}
+        if store["mode"] == "operational_budget":
+            acceptance["aggregate_budget_bytes"] = store["budget"]["bytes"]
+        acceptances[store["label"]] = acceptance
     if data["mode"] == "operational_budget":
-        acceptance["aggregate_budget_bytes"] = data["budget"]["bytes"]
         limitations.append("operational data budget only, aggregate across artifacts and results: "
                            "no physical byte or inode enforcement, no reserved space, and no "
                            "multipart constraint; shared NAS exhaustion remains possible")
+    if "unknown_filecount_risk_acceptance" in config["data"]:
+        limitations.append("NFS data all-zero filecounts may be accepted as UNKNOWN by the native "
+                           "headroom check: no free-inode capacity established; risk evidence: "
+                           + config["data"]["unknown_filecount_risk_acceptance"])
+    if metadata["mode"] == "operational_budget":
+        limitations.append("operational metadata budget only: no physical byte or inode "
+                           "enforcement, no reserved space; other services and metadata can "
+                           "exhaust the shared Docker filesystem; point-in-time check only, "
+                           "not continuous admission or monitoring")
     if "soft" in options:
         limitations.append("soft NFS data mount: timeouts surface as I/O errors; "
                            "not last-copy durability evidence")
-    return {
+    result = {
         "status": "passed-startup-preflight",
         "configuration": digest(config),
         "host": config["host"],
         "data_path": data["path"],
-        "data_acceptance": acceptance,
+        "data_acceptance": acceptances["data"],
+        "metadata_acceptance": acceptances["metadata"],
         "metadata_path": metadata["path"] + "/meta",
         "config_path": metadata["path"] + "/config",
         "limitations": limitations,
     }
+    if operator_contract:
+        result["operating_contract"] = config["operating_contract"]
+        result["qualifications"] = qualifications
+        result["qualification_validation"] = (
+            "local record shape and current qualifying digest only; operator reviews "
+            "evidence truth, allowed configuration differences and restore path mapping; "
+            "no evidence fetched or measured configuration bytes verified")
+    return result
 
 
 def main(argv=None):

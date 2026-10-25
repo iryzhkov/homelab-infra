@@ -1,0 +1,7 @@
+---
+# Never included by site.yml or authentik.yml. Supply enabled=true and exact PK.
+jocasta_operator_enabled: false
+jocasta_operator_state: present
+jocasta_operator_online_check: false
+jocasta_operator_recovery: null
+jocasta_operator_receipt_dir: null

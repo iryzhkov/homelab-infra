@@ -3,11 +3,15 @@ on:
   push:
     branches: [main]
   pull_request:
+# Keep main-branch checks; only superseded revisions of the same PR cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   drift:
     env:
       TMPDIR: ${{ github.workspace }}/../akasha-cutover-${{ github.run_id }}-${{ github.run_attempt }}
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -24,7 +28,7 @@ jobs:
           printf 'HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
           printf 'ANSIBLE_COLLECTIONS_PATH=%s\n' "$HOME/.ansible/collections" >>"$GITHUB_ENV"
       - name: Install ShellCheck in the disposable CI container
-        run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck
+        run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck git
       - run: python3 scripts/test-upkeeper-drift.py
       - run: python3 scripts/test-authentik-drift.py
       - run: python3 scripts/test-helper-backups.py
@@ -37,7 +41,7 @@ jobs:
       - run: python3 scripts/test_media_observability.py
       - run: python3 -m unittest discover -s scripts -p test_seedpool_policy.py
       - name: Install the deployment templating version for guarded role tests
-        run: pip install --disable-pip-version-check ansible-core==2.19.13
+        run: pip install --disable-pip-version-check ansible-core==2.19.13 tokenizers==0.22.2
       - name: Test Emby home ownership with a recording backend
         run: |
           export HOME="$PWD/.cache/holonet-executor/p0-tests/home"
@@ -55,9 +59,37 @@ jobs:
           mkdir -p "$TMPDIR"
           python3 scripts/test-jocasta-mcp-config.py
       - name: Install the Compose module for OV source syntax checks
-        run: ansible-galaxy collection install community.docker:5.4.0
+        # Exact commit of the verified upstream 5.4.0 tag; avoids its broken Galaxy artifact.
+        run: ansible-galaxy collection install git+https://github.com/ansible-collections/community.docker.git,6be1a09bebd60cb5d07e4f4753b2f393e44fe0e2
       - name: Test bounded web MCP and OV packaging
         run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/run-web-mcp-ci.py
+      - name: Test isolated OpenViking upgrade migration
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/home"
+          export TMPDIR="$HOME/tmp" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test-ov-provider-migration.py
+          ansible-playbook playbooks/ov-provider-migration.yml --syntax-check
+      - name: Test guarded OpenViking client credential rollover
+        # The helper refuses parents owned by another user and sources inside a
+        # repository, so the synthetic HOME stays outside the host-owned checkout.
+        run: |
+          export HOME=/home/job/.cache/ov-selfhost-20261024/client-home
+          export TMPDIR="$HOME/tmp" OV_CLIENT_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = /home/job/.cache/ov-selfhost-20261024/client-home
+          install -d -m 0700 /home/job /home/job/.cache /home/job/.cache/ov-selfhost-20261024 "$HOME" "$TMPDIR"
+          test "$(realpath -e -- "$HOME")" = "$HOME"
+          test "$(stat -c '%u %a' -- /home/job "$HOME" | sort -u)" = "$(id -u) 700"
+          python3 scripts/test-ov-client-credentials.py
+          ansible-playbook playbooks/ov-client-credentials.yml --syntax-check
+      - name: Test bounded OpenViking inference provisioning
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/inference-home"
+          export TMPDIR="$HOME/tmp" OPENVIKING_INFERENCE_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/inference-home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test-openviking-inference.py
       - name: Validate the NATS stack
         run: |
           python3 scripts/stack-lint.py stacks/nats/stack.yml
@@ -77,8 +109,78 @@ jobs:
       - run: shellcheck -S warning roles/backup/files/homelab-bulk-backup roles/backup/files/homelab-backup-run roles/backup/files/homelab-restore-verify roles/offsite_phone/files/homelab-offsite-run roles/offsite_phone/files/homelab-offsite-bundle roles/fleet_helpers/files/zigbee-watchdog.sh
       - run: python3 -m py_compile roles/drift_check/files/homelab-drift-check
 
+  openviking-native-providers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    container:
+      # The renderer test uses the runner's CLI read-only, with an absent daemon socket.
+      options: --memory=2g --cpus=2 --volume /usr/bin/docker:/usr/local/bin/docker:ro
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated native provider checks
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/native-home"
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/native-home"
+          mkdir -p "$HOME/tmp"
+          printf 'HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'TMPDIR=%s/tmp\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'OPENVIKING_INFERENCE_TEST_HOME=%s\n' "$HOME" >>"$GITHUB_ENV"
+          printf 'OPENVIKING_NATIVE_TEST=1\n' >>"$GITHUB_ENV"
+          printf 'PYTHONDONTWRITEBYTECODE=1\n' >>"$GITHUB_ENV"
+      - name: Install pinned native provider and deployment schemas
+        run: pip install --disable-pip-version-check openviking==0.5.2 ansible-core==2.19.13 tokenizers==0.22.2
+      - name: Exercise native inference and actual Swarm rendering
+        run: |
+          test -x /usr/local/bin/docker
+          docker --version
+          python3 scripts/test-openviking-inference.py NativeOV SourceContracts.test_actual_docker_stack_config_keeps_supplied_adapter_values -v
+      - name: Test lossless physical vector migration with the pinned SDK
+        run: |
+          export HOME="$PWD/.cache/ov-selfhost-20261024/test-home"
+          export TMPDIR="$HOME/scratch" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/ov-selfhost-20261024/test-home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test-ov-vector-migration.py -v
+      - name: Check scoped inference playbooks
+        run: |
+          ansible-playbook playbooks/ov-inference.yml --syntax-check
+          ansible-playbook playbooks/ov-pc-coexistence.yml --syntax-check
+
+  jocasta-operator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    container:
+      options: --memory=1g --cpus=2
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare the isolated operator fixture home
+        run: |
+          export HOME="$PWD/.cache/jocasta-operator-tests/home"
+          test "$HOME" = "$PWD/.cache/jocasta-operator-tests/home"
+          export TMPDIR="$HOME/tmp"
+          mkdir -p "$TMPDIR"
+          printf 'HOME=%s\nTMPDIR=%s\n' "$HOME" "$TMPDIR" >>"$GITHUB_ENV"
+          printf 'MACHINE_IDENTITY_TEST_HOME=%s\nJOCASTA_MCP_TEST_HOME=%s\n' "$HOME" "$HOME" >>"$GITHUB_ENV"
+          printf 'PYTHONDONTWRITEBYTECODE=1\n' >>"$GITHUB_ENV"
+      - name: Install pinned deployment and upstream importer dependencies
+        run: pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0 cryptography==46.0.3 Django==5.2.17 djangorestframework==3.17.1
+      - name: Test receipt-bound recovery and pinned importer and mapping-reference semantics
+        run: |
+          python3 -B roles/authentik_jocasta_operator/tests/test_importer_semantics.py -v
+          python3 -B roles/authentik_jocasta_operator/tests/test_operator.py -v
+          managed_fixture_home=/root/.cache/webmcp-managed-tests/home
+          install -d -m 0700 "$managed_fixture_home" "$managed_fixture_home/tmp"
+          env HOME="$managed_fixture_home" TMPDIR="$managed_fixture_home/tmp" WEBMCP_TEST_HOME="$managed_fixture_home" python3 -B scripts/test-webmcp-managed-interactive.py -v
+          python3 -B scripts/test-jocasta-mcp-config.py -v
+
   authentik-machine-identities:
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -103,7 +205,7 @@ jobs:
 
   machine-profiles:
     # Keep the long real-role coexistence/cleanup matrix separate from legacy tests.
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
       contents: read
@@ -125,7 +227,7 @@ jobs:
             -s roles/authentik_machine_identities/tests -p test_service_profiles.py -v
 
   akasha:
-    runs-on: [self-hosted, Linux, X64, homelab-infra, agent-a]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -196,6 +298,7 @@ jobs:
           python3 scripts/test-akasha-infra.py -v
           python3 scripts/test-nats-messaging.py -v
           OBJECTSTORE_TEST_HOME="$HOME" python3 -B scripts/test-garage-storage-preflight.py -v
+          OBJECTSTORE_TEST_HOME="$HOME" python3 -B scripts/test-garage-storage-native.py -v
           python3 scripts/test-akasha-ingress.py -v
           export MC_TEST_HOME="$HOME"
           python3 scripts/test-mission-control.py -v

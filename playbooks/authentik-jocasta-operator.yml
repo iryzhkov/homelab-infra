@@ -1,0 +1,47 @@
+---
+- name: Manage only the opt-in Jocasta human operator application
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
+  vars_files:
+    - vars/authentik-jocasta-operator.yml
+  pre_tasks:
+    - name: Validate the explicit input before credential access
+      ansible.builtin.assert:
+        that:
+          - jocasta_operator_enabled | bool
+          - jocasta_operator_user_pk is defined
+          - jocasta_operator_user_pk is integer
+          - jocasta_operator_user_pk > 0
+          - jocasta_operator_user_pk < 2147483648
+          - jocasta_operator_state in ['present', 'absent']
+        fail_msg: Supply opt-in and the operator-owned exact human user PK.
+        quiet: true
+
+    - name: Load only the existing controller API credential
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/authentik-api.sops.yaml"
+        name: authentik_api
+      no_log: true
+      when: not ansible_check_mode or jocasta_operator_online_check | bool
+
+    - name: Set the controlled API transport
+      ansible.builtin.set_fact:
+        authentik_url: "{{ authentik_api.authentik_api_url }}"
+        authentik_headers:
+          Authorization: "Bearer {{ authentik_api.authentik_api_token }}"
+      no_log: true
+      when: not ansible_check_mode or jocasta_operator_online_check | bool
+
+    - name: Pin administrative credential transport to the existing Authentik origin
+      ansible.builtin.assert:
+        that: authentik_url | regex_replace('/api/v3/?$', '') == 'https://auth.ryzhkov.dev'
+        quiet: true
+      no_log: true
+      when: not ansible_check_mode or jocasta_operator_online_check | bool
+  tasks:
+    - name: Manage the isolated operator blueprint
+      ansible.builtin.include_role:
+        name: authentik_jocasta_operator

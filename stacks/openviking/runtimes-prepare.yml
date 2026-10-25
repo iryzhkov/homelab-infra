@@ -1,0 +1,22 @@
+---
+# Explicit playbooks/ov-inference.yml only. Never include from Swarm prepare.
+# CPU runtimes need memory.swap.max=0; Swarm cannot express memory-swap.
+- name: Load checksummed inference recipes
+  ansible.builtin.set_fact:
+    ov_inference_recipes: "{{ lookup('file', swarm_stack_src ~ '/recipes/models.json') | from_json }}"
+
+- name: Create the private provider overlay on the Swarm manager
+  community.docker.docker_network:
+    name: "{{ openviking_inference_network }}"
+    driver: overlay
+    attachable: true
+    scope: swarm
+  delegate_to: homelab
+  become: true
+
+- name: Provision each CPU runtime
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/ollama-prepare.yml"
+  loop: "{{ openviking_inference | dict2items }}"
+  loop_control:
+    loop_var: ov_provider

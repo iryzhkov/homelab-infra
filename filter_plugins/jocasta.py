@@ -1,9 +1,10 @@
 """Opt-in HTTP MCP settings for the existing Jocasta Compose stack.
 
-The jocasta stack's env_extra names either none of the four MCP keys, which
-leaves the rendered .env exactly as before, or all four with canonical values.
-Jocasta validates them again at startup; this filter refuses a wrong inventory
-before anything on the host is written. See docs/jocasta.md.
+The four limited MCP settings remain all-or-none. A separate optional operator
+trio requires that existing verifier/resource and an operator-capable source
+image. Jocasta validates again at startup; this filter refuses wrong inventory
+before host writes. Source allowlists are not image-publication or deployment
+receipts. See docs/jocasta.md.
 """
 import re
 
@@ -15,13 +16,34 @@ MCP_KEYS = (
     "JOCASTA_OIDC_JWKS_URL",
     "JOCASTA_MCP_RESOURCE_URL",
 )
-KNOWN_KEYS = ("JOCASTA_IMAGE",) + MCP_KEYS
+OPERATOR_KEYS = (
+    "JOCASTA_OPERATOR_OIDC_ISSUER",
+    "JOCASTA_OPERATOR_OIDC_JWKS_URL",
+    "JOCASTA_OPERATOR_OIDC_CLIENT_ID",
+)
+KNOWN_KEYS = ("JOCASTA_IMAGE",) + MCP_KEYS + OPERATOR_KEYS
 
 # Full Jocasta source commits whose images are accepted to serve HTTP MCP:
 # the reviewed, published a3e83c5, whose application tree equals the
-# qualified 232c5e3. Every other image is refused, including the deployed
-# 37ce657 pin, which has no MCP support.
+# qualified 232c5e3. This image supports only limited access, never operator.
+# 37ce657 has no MCP support and is still refused.
 MCP_IMAGE_REVISIONS = frozenset({"a3e83c55e73661fc50d92a9ca328236a86f291fd"})
+
+# Reviewed capacity-fix source: independent Opus/Sol ACCEPT, exact-head CI SUCCESS
+# 40146155685, retained image artifact 12581331195, published without a rebuild.
+# These are source/image receipts, not native/runtime qualification or authority
+# to apply. Require this exact published tag/digest even with operator trust off.
+OPERATOR_IMAGE_REVISIONS = frozenset({"d473d2be609b27b4b229eb6d077352850e3b4a57"})
+OPERATOR_IMAGE_REPOSITORY = "git.ryzhkov.dev/igor/jocasta"
+OPERATOR_IMAGE_PIN = "git.ryzhkov.dev/igor/jocasta:d473d2be609b27b4b229eb6d077352850e3b4a57@sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9"
+OPERATOR_ISSUER = "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/"
+OPERATOR_JWKS = OPERATOR_ISSUER + "jwks/"
+OPERATOR_CLIENT_ID = "jocasta-laptop-interactive"
+MANAGED_OPERATOR_ISSUER = "https://auth.ryzhkov.dev/application/o/jocasta-managed-interactive/"
+OPERATOR_TRUST = frozenset({
+    (OPERATOR_ISSUER, OPERATOR_JWKS, OPERATOR_CLIENT_ID),
+    (MANAGED_OPERATOR_ISSUER, MANAGED_OPERATOR_ISSUER + "jwks/", "jocasta-managed-interactive"),
+})
 
 # The canonical MCP resource. Its HTTPS route is the separately managed
 # web_mcp_route service "jocasta" (filter_plugins/web_mcp.py JOCASTA_ROUTE),
@@ -57,11 +79,16 @@ def _url(pattern, value, what):
 
 
 def jocasta_mcp_env(env_extra):
-    """Return the four MCP variables for the .env, or {} when MCP is off."""
+    """Return validated public MCP settings; absent/all-empty operator trio is off."""
     _require(isinstance(env_extra, dict), "env_extra must be a mapping")
     unknown = sorted(set(env_extra) - set(KNOWN_KEYS))
     _require(not unknown, "unknown env_extra keys " + ", ".join(unknown))
+    operator_present = [key for key in OPERATOR_KEYS if key in env_extra]
+    _require(not operator_present or len(operator_present) == len(OPERATOR_KEYS),
+             "set all of " + ", ".join(OPERATOR_KEYS) + " or none of them")
+    operator_on = bool(operator_present) and not all(env_extra[key] == "" for key in OPERATOR_KEYS)
     present = [key for key in MCP_KEYS if key in env_extra]
+    _require(not operator_on or present, "operator needs the existing limited MCP verifier and resource")
     if not present:
         return {}
     _require(len(present) == len(MCP_KEYS),
@@ -78,9 +105,25 @@ def jocasta_mcp_env(env_extra):
 
     image = env_extra.get("JOCASTA_IMAGE")
     found = IMAGE.fullmatch(image) if isinstance(image, str) else None
-    _require(found is not None and found.group(1) in MCP_IMAGE_REVISIONS,
+    _require(found is not None and found.group(1) in (MCP_IMAGE_REVISIONS | OPERATOR_IMAGE_REVISIONS),
              "MCP needs a jocasta:<commit> image from an accepted MCP-capable source commit")
-    return {key: env_extra[key] for key in MCP_KEYS}
+    if found.group(1) in OPERATOR_IMAGE_REVISIONS:
+        _require(image == OPERATOR_IMAGE_PIN,
+                 "MCP needs the exact accepted published operator image source, repository and digest")
+    settings = {key: env_extra[key] for key in MCP_KEYS}
+    if operator_on:
+        selected = tuple(env_extra[key] for key in OPERATOR_KEYS)
+        _require(all(isinstance(value, str) for value in selected) and selected in OPERATOR_TRUST,
+                 "operator trio must match exactly one accepted issuer/JWKS/client combination")
+        _require(issuer_host == "auth.ryzhkov.dev",
+                 "operator and limited issuers must use the fixed Authentik origin")
+        _require(env_extra["JOCASTA_OIDC_ISSUER"] != env_extra["JOCASTA_OPERATOR_OIDC_ISSUER"],
+                 "operator issuer must be distinct from the limited issuer")
+        _require(found.group(1) in OPERATOR_IMAGE_REVISIONS
+                 and image.split("@", 1)[0] == OPERATOR_IMAGE_REPOSITORY + ":" + found.group(1),
+                 "operator needs the exact accepted operator-capable image source and repository")
+        settings.update({key: env_extra[key] for key in OPERATOR_KEYS})
+    return settings
 
 
 class FilterModule:

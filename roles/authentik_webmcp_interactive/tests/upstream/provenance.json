@@ -1,0 +1,47 @@
+{
+  "revision": "410f46e5cf18f97a1f0056b30984a145242df55d",
+  "release": "Authentik 2026.8.4",
+  "repository": "https://github.com/goauthentik/authentik",
+  "files": {
+    "used_by.py.txt": {
+      "source": "authentik/core/api/used_by.py",
+      "sha256": "b958d6ccb4142674759ac14c01a1e681516e1edf441de74ba6a9eb30a8559024"
+    },
+    "core_models.py.txt": {
+      "source": "authentik/core/models.py",
+      "sha256": "90e7076939fc1c2e97b340cff512378cda41a96ca7c48f745a843e7e5b63467b"
+    },
+    "oauth2_models.py.txt": {
+      "source": "authentik/providers/oauth2/models.py",
+      "sha256": "2b4fa3fc0b179da75c801a4e4a5eea696dca2143bae74d79b4d2353ef8030cb9"
+    },
+    "lib_models.py.txt": {
+      "source": "authentik/lib/models.py",
+      "sha256": "ecb5533300ae29f8bd9910d14247f63164ebaac890c2629b27ce65f12692310c"
+    },
+    "policy_models.py.txt": {
+      "source": "authentik/policies/models.py",
+      "sha256": "82615300e81556b7869b1af562d5885ba91035139a577df4485a52379a747c41"
+    },
+    "provider_api.py.txt": {
+      "source": "authentik/core/api/providers.py",
+      "sha256": "04b5e77abf7430f84728ae10c45db10b7ede766c4b7d1d0b2b2ed0a88bf633c8"
+    },
+    "application_api.py.txt": {
+      "source": "authentik/core/api/applications.py",
+      "sha256": "a189b3f73f2b05c1d75d74bdf406d615a9515c40b1fd939fa4038b3791a53da0"
+    },
+    "oauth2_provider_api.py.txt": {
+      "source": "authentik/providers/oauth2/api/providers.py",
+      "sha256": "53051b80bb110a72ba42fc0df970d32d0cd22b03008ee8934d583e8ec48c7b57"
+    },
+    "api_utils.py.txt": {
+      "source": "authentik/core/api/utils.py",
+      "sha256": "81118aaacedfc96e9c27beebae611f4dea6cff7066481ddf5bd120f6994141ab"
+    },
+    "core_urls.py.txt": {
+      "source": "authentik/core/urls.py",
+      "sha256": "8d5f37ba44a3687167f972e395496e78ffb78f0fdc0d133a7be3fe1cc4eb2eb1"
+    }
+  }
+}
