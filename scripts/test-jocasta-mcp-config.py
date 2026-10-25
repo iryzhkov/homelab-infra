@@ -395,7 +395,7 @@ class PersistentToolingTest(unittest.TestCase):
             "scope": "jocasta.read", "token_seconds": 300})
         self.assertEqual(values["authentik_machine_identities"], [
             {"host": "laptop", "profile": "jocasta-tooling-" + driver, "project": "tooling", "generation": 1,
-             "expires": "2026-11-23T00:00:00Z", "state": "present"} for driver in ("codex", "claude")])
+             "expires": "2026-11-23T00:00:00Z", "state": "present"} for driver in ("codex", "claude", "opencode")])
         inventory = yaml.safe_load((REPO / "inventory/hosts.yml").read_text())
         laptop = inventory["all"]["children"]["observability_clients"]["hosts"]["laptop"]
         hosts = {"laptop": {"ssh_user": laptop["ssh_user"], "home": "", "connection": laptop["ansible_connection"]}}
