@@ -9,6 +9,8 @@ recorded, so a test can prove what a run did not do.
 from base64 import b64encode, urlsafe_b64encode
 import hashlib
 import http.server
+import importlib.util
+from pathlib import Path
 import json
 import secrets
 import ssl
@@ -20,6 +22,13 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
+
+# Reuse the managed-inventory seam's pinned public/secret serializer behavior.
+_seam_path = Path(__file__).resolve().parents[2] / "authentik_webmcp_interactive/tests/provider_inventory_seam.py"
+_seam_spec = importlib.util.spec_from_file_location("machine_provider_inventory_seam", _seam_path)
+assert _seam_spec is not None and _seam_spec.loader is not None
+provider_seam = importlib.util.module_from_spec(_seam_spec)
+_seam_spec.loader.exec_module(provider_seam)
 
 ADMIN = "FAKE-ADMIN-TOKEN-NEVER-PRINT"
 KEY_PREFIX = "FAKEAPPPASSWORD"
@@ -187,6 +196,7 @@ class Authentik:
                 self.providers.pop(name, None)
                 return None
             p = self.providers.setdefault(name, {"pk": self._pk(), "name": name, "client_secret": secrets.token_hex(16)})
+            p["meta_model_name"] = "authentik_providers_oauth2.oauth2provider"
             p.update({k: v for k, v in attrs.items() if k not in ("authorization_flow", "invalidation_flow")})
             return p["pk"]
         if model == "authentik_core.application":
@@ -330,8 +340,16 @@ class Authentik:
             return 405, {}
         if path == "/propertymappings/provider/scope/":
             return 200, page([m for m in self.mappings.values() if m["name"] == query.get("name")])
+        if path == "/core/users/me/":
+            return 200, {"user": {"is_superuser": True}}
+        if path == "/providers/all/":
+            return 200, page([provider_seam.public_provider(p) for p in self.providers.values()])
+        if path.startswith("/providers/oauth2/") and path.count("/") == 4:
+            pk = path.split("/")[3]
+            rows = [p for p in self.providers.values() if str(p["pk"]) == pk]
+            return (200, provider_seam.oauth_provider(rows[0])) if len(rows) == 1 else (404, {})
         if path == "/providers/oauth2/":
-            rows = [{k: v for k, v in p.items() if k != "client_secret"} for p in self.providers.values()]
+            rows = [provider_seam.oauth_provider(p) for p in self.providers.values()]
             for field in ("name", "client_id"):
                 if field in query:
                     rows = [r for r in rows if r.get(field) == query[field]]

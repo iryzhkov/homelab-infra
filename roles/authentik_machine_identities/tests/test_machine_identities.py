@@ -255,7 +255,7 @@ class Scratch:
         return self.homes[host] / ".config/chaldea/authentik" / (profile + ".app-password")
 
     def run(self, identities, access=ACCESS, enabled=True, check=False, integrated=False,
-            offline=False, api_url=None, services=None):
+            offline=False, api_url=None, services=None, extra_vars=None):
         play = [{"name": "Machine identities against a fake Authentik", "hosts": "localhost",
                  "connection": "local", "gather_facts": False,
                  "module_defaults": {"ansible.builtin.uri": {"ca_path": str(self.cert)}},
@@ -268,6 +268,8 @@ class Scratch:
                  "tasks": [{"name": "Enrol Chaldea machine identities",
                              "ansible.builtin.include_role": {"name": "authentik_machine_identities"},
                              "when": "authentik_machine_identities_enabled | default(false) | bool"}]}]
+        if extra_vars:
+            play[0]["vars"].update(extra_vars)
         if services is not None:
             play[0]["vars"]["authentik_machine_services"] = services
         extra_path = self.base / "extra.yml"
@@ -715,6 +717,191 @@ class RoleTest(unittest.TestCase):
         self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), before)
         token = self.x.state.tokens["chaldea-agent-one-jocasta-projectA-reporter-g1"]
         self.assertEqual(token["expires"], later)
+
+
+
+class ExistingProviderTest(unittest.TestCase):
+    def setUp(self):
+        self.spec = spec([identity()])
+        a = ACCESS
+        self.content = (self.spec["marker"] + "\nversion: 1\nentries:\n"
+                        "- model: authentik_providers_oauth2.oauth2provider\n"
+                        "  id: jocasta-provider\n  identifiers:\n    name: " + a["name"] +
+                        "\n  attrs:\n    client_id: " + a["client_id"] +
+                        "\n- model: authentik_core.application\n  identifiers:\n    slug: " + a["slug"] +
+                        "\n  attrs:\n    provider: !KeyOf jocasta-provider\n")
+        self.baseline = {"provider_pk": 102, "application_pk": "2931fd75-e7e3-4bbf-a8a8-f65c62318514",
+                         "content_sha512": mi.sha512(self.content.encode()).hexdigest()}
+        self.instance = {"content": self.content, "status": "successful", "enabled": True,
+                         "path": "", "context": {}, "last_applied_hash": self.baseline["content_sha512"]}
+        self.provider = {"pk": 102, "name": a["name"],
+                         "meta_model_name": "authentik_providers_oauth2.oauth2provider"}
+        self.inventory = {"status": 200, "json": fake.page([self.provider])}
+        self.applications = {"status": 200, "json": fake.page([
+            {"pk": self.baseline["application_pk"], "slug": a["slug"], "provider": 102}])}
+        self.actor = {"status": 200, "json": {"user": {"is_superuser": True}}}
+
+    def prove(self, **changes):
+        args = dict(spec=self.spec, instance=self.instance, baseline=self.baseline,
+                    inventory=self.inventory, applications=self.applications, actor=self.actor)
+        args.update(changes)
+        return mi.machine_identity_existing_provider(**args)
+
+    def test_public_seam_and_exact_detail_replace_both_secret_collections(self):
+        foreign = dict(self.provider, pk=999, name="Foreign", client_id="foreign-client",
+                       client_secret="FOREIGN-SECRET-SENTINEL")
+        self.assertNotIn("client_secret", fake.provider_seam.public_provider(foreign))
+        self.assertEqual(fake.provider_seam.oauth_provider(foreign)["client_secret"],
+                         "FOREIGN-SECRET-SENTINEL")
+        proof = self.prove(inventory={"status": 200, "json": fake.page([
+            self.provider, fake.provider_seam.public_provider(foreign)])})
+        queries = mi.machine_identity_queries(self.spec, mi.machine_identity_owned(self.content), proof)
+        private = [q for q in queries if q["path"].startswith("/providers/oauth2/")]
+        self.assertEqual([q["path"] for q in private], ["/providers/oauth2/102/"])
+        detail = dict(self.provider, client_id=ACCESS["client_id"], client_secret="OWNED-UNUSED")
+        found = mi._found([{"status": 200, "item": proof, "json": detail}], [])
+        self.assertEqual(found[("client_id", ACCESS["client_id"])], [detail])
+        for change in ({"pk": 999}, {"name": "Foreign"}, {"client_id": "changed-client"}):
+            with self.subTest(change=change), self.assertRaises(mi.AnsibleFilterError):
+                mi._found([{"status": 200, "item": proof, "json": detail | change}], [])
+
+    def test_missing_changed_unknown_and_partial_baselines_fail_closed(self):
+        import copy
+        cases = [
+            {"baseline": {}}, {"instance": {}},
+            {"baseline": self.baseline | {"content_sha512": "0" * 128}},
+            {"instance": self.instance | {"status": "pending"}},
+            {"instance": self.instance | {"last_applied_hash": "0" * 128}},
+            {"baseline": self.baseline | {"provider_pk": True}},
+            {"inventory": {"status": 200, "json": fake.page([])}},
+            {"inventory": {"status": 200, "json": fake.page([self.provider, self.provider])}},
+            {"inventory": {"status": 200, "json": fake.page([self.provider | {"pk": 999}])}},
+            {"inventory": {"status": 200, "json": fake.page([self.provider | {"meta_model_name": "proxy"}])}},
+            {"inventory": {"status": 200, "json": {"results": [self.provider], "pagination": {"count": 2}}}},
+            {"applications": {"status": 200, "json": fake.page([
+                {"pk": self.baseline["application_pk"], "slug": ACCESS["slug"], "provider": 999}])}},
+            {"actor": {"status": 200, "json": {"user": {"is_superuser": False}}}},
+        ]
+        for case in cases:
+            with self.subTest(case=list(case)), self.assertRaises(mi.AnsibleFilterError):
+                self.prove(**case)
+        for old, new in (
+                ("client_id: " + ACCESS["client_id"], "client_id: changed-client"),
+                ("provider: !KeyOf jocasta-provider", "provider: jocasta-provider"),
+                ('"provider","' + ACCESS["name"] + '","present"',
+                 '"provider","' + ACCESS["name"] + '","absent"')):
+            content = self.content.replace(old, new)
+            self.assertNotEqual(content, self.content)
+            digest = mi.sha512(content.encode()).hexdigest()
+            with self.subTest(binding=old), self.assertRaises(mi.AnsibleFilterError):
+                self.prove(instance=self.instance | {"content": content, "last_applied_hash": digest},
+                           baseline=self.baseline | {"content_sha512": digest})
+        changed = copy.deepcopy(self.spec)
+        changed["access"]["client_id"] = "changed-client"
+        with self.assertRaises(mi.AnsibleFilterError):
+            self.prove(spec=changed)
+
+    def test_pinned_unique_model_fields_and_serializer_have_no_field_selector(self):
+        import ast
+        import hashlib
+        import json
+        upstream = ROOT / "roles/authentik_webmcp_interactive/tests/upstream"
+        provenance = json.loads((upstream / "provenance.json").read_text())
+        for filename, model, field in (("oauth2_models.py.txt", "OAuth2Provider", "client_id"),
+                                       ("core_models.py.txt", "Provider", "name")):
+            raw = (upstream / filename).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), provenance["files"][filename]["sha256"])
+            node = next(n for n in ast.parse(raw).body if isinstance(n, ast.ClassDef) and n.name == model)
+            value = next(n.value for n in node.body if isinstance(n, ast.Assign)
+                         and any(isinstance(t, ast.Name) and t.id == field for t in n.targets))
+            self.assertTrue(next(ast.literal_eval(k.value) for k in value.keywords if k.arg == "unique"))
+        # Pinned producer fields, view binding and permission redaction execute
+        # in provider_inventory_seam. There is no caller-selected field option
+        # in these serializer definitions; do not invent one in an API URL.
+        self.assertIn("client_secret", fake.provider_seam.OAUTH_FIELDS)
+        self.assertNotIn("client_id", fake.provider_seam.PUBLIC_FIELDS)
+
+
+class ToolingExistingRoleTest(unittest.TestCase):
+    def test_actual_three_accounts_preserve_existing_credentials_and_custody(self):
+        import copy
+        x = Scratch(self)
+        config = yaml.safe_load((ROOT / "playbooks/vars/authentik-jocasta-tooling.yml").read_text())
+        items = config.pop("authentik_machine_identities")
+        access = config["authentik_jocasta_machine_access"]
+        self.assertTrue(config["authentik_machine_identity_existing_owned_only"])
+        self.assertEqual([i["profile"] for i in items],
+                         ["jocasta-tooling-codex", "jocasta-tooling-claude", "jocasta-tooling-opencode"])
+        self.assertTrue(all(i["generation"] == 1 and i["project"] == "tooling"
+                            and i["expires"] == "2026-11-23T00:00:00Z" for i in items))
+        x.state.keypairs[access["signing_key"]] = dict(x.state.keypairs[fake.KEYPAIR], pk=access["signing_key"])
+        laptop = x.base / "laptop"
+        laptop.mkdir(mode=0o755)
+        x.homes = {"laptop": laptop}
+        x.inventory.write_text(yaml.safe_dump({"all": {"hosts": {"laptop": {
+            "ansible_connection": "local", "ssh_user": USER,
+            "authentik_machine_identity_home": str(laptop),
+            "ansible_python_interpreter": sys.executable}}}}))
+
+        def run(declarations, baseline=None, existing=True, success=True):
+            extra = config | {"authentik_machine_identity_existing_owned_only": existing,
+                              "authentik_machine_identity_existing_provider_baseline": baseline or {}}
+            rc, output = x.run(declarations, access=access, extra_vars=extra)
+            self.assertEqual(rc == 0, success, output)
+            return output
+
+        def private_reads():
+            return [p for method, p, _ in x.state.requests if p.startswith("/api/v3/providers/oauth2/")]
+
+        # No retained baseline or prior blueprint: no private detail, API write
+        # or app-password read is allowed. Generic setup below is fixture-only.
+        run(items, success=False)
+        self.assertEqual((private_reads(), x.writes(), x.key_reads()), ([], [], []))
+        run(items[:2], existing=False)
+
+        def baseline():
+            provider = x.state.providers[access["name"]]
+            app = x.state.apps[access["slug"]]
+            content = next(iter(x.state.blueprints.values()))["content"]
+            return {"provider_pk": provider["pk"], "application_pk": app["pk"],
+                    "content_sha512": mi.sha512(content.encode()).hexdigest()}
+
+        def existing_snapshot():
+            result = []
+            for item in items[:2]:
+                user = "chaldea-laptop-" + item["profile"]
+                path = x.secret("laptop", item["profile"])
+                result.append((copy.deepcopy(x.state.users[user]), copy.deepcopy(x.state.tokens[user + "-g1"]),
+                               path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns))
+            return result
+
+        before = existing_snapshot()
+        original = baseline()
+        x.state.providers["Foreign"] = {"pk": 999, "name": "Foreign", "client_id": "foreign-client",
+                                       "meta_model_name": "authentik_providers_oauth2.oauth2provider",
+                                       "client_secret": "FOREIGN-SECRET-SENTINEL"}
+        run(items, original)
+        self.assertEqual(existing_snapshot(), before)
+        expected_path = "/api/v3/providers/oauth2/" + str(original["provider_pk"]) + "/"
+        self.assertTrue(private_reads())
+        self.assertEqual(set(private_reads()), {expected_path})
+        run(items, original, success=False)  # Changed content is not auto-accepted.
+        self.assertEqual((private_reads(), x.writes(), x.key_reads()), ([], [], []))
+        self.assertEqual(existing_snapshot(), before)
+
+        confirmed = baseline()  # Fixture stands in for explicit operator confirmation.
+        self.assertEqual(x.changed(run(items, confirmed)), 0)
+        self.assertEqual(set(private_reads()), {expected_path})
+        absent = copy.deepcopy(items)
+        absent[-1]["state"] = "absent"
+        run(absent, confirmed)
+        self.assertEqual(existing_snapshot(), before)
+        user = "chaldea-laptop-jocasta-tooling-opencode"
+        self.assertNotIn(user, x.state.users)
+        self.assertNotIn(user + "-g1", x.state.tokens)
+        self.assertFalse(x.secret("laptop", "jocasta-tooling-opencode").exists())
+        self.assertIn(access["name"], x.state.providers)
+        self.assertIn(access["slug"], x.state.apps)
 
 
 if __name__ == "__main__":

@@ -89,13 +89,52 @@
         machine_identity_owned: "{{ machine_identity_instance.content | default('') | machine_identity_owned }}"
         machine_identity_changed: "{{ machine_identity_instance.content | default('') != machine_identity_content }}"
 
+    - name: Resolve only the existing baseline-owned provider
+      when: authentik_machine_identity_existing_owned_only | bool
+      block:
+        - name: Confirm public discovery is complete for this actor
+          ansible.builtin.uri:
+            url: "{{ machine_identity_api }}/core/users/me/"
+            headers: "{{ authentik_headers }}"
+            follow_redirects: none
+          register: machine_identity_discovery_actor
+          check_mode: false
+          no_log: true
+
+        - name: Read public provider summaries without OAuth2 secrets
+          ansible.builtin.uri:
+            url: "{{ machine_identity_api }}/providers/all/?page_size=500"
+            headers: "{{ authentik_headers }}"
+            follow_redirects: none
+          register: machine_identity_public_providers
+          check_mode: false
+          no_log: true
+
+        - name: Read the existing application's public provider binding
+          ansible.builtin.uri:
+            url: "{{ machine_identity_api }}/core/applications/?slug={{ machine_identity_spec.access.slug | urlencode }}&superuser_full_list=true"
+            headers: "{{ authentik_headers }}"
+            follow_redirects: none
+          register: machine_identity_public_application
+          check_mode: false
+          no_log: true
+
+        - name: Require the operator's prior baseline before any private detail
+          ansible.builtin.set_fact:
+            machine_identity_proven_provider: >-
+              {{ machine_identity_spec | machine_identity_existing_provider(
+                   machine_identity_instance, authentik_machine_identity_existing_provider_baseline,
+                   machine_identity_public_providers, machine_identity_public_application,
+                   machine_identity_discovery_actor) }}
+          no_log: true
+
     - name: Look up everything this blueprint names or once created
       ansible.builtin.uri:
         url: "{{ machine_identity_api }}{{ item.path }}"
         headers: "{{ authentik_headers }}"
         follow_redirects: none
         status_code: [200, 404]
-      loop: "{{ machine_identity_spec | machine_identity_queries(machine_identity_owned) }}"
+      loop: "{{ machine_identity_spec | machine_identity_queries(machine_identity_owned, machine_identity_proven_provider if authentik_machine_identity_existing_owned_only | bool else none) }}"
       loop_control:
         label: "{{ item.kind }} {{ item.id }}"
       register: machine_identity_seen

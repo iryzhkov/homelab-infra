@@ -11,6 +11,11 @@
 # is the ownership record.
 
 authentik_machine_identities_enabled: true
+# Existing provider/application only. Root must supply a confirmed prior public
+# baseline with provider_pk 102, application_pk
+# 2931fd75-e7e3-4bbf-a8a8-f65c62318514 and the exact successful stored-content
+# SHA-512 before an online run. No unverified hash is populated here.
+authentik_machine_identity_existing_owned_only: true
 authentik_machine_identities_blueprint_name: homelab-infra Jocasta tooling laptop
 # The entrypoint refuses API credentials for any other Authentik origin.
 jocasta_tooling_authentik_origin: https://auth.ryzhkov.dev

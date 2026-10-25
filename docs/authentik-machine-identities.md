@@ -31,8 +31,9 @@ service account in the identities group, or the attribute is missing, the
 mapping returns no claims and the token keeps Authentik's default audience (the
 client ID), which Jocasta refuses. Hosts authenticate with `client_id`,
 `username` and their app password; no provider client secret is used or
-delivered. The current provider lookup can nevertheless return a client secret
-to the controller. See the custody limitation below before any online run.
+delivered. The generic provider lookup can nevertheless return a client secret
+to the controller. The isolated tooling entrypoint requires the existing-only
+custody gate described below.
 
 Everything is one stored blueprint, "homelab-infra machine identities", applied
 the same way as `authentik_config`'s access blueprint: stored through the API,
@@ -422,36 +423,62 @@ For an uncertain apply, reconcile the original operation and ownership record
 before any retry or rollback. Offline tokens remain valid for up to 300 seconds.
 Full removal of all identities and the application is a separate root decision.
 
-### Provider metadata custody limitation
+### Existing-only provider custody gate
 
-The source preflight found no broad OAuth2 provider enumeration in this role.
-`machine_identities.py` uses filtered `/providers/oauth2/?name=...` and
-`?client_id=...` lookups for declared and previously recorded targets. It then
-requires complete results, exact name/client ID matching and prior stored
-`present` ownership before mutation. Application dependency checks use public
-provider summaries, and token `view_key` is reached only after correlated apply
-completion and exact account, token and grant verification, under `no_log`.
+The generic role retains its filtered `/providers/oauth2/?name=...` and
+`?client_id=...` preflight. These are not broad enumeration, but the pinned
+Authentik 2026.8.4 `OAuth2ProviderSerializer` includes `client_secret` for a
+caller with change permission. A foreign name/client-ID collision can return
+its secret before ownership refusal. `no_log` protects output, not custody.
+The pinned serializer exposes no supported caller-selected field exclusion;
+permission-dependent redaction is insufficient for this administrative actor.
 
-Those refusal checks follow the provider HTTP responses. In the pinned
-Authentik 2026.8.4 serializer sources retained under
-`roles/authentik_webmcp_interactive/tests/upstream/`,
-`OAuth2ProviderSerializer` includes `client_secret`, and
-`ModelSerializer.to_representation` retains it when the caller can change the
-provider. A foreign provider colliding with the target name or client ID can
-therefore return its secret to the administrative controller before refusal.
-Even an owned provider response can include its unused client secret.
-`no_log` protects output, not this custody boundary. No live API was queried
-to establish this source finding.
+The laptop declaration enables `authentik_machine_identity_existing_owned_only`,
+which defaults off for other callers. It replaces both secret-bearing collection
+queries with public `/providers/all/` summaries and one exact owned-PK OAuth2
+detail read. Before any such detail or write, it requires:
 
-Before root authorizes an online preflight or enrollment, the existing role
-needs a bounded correction and isolated evidence: discover collisions through
-public metadata and permit private provider detail only for an exact target
-proved owned by the original stored blueprint. The client-ID collision check
-must also avoid foreign secret-bearing responses; the public provider summary
-does not expose client IDs, so simply replacing that URL is insufficient.
-Preserve ownership refusal, complete dependency checks, `no_log` and the rule
-against uncertain POST replay. This source change leaves that role correction
-and native OpenCode acceptance as explicit prerequisites.
+- A root-supplied `authentik_machine_identity_existing_provider_baseline` mapping
+  with `provider_pk: 102`, `application_pk:
+  2931fd75-e7e3-4bbf-a8a8-f65c62318514` and `content_sha512`, the 128 lowercase
+  hex digits of the exact successful pre-run stored blueprint content. These
+  fixed IDs are retained prior public observations, not an original creation
+  receipt. No hash is populated by this source change.
+- The stored content and its successful `last_applied_hash` match that supplied
+  hash, with the original provider/application marked `present`. The original
+  typed blueprint provider name, unchanged client ID and application `!KeyOf`
+  binding must agree with the declaration.
+- A superuser actor, complete public provider inventory, exactly matching
+  provider PK/name/OAuth2 type, and the exact public application UUID/slug bound
+  to that PK. A same-name object with a different PK cannot be adopted.
+
+Only then is `/providers/oauth2/102/` read. Its PK, name and client ID must
+still agree before any mutation. The pinned `OAuth2Provider.client_id` model
+field has `unique=True`; the unchanged owned client ID therefore excludes a
+foreign duplicate under that schema without reading foreign OAuth2 bodies.
+The provider name is also unique in the pinned base model. The regression seam
+checks those pinned field declarations and serializer behavior. It does not
+observe the live database's migration or index state.
+
+Missing evidence, bootstrap, hash drift, absent ownership, changed declarations,
+incomplete public data or changed bindings fail before private detail or writes.
+A changed client ID on the owned detail fails before writes. This mode cannot
+create, rename or remove the shared provider/application. It allows adding or
+removing the OpenCode account while preserving the existing service. Generic
+bootstrap is outside this path's custody qualification.
+
+Root must qualify acquisition and provenance of the protected public baseline
+and the installed schema before any online check or enrollment. Never derive
+an accepted hash from the response being checked. After a confirmed successful
+content change, root must explicitly confirm the new public baseline hash for
+the next operation; the role never refreshes it automatically. Pending or
+uncertain operations require reconciliation of the original apply before any
+new baseline, retry or rollback. There is no new receipt store or credential.
+Application dependency checks, post-apply verification, `no_log` and the rule
+against uncertain POST replay remain in the existing role. An owned provider
+detail may contain its unused client secret; it is never delivered. Token
+`view_key` remains after correlated completion and exact account/token/grant
+verification. No live API was queried for this source correction.
 
 The nightly drift check compares applications only with the access
 blueprint's manifest, so it reports `chaldea-jocasta` as not managed by the
