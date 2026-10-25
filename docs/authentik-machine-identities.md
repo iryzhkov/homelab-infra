@@ -29,9 +29,11 @@ sets `jocasta_projects` to the one project in the account's `chaldea_jocasta`
 attribute. Nothing in it comes from the token request. If the account is not a
 service account in the identities group, or the attribute is missing, the
 mapping returns no claims and the token keeps Authentik's default audience (the
-client ID), which Jocasta refuses. The provider's client secret is never read or
-delivered; hosts authenticate with `client_id`, `username` and their app
-password.
+client ID), which Jocasta refuses. Hosts authenticate with `client_id`,
+`username` and their app password; no provider client secret is used or
+delivered. The generic provider lookup can nevertheless return a client secret
+to the controller. The isolated tooling entrypoint requires the existing-only
+custody gate described below.
 
 Everything is one stored blueprint, "homelab-infra machine identities", applied
 the same way as `authentik_config`'s access blueprint: stored through the API,
@@ -364,17 +366,19 @@ client enrollment or host grant is enabled here.
 
 ## Isolated Jocasta tooling enrollment
 
-`playbooks/authentik-jocasta-tooling.yml` enrolls the laptop's two persistent
-read-only Jocasta tooling accounts, `chaldea-laptop-jocasta-tooling-codex` and
-`chaldea-laptop-jocasta-tooling-claude`, declared in
+`playbooks/authentik-jocasta-tooling.yml` enrolls the laptop's read-only Jocasta
+tooling accounts, `chaldea-laptop-jocasta-tooling-codex`,
+`chaldea-laptop-jocasta-tooling-claude` and
+`chaldea-laptop-jocasta-tooling-opencode`, declared in
 `playbooks/vars/authentik-jocasta-tooling.yml`. It owns its own blueprint,
 "homelab-infra Jocasta tooling laptop", with the application `chaldea-jocasta`
 ("Chaldea Jocasta tooling access"), client ID `chaldea-jocasta-tooling`, group
 `chaldea-jocasta-tooling-identities`, the existing RSA signing key
 `8bbd6516-af33-4e64-a73b-caa39e692c29`, scope `jocasta.read` and 300-second
-tokens. Each account's only project is `tooling`. The Codex account is retained
-inactive: the laptop's session policy admits only the Claude preset until the
-Codex profile qualifies natively.
+tokens. Each account's only project is `tooling`. Codex and Claude have passed
+native acceptance. OpenCode enrollment is source preparation; its protected
+profile must pass separate source, CI and native acceptance gates before
+persistent activation. Enrollment alone does not admit a Chaldea session.
 
 The entrypoint loads the existing controller SOPS API credential the way
 `authentik_config` does, refuses any origin other than
@@ -388,15 +392,93 @@ ansible-playbook playbooks/authentik-jocasta-tooling.yml --check --diff
 ansible-playbook playbooks/authentik-jocasta-tooling.yml
 ```
 
-Check mode is the offline plan; add `-e jocasta_tooling_online_check=true` for
-the read-only ownership and collision preflight. A second real run changes
-nothing. The ownership, refusal and recovery rules above apply unchanged: never
-replay an uncertain apply. Both app passwords expire 2026-11-23T00:00:00Z.
-Extend `expires` or raise `generation` before then; within a day of expiry the
-role refuses to run. To remove the enrollment, set both identities and
-`authentik_jocasta_machine_access` to `state: absent` in that file and run the
-same entrypoint; keep the blueprint name. Offline tokens stay valid for up to
-300 seconds after removal.
+Check mode without API facts is the offline plan. It skips SOPS loading,
+network requests, host inspection and credential reads or delivery. The
+`jocasta_tooling_online_check=true` option enables the read-only ownership and
+collision preflight, including the provider metadata reads described below.
+Neither online check nor enrollment is authorized by this source change.
+A second real run is intended to change nothing. The ownership, refusal and
+recovery rules above apply unchanged: never replay an uncertain apply.
+
+The two existing app passwords and the prepared OpenCode declaration expire
+at 2026-11-23T00:00:00Z. Manual rotation remains due before November 22;
+this change preserves Codex and Claude generation 1, their `tooling` grants,
+expiry and credential paths. An expiry extension preserves the existing key;
+a higher generation rotates it. No extension or rotation is performed here.
+
+The root owns live enrollment, acceptance and rollback. Before an authorized
+run, retain the last successful blueprint content and the existing accounts'
+public generation, expiry and grant evidence. If OpenCode has never been
+enrolled, withdrawing its prepared source needs no live cleanup. After a
+confirmed enrollment, remove only the new account by setting only
+`jocasta-tooling-opencode` to `state: absent`, keeping both existing identities,
+the application and blueprint name unchanged, and using the same entrypoint.
+Confirm removal of `chaldea-laptop-jocasta-tooling-opencode`, its `-g1` app
+password and `~/.config/chaldea/authentik/jocasta-tooling-opencode.app-password`.
+Verify both existing accounts, credentials and grants are preserved. Retain the
+absent declaration until cleanup is confirmed; do not restore a two-account
+blueprint over uncertain partial state. Root separately removes any newly
+installed OpenCode profile/helper policy, if separately authorized and installed.
+For an uncertain apply, reconcile the original operation and ownership record
+before any retry or rollback. Offline tokens remain valid for up to 300 seconds.
+Full removal of all identities and the application is a separate root decision.
+
+### Existing-only provider custody gate
+
+The generic role retains its filtered `/providers/oauth2/?name=...` and
+`?client_id=...` preflight. These are not broad enumeration, but the pinned
+Authentik 2026.8.4 `OAuth2ProviderSerializer` includes `client_secret` for a
+caller with change permission. A foreign name/client-ID collision can return
+its secret before ownership refusal. `no_log` protects output, not custody.
+The pinned serializer exposes no supported caller-selected field exclusion;
+permission-dependent redaction is insufficient for this administrative actor.
+
+The laptop declaration enables `authentik_machine_identity_existing_owned_only`,
+which defaults off for other callers. It replaces both secret-bearing collection
+queries with public `/providers/all/` summaries and one exact owned-PK OAuth2
+detail read. Before any such detail or write, it requires:
+
+- A root-supplied `authentik_machine_identity_existing_provider_baseline` mapping
+  with `provider_pk: 102`, `application_pk:
+  2931fd75-e7e3-4bbf-a8a8-f65c62318514` and `content_sha512`, the 128 lowercase
+  hex digits of the exact successful pre-run stored blueprint content. These
+  fixed IDs are retained prior public observations, not an original creation
+  receipt. No hash is populated by this source change.
+- The stored content and its successful `last_applied_hash` match that supplied
+  hash, with the original provider/application marked `present`. The original
+  typed blueprint provider name, unchanged client ID and application `!KeyOf`
+  binding must agree with the declaration.
+- A superuser actor, complete public provider inventory, exactly matching
+  provider PK/name/OAuth2 type, and the exact public application UUID/slug bound
+  to that PK. A same-name object with a different PK cannot be adopted.
+
+Only then is `/providers/oauth2/102/` read. Its PK, name and client ID must
+still agree before any mutation. The pinned `OAuth2Provider.client_id` model
+field has `unique=True`; the unchanged owned client ID therefore excludes a
+foreign duplicate under that schema without reading foreign OAuth2 bodies.
+The provider name is also unique in the pinned base model. The regression seam
+checks those pinned field declarations and serializer behavior. It does not
+observe the live database's migration or index state.
+
+Missing evidence, bootstrap, hash drift, absent ownership, changed declarations,
+incomplete public data or changed bindings fail before private detail or writes.
+A changed client ID on the owned detail fails before writes. This mode cannot
+create, rename or remove the shared provider/application. It allows adding or
+removing the OpenCode account while preserving the existing service. Generic
+bootstrap is outside this path's custody qualification.
+
+Root must qualify acquisition and provenance of the protected public baseline
+and the installed schema before any online check or enrollment. Never derive
+an accepted hash from the response being checked. After a confirmed successful
+content change, root must explicitly confirm the new public baseline hash for
+the next operation; the role never refreshes it automatically. Pending or
+uncertain operations require reconciliation of the original apply before any
+new baseline, retry or rollback. There is no new receipt store or credential.
+Application dependency checks, post-apply verification, `no_log` and the rule
+against uncertain POST replay remain in the existing role. An owned provider
+detail may contain its unused client secret; it is never delivered. Token
+`view_key` remains after correlated completion and exact account/token/grant
+verification. No live API was queried for this source correction.
 
 The nightly drift check compares applications only with the access
 blueprint's manifest, so it reports `chaldea-jocasta` as not managed by the

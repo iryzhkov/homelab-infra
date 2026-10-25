@@ -5,6 +5,16 @@
 # authentik_machine_identities_enabled is true.
 authentik_machine_identities_enabled: false
 
+# Optional existing-only custody gate. Generic bootstrap behavior is unchanged
+# unless explicitly enabled. Online use then requires a root-confirmed prior
+# public baseline, not a creation receipt; never learn it from discovery.
+authentik_machine_identity_existing_owned_only: false
+authentik_machine_identity_existing_provider_baseline: {}
+# Baseline fields: provider_pk (integer), application_pk (UUID), content_sha512
+# (128 lowercase hex digits of the exact successful pre-run stored content).
+# Confirm a new hash only after the previous apply is conclusively successful.
+
+
 # The blueprint this role owns, found by name. Its stored content records
 # every object the role created; renaming it here would orphan them.
 authentik_machine_identities_blueprint_name: homelab-infra machine identities

@@ -14,7 +14,7 @@
         headers: "{{ authentik_headers }}"
         follow_redirects: none
         status_code: [200, 404]
-      loop: "{{ machine_identity_spec | machine_identity_queries(machine_identity_owned) }}"
+      loop: "{{ machine_identity_spec | machine_identity_queries(machine_identity_owned, machine_identity_proven_provider if authentik_machine_identity_existing_owned_only | bool else none) }}"
       loop_control:
         label: "{{ item.kind }} {{ item.id }}"
       register: machine_identity_result

@@ -500,6 +500,110 @@ def machine_identity_owned(content):
     return [list(o) for o in objects]
 
 
+
+def machine_identity_existing_provider(spec, instance, baseline, inventory, applications, actor):
+    """Authorize one existing provider detail read from a prior public baseline.
+
+    This is an operator-confirmed prior baseline, not a creation receipt. Never
+    learn or refresh it from the current HTTP response. The tooling entrypoint
+    requires fresh confirmation after each completed content change.
+    """
+    if (not isinstance(baseline, dict)
+            or set(baseline) != {"provider_pk", "application_pk", "content_sha512"}
+            or not isinstance(baseline["provider_pk"], int) or isinstance(baseline["provider_pk"], bool)
+            or baseline["provider_pk"] <= 0
+            or not isinstance(baseline["application_pk"], str)
+            or not UUID.fullmatch(baseline["application_pk"])
+            or not isinstance(baseline["content_sha512"], str)
+            or not re.fullmatch(r"[0-9a-f]{128}", baseline["content_sha512"])):
+        _refuse("existing-only mode requires an independently confirmed prior public baseline")
+    if (not isinstance(actor, dict) or actor.get("status") != 200
+            or not isinstance(actor.get("json"), dict)
+            or not isinstance(actor["json"].get("user"), dict)
+            or actor["json"]["user"].get("is_superuser") is not True):
+        _refuse("existing-only public discovery requires a superuser")
+    if set(spec["services"]) != {"jocasta"} or spec["access"]["state"] != "present":
+        _refuse("existing-only mode requires the unchanged present Jocasta application")
+    access = spec["access"]
+    content = instance.get("content", "") if isinstance(instance, dict) else ""
+    if (not content or sha512(content.encode()).hexdigest() != baseline["content_sha512"]
+            or instance.get("last_applied_hash") != baseline["content_sha512"]
+            or instance.get("status") != "successful" or instance.get("enabled") is not True
+            or instance.get("path") != "" or instance.get("context") != {}):
+        _refuse("existing-only stored blueprint is missing, changed or not confirmed successful")
+    owned = machine_identity_owned(content)
+    if sorted(o for o in owned if o[0] in ("provider", "application")) != sorted([
+            ["provider", access["name"], "present"],
+            ["application", access["slug"], "present"]]):
+        _refuse("existing-only provider and application lack original stored-present ownership")
+
+    # Compose nodes rather than constructing arbitrary blueprint tags. Check the
+    # original typed binding; a matching name alone does not authorize detail.
+    import yaml
+    try:
+        document = yaml.compose(content, Loader=yaml.SafeLoader)
+
+        def mapping(node):
+            if not isinstance(node, yaml.MappingNode):
+                raise ValueError()
+            pairs = [(scalar(k), v) for k, v in node.value]
+            if len({k for k, _ in pairs}) != len(pairs):
+                raise ValueError()
+            return dict(pairs)
+
+        def scalar(node):
+            if not isinstance(node, yaml.ScalarNode) or node.tag != "tag:yaml.org,2002:str":
+                raise ValueError()
+            return node.value
+
+        entries = mapping(document)["entries"]
+        if not isinstance(entries, yaml.SequenceNode):
+            raise ValueError()
+        rows = [mapping(n) for n in entries.value]
+
+        def entry(model, field, value):
+            matches = [row for row in rows
+                       if scalar(row["model"]) == model
+                       and scalar(mapping(row["identifiers"])[field]) == value]
+            if len(matches) != 1:
+                raise ValueError()
+            row = matches[0]
+            if "state" in row and scalar(row["state"]) != "present":
+                raise ValueError()
+            return row
+
+        provider = entry("authentik_providers_oauth2.oauth2provider", "name", access["name"])
+        application = entry("authentik_core.application", "slug", access["slug"])
+        if scalar(mapping(provider["attrs"])["client_id"]) != access["client_id"]:
+            raise ValueError()
+        binding = mapping(application["attrs"])["provider"]
+        if (not isinstance(binding, yaml.ScalarNode) or binding.tag != "!KeyOf"
+                or binding.value != scalar(provider["id"])):
+            raise ValueError()
+    except (yaml.YAMLError, ValueError, KeyError, TypeError, AttributeError):
+        _refuse("existing-only original blueprint provider/client/application binding changed")
+    if not isinstance(inventory, dict) or inventory.get("status") != 200:
+        _refuse("existing-only public provider inventory is unavailable")
+    providers = _complete_rows(inventory.get("json"), "public providers", "name")
+    matches = [r for r in providers if r.get("name") == access["name"]]
+    pinned = [r for r in providers if r.get("pk") == baseline["provider_pk"]]
+    if (len(matches) != 1 or len(pinned) != 1 or matches[0] != pinned[0]
+            or type(pinned[0].get("pk")) is not int
+            or pinned[0].get("meta_model_name") != "authentik_providers_oauth2.oauth2provider"):
+        _refuse("existing-only public provider ID, name or type differs from the prior baseline")
+    if not isinstance(applications, dict) or applications.get("status") != 200:
+        _refuse("existing-only public application is unavailable")
+    apps = _complete_rows(applications.get("json"), "public application", "slug")
+    if (len(apps) != 1 or apps[0].get("slug") != access["slug"]
+            or apps[0].get("pk") != baseline["application_pk"]
+            or type(apps[0].get("provider")) is not int
+            or apps[0]["provider"] != baseline["provider_pk"]):
+        _refuse("existing-only public application binding differs from the prior baseline")
+    return {"kind": "owned_provider", "id": access["name"], "pk": baseline["provider_pk"],
+            "client_id": access["client_id"],
+            "path": f"/providers/oauth2/{baseline['provider_pk']}/"}
+
+
 def _found(results, problems):
     """(kind, name) -> the one object with exactly that name, or None."""
     found = {}
@@ -507,6 +611,14 @@ def _found(results, problems):
         item = result.get("item", {})
         kind, ident = item.get("kind"), item.get("id")
         body = result.get("json") if isinstance(result.get("json"), dict) else {}
+        if kind == "owned_provider":
+            if (result.get("status") != 200 or type(body.get("pk")) is not int
+                    or body["pk"] != item.get("pk") or body.get("name") != ident
+                    or body.get("client_id") != item.get("client_id")):
+                _refuse("existing-only exact owned provider detail or unchanged client ID differs")
+            found[("provider", ident)] = body
+            found[("client_id", item["client_id"])] = [body]
+            continue
         if kind == "keypair":
             found[(kind, ident)] = body if result.get("status") == 200 else None
             continue
@@ -604,7 +716,7 @@ def machine_identity_refusals(spec, owned, results, applications=None):
     for part in _service_specs(spec):
         names = {tuple(o[:2]) for o in part["objects"]}
         local_results = [r for r in results if (r["item"]["kind"], r["item"]["id"]) in names
-                         or r["item"]["kind"] in ("client_id", "keypair")]
+                         or r["item"]["kind"] in ("client_id", "keypair", "owned_provider")]
         problems.extend(_service_refusals(part, owned, local_results, applications))
     return problems
 
@@ -754,12 +866,15 @@ def _single_problems(spec, results, applications, bindings, checks):
     return problems
 
 
-def machine_identity_queries(spec, owned):
+def machine_identity_queries(spec, owned, proven_provider=None):
     """One complete lookup per owned/declared name, client ID and signing key."""
     wanted = {(k, i) for k, i, _ in spec["objects"]} | {(k, i) for k, i, _ in owned}
     wanted.update(("client_id", access["client_id"]) for access in spec["services"].values())
     queries = [{"kind": k, "id": i, "path": LOOKUPS[k][0].format(quote(i, safe=""))}
-               for k, i in sorted(wanted)]
+               for k, i in sorted(wanted)
+               if proven_provider is None or k not in ("provider", "client_id")]
+    if proven_provider is not None:
+        queries.append(proven_provider)
     keys = {access["signing_key"] for access in spec["services"].values() if access["state"] == "present"}
     queries.extend({"kind": "keypair", "id": key, "path": f"/crypto/certificatekeypairs/{key}/"}
                    for key in sorted(keys))
@@ -816,6 +931,7 @@ class FilterModule:
             "machine_identity_spec": machine_identity_spec,
             "machine_identity_owned": machine_identity_owned,
             "machine_identity_queries": machine_identity_queries,
+            "machine_identity_existing_provider": machine_identity_existing_provider,
             "machine_identity_lookup": machine_identity_lookup,
             "machine_identity_refusals": machine_identity_refusals,
             "machine_identity_problems": machine_identity_problems,

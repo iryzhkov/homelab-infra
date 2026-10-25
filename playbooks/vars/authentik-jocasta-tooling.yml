@@ -11,6 +11,11 @@
 # is the ownership record.
 
 authentik_machine_identities_enabled: true
+# Existing provider/application only. Root must supply a confirmed prior public
+# baseline with provider_pk 102, application_pk
+# 2931fd75-e7e3-4bbf-a8a8-f65c62318514 and the exact successful stored-content
+# SHA-512 before an online run. No unverified hash is populated here.
+authentik_machine_identity_existing_owned_only: true
 authentik_machine_identities_blueprint_name: homelab-infra Jocasta tooling laptop
 # The entrypoint refuses API credentials for any other Authentik origin.
 jocasta_tooling_authentik_origin: https://auth.ryzhkov.dev
@@ -29,10 +34,8 @@ authentik_jocasta_machine_access:
   scope: jocasta.read
   token_seconds: 300
 
-# The Codex account is retained inactive: enrolled and delivered, but the
-# laptop's session policy admits only the Claude preset until the Codex profile
-# qualifies natively. Keep it present; absent would delete the account and its
-# host file.
+# Codex and Claude are natively qualified. OpenCode is a separate pending
+# enrollment/profile; source presence does not establish native acceptance.
 # One account per laptop profile, matching chaldea-fleet-config's
 # inventory/host_vars/laptop/chaldea-jocasta-tooling.yml presets. Raise
 # generation to rotate; extend expires before it is less than a day away, or
@@ -46,6 +49,12 @@ authentik_machine_identities:
     state: present
   - host: laptop
     profile: jocasta-tooling-claude
+    project: tooling
+    generation: 1
+    expires: "2026-11-23T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: jocasta-tooling-opencode
     project: tooling
     generation: 1
     expires: "2026-11-23T00:00:00Z"
