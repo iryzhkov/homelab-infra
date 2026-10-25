@@ -29,9 +29,10 @@ sets `jocasta_projects` to the one project in the account's `chaldea_jocasta`
 attribute. Nothing in it comes from the token request. If the account is not a
 service account in the identities group, or the attribute is missing, the
 mapping returns no claims and the token keeps Authentik's default audience (the
-client ID), which Jocasta refuses. The provider's client secret is never read or
-delivered; hosts authenticate with `client_id`, `username` and their app
-password.
+client ID), which Jocasta refuses. Hosts authenticate with `client_id`,
+`username` and their app password; no provider client secret is used or
+delivered. The current provider lookup can nevertheless return a client secret
+to the controller. See the custody limitation below before any online run.
 
 Everything is one stored blueprint, "homelab-infra machine identities", applied
 the same way as `authentik_config`'s access blueprint: stored through the API,
@@ -390,15 +391,67 @@ ansible-playbook playbooks/authentik-jocasta-tooling.yml --check --diff
 ansible-playbook playbooks/authentik-jocasta-tooling.yml
 ```
 
-Check mode is the offline plan; add `-e jocasta_tooling_online_check=true` for
-the read-only ownership and collision preflight. A second real run changes
-nothing. The ownership, refusal and recovery rules above apply unchanged: never
-replay an uncertain apply. These app passwords expire 2026-11-23T00:00:00Z.
-Extend `expires` or raise `generation` before then; within a day of expiry the
-role refuses to run. To remove the entire enrollment, set all identities and
-`authentik_jocasta_machine_access` to `state: absent` in that file and run the
-same entrypoint; keep the blueprint name. Offline tokens stay valid for up to
-300 seconds after removal.
+Check mode without API facts is the offline plan. It skips SOPS loading,
+network requests, host inspection and credential reads or delivery. The
+`jocasta_tooling_online_check=true` option enables the read-only ownership and
+collision preflight, including the provider metadata reads described below.
+Neither online check nor enrollment is authorized by this source change.
+A second real run is intended to change nothing. The ownership, refusal and
+recovery rules above apply unchanged: never replay an uncertain apply.
+
+The two existing app passwords and the prepared OpenCode declaration expire
+at 2026-11-23T00:00:00Z. Manual rotation remains due before November 22;
+this change preserves Codex and Claude generation 1, their `tooling` grants,
+expiry and credential paths. An expiry extension preserves the existing key;
+a higher generation rotates it. No extension or rotation is performed here.
+
+The root owns live enrollment, acceptance and rollback. Before an authorized
+run, retain the last successful blueprint content and the existing accounts'
+public generation, expiry and grant evidence. If OpenCode has never been
+enrolled, withdrawing its prepared source needs no live cleanup. After a
+confirmed enrollment, remove only the new account by setting only
+`jocasta-tooling-opencode` to `state: absent`, keeping both existing identities,
+the application and blueprint name unchanged, and using the same entrypoint.
+Confirm removal of `chaldea-laptop-jocasta-tooling-opencode`, its `-g1` app
+password and `~/.config/chaldea/authentik/jocasta-tooling-opencode.app-password`.
+Verify both existing accounts, credentials and grants are preserved. Retain the
+absent declaration until cleanup is confirmed; do not restore a two-account
+blueprint over uncertain partial state. Root separately removes any newly
+installed OpenCode profile/helper policy, if separately authorized and installed.
+For an uncertain apply, reconcile the original operation and ownership record
+before any retry or rollback. Offline tokens remain valid for up to 300 seconds.
+Full removal of all identities and the application is a separate root decision.
+
+### Provider metadata custody limitation
+
+The source preflight found no broad OAuth2 provider enumeration in this role.
+`machine_identities.py` uses filtered `/providers/oauth2/?name=...` and
+`?client_id=...` lookups for declared and previously recorded targets. It then
+requires complete results, exact name/client ID matching and prior stored
+`present` ownership before mutation. Application dependency checks use public
+provider summaries, and token `view_key` is reached only after correlated apply
+completion and exact account, token and grant verification, under `no_log`.
+
+Those refusal checks follow the provider HTTP responses. In the pinned
+Authentik 2026.8.4 serializer sources retained under
+`roles/authentik_webmcp_interactive/tests/upstream/`,
+`OAuth2ProviderSerializer` includes `client_secret`, and
+`ModelSerializer.to_representation` retains it when the caller can change the
+provider. A foreign provider colliding with the target name or client ID can
+therefore return its secret to the administrative controller before refusal.
+Even an owned provider response can include its unused client secret.
+`no_log` protects output, not this custody boundary. No live API was queried
+to establish this source finding.
+
+Before root authorizes an online preflight or enrollment, the existing role
+needs a bounded correction and isolated evidence: discover collisions through
+public metadata and permit private provider detail only for an exact target
+proved owned by the original stored blueprint. The client-ID collision check
+must also avoid foreign secret-bearing responses; the public provider summary
+does not expose client IDs, so simply replacing that URL is insufficient.
+Preserve ownership refusal, complete dependency checks, `no_log` and the rule
+against uncertain POST replay. This source change leaves that role correction
+and native OpenCode acceptance as explicit prerequisites.
 
 The nightly drift check compares applications only with the access
 blueprint's manifest, so it reports `chaldea-jocasta` as not managed by the
