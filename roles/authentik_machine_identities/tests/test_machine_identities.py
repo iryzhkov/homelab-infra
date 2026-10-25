@@ -720,6 +720,33 @@ class RoleTest(unittest.TestCase):
 
 
 
+
+def pinned_model_field(raw, model, field):
+    """Parse one unchanged class-level field, not unrelated newer Python syntax."""
+    import ast
+    import io
+    import textwrap
+    import tokenize
+
+    blocks = [block for block in raw.decode("utf-8").split("\nclass ")
+              if block.startswith(model + "(")]
+    assert len(blocks) == 1, (model, "expected one pinned class")
+    lines = blocks[0].splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if line.startswith("    " + field + " = ")]
+    assert len(starts) == 1, (model, field, "expected one class-level assignment")
+    start = starts[0]
+    # tokenize.NEWLINE terminates the first logical statement, including a
+    # multiline field call. Stop the lazy tokenizer before any later method.
+    tokens = tokenize.generate_tokens(io.StringIO("".join(lines[start:])).readline)
+    end = next(token.end[0] for token in tokens if token.type == tokenize.NEWLINE)
+    body = ast.parse(textwrap.dedent("".join(lines[start:start + end]))).body
+    assert len(body) == 1 and isinstance(body[0], ast.Assign)
+    assignment = body[0]
+    assert len(assignment.targets) == 1 and isinstance(assignment.targets[0], ast.Name)
+    assert assignment.targets[0].id == field
+    return assignment
+
+
 class ExistingProviderTest(unittest.TestCase):
     def setUp(self):
         self.spec = spec([identity()])
@@ -801,6 +828,20 @@ class ExistingProviderTest(unittest.TestCase):
         with self.assertRaises(mi.AnsibleFilterError):
             self.prove(spec=changed)
 
+    def test_pinned_field_extraction_is_bounded_and_exact(self):
+        import ast
+        raw = (b"class Other:\n    def unrelated[T](self): pass\n\n"
+               b"class Selected(Base):\n    client_id = models.CharField(\n"
+               b"        max_length=255,\n        unique=True,\n    )\n"
+               b"    def unrelated[T](self): pass\n")
+        value = pinned_model_field(raw, "Selected", "client_id").value
+        self.assertEqual(ast.unparse(value), "models.CharField(max_length=255, unique=True)")
+        for changed in (raw.replace(b"client_id =", b"other_id ="),
+                        raw.replace(b"    def unrelated[T](self): pass\n",
+                                    b"    client_id = models.CharField(unique=False)\n")):
+            with self.assertRaises(AssertionError):
+                pinned_model_field(changed, "Selected", "client_id")
+
     def test_pinned_unique_model_fields_and_serializer_have_no_field_selector(self):
         import ast
         import hashlib
@@ -811,9 +852,7 @@ class ExistingProviderTest(unittest.TestCase):
                                        ("core_models.py.txt", "Provider", "name")):
             raw = (upstream / filename).read_bytes()
             self.assertEqual(hashlib.sha256(raw).hexdigest(), provenance["files"][filename]["sha256"])
-            node = next(n for n in ast.parse(raw).body if isinstance(n, ast.ClassDef) and n.name == model)
-            value = next(n.value for n in node.body if isinstance(n, ast.Assign)
-                         and any(isinstance(t, ast.Name) and t.id == field for t in n.targets))
+            value = pinned_model_field(raw, model, field).value
             self.assertTrue(next(ast.literal_eval(k.value) for k in value.keywords if k.arg == "unique"))
         # Pinned producer fields, view binding and permission redaction execute
         # in provider_inventory_seam. There is no caller-selected field option
