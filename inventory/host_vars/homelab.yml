@@ -83,6 +83,12 @@ docker_data_root: /mnt/docker-data/docker
 # The old a3e83c5 image remains allowed for limited-only rollback; docs/jocasta.md.
 jocasta_image: git.ryzhkov.dev/igor/jocasta:d473d2be609b27b4b229eb6d077352850e3b4a57@sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9
 
+# PREPARED conditional verifier selection. Native qualification is OPEN.
+# Keep off main until root passes actual laptop Codex AND Claude full managed
+# access, CAS, idempotency and >330s reuse gates. This is no acceptance receipt.
+# Ordinary owning stack convergence then retains the managed operator trio.
+jocasta_managed_interactive_verifier_enabled: true
+
 # The iGPU passed through to this VM (UHD 770, hostpci0 0000:00:02 on
 # proxmox-a), as Compose stacks that may land here need it: the render and
 # video group IDs for Emby's GIDLIST, and the udev path that names
@@ -190,9 +196,9 @@ host_stacks:
       JOCASTA_OIDC_AUDIENCE: jocasta-rest-persistent-tooling
       # Public operator trust, distinct from the unchanged limited verifier.
       # Root still owns Auth readiness and authorized convergence/native checks.
-      # Capability only: default false preserves the current exact verifier.
-      # Root opts in after separate enrollment; laptop native acceptance then
-      # gates every other host. This remains the single operator verifier slot.
+      # Default false remains the capability fallback. The explicit homelab
+      # selector above is conditional on root's laptop native qualification.
+      # This remains the single operator verifier slot.
       JOCASTA_OPERATOR_OIDC_ISSUER: "{{ 'https://auth.ryzhkov.dev/application/o/jocasta-managed-interactive/' if jocasta_managed_interactive_verifier_enabled | default(false) | bool else 'https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/' }}"
       JOCASTA_OPERATOR_OIDC_JWKS_URL: "{{ 'https://auth.ryzhkov.dev/application/o/jocasta-managed-interactive/jwks/' if jocasta_managed_interactive_verifier_enabled | default(false) | bool else 'https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/jwks/' }}"
       JOCASTA_OPERATOR_OIDC_CLIENT_ID: "{{ 'jocasta-managed-interactive' if jocasta_managed_interactive_verifier_enabled | default(false) | bool else 'jocasta-laptop-interactive' }}"

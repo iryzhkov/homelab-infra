@@ -126,16 +126,20 @@ credential directories. Live requests use fixed verified HTTPS, no proxy/redirec
 eight-second request timeouts and bounded complete collections. Incomplete data
 refuses. Errors never quote API response bodies.
 
-After managed enrollment, root selects
-jocasta_managed_interactive_verifier_enabled=true through owning stack convergence.
-Default false preserves the current exact public trio. The filter accepts one
-complete fixed public or managed issuer/JWKS/client trio, never mixed trios or
-wildcard origins. Accepted image/resource/limited settings remain required.
+The explicit homelab jocasta_managed_interactive_verifier_enabled=true selector
+is PREPARED conditional source. Native qualification is OPEN. Keep it off main
+until root passes actual laptop Codex AND Claude full managed access, CAS,
+idempotency and >330s reuse gates. This source is no native acceptance receipt.
+After qualification and merge, ordinary owning stack convergence retains the
+managed operator trio. Default false remains the capability fallback elsewhere.
+The filter accepts one complete fixed public or managed issuer/JWKS/client trio,
+never mixed trios or wildcard origins. Accepted image/resource/limited settings
+remain required.
 
 Root delivers HOST.json and the reviewed architecture-specific helper through
-fleet's separate opt-in. Persist only accepted per-host activation in inventory
-so active pull timers revisit the managed definition. A capability source merge
-enables no host and selects no new verifier.
+fleet's separate opt-in. Only laptop persistence is prepared in the companion
+fleet selection. Other hosts stay default off until their accepted enrollment.
+The selectors add no Authentik declarations, grants, users or deployment mechanism.
 
 Rotation raises generation in the same declaration/receipt, then uses protected
 fleet delivery with the exact prior credential digest supplied privately.
