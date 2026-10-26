@@ -21,8 +21,6 @@ authentik_machine_identities_blueprint_name: homelab-infra holonet catalog ident
 # The existing homelab account's token-maximum-lifetime attribute is days=180;
 # another value would change that account.
 authentik_machine_identity_max_days: 180
-# The entrypoint refuses API credentials for any other Authentik origin.
-holonet_catalog_authentik_origin: https://auth.ryzhkov.dev
 
 # Retained historical evidence for the read-only baseline mode: the owned
 # blueprint's PK and the SHA-256 of its last successful stored content, as

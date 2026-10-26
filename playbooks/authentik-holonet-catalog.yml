@@ -50,10 +50,12 @@
         quiet: true
       when: holonet_catalog_baseline_mode | bool
 
-    # Literal values, so an extra-vars file cannot drop or change the existing
-    # homelab reader, widen or move the laptop identity, add another account,
-    # change the baseline anchor or widen this run beyond the one owned
-    # HoloNet application.
+    # Literal values: a declaration that drops or changes the existing homelab
+    # reader, widens or moves the laptop identity, adds another account,
+    # changes the baseline anchor or widens this run beyond the one owned
+    # HoloNet application is refused, whether it comes from source or extra
+    # vars. This checks the declared inputs only; extra vars can still override
+    # the role's internal facts, so run only the documented commands.
     - name: Preserve the existing HoloNet application and homelab identity exactly
       ansible.builtin.assert:
         that:
@@ -126,9 +128,14 @@
         not ansible_check_mode or holonet_catalog_online_check | default(false) | bool
         or holonet_catalog_baseline_mode | bool
 
-    - name: Refuse API credentials for another Authentik origin
+    # The effective URL, after any extra vars, against a literal: no input can
+    # move where the controller credential is sent. One trailing slash is the
+    # only accepted variation.
+    - name: Pin administrative credential transport to the existing Authentik API
       ansible.builtin.assert:
-        that: authentik_url | regex_replace('/api/v3/?$', '') == holonet_catalog_authentik_origin
+        that:
+          - authentik_url is string
+          - authentik_url | regex_replace('/$', '') == 'https://auth.ryzhkov.dev/api/v3'
         quiet: true
       no_log: true
       when: >-

@@ -78,12 +78,11 @@ class DeclarationTest(unittest.TestCase):
         self.assertIs(values["authentik_machine_identity_existing_owned_only"], True)
         self.assertEqual(values["authentik_machine_identity_max_days"], 180)
         self.assertEqual(values["holonet_catalog_baseline_anchor"], ANCHOR)
-        self.assertEqual(values["holonet_catalog_authentik_origin"], "https://auth.ryzhkov.dev")
         # No baseline PK/hash, destination, apply switch or connection in source.
         self.assertEqual(set(values), {
             "authentik_machine_identities_enabled", "authentik_machine_identity_existing_owned_only",
             "authentik_machine_identities_blueprint_name", "authentik_machine_identity_max_days",
-            "holonet_catalog_authentik_origin", "holonet_catalog_baseline_anchor",
+            "holonet_catalog_baseline_anchor",
             "authentik_machine_services", "authentik_machine_identities"})
         integrated = yaml.safe_load((ROOT / "playbooks/vars/authentik.yml").read_text())
         self.assertIs(integrated["authentik_machine_identities_enabled"], False)
@@ -261,6 +260,7 @@ class EntrypointTest(unittest.TestCase):
         x.inventory.write_text(yaml.safe_dump({"all": {"hosts": hosts}}))
         here = {"hostname": os.uname().nodename, "uid": os.getuid()}
         self.bindings = {"homelab": dict(here), "laptop": dict(here)}
+        self.use_patched = False
         plugins = x.base / "collections/ansible_collections/community/sops/plugins"
         (plugins / "action").mkdir(parents=True)
         (plugins / "modules").mkdir()
@@ -288,17 +288,34 @@ class EntrypointTest(unittest.TestCase):
         self.assertNotIn(fake.KEY_PREFIX, output)
         return result.returncode, output
 
-    def play(self, baseline=None, apply=True, check=False, online=False, baseline_read=False, **overrides):
+    def entrypoint(self, patched):
+        if not patched:
+            return ENTRYPOINT
+        # Test-transport boundary only: a scratch copy whose literal API pin
+        # names this fixture's origin, so plays can reach the fake. It proves
+        # the role's logic against the fake, never the production origin pin,
+        # which the unpatched entrypoint's refusals below exercise.
+        text = ENTRYPOINT.read_text()
+        literal = "'https://auth.ryzhkov.dev/api/v3'"
+        self.assertEqual(text.count(literal), 1)
+        target = self.x.base / "playbooks" / ENTRYPOINT.name
+        (target.parent / "vars").mkdir(parents=True, exist_ok=True)
+        (target.parent / "vars" / VARS.name).write_text(VARS.read_text())
+        target.write_text(text.replace(literal, repr(self.origin + "/api/v3")))
+        return target
+
+    def play(self, baseline=None, apply=True, check=False, online=False, baseline_read=False, patched=None,
+             **overrides):
         x = self.x
+        path = self.entrypoint(self.use_patched if patched is None else patched)
         extra = {"authentik_machine_services": {"holonet": self.holonet},
-                 "holonet_catalog_authentik_origin": self.origin,
                  "authentik_machine_identity_destinations": self.bindings,
                  "authentik_machine_identity_existing_provider_baseline": baseline or {}} | overrides
         extra_path = x.base / "entrypoint-extra.yml"
         extra_path.write_text(yaml.safe_dump(extra))
         (x.base / "sops-loaded").unlink(missing_ok=True)
         x.state.requests.clear()
-        argv = ["ansible-playbook", "-i", str(x.inventory), str(ENTRYPOINT), "--diff", "-e", "@" + str(extra_path)]
+        argv = ["ansible-playbook", "-i", str(x.inventory), str(path), "--diff", "-e", "@" + str(extra_path)]
         argv += ["--check"] if check else []
         argv += ["-e", "holonet_catalog_apply=true"] if apply and not check else []
         argv += ["-e", "holonet_catalog_online_check=true"] if online else []
@@ -393,7 +410,7 @@ class EntrypointTest(unittest.TestCase):
 
         # Through the entrypoint, the pinned historical anchor refuses this
         # fixture's content after discovery reads only, and needs check mode alone.
-        code, output = self.play(baseline_read=True, check=True,
+        code, output = self.play(baseline_read=True, check=True, patched=True,
                                  authentik_machine_identity_destinations={})
         self.assertNotEqual(code, 0, output)
         self.assertIn("Derive the baseline only from content matching the anchor", output)
@@ -442,8 +459,34 @@ class EntrypointTest(unittest.TestCase):
                          authentik_machine_identity_destinations=bindings)
             self.assertFalse(x.state.requests or (x.base / "sops-loaded").exists())
 
+    def test_moved_api_url_and_origin_refuse_before_any_request(self):
+        """The unpatched entrypoint: the decrypted credential is never sent to
+        any origin but the literal Authentik API, however the inputs move."""
+        x = self.x
+        moved = self.origin + "/api/v3"
+        cases = (
+            # The sentinel's credential itself names this fixture, a foreign origin.
+            {},
+            # The URL and the former expected-origin input moved together.
+            {"authentik_url": moved, "holonet_catalog_authentik_origin": self.origin},
+            {"authentik_url": moved + "/", "holonet_catalog_authentik_origin": self.origin},
+            {"authentik_url": "https://auth.ryzhkov.dev.example.test/api/v3",
+             "holonet_catalog_authentik_origin": "https://auth.ryzhkov.dev.example.test"},
+        )
+        pin = "Pin administrative credential transport to the existing Authentik API"
+        for overrides in cases:
+            for mode in ({}, {"check": True, "online": True}, {"check": True, "baseline_read": True}):
+                with self.subTest(overrides=sorted(overrides), mode=sorted(mode)):
+                    code, output = self.play(**mode, **overrides)
+                    self.assertNotEqual(code, 0, output)
+                    self.assertIn(pin, output)
+                    # Refused after the credential was loaded, before any request.
+                    self.assertTrue((x.base / "sops-loaded").exists())
+                    self.assertEqual(x.state.requests, [])
+
     def test_real_cohort_apply_preserves_homelab_and_converges(self):
         x = self.x
+        self.use_patched = True
         code, output = x.run([HOMELAB], services={"holonet": self.holonet},
                              extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
         self.assertEqual(code, 0, output)

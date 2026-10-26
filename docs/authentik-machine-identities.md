@@ -631,7 +631,13 @@ real run needs `-e holonet_catalog_apply=true`; `--check` is the offline plan;
 loading any credential it refuses a declaration that is not exactly the one
 owned HoloNet application, changes or drops the homelab identity, widens,
 moves or multiplies the laptop identity, changes `max_days` from 180 or the
-baseline anchor, or disables the existing-only gate. The laptop account's
+baseline anchor, or disables the existing-only gate. After loading the
+controller SOPS API credential, and before any request, it requires the
+effective `authentik_url`, including any extra-vars override, to be the
+literal `https://auth.ryzhkov.dev/api/v3` (one trailing slash tolerated); no
+input can move where that credential is sent. These guards check the
+declared inputs only: extra vars can still override the role's internal
+facts, so run only the documented commands. The laptop account's
 generation, expiry and state follow the role's lifecycle rules. Its source
 expiry is aligned with the homelab account; root may change it within the
 role's 1..180-day window by a source change. The homelab expiry is never
@@ -730,8 +736,13 @@ output, no secret) and the actual entrypoint: mode separation, literal guards,
 destination requirements, the pinned anchor refusing fixture content, the
 missing-baseline gate, remapped destinations, laptop addition with the homelab
 account, token and file byte-identical, the stale baseline and a confirmed
-second run with no changes. The entrypoint plays skip once the pinned homelab
-expiry is within the role's one-day window.
+second run with no changes. The unpatched entrypoint refuses a foreign
+credential URL, or the URL and former origin input moved together by extra
+vars, after SOPS loading and before any request, in apply, online-check and
+baseline modes. Plays that must reach the fake use a scratch copy whose literal
+API pin names the fixture origin; they prove the role's logic, not the
+production pin. The entrypoint plays skip once the pinned homelab expiry is
+within the role's one-day window.
 
 ## Not yet known: qualify before enabling
 
