@@ -138,6 +138,36 @@ class PackagingTest(unittest.TestCase):
         value["config"]["gatus"][0]["token_file"] = "/legacy"
         self.rejected(value)
 
+    def test_holonet_reviewed_catalog_upgrade_and_original_rollback(self):
+        old = "4aceab9770f0098b4369e37657f6b64051884baf"
+        new = "883f0b9dec292668d3244cf1f0094e321f78e462"
+        self.assertEqual(contract.HOLONET_SOURCE_REVISIONS, {old, new})
+        self.assertEqual(contract.SERVICES["holonet"][1], old)
+        for revision in (old, new, old):
+            value = fixture("holonet")
+            value["artifact"]["source_revision"] = revision
+            value["artifact"]["contract_revision"] = old
+            value["artifact"]["local_source"] = {"path": "/protected/holonet-binary", "owner_uid": 1000}
+            value["artifact"].pop("url")
+            before = copy.deepcopy(value)
+            self.assertEqual(contract.endpoint_contract(value), before)
+            # The reviewed optional query/metadata extension cannot widen the
+            # same unchanged config, credentials or one-library/user policy.
+            for field, bad in (("HistoryUsers", ["e" * 32]),
+                               ("Actions", ["catalog.read", "userdata.read"]),
+                               ("Actions", ["playlist.manage"])):
+                broken = copy.deepcopy(value)
+                broken["config"]["policy"][field] = bad
+                self.rejected(broken)
+            for source in ("a" * 40, new.upper(), new[:-1], contract.SERVICES["ha-mcp"][1]):
+                broken = copy.deepcopy(value)
+                broken["artifact"]["source_revision"] = source
+                self.rejected(broken)
+            for interface in (new, "a" * 40):
+                broken = copy.deepcopy(value)
+                broken["artifact"]["contract_revision"] = interface
+                self.rejected(broken)
+
     def test_holonet_catalog_only_contract_and_protected_artifact(self):
         value = fixture("holonet")
         artifact = value["artifact"]

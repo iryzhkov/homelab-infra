@@ -109,9 +109,21 @@ only; no binary release asset or deployment is claimed.
 
 ## HoloNet catalog-only boundary
 
-The accepted HoloNet command/package interface is homelab-cli
+The accepted HoloNet command/config interface remains homelab-cli
 4aceab9770f0098b4369e37657f6b64051884baf (PR23 on PR22).
-Both artifact source_revision and contract_revision must equal that pin.
+artifact.contract_revision must still equal that interface. The closed
+artifact.source_revision allowlist admits that original build for rollback
+and reviewed catalog-search build883f0b9dec292668d3244cf1f0094e321f78e462
+(PR24), whose optional title/director/composer queries and metadata preserve
+the existing default projection and catalog-only policy. No arbitrary source
+revision is admitted. Every artifact still needs its exact reviewed SHA256
+and all existing protected transport, static-byte and target checks.
+The original artifact SHA256 is
+1259cd1dcacff79454bf52533a2c009379137a9786a83c9c72fb30b8caa4dfdb;
+the new Go1.25 Linux/amd64 artifact from agent-a
+ccdf128f-0da7-4b2e-a25d-d2e68fc40250 is
+e82bf5bdeeb0227fa3168ff727b98c9f136956675bef6fdca36caef4397f1763.
+These are build receipts, not a deployment or native acceptance claim.
 For HoloNet with local_source, url may be omitted: an unpublished exact Chaldea
 artifact does not have a release URL. If supplied it is still validated; no URL
 fetch occurs. All descriptor, static-byte, transfer-binding and target gates
@@ -125,8 +137,8 @@ backend /emby or exact http://127.0.0.1:8096/emby only. Server is hex32;
 policy revision40..64hex. Policy has exact Server/Actions/Libraries/CatalogUsers/
 HistoryUsers keys, server equal to configured server, Actions [catalog.read],
 HistoryUsers empty, exactly one decimal library and one hex32 user. Private
-operator inventory must establish those refer to Movies and TV; source validates
-IDs, not human names. library_guids maps that decimal ItemId to hex32 virtual-folder
+operator inventory must establish those refer to Movies and the dedicated
+catalog principal; source validates IDs, not human names. library_guids maps that decimal ItemId to hex32 virtual-folder
 Guid, a distinct installed UserPolicy namespace. No UserData/history, playlist,
 collection, home or mutation capability is enabled.
 
