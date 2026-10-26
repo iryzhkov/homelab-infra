@@ -11,6 +11,14 @@ SERVICES = {
     "holonet": ("homelab-cli", "4aceab9770f0098b4369e37657f6b64051884baf"),
 }
 
+# Both reviewed builds keep the accepted command/config/catalog-only boundary.
+# The original remains admissible for rollback; this is not an arbitrary source
+# selector. Artifact bytes still require the operator's exact reviewed SHA256.
+HOLONET_SOURCE_REVISIONS = frozenset({
+    SERVICES["holonet"][1],
+    "31817f70f7fed5900622bc7274c6a8a31275189b",
+})
+
 
 def require(ok, message):
     if not ok:
@@ -258,7 +266,7 @@ def endpoint_contract(value):
                 "unsafe local artifact path")
         integer(source["owner_uid"], 0, 2147483647)
     if service == "holonet":
-        require(artifact["source_revision"] == contract, "initial HoloNet source pin is fixed")
+        require(artifact["source_revision"] in HOLONET_SOURCE_REVISIONS, "unaccepted HoloNet source revision")
         expected = holonet_config(value["config"])
     else:
         expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
