@@ -634,10 +634,13 @@ moves or multiplies the laptop identity, changes `max_days` from 180 or the
 baseline anchor, or disables the existing-only gate. After loading the
 controller SOPS API credential, and before any request, it requires the
 effective `authentik_url`, including any extra-vars override, to be the
-literal `https://auth.ryzhkov.dev/api/v3` (one trailing slash tolerated); no
-input can move where that credential is sent. These guards check the
-declared inputs only: extra vars can still override the role's internal
-facts, so run only the documented commands. The laptop account's
+exact literal `https://auth.ryzhkov.dev/api/v3`; no input can move where
+that credential is sent. Before loading it, the entrypoint also refuses extra
+vars for `machine_identity_api`, the role-derived URL every request uses, and
+for its own baseline include inputs `machine_identity_baseline_anchor` and
+`machine_identity_baseline_identities`. These guards check the declared
+inputs and these reserved facts only: extra vars can still override other
+internal facts, so run only the documented commands. The laptop account's
 generation, expiry and state follow the role's lifecycle rules. Its source
 expiry is aligned with the homelab account; root may change it within the
 role's 1..180-day window by a source change. The homelab expiry is never
@@ -739,7 +742,9 @@ account, token and file byte-identical, the stale baseline and a confirmed
 second run with no changes. The unpatched entrypoint refuses a foreign
 credential URL, or the URL and former origin input moved together by extra
 vars, after SOPS loading and before any request, in apply, online-check and
-baseline modes. Plays that must reach the fake use a scratch copy whose literal
+baseline modes. With the legitimate literal URL, an extra-vars
+`machine_identity_api` or either baseline include input is refused before SOPS
+loading and before any request, in all three modes. Plays that must reach the fake use a scratch copy whose literal
 API pin names the fixture origin; they prove the role's logic, not the
 production pin. The entrypoint plays skip once the pinned homelab expiry is
 within the role's one-day window.

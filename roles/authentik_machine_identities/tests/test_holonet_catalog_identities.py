@@ -484,6 +484,26 @@ class EntrypointTest(unittest.TestCase):
                     self.assertTrue((x.base / "sops-loaded").exists())
                     self.assertEqual(x.state.requests, [])
 
+    def test_reserved_derived_facts_refuse_before_credential_load(self):
+        """The unpatched entrypoint with the legitimate literal authentik_url:
+        an extra-vars machine_identity_api, the URL every role request uses,
+        or a baseline include input is refused before SOPS loading, so no
+        credential reaches any receiver."""
+        x = self.x
+        legitimate = {"authentik_url": "https://auth.ryzhkov.dev/api/v3"}
+        anchor = {"blueprint_pk": ANCHOR["blueprint_pk"], "content_sha256": "0" * 64}
+        reserved = "Refuse extra vars for facts this entrypoint and its role derive"
+        for overrides in ({"machine_identity_api": self.origin + "/api/v3"},
+                          {"machine_identity_baseline_anchor": anchor},
+                          {"machine_identity_baseline_identities": [LAPTOP]}):
+            for mode in ({}, {"check": True, "online": True}, {"check": True, "baseline_read": True}):
+                with self.subTest(overrides=sorted(overrides), mode=sorted(mode)):
+                    code, output = self.play(**mode, **legitimate, **overrides)
+                    self.assertNotEqual(code, 0, output)
+                    self.assertIn(reserved, output)
+                    self.assertFalse((x.base / "sops-loaded").exists())
+                    self.assertEqual(x.state.requests, [])
+
     def test_real_cohort_apply_preserves_homelab_and_converges(self):
         x = self.x
         self.use_patched = True

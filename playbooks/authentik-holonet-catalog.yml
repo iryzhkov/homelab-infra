@@ -34,6 +34,21 @@
   vars_files:
     - vars/authentik-holonet-catalog.yml
   pre_tasks:
+    # The role derives machine_identity_api, the URL every request uses, and
+    # this play sets the baseline include's inputs. None is ever an entrypoint
+    # input; an extra var would silently replace them, so refuse it before the
+    # credential is loaded.
+    - name: Refuse extra vars for facts this entrypoint and its role derive
+      ansible.builtin.assert:
+        that:
+          - machine_identity_api is not defined
+          - machine_identity_baseline_anchor is not defined
+          - machine_identity_baseline_identities is not defined
+        fail_msg: >-
+          machine_identity_api, machine_identity_baseline_anchor and
+          machine_identity_baseline_identities are derived, never inputs.
+        quiet: true
+
     - name: Require an explicit apply outside check mode
       ansible.builtin.assert:
         that: ansible_check_mode or (holonet_catalog_apply | default(false) | bool)
@@ -128,14 +143,14 @@
         not ansible_check_mode or holonet_catalog_online_check | default(false) | bool
         or holonet_catalog_baseline_mode | bool
 
-    # The effective URL, after any extra vars, against a literal: no input can
-    # move where the controller credential is sent. One trailing slash is the
-    # only accepted variation.
+    # The effective URL, after any extra vars, against the exact literal the
+    # role's machine_identity_api_url accepts: no input can move where the
+    # controller credential is sent.
     - name: Pin administrative credential transport to the existing Authentik API
       ansible.builtin.assert:
         that:
           - authentik_url is string
-          - authentik_url | regex_replace('/$', '') == 'https://auth.ryzhkov.dev/api/v3'
+          - authentik_url == 'https://auth.ryzhkov.dev/api/v3'
         quiet: true
       no_log: true
       when: >-
