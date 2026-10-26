@@ -1,0 +1,173 @@
+---
+# Isolated enrollment of the HoloNet catalog machine identities:
+# docs/authentik-machine-identities.md, "Isolated HoloNet catalog identities".
+# Runs only roles/authentik_machine_identities, with the existing owned HoloNet
+# blueprint and the declaration in vars/authentik-holonet-catalog.yml. It never
+# runs authentik_config, the access blueprint, the shared, Jocasta or OV
+# machine identity blueprints or any other host convergence.
+#
+# Use an operator inventory outside this repository that defines exactly the
+# declared hosts (homelab, laptop) with their real connections, and supply
+# authentik_machine_identity_destinations binding both. The homelab identity
+# is the existing persistent reader and stays unchanged; the laptop receives
+# only the limited Chaldea Claude preset's separate credential. Off unless
+# explicitly requested:
+#
+#   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-holonet-catalog.yml --check --diff \
+#     -e @DESTINATIONS
+#   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-holonet-catalog.yml --check \
+#     -e holonet_catalog_baseline_read=true
+#   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-holonet-catalog.yml --check --diff \
+#     -e @DESTINATIONS -e holonet_catalog_online_check=true -e @PROTECTED_BASELINE
+#   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-holonet-catalog.yml \
+#     -e @DESTINATIONS -e holonet_catalog_apply=true -e @PROTECTED_BASELINE
+
+- name: Enrol only the owned HoloNet catalog machine identities
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  # As in playbooks/authentik.yml: the inventory's ansible_user is
+  # "{{ ssh_user }}", which localhost lacks.
+  vars:
+    ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
+    holonet_catalog_baseline_mode: "{{ holonet_catalog_baseline_read | default(false) | bool }}"
+  vars_files:
+    - vars/authentik-holonet-catalog.yml
+  pre_tasks:
+    # The role derives machine_identity_api, the URL every request uses, and
+    # this play sets the baseline include's inputs. None is ever an entrypoint
+    # input; an extra var would silently replace them, so refuse it before the
+    # credential is loaded.
+    - name: Refuse extra vars for facts this entrypoint and its role derive
+      ansible.builtin.assert:
+        that:
+          - machine_identity_api is not defined
+          - machine_identity_baseline_anchor is not defined
+          - machine_identity_baseline_identities is not defined
+        fail_msg: >-
+          machine_identity_api, machine_identity_baseline_anchor and
+          machine_identity_baseline_identities are derived, never inputs.
+        quiet: true
+
+    - name: Require an explicit apply outside check mode
+      ansible.builtin.assert:
+        that: ansible_check_mode or (holonet_catalog_apply | default(false) | bool)
+        fail_msg: Real runs need -e holonet_catalog_apply=true; use --check for the plan.
+        quiet: true
+
+    - name: Keep the baseline read separate from every other mode
+      ansible.builtin.assert:
+        that:
+          - ansible_check_mode
+          - not (holonet_catalog_apply | default(false) | bool)
+          - not (holonet_catalog_online_check | default(false) | bool)
+        fail_msg: The baseline read runs alone, in check mode, without apply or the online preflight.
+        quiet: true
+      when: holonet_catalog_baseline_mode | bool
+
+    # Literal values: a declaration that drops or changes the existing homelab
+    # reader, widens or moves the laptop identity, adds another account,
+    # changes the baseline anchor or widens this run beyond the one owned
+    # HoloNet application is refused, whether it comes from source or extra
+    # vars. This checks the declared inputs only; extra vars can still override
+    # the role's internal facts, so run only the documented commands.
+    - name: Preserve the existing HoloNet application and homelab identity exactly
+      ansible.builtin.assert:
+        that:
+          - authentik_machine_identities_enabled | bool
+          - authentik_machine_identity_existing_owned_only | bool
+          - authentik_machine_identities_blueprint_name == 'homelab-infra holonet catalog identities'
+          - authentik_machine_identity_max_days == 180
+          - >-
+            holonet_catalog_baseline_anchor == {'blueprint_pk': '2514696c-15e3-494e-8df6-eb0c098a9efb',
+            'content_sha256': 'aef30eb3096776f9edddff5d00cb3eb3aac7d1128b05a730aa138407bc577f58'}
+          - authentik_machine_services.keys() | list == ['holonet']
+          - >-
+            (authentik_machine_services.holonet | dict2items | rejectattr('key', 'in', ['issuer', 'jwks_url'])
+            | items2dict) == {'state': 'present', 'slug': 'chaldea-holonet',
+            'name': 'Chaldea HoloNet catalog access', 'group': 'chaldea-holonet-machine-identities',
+            'client_id': 'chaldea-holonet-machine', 'resource': 'https://media.mcp.ryzhkov.dev/mcp',
+            'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29', 'scope': 'holonet.read', 'token_seconds': 300}
+          - >-
+            authentik_machine_identities | map(attribute='profile') | list ==
+            ['holonet-movies-catalog', 'holonet-movies-catalog-claude']
+          - >-
+            authentik_machine_identities | first ==
+            {'host': 'homelab', 'profile': 'holonet-movies-catalog', 'service': 'holonet',
+             'holonet_server': '3c86e6d7ff6c4a3296522cdf03d22bb0', 'holonet_libraries': ['3'],
+             'holonet_catalog_users': ['54b7d36cef804d3c8478474553ed3a82'],
+             'holonet_history_users': [], 'holonet_target_users': [], 'holonet_actions': ['catalog.read'],
+             'holonet_namespace': 'movies-catalog',
+             'generation': 1, 'expires': '2026-11-20T00:00:00Z', 'state': 'present'}
+          # The new laptop account: its generation, expiry and state follow the
+          # role's own lifecycle rules, but its host, profile and grant are fixed.
+          - >-
+            (authentik_machine_identities | last | dict2items
+            | rejectattr('key', 'in', ['generation', 'expires', 'state']) | items2dict) ==
+            {'host': 'laptop', 'profile': 'holonet-movies-catalog-claude', 'service': 'holonet',
+             'holonet_server': '3c86e6d7ff6c4a3296522cdf03d22bb0', 'holonet_libraries': ['3'],
+             'holonet_catalog_users': ['54b7d36cef804d3c8478474553ed3a82'],
+             'holonet_history_users': [], 'holonet_target_users': [], 'holonet_actions': ['catalog.read'],
+             'holonet_namespace': 'movies-catalog'}
+        fail_msg: >-
+          This entrypoint only adds to the existing owned HoloNet application and keeps
+          its homelab identity present and unchanged. The only other account is the
+          laptop's limited Claude catalog identity with the same fixed grant.
+        quiet: true
+
+    - name: Require both destinations bound before any host is touched
+      ansible.builtin.assert:
+        that: >-
+          authentik_machine_identity_destinations | default({}) | list | sort == ['homelab', 'laptop']
+        fail_msg: Supply authentik_machine_identity_destinations binding exactly homelab and laptop.
+        quiet: true
+      when: not holonet_catalog_baseline_mode | bool
+
+    # Check mode stays offline unless explicitly asked for a read-only mode.
+    - name: Load only the existing controller API credential
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/authentik-api.sops.yaml"
+        name: authentik_api
+      no_log: true
+      when: >-
+        not ansible_check_mode or holonet_catalog_online_check | default(false) | bool
+        or holonet_catalog_baseline_mode | bool
+
+    - name: Describe the API exactly as authentik_config does
+      ansible.builtin.set_fact:
+        authentik_url: "{{ authentik_api.authentik_api_url }}"
+        authentik_headers:
+          Authorization: "Bearer {{ authentik_api.authentik_api_token }}"
+      no_log: true
+      when: >-
+        not ansible_check_mode or holonet_catalog_online_check | default(false) | bool
+        or holonet_catalog_baseline_mode | bool
+
+    # The effective URL, after any extra vars, against the exact literal the
+    # role's machine_identity_api_url accepts: no input can move where the
+    # controller credential is sent.
+    - name: Pin administrative credential transport to the existing Authentik API
+      ansible.builtin.assert:
+        that:
+          - authentik_url is string
+          - authentik_url == 'https://auth.ryzhkov.dev/api/v3'
+        quiet: true
+      no_log: true
+      when: >-
+        not ansible_check_mode or holonet_catalog_online_check | default(false) | bool
+        or holonet_catalog_baseline_mode | bool
+  tasks:
+    - name: Enrol through the maintained ownership checks and bound private delivery
+      ansible.builtin.include_role:
+        name: authentik_machine_identities
+      when: not holonet_catalog_baseline_mode | bool
+
+    - name: Produce the public existing-only baseline without any change
+      ansible.builtin.include_role:
+        name: authentik_machine_identities
+        tasks_from: baseline.yml
+      vars:
+        machine_identity_baseline_anchor: "{{ holonet_catalog_baseline_anchor }}"
+        # The stored content owns only the historical homelab identity.
+        machine_identity_baseline_identities: "{{ authentik_machine_identities[:1] }}"
+      when: holonet_catalog_baseline_mode | bool
