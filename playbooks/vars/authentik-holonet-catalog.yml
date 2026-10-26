@@ -92,3 +92,23 @@ authentik_machine_identities:
     generation: 1
     expires: "2026-11-20T00:00:00Z"
     state: present
+
+# Optional ordinary T3 reader. Off by default and used only by this isolated
+# entrypoint. Once enrolled, keep this opt-in on every subsequent apply; removal
+# is an explicit state=absent lifecycle operation, never a grant to reuse the
+# limited preset's credential.
+holonet_catalog_interactive_enabled: false
+holonet_catalog_interactive_identity:
+  host: laptop
+  profile: holonet-interactive
+  service: holonet
+  holonet_server: "3c86e6d7ff6c4a3296522cdf03d22bb0"
+  holonet_libraries: ["3"]
+  holonet_catalog_users: ["54b7d36cef804d3c8478474553ed3a82"]
+  holonet_history_users: []
+  holonet_target_users: []
+  holonet_actions: [catalog.read]
+  holonet_namespace: movies-catalog
+  generation: 1
+  expires: "2026-11-20T00:00:00Z"
+  state: present
