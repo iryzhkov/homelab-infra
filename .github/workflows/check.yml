@@ -227,6 +227,8 @@ jobs:
             -s roles/authentik_machine_identities/tests -p test_service_profiles.py -v
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
             -s roles/authentik_machine_identities/tests -p test_ov_http_identities.py -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+            -s roles/authentik_machine_identities/tests -p test_ov_full_rollback.py -v
 
   akasha:
     runs-on: ubuntu-24.04
