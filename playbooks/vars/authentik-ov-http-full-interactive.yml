@@ -1,0 +1,95 @@
+---
+# Prepared full interactive OV declaration, loaded by
+# playbooks/authentik-ov-http-identities.yml only with
+# -e ov_http_identities_full_interactive=true (docs/authentik-machine-identities.md,
+# "Full interactive OV identities"). Without that switch the entrypoint keeps
+# the original read-only declaration in vars/authentik-ov-http-identities.yml.
+# Public values only.
+#
+# It extends the same owned OV a63e197f provider and application: no new
+# issuer, client, signing key or blueprint. The three existing identities stay
+# exactly as they are and keep the original read-only claims, because their
+# grants carry no ov_actions. Each selected host gets one more account whose
+# signed grant is the whole resources store with all four actions. Ordinary
+# Codex and Claude on that host share it through the fleet's closed helper
+# (`webmcp-interactive-headers ov-full HOST`), as they share the managed
+# Jocasta identity. User, agent and session stores are never granted.
+#
+# Selecting this file is a later, separately authorized enrollment: it needs
+# the accepted server verifier, the confirmed provider baseline and the
+# operator's inventory with the omarchy-pc host, in addition to the existing
+# controller and laptop hosts.
+
+authentik_machine_services:
+  ov:
+    state: present
+    slug: ov-http-a63e197f
+    name: OV HTTP a63e197f machine access
+    group: ov-http-a63e197f-machine-identities
+    client_id: ov-http-a63e197f-machine
+    resource: https://ov.mcp.ryzhkov.dev/mcp
+    signing_key: 8bbd6516-af33-4e64-a73b-caa39e692c29
+    # ov.read stays required; the other three add one scope mapping each.
+    scope: ov.read ov.write ov.remove ov.maintain
+    token_seconds: 300
+    issuer: https://auth.ryzhkov.dev/application/o/ov-http-a63e197f/
+    jwks_url: https://auth.ryzhkov.dev/application/o/ov-http-a63e197f/jwks/
+
+# The existing two bindings plus omarchy-pc. The controller and omarchy-pc
+# are the same machine and account; they are separate inventory names so the
+# canary reader keeps its role-based name and the interactive account is
+# named after the fleet host that uses it.
+authentik_machine_identity_destinations:
+  controller:
+    hostname: omarchy-pc
+    uid: 1000
+  laptop:
+    hostname: omarchy-macbook-air-igor
+    uid: 1001
+  omarchy-pc:
+    hostname: omarchy-pc
+    uid: 1000
+
+authentik_machine_identities:
+  - host: controller
+    profile: ov-http-a63e197f-reader
+    service: ov
+    ov_namespaces:
+      - viking://resources/homeassistant-api/rest-api.md
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: ov-tooling-codex
+    service: ov
+    ov_namespaces:
+      - viking://resources/homeassistant-api/rest-api.md
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: ov-interactive-codex
+    service: ov
+    ov_namespaces:
+      - viking://resources/homeassistant-api/rest-api.md
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: ov-full-interactive
+    service: ov
+    ov_namespaces:
+      - viking://resources
+    ov_actions: [read, write, remove, maintain]
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: omarchy-pc
+    profile: ov-full-interactive
+    service: ov
+    ov_namespaces:
+      - viking://resources
+    ov_actions: [read, write, remove, maintain]
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present

@@ -11,12 +11,14 @@ import unittest
 import yaml
 
 import test_machine_identities as base
+import test_service_profiles as profiles
 
 mi = base.mi
 fake = base.fake
 ROOT = base.ROOT
 ENTRYPOINT = ROOT / "playbooks/authentik-ov-http-identities.yml"
 VARS = ROOT / "playbooks/vars/authentik-ov-http-identities.yml"
+FULL_VARS = ROOT / "playbooks/vars/authentik-ov-http-full-interactive.yml"
 BLUEPRINT = "homelab-infra ov http a63e197f identities"
 NODE = "viking://resources/homeassistant-api/rest-api.md"
 OV = {"state": "present", "slug": "ov-http-a63e197f", "name": "OV HTTP a63e197f machine access",
@@ -34,10 +36,21 @@ LAPTOP = {"host": "laptop", "profile": "ov-tooling-codex", "service": "ov",
 INTERACTIVE = {"host": "laptop", "profile": "ov-interactive-codex", "service": "ov",
                "ov_namespaces": [NODE], "generation": 1, "expires": "2027-01-15T00:00:00Z", "state": "present"}
 COHORT = [CONTROLLER, LAPTOP, INTERACTIVE]
+# The prepared full interactive mode: same provider, four scopes and one
+# resource-root account per selected host, shared by its Codex and Claude.
+FULL_SCOPE = "ov.read ov.write ov.remove ov.maintain"
+ALL_ACTIONS = ["read", "write", "remove", "maintain"]
+FULL_LAPTOP = {"host": "laptop", "profile": "ov-full-interactive", "service": "ov",
+               "ov_namespaces": ["viking://resources"], "ov_actions": ALL_ACTIONS,
+               "generation": 1, "expires": "2027-01-15T00:00:00Z", "state": "present"}
+FULL_PC = FULL_LAPTOP | {"host": "omarchy-pc"}
+FULL_COHORT = COHORT + [FULL_LAPTOP, FULL_PC]
 HOSTS = {"controller": {"ssh_user": "igor", "home": "/home/igor", "connection": "local"},
          "laptop": {"ssh_user": "igor", "home": "", "connection": "ssh"}}
 BINDINGS = {"controller": {"hostname": "omarchy-pc", "uid": 1000},
             "laptop": {"hostname": "omarchy-macbook-air-igor", "uid": 1001}}
+FULL_HOSTS = HOSTS | {"omarchy-pc": {"ssh_user": "igor", "home": "/home/igor", "connection": "local"}}
+FULL_BINDINGS = BINDINGS | {"omarchy-pc": {"hostname": "omarchy-pc", "uid": 1000}}
 
 
 def spec(identities, services=None, destinations=None, hosts=HOSTS):
@@ -101,6 +114,46 @@ class DeclarationTest(unittest.TestCase):
             ("user", controller["username"], "present"), ("user", laptop["username"], "present"),
             ("user", interactive["username"], "present")]))
 
+    def test_prepared_full_declaration_is_exact_and_separate(self):
+        values = yaml.safe_load(FULL_VARS.read_text())
+        # Only the three values the full mode replaces; everything else, and
+        # the default declaration, stays in the original file.
+        self.assertEqual(set(values), {"authentik_machine_services", "authentik_machine_identities",
+                                       "authentik_machine_identity_destinations"})
+        self.assertEqual(values["authentik_machine_services"], {"ov": OV | {"scope": FULL_SCOPE}})
+        self.assertEqual(values["authentik_machine_identities"], FULL_COHORT)
+        self.assertEqual(values["authentik_machine_identity_destinations"], FULL_BINDINGS)
+        play = yaml.safe_load(ENTRYPOINT.read_text())
+        selector = [t for t in play[0]["pre_tasks"] if "ansible.builtin.include_vars" in t]
+        self.assertEqual(selector, [{
+            "name": "Select the prepared full interactive declaration only when explicitly requested",
+            "ansible.builtin.include_vars": {"file": "vars/authentik-ov-http-full-interactive.yml"},
+            "when": "ov_http_identities_full_interactive | default(false) | bool"}])
+
+        s = spec(values["authentik_machine_identities"], values["authentik_machine_services"],
+                 values["authentik_machine_identity_destinations"], FULL_HOSTS)
+        narrow = spec(COHORT, destinations=BINDINGS)
+        old = s["identities"][:3]
+        # The existing accounts, files and grants are unchanged.
+        self.assertEqual([(i["username"], i["secret_path"], i["grant"], i["token"]) for i in old],
+                         [(i["username"], i["secret_path"], i["grant"], i["token"]) for i in narrow["identities"]])
+        laptop, pc = s["identities"][3:]
+        self.assertEqual((laptop["username"], pc["username"]),
+                         ("chaldea-laptop-ov-full-interactive", "chaldea-omarchy-pc-ov-full-interactive"))
+        for item, binding in ((laptop, BINDINGS["laptop"]), (pc, BINDINGS["controller"])):
+            self.assertEqual(item["secret_path"], "/home/igor/.config/chaldea/authentik/ov-full-interactive.app-password")
+            self.assertEqual(item["grant"], {"ov_namespaces": ["viking://resources"], "ov_actions": ALL_ACTIONS})
+            self.assertEqual(item["destination"], binding)
+        # One account per host, separate from each narrow account and file.
+        self.assertEqual(len({i["username"] for i in s["identities"]}), 5)
+        self.assertEqual(len({(i["host"], i["secret_path"]) for i in s["identities"]}), 5)
+        self.assertEqual(sorted(o for o in s["objects"] if o[0] == "scopemapping"),
+                         sorted(["scopemapping", OV["name"] + ": " + x, "present"] for x in FULL_SCOPE.split()))
+        self.assertEqual(sorted(o for o in s["objects"] if o[0] not in ("scopemapping", "user", "token")),
+                         sorted(o for o in narrow["objects"] if o[0] not in ("scopemapping", "user", "token")))
+        self.assertEqual(s["services"]["ov"]["client_id"], narrow["services"]["ov"]["client_id"])
+        self.assertEqual(s["services"]["ov"]["issuer"], narrow["services"]["ov"]["issuer"])
+
     def test_destination_bindings_are_exact(self):
         for bad in ({"controller": BINDINGS["controller"]},
                     BINDINGS | {"agent-a": {"hostname": "agent-a", "uid": 1000}},
@@ -158,7 +211,7 @@ class EntrypointTest(unittest.TestCase):
         x.state.keypairs[OV["signing_key"]] = dict(x.state.keypairs[fake.KEYPAIR], pk=OV["signing_key"])
         x.homes = {}
         hosts = {}
-        for host in ("controller", "laptop"):
+        for host in ("controller", "laptop", "omarchy-pc"):
             home = x.base / host
             home.mkdir(mode=0o755)
             x.homes[host] = home
@@ -359,6 +412,96 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual([(s.read_bytes(), s.stat().st_ino, s.stat().st_mtime_ns) for s in secrets.values()],
                          laptop_bytes)
         self.assertIn("budget", x.state.apps)
+
+    def test_full_interactive_mode_adds_only_the_two_root_accounts(self):
+        x = self.x
+        code, output = x.run([CONTROLLER], services={"ov": self.ov},
+                             extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
+        self.assertEqual(code, 0, output)
+        self.ok(self.baseline())
+        before = self.controller_snapshot()
+        narrow = [(self.secret("laptop", i).read_bytes(), self.secret("laptop", i).stat().st_ino)
+                  for i in (LAPTOP, INTERACTIVE)]
+        read_mapping = x.state.mappings[OV["name"] + ": ov.read"]["pk"]
+        confirmed = self.baseline()
+        full = {"ov_http_identities_full_interactive": True,
+                "authentik_machine_services": {"ov": self.ov | {"scope": FULL_SCOPE}},
+                "authentik_machine_identity_destinations": self.bindings | {"omarchy-pc": dict(self.bindings["laptop"])}}
+
+        guard = "keeps its controller identity present and unchanged"
+        without_actions = {k: v for k, v in FULL_PC.items() if k != "ov_actions"}
+        for overrides in (
+                # The switch never widens the original application or adds partial cohorts.
+                full | {"authentik_machine_services": {"ov": self.ov}},
+                full | {"authentik_machine_identities": COHORT},
+                full | {"authentik_machine_identities": COHORT + [FULL_LAPTOP]},
+                full | {"authentik_machine_identities": COHORT + [FULL_PC, FULL_LAPTOP]},
+                full | {"authentik_machine_identities": FULL_COHORT + [FULL_PC | {"host": "agent-a"}]},
+                full | {"authentik_machine_identities": COHORT + [FULL_LAPTOP, FULL_PC | {"host": "agent-a"}]},
+                full | {"authentik_machine_identities": COHORT + [FULL_LAPTOP | {"ov_actions": ["read", "write"]}, FULL_PC]},
+                full | {"authentik_machine_identities": COHORT + [FULL_LAPTOP, without_actions]},
+                full | {"authentik_machine_identities": COHORT + [FULL_LAPTOP, FULL_PC | {"ov_namespaces": [NODE]}]},
+                full | {"authentik_machine_identities": COHORT + [FULL_LAPTOP, FULL_PC | {"profile": "ov-full-codex"}]},
+                # Existing accounts cannot be escalated in the same run.
+                full | {"authentik_machine_identities": [CONTROLLER | {"ov_actions": ALL_ACTIONS}] + FULL_COHORT[1:]},
+                full | {"authentik_machine_identities": [CONTROLLER, LAPTOP | {"ov_actions": ALL_ACTIONS}] + FULL_COHORT[2:]},
+                full | {"authentik_machine_identities": [CONTROLLER, LAPTOP, INTERACTIVE | {"ov_actions": ["read", "write"]},
+                                                          FULL_LAPTOP, FULL_PC]},
+                full | {"authentik_machine_identities": [CONTROLLER, LAPTOP,
+                                                          INTERACTIVE | {"ov_namespaces": ["viking://resources"]},
+                                                          FULL_LAPTOP, FULL_PC]},
+                # Without the switch neither the scopes nor the accounts are accepted.
+                {"authentik_machine_services": {"ov": self.ov | {"scope": FULL_SCOPE}}},
+                {"authentik_machine_identities": FULL_COHORT,
+                 "authentik_machine_identity_destinations": full["authentik_machine_identity_destinations"]},
+                {"ov_http_identities_full_interactive": False} | {k: v for k, v in full.items()
+                                                                    if k != "ov_http_identities_full_interactive"}):
+            with self.subTest(overrides=sorted(overrides)):
+                self.refused(guard, confirmed, **overrides)
+                self.assertFalse(x.state.requests or (x.base / "sops-loaded").exists())
+        self.assertEqual(self.controller_snapshot(), before)
+
+        self.ok(confirmed, **full)
+        self.assertEqual(self.controller_snapshot(), before)
+        self.assertEqual([(self.secret("laptop", i).read_bytes(), self.secret("laptop", i).stat().st_ino)
+                          for i in (LAPTOP, INTERACTIVE)], narrow)
+        self.assertEqual((x.state.providers[OV["name"]]["pk"], x.state.apps[OV["slug"]]["pk"],
+                          x.state.providers[OV["name"]]["client_id"]),
+                         (confirmed["provider_pk"], confirmed["application_pk"], OV["client_id"]))
+        self.assertEqual(x.state.mappings[OV["name"] + ": ov.read"]["pk"], read_mapping)
+        full_users = []
+        for host in ("laptop", "omarchy-pc"):
+            name = f"chaldea-{host}-ov-full-interactive"
+            full_users.append(name)
+            secret = self.secret(host, FULL_LAPTOP)
+            self.assertEqual(secret.read_text(), x.state.tokens[name + "-g1"]["key"])
+            self.assertEqual((secret.stat().st_mode & 0o777, secret.stat().st_nlink), (0o600, 1))
+            self.assertEqual(x.state.users[name]["attributes"]["chaldea_ov"],
+                             {"ov_namespaces": ["viking://resources"], "ov_actions": ALL_ACTIONS})
+        old_users = ["chaldea-controller-" + CONTROLLER["profile"], "chaldea-laptop-" + LAPTOP["profile"],
+                     "chaldea-laptop-" + INTERACTIVE["profile"]]
+        self.assertEqual(sorted(x.state.groups[OV["group"]]["users"]), sorted(old_users + full_users))
+        self.assertEqual(sorted(n for n in x.state.mappings if n.startswith(OV["name"])),
+                         sorted(OV["name"] + ": " + s for s in FULL_SCOPE.split()))
+        mappings = [x.state.mappings[OV["name"] + ": " + s] for s in FULL_SCOPE.split()]
+        old_claims = {"ov_namespaces": [NODE], "aud": OV["resource"]}
+        for requested in (["ov.read"], ["ov.read", "ov.write"], FULL_SCOPE.split(), ["ov.maintain", "ov.read"]):
+            for name in old_users + full_users:
+                account = types.SimpleNamespace(**x.state.users[name])
+                claims = profiles.merged_claims(mappings, account, OV["group"], requested)
+                with self.subTest(name=name, requested=requested):
+                    if name in old_users:
+                        # An old credential asking for more still signs no action.
+                        self.assertEqual(claims, old_claims)
+                    else:
+                        self.assertEqual(claims, {"aud": OV["resource"], "ov_namespaces": ["viking://resources"],
+                                                  "ov_actions": [a for a in ALL_ACTIONS if "ov." + a in requested]})
+                    self.assertEqual(profiles.merged_claims(mappings, account, OV["group"], ["ov.write"]), {})
+
+        # Confirmed new baseline: the identical full repeat changes nothing.
+        self.refused("Require the operator's prior baseline before any private detail", confirmed, **full)
+        self.assertEqual(x.changed(self.ok(self.baseline(), **full)), 0)
+        self.assertEqual(self.controller_snapshot(), before)
 
 
 if __name__ == "__main__":

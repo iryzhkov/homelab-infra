@@ -9,6 +9,7 @@ confers ownership; absent entries are deletion requests. Other colliding names
 are refused, never adopted or deleted.
 """
 from hashlib import sha512
+from itertools import combinations
 import json
 import posixpath
 import re
@@ -197,7 +198,13 @@ SERVICE = {
 }
 
 
-OV_ROOT = re.compile(r"viking://resources/(?:[A-Za-z0-9_@+.,=-]+/)*[A-Za-z0-9_@+.,=-]+\Z")
+# The resources root itself is one exact canonical grant, without a trailing
+# slash; user, agent and session stores are never an OV namespace grant.
+OV_ROOT = re.compile(r"viking://resources(?:/(?:[A-Za-z0-9_@+.,=-]+/)*[A-Za-z0-9_@+.,=-]+)?\Z")
+# Each optional action needs its own explicitly declared and requested scope.
+# ov.read is always required; old grants without ov_actions mean read only.
+OV_ACTIONS = ("read", "write", "remove", "maintain")
+OV_SCOPES = tuple("ov." + action for action in OV_ACTIONS)
 OBSERVER_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\Z")
 HA_ENTITY = re.compile(r"(light|switch|sensor|binary_sensor)\.[a-z0-9_]{1,96}\Z")
 HA_ACTION = re.compile(r"(state\.read|light\.control|switch\.control)\Z")
@@ -221,6 +228,17 @@ def _ov_grant(item, name):
            for n, a in enumerate(roots) for b in roots[n + 1:]):
         _refuse(name + " ov_namespaces must not overlap")
     grant = {"ov_namespaces": roots}
+    if "ov_actions" in item:
+        actions = item["ov_actions"]
+        # An explicit, duplicate-free allowlist in canonical order that always
+        # includes read. Absent means the original read-only grant shape.
+        if (not isinstance(actions, list) or not actions
+                or any(not isinstance(a, str) or a not in OV_ACTIONS for a in actions)
+                or len(set(actions)) != len(actions) or "read" not in actions
+                or actions != [a for a in OV_ACTIONS if a in actions]):
+            _refuse(name + " ov_actions must be a canonical subset of "
+                    + ", ".join(OV_ACTIONS) + " that includes read")
+        grant["ov_actions"] = list(actions)
     return grant, {"chaldea_ov": grant}
 
 
@@ -299,6 +317,26 @@ def _bounded_expression(access, service, scope=None):
             "    return {}",
             f"return {{'aud': {access['resource']!r}, 'ha_entities': grant['ha_entities'], 'ha_actions': actions}}",
         ]
+    elif service == "ov" and len(access["scope_mappings"]) > 1:
+        # The same 2026.8.4 deepmerge workaround as HA: one elected mapping
+        # emits the arrays once. ov.read must be requested. A grant without
+        # ov_actions keeps its original read-only claims for every request; an
+        # explicit allowlist is reduced to the requested scopes and never
+        # widened by them.
+        lines += [
+            "requested = token.scope",
+            f"allowed = {list(access['scope_mappings'])!r}",
+            "if (not isinstance(requested, list) or 'ov.read' not in requested",
+            "        or any(s not in allowed for s in requested)",
+            "        or len(set(requested)) != len(requested)):",
+            "    return {}",
+            f"if {scope!r} != sorted(requested)[0]:",
+            "    return {}",
+            "if 'ov_actions' not in grant:",
+            f"    return dict(grant, aud={access['resource']!r})",
+            "actions = [a for a in grant['ov_actions'] if 'ov.' + a in requested]",
+            f"return {{'aud': {access['resource']!r}, 'ov_namespaces': grant['ov_namespaces'], 'ov_actions': actions}}",
+        ]
     else:
         lines.append(f"return dict(grant, aud={access['resource']!r})")
     return "\n".join(lines)
@@ -308,8 +346,8 @@ SERVICES = {
     "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS, "scope": "holonet.read",
                 "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},
     "jocasta": SERVICE,
-    "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "scope": "ov.read",
-           "resource": "https://ov.mcp.ryzhkov.dev/mcp", "grant": _ov_grant},
+    "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "optional_account_keys": {"ov_actions"},
+           "scope": "ov.read", "resource": "https://ov.mcp.ryzhkov.dev/mcp", "grant": _ov_grant},
     "ha": {"name": "ha", "account_keys": {"ha_entities", "ha_actions"}, "scope": "ha.read",
            "resource": "https://ha.mcp.ryzhkov.dev/mcp", "grant": _ha_grant},
     "homelab": {"name": "homelab", "account_keys": {"homelab_services", "homelab_hosts"},
@@ -331,7 +369,15 @@ def _application(raw, service):
     if service == "jocasta":
         access.update(_jocasta_application(access))
     else:
-        scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read") if service == "ha" else (profile["scope"],)
+        if service == "ha":
+            scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read")
+        elif service == "ov":
+            # ov.read first, then any optional families in canonical order.
+            optional = OV_SCOPES[1:]
+            scopes = tuple(" ".join((OV_SCOPES[0],) + chosen) for size in range(len(optional) + 1)
+                           for chosen in combinations(optional, size))
+        else:
+            scopes = (profile["scope"],)
         if access["scope"] not in scopes:
             _refuse(f"access scope must be {' or '.join(scopes)}")
         if (not isinstance(access["token_seconds"], int) or isinstance(access["token_seconds"], bool)
@@ -427,7 +473,8 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
             _refuse(name + " service must name a declared closed service profile")
         profile_spec = SERVICES[service]
         access = services[service]
-        item = _keys(raw, ACCOUNT_KEYS | profile_spec["account_keys"] |
+        optional = profile_spec.get("optional_account_keys", set()) & set(raw)
+        item = _keys(raw, ACCOUNT_KEYS | profile_spec["account_keys"] | optional |
                      ({"service"} if "service" in raw else set()), name)
         host = _match(HOST, item["host"], name + " host")
         profile = _match(PROFILE, item["profile"], name + " profile")
@@ -439,6 +486,9 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
                 needed = "ha.read" if action == "state.read" else "ha.control"
                 if needed not in scopes:
                     _refuse(name + " ha_actions require the corresponding explicit scope")
+        if service == "ov" and any("ov." + a not in access["scope"].split(" ")
+                                   for a in grant.get("ov_actions", [])):
+            _refuse(name + " ov_actions require the corresponding explicit scope")
         state = item["state"]
         if state not in STATES:
             _refuse(name + " state must be present or absent")
@@ -493,7 +543,9 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
                                         if i["service"] == service and i["state"] == "present"}
             access["expression"] = _bounded_expression(access, service, next(iter(access["scope_mappings"])))
         access["scope_expressions"] = {
-            scope: _bounded_expression(access, service, scope) if service == "ha" else access["expression"]
+            scope: (_bounded_expression(access, service, scope)
+                    if service == "ha" or (service == "ov" and len(access["scope_mappings"]) > 1)
+                    else access["expression"])
             for scope in access["scope_mappings"]}
         for mapping in access["scope_mappings"].values():
             objects.append(["scopemapping", mapping, access["state"]])

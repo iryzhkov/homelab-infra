@@ -13,6 +13,10 @@
 # destination is checked against its machine and UID binding before Authentik
 # changes. Off unless explicitly requested:
 #
+# The prepared full interactive declaration (vars/authentik-ov-http-full-interactive.yml)
+# is selected only by adding -e ov_http_identities_full_interactive=true to
+# these commands; its operator inventory also defines omarchy-pc.
+#
 #   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-ov-http-identities.yml --check --diff
 #   ansible-playbook -i OPERATOR_INVENTORY playbooks/authentik-ov-http-identities.yml --check --diff \
 #     -e ov_http_identities_online_check=true -e @PROTECTED_BASELINE
@@ -36,10 +40,21 @@
         fail_msg: Real runs need -e ov_http_identities_apply=true; use --check for the plan.
         quiet: true
 
+    # The only alternative declaration is the reviewed source file; the guard
+    # below still checks every value literally.
+    - name: Select the prepared full interactive declaration only when explicitly requested
+      ansible.builtin.include_vars:
+        file: vars/authentik-ov-http-full-interactive.yml
+      when: ov_http_identities_full_interactive | default(false) | bool
+
     # Literal values, so an extra-vars file cannot drop or change the existing
     # canary reader or the limited laptop identity, add another account, or
     # widen this run beyond the one owned OV application and its single node.
+    # The full interactive mode admits exactly the two declared resource-root
+    # accounts and the application's four fixed scopes, nothing else.
     - name: Preserve the existing OV application and controller identity exactly
+      vars:
+        ov_full: "{{ ov_http_identities_full_interactive | default(false) | bool }}"
       ansible.builtin.assert:
         that:
           - authentik_machine_identities_enabled | bool
@@ -51,7 +66,8 @@
             | items2dict) == {'state': 'present', 'slug': 'ov-http-a63e197f',
             'name': 'OV HTTP a63e197f machine access', 'group': 'ov-http-a63e197f-machine-identities',
             'client_id': 'ov-http-a63e197f-machine', 'resource': 'https://ov.mcp.ryzhkov.dev/mcp',
-            'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29', 'scope': 'ov.read', 'token_seconds': 300}
+            'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29',
+            'scope': ('ov.read ov.write ov.remove ov.maintain' if ov_full | bool else 'ov.read'), 'token_seconds': 300}
           - >-
             authentik_machine_identities | selectattr('host', 'equalto', 'controller') | list ==
             [{'host': 'controller', 'profile': 'ov-http-a63e197f-reader', 'service': 'ov',
@@ -68,17 +84,32 @@
           - >-
             authentik_machine_identities | map(attribute='profile') | list ==
             ['ov-http-a63e197f-reader', 'ov-tooling-codex', 'ov-interactive-codex']
+            + (['ov-full-interactive', 'ov-full-interactive'] if ov_full | bool else [])
           - >-
-            (authentik_machine_identities | last | dict2items
-            | rejectattr('key', 'in', ['generation', 'expires', 'state']) | items2dict) ==
-            {'host': 'laptop', 'profile': 'ov-interactive-codex', 'service': 'ov',
-             'ov_namespaces': ['viking://resources/homeassistant-api/rest-api.md']}
+            (authentik_machine_identities[2:3] | map('dict2items')
+            | map('rejectattr', 'key', 'in', ['generation', 'expires', 'state'])
+            | map('list') | map('items2dict') | list) ==
+            [{'host': 'laptop', 'profile': 'ov-interactive-codex', 'service': 'ov',
+              'ov_namespaces': ['viking://resources/homeassistant-api/rest-api.md']}]
+          # One resource-root account per selected host, all four actions.
+          - >-
+            (authentik_machine_identities[3:] | map('dict2items')
+            | map('rejectattr', 'key', 'in', ['generation', 'expires', 'state'])
+            | map('list') | map('items2dict') | list) ==
+            ([{'host': 'laptop', 'profile': 'ov-full-interactive', 'service': 'ov',
+               'ov_namespaces': ['viking://resources'],
+               'ov_actions': ['read', 'write', 'remove', 'maintain']},
+              {'host': 'omarchy-pc', 'profile': 'ov-full-interactive', 'service': 'ov',
+               'ov_namespaces': ['viking://resources'],
+               'ov_actions': ['read', 'write', 'remove', 'maintain']}] if ov_full | bool else [])
           - authentik_machine_identity_destinations | default({}) | length > 0
         fail_msg: >-
           This entrypoint only adds to the existing owned OV application and keeps
           its controller identity present and unchanged, with every destination bound.
           The limited laptop identity stays unchanged and the only other account is
-          the laptop's interactive OV identity on the same single node.
+          the laptop's interactive OV identity on the same single node, plus, only in
+          the explicit full interactive mode, one resource-root account each for
+          laptop and omarchy-pc.
         quiet: true
 
     # Check mode stays offline unless explicitly asked for the read-only preflight.

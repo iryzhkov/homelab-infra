@@ -228,7 +228,7 @@ live token acceptance remains a qualification step.
 | Profile | Fixed resource audience | Fixed scope | Required identity fields |
 | --- | --- | --- | --- |
 | Jocasta | Existing operator resource | `jocasta.read` | `project` |
-| OV | `https://ov.mcp.ryzhkov.dev/mcp` | `ov.read` | `ov_namespaces` |
+| OV | `https://ov.mcp.ryzhkov.dev/mcp` | `ov.read`; explicit `ov.write`, `ov.remove`, `ov.maintain` allowed | `ov_namespaces`; optional `ov_actions` |
 | Homelab | `https://homelab.mcp.ryzhkov.dev/mcp` | `homelab.read` | `homelab_services`, `homelab_hosts` |
 | HA | `https://ha.mcp.ryzhkov.dev/mcp` | `ha.read` initially; explicit `ha.control` allowed | `ha_entities`, `ha_actions` |
 
@@ -268,6 +268,29 @@ letters, digits, underscore, hyphen, period, @, +, comma and equals.
 Dot segments, wildcards, percent encoding and repeated/trailing slashes are
 refused. Roots authorize descendants, matching the merged reader verifier at
 `ov-mcp@599fdda83074c419a3d8170a5217aabb3b92745b`, `ov_http/auth.py`.
+The resources root itself, exactly `viking://resources` without a trailing
+slash, is also one canonical root; nothing may be declared beside it, since
+every other root overlaps it. User, agent and session stores are never an OV
+grant.
+
+OV mutation authority is an explicit signed per-identity allowlist, never the
+requested OAuth scope alone. An identity may declare `ov_actions`, a canonical,
+duplicate-free subset of `read`, `write`, `remove`, `maintain` in that order
+that always includes `read`. Each action needs its scope family (`ov.read`,
+`ov.write`, `ov.remove`, `ov.maintain`) in the application's declared scope,
+which must start with `ov.read` and lists any optional families in that same
+order. With only `ov.read` declared, the provider keeps its one original
+mapping and the mapping text is byte-identical to earlier source. With more
+families, each has its own owned scope mapping, and, as for HA, one mapping
+elected from Authentik's authenticated `token.scope` emits the arrays exactly
+once. Every request must include `ov.read` and only declared, distinct
+families, or no resource claim is emitted. An identity without `ov_actions`
+keeps its original claims, `aud` and `ov_namespaces` only, whatever it
+requests: asking for `ov.write` with an old credential never signs a write
+action. An explicit allowlist is reduced to the requested families and never
+widened by them. The new HTTP adapter must check both the requested scope
+family and the signed action, refuse unknown or duplicate actions and treat a
+missing `ov_actions` claim as read only.
 
 Homelab requires both explicit lists, each containing 0–128 unique IDs matching
 `[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}`. An empty list grants nothing in that category;
@@ -566,6 +589,45 @@ none. The template and OV scope mapping code are unchanged since the original
 enrollment's source, ebbde2778ea776acfaa6db43e24f9d0e4d723ca4, so root can
 render the original controller-only declaration offline and compare its hash
 with the stored blueprint. Never take the hash from the response being checked.
+
+### Full interactive OV identities
+
+The same entrypoint has one prepared alternative declaration,
+`playbooks/vars/authentik-ov-http-full-interactive.yml`, loaded only with
+`-e ov_http_identities_full_interactive=true`. Without that switch the
+entrypoint refuses its scopes and accounts, so the default run stays exactly
+the read-only cohort above. The full declaration extends the same owned
+provider, application, client ID, issuer and signing key: no second issuer,
+verifier slot or blueprint. It declares scope
+`ov.read ov.write ov.remove ov.maintain`, which adds three owned scope
+mappings beside the original `ov.read` one, and keeps the three existing
+accounts unchanged, with no `ov_actions`, so they keep their exact read-only
+claims. It adds one account per selected host, each with
+`ov_namespaces: [viking://resources]` and all four actions:
+
+- `chaldea-laptop-ov-full-interactive` on the laptop (UID 1001);
+- `chaldea-omarchy-pc-ov-full-interactive` on omarchy-pc (UID 1000), bound to
+  the same machine and account as the controller but declared under its fleet
+  host name. The operator inventory must define `omarchy-pc` as well.
+
+Both files are
+`/home/igor/.config/chaldea/authentik/ov-full-interactive.app-password`.
+Ordinary interactive Codex and Claude on one host share that host's account
+through chaldea-fleet-config's closed helper mode
+`/usr/local/libexec/webmcp-interactive-headers ov-full HOST`, as they share
+the managed Jocasta identity; neither the limited preset nor the narrow
+`ov laptop` helper mode reads it. In this mode the guard additionally fixes
+both full accounts' host, profile, service, root and actions, and refuses a
+partial pair, a third account or `ov_actions` on any existing account.
+
+Selecting the full declaration is a later, separately authorized enrollment.
+It requires the accepted server verifier, a freshly confirmed provider
+baseline and the fleet consumer that refuses a narrower or wider token. After
+it has been applied, the stored blueprint owns all four mappings, so the
+default read-only run is refused ("declare it absent before dropping it")
+rather than silently removing them. To stop issuance, run the full mode with
+the two full accounts declared `state: absent`; the old accounts are
+unaffected. Issued tokens remain valid until they expire.
 
 ### Destination binding
 
