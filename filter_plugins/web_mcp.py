@@ -16,7 +16,7 @@ SERVICES = {
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
 HOLONET_SOURCE_REVISIONS = frozenset({
     SERVICES["holonet"][1],
-    "883f0b9dec292668d3244cf1f0094e321f78e462",
+    "31817f70f7fed5900622bc7274c6a8a31275189b",
 })
 
 

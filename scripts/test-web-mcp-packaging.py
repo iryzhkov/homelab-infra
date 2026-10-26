@@ -140,7 +140,7 @@ class PackagingTest(unittest.TestCase):
 
     def test_holonet_reviewed_catalog_upgrade_and_original_rollback(self):
         old = "4aceab9770f0098b4369e37657f6b64051884baf"
-        new = "883f0b9dec292668d3244cf1f0094e321f78e462"
+        new = "31817f70f7fed5900622bc7274c6a8a31275189b"
         self.assertEqual(contract.HOLONET_SOURCE_REVISIONS, {old, new})
         self.assertEqual(contract.SERVICES["holonet"][1], old)
         for revision in (old, new, old):

@@ -113,16 +113,18 @@ The accepted HoloNet command/config interface remains homelab-cli
 4aceab9770f0098b4369e37657f6b64051884baf (PR23 on PR22).
 artifact.contract_revision must still equal that interface. The closed
 artifact.source_revision allowlist admits that original build for rollback
-and reviewed catalog-search build883f0b9dec292668d3244cf1f0094e321f78e462
-(PR24), whose optional title/director/composer queries and metadata preserve
-the existing default projection and catalog-only policy. No arbitrary source
+and reviewed catalog/target-guidance build
+31817f70f7fed5900622bc7274c6a8a31275189b. Its optional title/director/composer
+queries and metadata preserve the existing default projection and catalog-only
+policy. Authenticated tool descriptions expose only an unambiguous target
+allowed by that request and operator policy, without a backend discovery read. No arbitrary source
 revision is admitted. Every artifact still needs its exact reviewed SHA256
 and all existing protected transport, static-byte and target checks.
 The original artifact SHA256 is
 1259cd1dcacff79454bf52533a2c009379137a9786a83c9c72fb30b8caa4dfdb;
 the new Go1.25 Linux/amd64 artifact from agent-a
-ccdf128f-0da7-4b2e-a25d-d2e68fc40250 is
-e82bf5bdeeb0227fa3168ff727b98c9f136956675bef6fdca36caef4397f1763.
+fb9f6763-50cd-4a58-b011-0a6c200064f0 is
+8c482dff88ed227a494419fbcf9d0e58c91d1d7aa47b05f98f42ea394f0654c3.
 These are build receipts, not a deployment or native acceptance claim.
 For HoloNet with local_source, url may be omitted: an unpublished exact Chaldea
 artifact does not have a release URL. If supplied it is still validated; no URL
