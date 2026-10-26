@@ -1,0 +1,79 @@
+---
+# Read-only producer of the existing-only gate's public baseline
+# (docs/authentik-machine-identities.md, "Existing-only baseline read").
+# Included with tasks_from by an owning entrypoint that pins
+# machine_identity_baseline_anchor (the retained blueprint PK and SHA-256 of
+# its successful stored content) and machine_identity_baseline_identities (the
+# historical identities that content owns). Check mode only. It makes exactly
+# the role's own existing-only discovery reads: the named blueprint, the
+# actor, public provider summaries and the one declared application. No
+# OAuth2 collection or detail, token, key, host or write is touched, and only
+# allowlisted IDs, hashes and booleans are shown.
+
+- name: Require check mode, API facts and the pinned anchor
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode
+      - authentik_url is defined and authentik_headers is defined
+      - machine_identity_baseline_anchor is mapping
+      - machine_identity_baseline_identities is sequence
+    fail_msg: The baseline read runs only in check mode with API facts and a pinned anchor.
+    quiet: true
+
+- name: Validate credential transport before any request
+  ansible.builtin.set_fact:
+    machine_identity_api: "{{ authentik_url | machine_identity_api_url }}"
+  no_log: true
+
+- name: Find the stored blueprint
+  ansible.builtin.uri:
+    url: "{{ machine_identity_api }}/managed/blueprints/?name={{ authentik_machine_identities_blueprint_name | urlencode }}"
+    headers: "{{ authentik_headers }}"
+    follow_redirects: none
+  register: machine_identity_baseline_found
+  check_mode: false
+  no_log: true
+
+- name: Confirm public discovery is complete for this actor
+  ansible.builtin.uri:
+    url: "{{ machine_identity_api }}/core/users/me/"
+    headers: "{{ authentik_headers }}"
+    follow_redirects: none
+  register: machine_identity_baseline_actor
+  check_mode: false
+  no_log: true
+
+- name: Read public provider summaries without OAuth2 secrets
+  ansible.builtin.uri:
+    url: "{{ machine_identity_api }}/providers/all/?page_size=500"
+    headers: "{{ authentik_headers }}"
+    follow_redirects: none
+  register: machine_identity_baseline_providers
+  check_mode: false
+  no_log: true
+
+- name: Read the declared application's public provider binding
+  ansible.builtin.uri:
+    url: >-
+      {{ machine_identity_api }}/core/applications/?slug={{
+         authentik_machine_services[authentik_machine_services | list | first].slug | urlencode }}&superuser_full_list=true
+    headers: "{{ authentik_headers }}"
+    follow_redirects: none
+  register: machine_identity_baseline_application
+  check_mode: false
+  no_log: true
+
+- name: Derive the baseline only from content matching the anchor
+  ansible.builtin.set_fact:
+    machine_identity_baseline_result: >-
+      {{ machine_identity_baseline_identities | machine_identity_existing_baseline(
+           authentik_machine_services, authentik_machine_identity_max_days | int,
+           now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ'), machine_identity_baseline_anchor,
+           machine_identity_baseline_found | machine_identity_blueprint(authentik_machine_identities_blueprint_name),
+           machine_identity_baseline_providers, machine_identity_baseline_application,
+           machine_identity_baseline_actor) }}
+  no_log: true
+
+- name: Show only the allowlisted public baseline
+  ansible.builtin.debug:
+    msg: "{{ machine_identity_baseline_result }}"
