@@ -227,6 +227,116 @@ class ProfileTest(unittest.TestCase):
                     changed.attributes["chaldea_ha"]["ha_entities"].append("light.foreign")
                     self.assertEqual(merged_claims(mappings, changed, app["group"], requested), {})
 
+    def test_ov_actions_scopes_and_resources_root_are_closed(self):
+        full = access("ov") | {"scope": "ov.read ov.write ov.remove ov.maintain"}
+        root = identity("ov") | {"ov_namespaces": ["viking://resources"],
+                                 "ov_actions": ["read", "write", "remove", "maintain"]}
+        s = spec([root], {"ov": full})
+        self.assertEqual(s["identities"][0]["grant"], {"ov_namespaces": ["viking://resources"],
+                                                       "ov_actions": ["read", "write", "remove", "maintain"]})
+        self.assertEqual(s["identities"][0]["grant_attributes"], {"chaldea_ov": s["identities"][0]["grant"]})
+        self.assertEqual(list(s["services"]["ov"]["scope_mappings"]),
+                         ["ov.read", "ov.write", "ov.remove", "ov.maintain"])
+        # One owned mapping per declared scope, all on the one provider.
+        self.assertEqual(sorted(o[1] for o in s["objects"] if o[0] == "scopemapping"),
+                         sorted(full["name"] + ": " + x for x in full["scope"].split()))
+        for scope in ("ov.read", "ov.read ov.write", "ov.read ov.maintain", "ov.read ov.remove ov.maintain"):
+            self.assertEqual(list(spec([], {"ov": access("ov") | {"scope": scope}})["services"]["ov"]
+                                  ["scope_mappings"]), scope.split())
+        # ov.read is required and first; no duplicate, unknown or reordered family.
+        for scope in ("ov.write", "ov.write ov.read", "ov.read ov.read", "ov.read ov.admin",
+                      "ov.read  ov.write", "ov.read\tov.write", "ov.read ov.maintain ov.write",
+                      "ov.read ov.write ov.write", "", "ov.*", "ov.read ha.read"):
+            with self.subTest(scope=scope), self.assertRaises(mi.AnsibleFilterError):
+                spec([], {"ov": access("ov") | {"scope": scope}})
+        # Unknown, duplicate, reordered or read-less actions refuse.
+        for actions in ([], None, "read", ["write"], ["read", "read"], ["write", "read"],
+                        ["read", "admin"], ["read", "*"], ["read", True], ["READ"],
+                        ["read", "maintain", "write"], ["read", "write", "remove", "maintain", "read"]):
+            with self.subTest(actions=actions), self.assertRaises(mi.AnsibleFilterError):
+                spec([root | {"ov_actions": actions}], {"ov": full})
+        # Every signed action needs its own explicitly declared scope family.
+        for scope, actions in (("ov.read", ["read", "write"]), ("ov.read ov.write", ["read", "remove"]),
+                               ("ov.read ov.write ov.remove", ["read", "write", "remove", "maintain"])):
+            with self.subTest(scope=scope), self.assertRaisesRegex(mi.AnsibleFilterError,
+                                                                   "corresponding explicit scope"):
+                spec([root | {"ov_actions": actions}], {"ov": access("ov") | {"scope": scope}})
+        # The resources root is exact and canonical, and nothing may overlap it.
+        for roots in (["viking://resources/"], ["viking://resources", "viking://resources/a"],
+                      ["viking://resources"] * 2, ["viking://resourcesX"], ["viking://user"],
+                      ["viking://user/memories"], ["viking://agent/a"], ["viking://session/a"],
+                      ["viking://resources//a"], ["viking://resources/a/../b"]):
+            with self.subTest(roots=roots), self.assertRaises(mi.AnsibleFilterError):
+                spec([root | {"ov_namespaces": roots}], {"ov": full})
+
+    def test_ov_composition_keeps_old_grants_read_only_and_requested_ceiling(self):
+        self.assertEqual(always_merger.merge({"a": [1]}, {"a": [1]}), {"a": [1, 1]})
+        node = "viking://resources/homeassistant-api/rest-api.md"
+        old = identity("ov") | {"profile": "ov-old", "ov_namespaces": [node]}
+        full = identity("ov") | {"profile": "ov-full", "ov_namespaces": ["viking://resources"],
+                                 "ov_actions": ["read", "write", "remove", "maintain"]}
+        partial = identity("ov") | {"profile": "ov-partial", "ov_namespaces": ["viking://resources/a"],
+                                    "ov_actions": ["read", "write"]}
+        narrow = spec([old], {"ov": access("ov")})
+        wide = spec([old, full, partial], {"ov": access("ov") | {"scope": "ov.read ov.write ov.remove ov.maintain"}})
+        app = wide["services"]["ov"]
+        mappings = [{"scope_name": scope, "expression": expression}
+                    for scope, expression in app["scope_expressions"].items()]
+        users = {}
+        for item in wide["identities"]:
+            users[item["profile"]] = types.SimpleNamespace(
+                username=item["username"], type="service_account",
+                attributes=copy.deepcopy(item["grant_attributes"]))
+        scopes = list(app["scope_mappings"])
+        requests = [list(order) for size in range(1, 5) for chosen in combinations(scopes, size)
+                    for order in permutations(chosen)]
+        for requested in requests:
+            valid = "ov.read" in requested
+            for profile, user in users.items():
+                claims = merged_claims(mappings, user, app["group"], requested)
+                with self.subTest(profile=profile, requested=requested):
+                    if not valid:
+                        self.assertEqual(claims, {})
+                    elif profile == "ov-old":
+                        # No signed action, whatever the request: the original read-only shape.
+                        self.assertEqual(json.dumps(claims), json.dumps(
+                            {"ov_namespaces": [node], "aud": app["resource"]}))
+                    else:
+                        grant = (full if profile == "ov-full" else partial)
+                        self.assertEqual(claims, {
+                            "aud": app["resource"], "ov_namespaces": grant["ov_namespaces"],
+                            "ov_actions": [a for a in grant["ov_actions"] if "ov." + a in requested]})
+                    self.assertEqual(merged_claims(mappings, user, "foreign", requested), {})
+        for requested in ([], ["ov.read", "ov.read"], ["ov.read", "ov.admin"], ["ov.read", "ha.read"],
+                          ["ov.write", "ov.remove", "ov.maintain"], ["ov.write"]):
+            for profile, user in users.items():
+                with self.subTest(profile=profile, requested=requested):
+                    for scope, expression in app["scope_expressions"].items():
+                        self.assertEqual(evaluate(expression, user, app["group"], requested), {})
+        # Escalating attributes on the same subject never sign anything.
+        for profile, change in (("ov-old", {"ov_actions": ["read", "write"]}),
+                                ("ov-partial", {"ov_actions": ["read", "write", "remove", "maintain"]}),
+                                ("ov-partial", {"ov_namespaces": ["viking://resources"]}),
+                                ("ov-full", {"ov_actions": ["read", "write", "remove", "maintain", "admin"]})):
+            changed = copy.deepcopy(users[profile])
+            changed.attributes["chaldea_ov"].update(change)
+            with self.subTest(profile=profile, change=change):
+                self.assertEqual(merged_claims(mappings, changed, app["group"], scopes), {})
+        # The single-scope application keeps its original mapping text and output.
+        expected = narrow["services"]["ov"]["account_grants"]
+        legacy = "\n".join([
+            "# Rendered by homelab-infra roles/authentik_machine_identities.",
+            f"expected = {expected!r}",
+            "grant = user.attributes.get('chaldea_ov') if user else None",
+            "if (not user or str(user.type) != 'service_account'",
+            f"        or not ak_is_group_member(user, name={app['group']!r})",
+            "        or user.username not in expected or grant != expected[user.username]):",
+            "    return {}",
+            f"return dict(grant, aud={app['resource']!r})"])
+        self.assertEqual(narrow["services"]["ov"]["scope_expressions"], {"ov.read": legacy})
+        self.assertEqual(json.dumps(evaluate(legacy, users["ov-old"], app["group"], ["ov.read"])),
+                         json.dumps(merged_claims(mappings, users["ov-old"], app["group"], ["ov.read"])))
+
     def test_mapping_exact_claims_and_cross_service_and_same_subject_denials(self):
         s = spec([identity("ov"), identity("homelab"), identity("ha")],
                  {"ov": access("ov"), "homelab": access("homelab"), "ha": access("ha")})
