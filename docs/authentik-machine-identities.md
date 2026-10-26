@@ -599,6 +599,96 @@ application and blueprint name stay unchanged. Removing the limited laptop
 account needs a reviewed change to the entrypoint's literal guard first.
 Offline tokens remain valid for up to 300 seconds after removal.
 
+## Isolated HoloNet catalog identities
+
+`playbooks/authentik-holonet-catalog.yml` manages the existing owned HoloNet
+blueprint "homelab-infra holonet catalog identities", declared in
+`playbooks/vars/authentik-holonet-catalog.yml`. It owns the application
+`chaldea-holonet` ("Chaldea HoloNet catalog access", client ID
+`chaldea-holonet-machine`, group `chaldea-holonet-machine-identities`, signing
+key `8bbd6516-af33-4e64-a73b-caa39e692c29`, scope `holonet.read`, resource
+https://media.mcp.ryzhkov.dev/mcp, 300-second tokens). The declaration is the
+public historical cohort that the 2026-10-22 read-only issuer observation
+matched: one persistent account, `chaldea-homelab-holonet-movies-catalog`
+(profile `holonet-movies-catalog`, generation 1, expiry 2026-11-20T00:00:00Z,
+`token-maximum-lifetime` days=180). Its grant is server
+`3c86e6d7ff6c4a3296522cdf03d22bb0`, library `3` (Movies), catalog user
+`54b7d36cef804d3c8478474553ed3a82`, empty history and target users,
+`catalog.read` only and namespace `movies-catalog`.
+
+It keeps that account unchanged and adds one ordinary laptop account,
+`chaldea-laptop-holonet-movies-catalog-claude`, for the laptop's limited
+Chaldea Claude catalog preset, at
+`/home/igor/.config/chaldea/authentik/holonet-movies-catalog-claude.app-password`.
+It holds the same fixed grant. The scope mapping changes only by adding that
+username to its literal allowlist; a later run with only the laptop row
+`absent` restores the historical mapping. It is the same blueprint, provider
+and verifier, not a second issuer.
+
+The entrypoint runs only this role and is off unless explicitly requested. A
+real run needs `-e holonet_catalog_apply=true`; `--check` is the offline plan;
+`-e holonet_catalog_online_check=true` adds the read-only preflight. Before
+loading any credential it refuses a declaration that is not exactly the one
+owned HoloNet application, changes or drops the homelab identity, widens,
+moves or multiplies the laptop identity, changes `max_days` from 180 or the
+baseline anchor, or disables the existing-only gate. The laptop account's
+generation, expiry and state follow the role's lifecycle rules. Its source
+expiry is aligned with the homelab account; root may change it within the
+role's 1..180-day window by a source change. The homelab expiry is never
+extended silently: the role refuses every run within one day of
+2026-11-20, and extending it is a separate reviewed change.
+
+Destination bindings are required but not in source, because the homelab
+node name and UID are not repository facts. Root supplies
+`authentik_machine_identity_destinations` naming exactly `homelab` and
+`laptop`, for example:
+
+```yaml
+authentik_machine_identity_destinations:
+  homelab: {hostname: <homelab uname -n>, uid: <iryzhkov UID>}
+  laptop: {hostname: omarchy-macbook-air-igor, uid: 1001}
+```
+
+The operator inventory defines `homelab` as `iryzhkov` over SSH with home
+`/home/iryzhkov` and `laptop` as `igor` with home `/home/igor`. As for OV, every
+real run rereads the homelab app password and writes it back unchanged to
+`/home/iryzhkov/.config/chaldea/authentik/holonet-movies-catalog.app-password`;
+the binding ensures that write reaches only the bound machine and account.
+
+### Existing-only baseline read
+
+The existing-only gate needs the current provider PK, application UUID and
+SHA-512 of the successful stored blueprint. The retained read-only receipt
+has only the content's SHA-256 and the blueprint PK, and no maintained
+producer existed. `-e holonet_catalog_baseline_read=true` with `--check` (and
+without apply or the online preflight) runs only the role's
+`tasks/baseline.yml`, with the accepted SOPS/no_log credential path:
+
+```sh
+ansible-playbook -i <operator-inventory> playbooks/authentik-holonet-catalog.yml --check \
+  -e holonet_catalog_baseline_read=true
+```
+
+It makes exactly four GETs, the same discovery the existing-only gate already
+uses: the named blueprint, `/core/users/me/`, public `/providers/all/`
+summaries and the one declared application by slug. It reads no OAuth2
+collection or detail, token, key or host and writes nothing. The filter
+`machine_identity_existing_baseline` then requires the pinned anchor
+(blueprint `2514696c-15e3-494e-8df6-eb0c098a9efb`, content SHA-256
+`aef30eb3096776f9edddff5d00cb3eb3aac7d1128b05a730aa138407bc577f58`), an
+ownership record naming exactly the historical homelab identity, and every
+condition of the existing-only gate for the derived values. Only then does it
+show the allowlisted result: the anchor, the three baseline fields and fixed
+match booleans. No body, expression, header or credential is shown. Content
+with another hash yields nothing, so the response never supplies its own
+accepted hash; the SHA-512 is of the bytes the independent SHA-256 names.
+
+Root reviews that output and supplies it as
+`authentik_machine_identity_existing_provider_baseline`. The anchor names
+only the pre-enrollment content: after a successful apply it no longer
+matches, and the next baseline needs explicit confirmation as described in
+the existing-only gate section.
+
 ## Tests
 
 `roles/authentik_machine_identities/tests` runs in CI. The existing Jocasta
@@ -630,6 +720,18 @@ destination before any write or key read, addition of both separate laptop
 accounts and files with the controller account, token and file
 byte-identical, refusal of the stale baseline, and a confirmed second run with
 no changes.
+`test_holonet_catalog_identities.py`, in the same job, checks the exact HoloNet
+declaration, that current source renders the receipt-matched historical
+mapping (expression SHA-256 `8874e2d1...`) and the homelab account unchanged,
+the mapping's laptop-only addition and refusals, and the baseline producer's
+refusal of every anchor, ownership, status, inventory, binding or actor
+drift. It plays the role's baseline task (four discovery GETs, allowlisted
+output, no secret) and the actual entrypoint: mode separation, literal guards,
+destination requirements, the pinned anchor refusing fixture content, the
+missing-baseline gate, remapped destinations, laptop addition with the homelab
+account, token and file byte-identical, the stale baseline and a confirmed
+second run with no changes. The entrypoint plays skip once the pinned homelab
+expiry is within the role's one-day window.
 
 ## Not yet known: qualify before enabling
 

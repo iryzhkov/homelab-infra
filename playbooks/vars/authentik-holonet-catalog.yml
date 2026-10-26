@@ -1,0 +1,96 @@
+---
+# The HoloNet catalog machine identities, enrolled only by
+# playbooks/authentik-holonet-catalog.yml (docs/authentik-machine-identities.md,
+# "Isolated HoloNet catalog identities"). Public values only: the role reads
+# each app password on the controller under no_log and writes it to its bound
+# host.
+#
+# This is the existing owned blueprint first enrolled for the homelab catalog
+# reader, separate from the shared, Jocasta, OV and access blueprints.
+# playbooks/vars/authentik.yml keeps authentik_machine_identities_enabled
+# false, so playbooks/authentik.yml never touches these objects. Never rename
+# the blueprint: its stored content is the ownership record.
+
+authentik_machine_identities_enabled: true
+# Existing provider/application only. Root must supply a confirmed prior public
+# baseline (provider_pk, application_pk and the exact successful stored-content
+# SHA-512) before an online run. No PK or hash is populated here; the
+# entrypoint's read-only baseline mode can produce them from the anchor below.
+authentik_machine_identity_existing_owned_only: true
+authentik_machine_identities_blueprint_name: homelab-infra holonet catalog identities
+# The existing homelab account's token-maximum-lifetime attribute is days=180;
+# another value would change that account.
+authentik_machine_identity_max_days: 180
+# The entrypoint refuses API credentials for any other Authentik origin.
+holonet_catalog_authentik_origin: https://auth.ryzhkov.dev
+
+# Retained historical evidence for the read-only baseline mode: the owned
+# blueprint's PK and the SHA-256 of its last successful stored content, as
+# matched by the 2026-10-22 read-only issuer observation. It anchors only
+# that content; after any successful change root confirms a new baseline.
+holonet_catalog_baseline_anchor:
+  blueprint_pk: 2514696c-15e3-494e-8df6-eb0c098a9efb
+  content_sha256: aef30eb3096776f9edddff5d00cb3eb3aac7d1128b05a730aa138407bc577f58
+
+# The one HoloNet application this blueprint owns, exactly as first enrolled.
+authentik_machine_services:
+  holonet:
+    state: present
+    slug: chaldea-holonet
+    name: Chaldea HoloNet catalog access
+    group: chaldea-holonet-machine-identities
+    client_id: chaldea-holonet-machine
+    resource: https://media.mcp.ryzhkov.dev/mcp
+    # kp_uuid of the existing RSA signing keypair; this role never creates a key.
+    signing_key: 8bbd6516-af33-4e64-a73b-caa39e692c29
+    scope: holonet.read
+    token_seconds: 300
+    issuer: https://auth.ryzhkov.dev/application/o/chaldea-holonet/
+    jwks_url: https://auth.ryzhkov.dev/application/o/chaldea-holonet/jwks/
+
+# Destination bindings are not in source: the homelab node name and UID are not
+# public repository facts. Root supplies authentik_machine_identity_destinations
+# naming exactly homelab and laptop (laptop: omarchy-macbook-air-igor, UID 1001).
+
+# One account per host and preset, both with the same fixed catalog grant: the
+# Movies library on the one server, one catalog user, no history or target
+# users and only catalog.read, in namespace movies-catalog.
+#
+# The homelab identity is the existing persistent reader. It must stay present
+# and unchanged, including its generation and its 2026-11-20 expiry; the
+# entrypoint refuses any change to it. The role refuses every run within one
+# day of that expiry, so extending it is a separate reviewed change.
+#
+# The laptop identity is new and separate: the limited Chaldea Claude preset's
+# account, chaldea-laptop-holonet-movies-catalog-claude, with its own app
+# password at ~/.config/chaldea/authentik/holonet-movies-catalog-claude.app-password.
+# Its generation, expiry and state follow the role's lifecycle rules; its
+# expiry is a declared choice aligned with the homelab identity, which root
+# may change within the role's 1..180-day window before the first run.
+authentik_machine_identities:
+  - host: homelab
+    profile: holonet-movies-catalog
+    service: holonet
+    holonet_server: "3c86e6d7ff6c4a3296522cdf03d22bb0"
+    holonet_libraries: ["3"]
+    holonet_catalog_users: ["54b7d36cef804d3c8478474553ed3a82"]
+    holonet_history_users: []
+    holonet_target_users: []
+    holonet_actions: [catalog.read]
+    holonet_namespace: movies-catalog
+    generation: 1
+    expires: "2026-11-20T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: holonet-movies-catalog-claude
+    service: holonet
+    holonet_server: "3c86e6d7ff6c4a3296522cdf03d22bb0"
+    holonet_libraries: ["3"]
+    holonet_catalog_users: ["54b7d36cef804d3c8478474553ed3a82"]
+    holonet_history_users: []
+    holonet_target_users: []
+    holonet_actions: [catalog.read]
+    holonet_namespace: movies-catalog
+    generation: 1
+    expires: "2026-11-20T00:00:00Z"
+    state: present

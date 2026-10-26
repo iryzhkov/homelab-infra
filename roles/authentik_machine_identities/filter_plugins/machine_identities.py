@@ -8,7 +8,7 @@ line lists every object and its desired state. Only a stored present entry
 confers ownership; absent entries are deletion requests. Other colliding names
 are refused, never adopted or deleted.
 """
-from hashlib import sha512
+from hashlib import sha256, sha512
 import json
 import posixpath
 import re
@@ -636,6 +636,54 @@ def machine_identity_existing_provider(spec, instance, baseline, inventory, appl
             "path": f"/providers/oauth2/{baseline['provider_pk']}/"}
 
 
+def machine_identity_existing_baseline(identities, services, max_days, now, anchor,
+                                       instance, inventory, applications, actor):
+    """Produce the existing-only gate's public baseline from one read-only pass.
+
+    The independent anchor is a retained historical blueprint PK and SHA-256 of
+    its successful stored content. Only content with exactly that SHA-256 can
+    yield a SHA-512, so the response being checked never supplies its own
+    accepted hash. The stored ownership record must name exactly the declared
+    historical identities, and every condition of the existing-only gate must
+    already hold for the derived values. Only IDs, hashes and fixed booleans
+    are returned; no response body, expression or credential leaves here.
+    """
+    if (not isinstance(anchor, dict) or set(anchor) != {"blueprint_pk", "content_sha256"}
+            or not isinstance(anchor["blueprint_pk"], str) or not UUID.fullmatch(anchor["blueprint_pk"])
+            or not isinstance(anchor["content_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", anchor["content_sha256"])):
+        _refuse("baseline read requires the retained blueprint PK and content SHA-256")
+    # Hosts never affect object names; a fixed placeholder keeps this pure.
+    hosts = {i.get("host"): {"ssh_user": "baseline", "connection": "ssh"}
+             for i in identities if isinstance(i, dict)} if isinstance(identities, list) else {}
+    spec = machine_identity_spec(identities, {}, hosts, max_days, now, services)
+    content = instance.get("content") if isinstance(instance, dict) else None
+    if (instance.get("pk") if isinstance(instance, dict) else None) != anchor["blueprint_pk"] \
+            or not isinstance(content, str) or not content \
+            or sha256(content.encode()).hexdigest() != anchor["content_sha256"]:
+        _refuse("baseline read: stored blueprint PK or content differs from the retained anchor")
+    if sorted(machine_identity_owned(content)) != sorted(spec["objects"]):
+        _refuse("baseline read: stored ownership differs from the declared historical identities")
+    rows = []
+    if isinstance(inventory, dict) and inventory.get("status") == 200:
+        rows = [r for r in _complete_rows(inventory.get("json"), "public providers", "name")
+                if r.get("name") == spec["access"]["name"]]
+    apps = []
+    if isinstance(applications, dict) and applications.get("status") == 200:
+        apps = _complete_rows(applications.get("json"), "public application", "slug")
+    if len(rows) != 1 or type(rows[0].get("pk")) is not int or len(apps) != 1 \
+            or not isinstance(apps[0].get("pk"), str):
+        _refuse("baseline read: public provider or application is not exactly one object")
+    baseline = {"provider_pk": rows[0]["pk"], "application_pk": apps[0]["pk"],
+                "content_sha512": sha512(content.encode()).hexdigest()}
+    # The same checks a later online run makes, against the derived values.
+    machine_identity_existing_provider(spec, instance, baseline, inventory, applications, actor)
+    return {"blueprint_pk": anchor["blueprint_pk"], "content_sha256": anchor["content_sha256"],
+            "authentik_machine_identity_existing_provider_baseline": baseline,
+            "stored_content_matches_anchor": True, "ownership_matches_declaration": True,
+            "existing_only_gate_holds": True}
+
+
 def _found(results, problems):
     """(kind, name) -> the one object with exactly that name, or None."""
     found = {}
@@ -964,6 +1012,7 @@ class FilterModule:
             "machine_identity_owned": machine_identity_owned,
             "machine_identity_queries": machine_identity_queries,
             "machine_identity_existing_provider": machine_identity_existing_provider,
+            "machine_identity_existing_baseline": machine_identity_existing_baseline,
             "machine_identity_lookup": machine_identity_lookup,
             "machine_identity_refusals": machine_identity_refusals,
             "machine_identity_problems": machine_identity_problems,
