@@ -726,6 +726,35 @@ real run rereads the homelab app password and writes it back unchanged to
 `/home/iryzhkov/.config/chaldea/authentik/holonet-movies-catalog.app-password`;
 the binding ensures that write reaches only the bound machine and account.
 
+### Optional ordinary HoloNet reader
+
+The same isolated entrypoint can add `chaldea-laptop-holonet-interactive`
+with `-e holonet_catalog_interactive_enabled=true`. It is off by default.
+Its separate `holonet-interactive.app-password` is delivered only to the
+bound laptop account and is consumed by the ordinary Codex managed helper.
+It has the same fixed Movies catalog grant, with no history, target users or
+write actions. It does not reuse the admission-bound preset credential.
+
+The declared existing two accounts and all application/provider bindings stay
+unchanged. The only mapping delta is the new exact username and its identical
+grant. A fresh confirmed successful stored-content baseline is required before
+apply and before repeat. The historical homelab-only baseline-read mode is
+historical evidence and must refuse the current two- or three-account content;
+do not reuse its old anchor as a current baseline.
+
+Keep the interactive opt-in on every apply after enrollment. For retirement or
+failed initial qualification, keep the opt-in true and explicitly set only
+`holonet_catalog_interactive_identity.state: absent` through a complete
+reviewed identity object. The same guard preserves its host, profile and grant;
+the role owns lifecycle validation. Confirm new-only account/token/file absence
+and preservation of both existing accounts. Dropping the opt-in is not the
+reviewed removal procedure. Never use this entrypoint to alter Jocasta or OV
+accounts, signing keys, global policies or the Emby backend identity.
+
+Neither this source declaration nor an issuer success proves ordinary native
+MCP use or renewal. Enrollment, helper deployment and live/native lifetime
+qualification are separate guarded stages.
+
 ### Existing-only baseline read
 
 The existing-only gate needs the current provider PK, application UUID and

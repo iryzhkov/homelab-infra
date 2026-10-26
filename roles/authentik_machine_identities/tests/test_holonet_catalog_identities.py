@@ -36,6 +36,7 @@ HOMELAB = {"host": "homelab", "profile": "holonet-movies-catalog", "service": "h
 LAPTOP = {"host": "laptop", "profile": "holonet-movies-catalog-claude", "service": "holonet", **GRANT,
           "generation": 1, "expires": "2026-11-20T00:00:00Z", "state": "present"}
 COHORT = [HOMELAB, LAPTOP]
+INTERACTIVE = LAPTOP | {"profile": "holonet-interactive"}
 ANCHOR = {"blueprint_pk": "2514696c-15e3-494e-8df6-eb0c098a9efb",
           "content_sha256": "aef30eb3096776f9edddff5d00cb3eb3aac7d1128b05a730aa138407bc577f58"}
 # scope_expression_sha256 from the 2026-10-22 read-only issuer receipt, which
@@ -83,7 +84,10 @@ class DeclarationTest(unittest.TestCase):
             "authentik_machine_identities_enabled", "authentik_machine_identity_existing_owned_only",
             "authentik_machine_identities_blueprint_name", "authentik_machine_identity_max_days",
             "holonet_catalog_baseline_anchor",
-            "authentik_machine_services", "authentik_machine_identities"})
+            "authentik_machine_services", "authentik_machine_identities",
+            "holonet_catalog_interactive_enabled", "holonet_catalog_interactive_identity"})
+        self.assertIs(values["holonet_catalog_interactive_enabled"], False)
+        self.assertEqual(values["holonet_catalog_interactive_identity"], INTERACTIVE)
         integrated = yaml.safe_load((ROOT / "playbooks/vars/authentik.yml").read_text())
         self.assertIs(integrated["authentik_machine_identities_enabled"], False)
         play = yaml.safe_load(ENTRYPOINT.read_text())
@@ -564,6 +568,54 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual(self.homelab_snapshot(), before)
         self.assertEqual((secret.read_bytes(), secret.stat().st_ino, secret.stat().st_mtime_ns), laptop_bytes)
         self.assertIn("budget", x.state.apps)
+
+    def test_opted_in_reader_preserves_both_existing_accounts_and_has_scoped_inverse(self):
+        x = self.x
+        self.use_patched = True
+        code, output = x.run(COHORT, services={"holonet": self.holonet},
+                             extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
+        self.assertEqual(code, 0, output)
+        before = self.homelab_snapshot()
+        limited_name = "chaldea-laptop-" + LAPTOP["profile"]
+        limited_path = self.secret("laptop", LAPTOP)
+        def limited():
+            return (copy.deepcopy(x.state.users[limited_name]), copy.deepcopy(x.state.tokens[limited_name + "-g1"]),
+                    limited_path.read_bytes(), limited_path.stat().st_ino, limited_path.stat().st_mtime_ns)
+        old_limited = limited()
+        original = self.baseline()
+        opts = {"holonet_catalog_interactive_enabled": True}
+        # Closed grant refuses before SOPS or any API request.
+        for key, value in (("host", "homelab"), ("profile", "other"), ("holonet_libraries", ["4"]),
+                           ("holonet_history_users", GRANT["holonet_catalog_users"]),
+                           ("holonet_actions", ["catalog.read", "userdata.read"])):
+            self.refused("Preserve the existing HoloNet", original, **opts,
+                         holonet_catalog_interactive_identity=INTERACTIVE | {key: value})
+            self.assertFalse((x.base / "sops-loaded").exists())
+            self.assertEqual(x.state.requests, [])
+        self.ok(original, **opts)
+        self.assertEqual(self.homelab_snapshot(), before)
+        self.assertEqual(limited(), old_limited)
+        username = "chaldea-laptop-holonet-interactive"
+        self.assertEqual(x.state.users[username]["attributes"]["chaldea_holonet"], GRANT)
+        path = self.secret("laptop", INTERACTIVE)
+        self.assertEqual(path.read_text(), x.state.tokens[username + "-g1"]["key"])
+        self.assertEqual((path.stat().st_mode & 0o777, path.stat().st_nlink), (0o600, 1))
+        new_bytes = (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+        self.assertEqual(x.changed(self.ok(self.baseline(), **opts)), 0)
+        self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), new_bytes)
+        mapping = x.state.mappings[HOLONET["name"] + ": holonet.read"]["expression"]
+        for account in spec(COHORT + [INTERACTIVE])["identities"]:
+            self.assertEqual(evaluate(mapping, types.SimpleNamespace(**x.state.users[account["username"]]),
+                                      HOLONET["group"]), GRANT | {"aud": HOLONET["resource"]})
+        # Explicit new-only absence, still opted in, restores the original cohort.
+        self.ok(self.baseline(), **opts, holonet_catalog_interactive_identity=INTERACTIVE | {"state": "absent"})
+        self.assertNotIn(username, x.state.users)
+        self.assertNotIn(username + "-g1", x.state.tokens)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.homelab_snapshot(), before)
+        self.assertEqual(limited(), old_limited)
+        self.assertEqual(x.state.mappings[HOLONET["name"] + ": holonet.read"]["expression"],
+                         spec(COHORT)["services"]["holonet"]["expression"])
 
 
 if __name__ == "__main__":

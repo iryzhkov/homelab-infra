@@ -65,6 +65,11 @@
         quiet: true
       when: holonet_catalog_baseline_mode | bool
 
+    - name: Select the separately opted-in ordinary HoloNet catalog reader
+      ansible.builtin.set_fact:
+        authentik_machine_identities: "{{ authentik_machine_identities + [holonet_catalog_interactive_identity] }}"
+      when: holonet_catalog_interactive_enabled | bool
+
     # Literal values: a declaration that drops or changes the existing homelab
     # reader, widens or moves the laptop identity, adds another account,
     # changes the baseline anchor or widens this run beyond the one owned
@@ -90,7 +95,8 @@
             'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29', 'scope': 'holonet.read', 'token_seconds': 300}
           - >-
             authentik_machine_identities | map(attribute='profile') | list ==
-            ['holonet-movies-catalog', 'holonet-movies-catalog-claude']
+            (['holonet-movies-catalog', 'holonet-movies-catalog-claude'] +
+            (['holonet-interactive'] if holonet_catalog_interactive_enabled | bool else []))
           - >-
             authentik_machine_identities | first ==
             {'host': 'homelab', 'profile': 'holonet-movies-catalog', 'service': 'holonet',
@@ -102,17 +108,27 @@
           # The new laptop account: its generation, expiry and state follow the
           # role's own lifecycle rules, but its host, profile and grant are fixed.
           - >-
-            (authentik_machine_identities | last | dict2items
+            (authentik_machine_identities[1] | dict2items
             | rejectattr('key', 'in', ['generation', 'expires', 'state']) | items2dict) ==
             {'host': 'laptop', 'profile': 'holonet-movies-catalog-claude', 'service': 'holonet',
              'holonet_server': '3c86e6d7ff6c4a3296522cdf03d22bb0', 'holonet_libraries': ['3'],
              'holonet_catalog_users': ['54b7d36cef804d3c8478474553ed3a82'],
              'holonet_history_users': [], 'holonet_target_users': [], 'holonet_actions': ['catalog.read'],
              'holonet_namespace': 'movies-catalog'}
+          - >-
+            not (holonet_catalog_interactive_enabled | bool) or
+            (authentik_machine_identities[2] | dict2items
+            | rejectattr('key', 'in', ['generation', 'expires', 'state']) | items2dict) ==
+            {'host': 'laptop', 'profile': 'holonet-interactive', 'service': 'holonet',
+             'holonet_server': '3c86e6d7ff6c4a3296522cdf03d22bb0', 'holonet_libraries': ['3'],
+             'holonet_catalog_users': ['54b7d36cef804d3c8478474553ed3a82'],
+             'holonet_history_users': [], 'holonet_target_users': [], 'holonet_actions': ['catalog.read'],
+             'holonet_namespace': 'movies-catalog'}
         fail_msg: >-
           This entrypoint only adds to the existing owned HoloNet application and keeps
-          its homelab identity present and unchanged. The only other account is the
-          laptop's limited Claude catalog identity with the same fixed grant.
+          its homelab identity present and unchanged. Laptop identities are only the
+          limited Claude preset and the explicitly opted-in ordinary catalog reader,
+          each with the same fixed grant and its own credential.
         quiet: true
 
     - name: Require both destinations bound before any host is touched
