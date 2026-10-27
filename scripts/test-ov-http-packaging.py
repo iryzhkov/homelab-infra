@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Source-only OV packaging fixtures; no live Docker, backend or issuer access."""
 import copy
+from dataclasses import replace
+import hashlib
+import sys
 import errno
 import stat
 import json
@@ -40,7 +43,111 @@ def fixture():
                    "listen_host": "0.0.0.0", "listen_port": 8098}}
 
 
+def full_fixture():
+    value = fixture()
+    value["image"]["contract_revision"] = "1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319"
+    value["image"]["source_revision"] = "1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319"
+    value["config"].update({
+        "semantic_profile": "resources-directories-v052-v1",
+        "semantic_backend_revision": "7f3ae1af822d936c1d0b070537772b0f1d59122f",
+        "namespace_roots": ["viking://resources"],
+        "mutation_profile": "resources-document-mutations-v1"})
+    return value
+
+
+def invalid_full_packages():
+    good = full_fixture()
+    semantic = ("semantic_profile", "semantic_backend_revision", "namespace_roots",
+                "mutation_profile")
+    for mask in range(15):
+        bad = copy.deepcopy(good)
+        for i, key in enumerate(semantic):
+            if not mask & (1 << i):
+                del bad["config"][key]
+        yield "partial-" + str(mask), bad
+    for key, replacement in (
+        ("semantic_profile", "namespace-directories-v1"),
+        ("semantic_profile", "disabled"),
+        ("semantic_backend_revision", "68e66ec8998957e1af3cae8a661947fe77cd9578"),
+        ("semantic_backend_revision", "f" * 40),
+        ("namespace_roots", ["viking://resources/homeassistant-api"]),
+        ("namespace_roots", ["viking://resources", "viking://user"]),
+        ("namespace_roots", ["viking://resources/"]),
+        ("namespace_roots", []),
+        ("namespace_roots", "viking://resources"),
+        ("mutation_profile", "disabled"),
+        ("mutation_profile", "future-mutations"),
+        ("extra", "refused"),
+    ):
+        bad = copy.deepcopy(good)
+        bad["config"][key] = replacement
+        yield key + "-" + str(replacement), bad
+    for key, replacement in (
+        ("contract_revision", "f" * 40),
+        ("contract_revision", "5f5c52c2171a2fef9ebe1439342921b1e58169bd"),
+        ("source_revision", "f" * 40),
+        ("source_revision", "5f5c52c2171a2fef9ebe1439342921b1e58169bd"),
+    ):
+        bad = copy.deepcopy(good)
+        bad["image"][key] = replacement
+        yield key + "-" + replacement, bad
+
+
 class OVPackagingTest(unittest.TestCase):
+    def test_closed_full_contract_and_unchanged_legacy(self):
+        legacy = fixture()
+        before = copy.deepcopy(legacy)
+        self.assertIs(contract.ov_contract(legacy), legacy)
+        self.assertEqual(legacy, before)
+        self.assertEqual(len(legacy["config"]), 7)
+        for revision in ("1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319",
+                         "4cc776bc4f9a9211b1106f2ba3299d92e82690be"):
+            full = full_fixture()
+            full["image"]["source_revision"] = revision
+            before = copy.deepcopy(full)
+            self.assertIs(contract.ov_contract(full), full)
+            self.assertEqual(full, before)
+            self.assertEqual(len(full["config"]), 11)
+        for name, bad in invalid_full_packages():
+            with self.subTest(name=name), self.assertRaises(AnsibleFilterError):
+                contract.ov_contract(bad)
+        for key in ("semantic_profile", "semantic_backend_revision", "namespace_roots",
+                    "mutation_profile"):
+            bad = fixture()
+            bad["config"][key] = full_fixture()["config"][key]
+            with self.subTest(legacy_extra=key), self.assertRaises(AnsibleFilterError):
+                contract.ov_contract(bad)
+
+    def check_source_bound_loader(self, path, full, base):
+        source = os.environ.get("OV_HTTP_CONFIG_SOURCE")
+        if not source:
+            return  # Ordinary packaging CI has no separately bound adapter input.
+        source = Path(source).resolve()
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),
+                         "e02fc83629be65ebf40252450306f7787f1bc35b7f8cbfa017c77b73b7646fa9")
+        spec = importlib.util.spec_from_file_location("accepted_ov_config", source)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        loaded = module.Config.load(str(path))
+        self.assertEqual(loaded.uri_policy,
+                         "resources-utf8-read-v1" if full else "legacy-ascii-v1")
+        self.assertEqual(loaded.mutation_profile,
+                         "resources-document-mutations-v1" if full else "disabled")
+        self.assertEqual(loaded.namespace_roots, ("viking://resources",) if full else ())
+        self.assertEqual(loaded.admits_namespace("viking://resources/fixture"), full)
+        self.assertFalse(loaded.admits_namespace("viking://resources-other/fixture"))
+        key = base / "synthetic-backend-key"
+        key.write_text("synthetic-only-key\n")
+        key.chmod(0o600)
+        self.assertEqual(replace(loaded, backend_secret_file=str(key)).secret(),
+                         "synthetic-only-key")
+        print("OV_CONFIG_IMPORT " + json.dumps({
+            "path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "pin": "1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319",
+            "tree": "651a695611641667e63b9b1d78e27b6b5387dc7b",
+            "profile": "full" if full else "legacy"}), flush=True)
     def test_contract_refusals_and_static_package_separation(self):
         value = fixture()
         self.assertEqual(contract.ov_contract(value), value)
@@ -201,6 +308,15 @@ class OVPackagingTest(unittest.TestCase):
             self.assertIn("changed=3", run(render).stdout)
             self.assertIn("changed=0", run(render).stdout)
             self.assertEqual(tomllib.loads((base / "runtime.toml").read_text()), value["config"])
+            self.assertEqual((base / "runtime.toml").read_bytes(), (
+                'backend_secret_file = "/etc/ov-http/backend-key"\n'
+                'backend_url = "http://192.168.70.200:1933/api/v1"\n'
+                'issuer = "https://auth.example.invalid/ov/"\n'
+                'jwks_url = "https://auth.example.invalid/ov/jwks/"\n'
+                'listen_host = "0.0.0.0"\n'
+                'listen_port = 8098\n'
+                'resource = "https://ov.mcp.example.invalid/mcp"\n').encode())
+            self.check_source_bound_loader(base / "runtime.toml", False, base)
             compose = yaml.safe_load((base / "compose.yml").read_text())
             service = compose["services"]["ov-http"]
             self.assertEqual(set(compose["services"]), {"ov-http"})
@@ -231,6 +347,27 @@ class OVPackagingTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Require an explicit lifecycle", result.stdout)
                 self.assertNotIn("Guard all package ancestors", result.stdout)
+            # The owning role refuses invalid profiles in its first task, before guards,
+            # credential metadata, directories, templates or Docker can be touched.
+            for name, bad in list(invalid_full_packages())[::8]:
+                values_bad = {"ov_http_compose_enabled": True, "ov_http_package": bad}
+                enabled.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                    "vars": values_bad, "roles": ["ov_http_compose"]}]))
+                result = run(enabled, check=False)
+                self.assertNotEqual(result.returncode, 0, name)
+                self.assertIn("Validate fixed OV packaging inputs before writes", result.stdout)
+                self.assertNotIn("Require an explicit lifecycle choice", result.stdout)
+                self.assertNotIn("Guard all package ancestors", result.stdout)
+            full = full_fixture()
+            values["ov_http"] = contract.ov_contract(full)
+            render.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                "vars": values, "tasks": [{"name": "Render full runtime", "ansible.builtin.template":
+                    {"src": str(ROOT / "roles/ov_http_compose/templates/runtime.toml.j2"),
+                     "dest": str(base / "runtime.toml"), "mode": "0600"}}]}]))
+            self.assertIn("changed=1", run(render).stdout)
+            self.assertIn("changed=0", run(render).stdout)
+            self.assertEqual(tomllib.loads((base / "runtime.toml").read_text()), full["config"])
+            self.check_source_bound_loader(base / "runtime.toml", True, base)
             # Optional CLI parsing needs no daemon; CI still exercises actual Ansible/YAML.
             if os.environ.get("OV_HTTP_COMPOSE_PARSE") == "1":
                 parsed = subprocess.run(["docker", "compose", "-f", str(base / "compose.yml"),

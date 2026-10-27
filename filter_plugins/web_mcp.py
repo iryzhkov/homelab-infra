@@ -325,6 +325,17 @@ def route_contract(value):
 
 
 OV_CONTRACT = "5f5c52c2171a2fef9ebe1439342921b1e58169bd"
+OV_FULL_CONTRACT = "1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319"
+OV_FULL_SOURCE_REVISIONS = (
+    OV_FULL_CONTRACT,
+    "4cc776bc4f9a9211b1106f2ba3299d92e82690be",
+)
+OV_FULL_CONFIG = {
+    "semantic_profile": "resources-directories-v052-v1",
+    "semantic_backend_revision": "7f3ae1af822d936c1d0b070537772b0f1d59122f",
+    "namespace_roots": ["viking://resources"],
+    "mutation_profile": "resources-document-mutations-v1",
+}
 
 
 def ov_contract(value):
@@ -336,14 +347,23 @@ def ov_contract(value):
     match(image["reference"], r"[a-z0-9][a-z0-9./:_-]{0,240}@sha256:[0-9a-f]{64}")
     require(":latest@" not in image["reference"], "no latest image tag")
     match(image["source_revision"], r"[0-9a-f]{40}")
-    require(image["contract_revision"] == OV_CONTRACT, "unaccepted OV reader interface")
+    require(image["contract_revision"] in (OV_CONTRACT, OV_FULL_CONTRACT),
+            "unaccepted OV reader interface")
+    full_resources = image["contract_revision"] == OV_FULL_CONTRACT
+    if full_resources:
+        require(image["source_revision"] in OV_FULL_SOURCE_REVISIONS,
+                "unaccepted full-resource OV source revision")
     p = url(image["provenance"])
     require(p.path not in ("", "/") and "/latest/" not in p.path,
             "explicit reviewed build receipt required")
     config = value["config"]
-    # Semantic deployment is deliberately unsupported in this packaging slice.
-    keys(config, ("resource", "issuer", "jwks_url", "backend_url",
-                  "backend_secret_file", "listen_host", "listen_port"))
+    required = ("resource", "issuer", "jwks_url", "backend_url",
+                "backend_secret_file", "listen_host", "listen_port")
+    keys(config, required + (tuple(OV_FULL_CONFIG) if full_resources else ()))
+    if full_resources:
+        require(all(config[key] == fixed for key, fixed in OV_FULL_CONFIG.items()),
+                "full-resource OV requires the exact resources and mutation profiles")
+    # Return the supplied object unchanged, including the legacy seven-field config.
     trust(config, "resource", "issuer")
     for key in ("resource", "issuer", "jwks_url", "backend_url"):
         require("%" not in config[key], "escaped runtime URLs refused")

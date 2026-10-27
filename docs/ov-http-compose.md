@@ -1,16 +1,19 @@
-# OV HTTP reader Compose source
+# OV HTTP Compose source
 
 The standalone playbook playbooks/ov-http.yml and ov_http_compose role package
-the reviewed iryzhkov/ov-mcp HTTP reader interface at
-5f5c52c2171a2fef9ebe1439342921b1e58169bd. The accepted source includes
-the complete requirements-http.lock closure. Build the Python 3.13 image with
-that repository's Dockerfile using a reviewed immutable official Python base.
-No image reference or production input is supplied here.
+two closed iryzhkov/ov-mcp HTTP interfaces. The legacy reader contract remains
+5f5c52c2171a2fef9ebe1439342921b1e58169bd. The full-resource contract is
+1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319. Build the Python 3.13 image with
+the accepted source's Dockerfile and complete requirements-http.lock closure,
+using a reviewed immutable official Python base. No image reference or production
+input is supplied here. This extension permits later explicitly selected staging;
+it does not select or activate the new profile on installed hosts.
 
 The full Jocasta authoring guide was fetched at
-jocasta:38a63cf8918eebae2dd7c8911eacd89c@1, content SHA256
-b68c6ba2ca4ddc8d2293dc349cd9e3b95b87a00172b3820938f2ae86a0fa1ca4.
-Its tested Jocasta/native-client results do not qualify this reader.
+jocasta:38a63cf8918eebae2dd7c8911eacd89c@44, content SHA256
+e93cb3050f5e554dddcc92c0417ab68893653acf90077cb0f0c3531007d6ac06.
+It grants no new authority. Jocasta, OpenCode and HoloNet retain separate owners
+and enrollments. This source changes no credentials, tokens or native registrations.
 
 ## Deliberate single-host Compose boundary
 
@@ -49,7 +52,15 @@ or production variables.
 
 image.reference requires an explicit image@sha256 digest and refuses latest.
 source_revision is the actual reviewed 40-hex ov-mcp build commit.
-contract_revision must equal 5f5c52c2171a2fef9ebe1439342921b1e58169bd.
+contract_revision selects exactly one of the two contracts:
+- Legacy 5f5c52c2171a2fef9ebe1439342921b1e58169bd retains its existing
+  40-hex source_revision acceptance and exact seven-field config.
+- Full-resource 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319 accepts only
+  source_revision 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319 or its published
+  identical-tree merge 4cc776bc4f9a9211b1106f2ba3299d92e82690be.
+  Both identify tree 651a695611641667e63b9b1d78e27b6b5387dc7b.
+  Arbitrary future full-profile sources refuse.
+
 provenance is an explicit HTTPS reviewed build-receipt URL. That receipt must
 map the image digest to the reviewed ov-mcp commit/tree, lock blob, platform,
 base digest and successful build. Inventory values and OCI labels assert that
@@ -60,12 +71,30 @@ Config fields exactly match ov_http/config.py. Resource is canonical public
 HTTPS /mcp, issuer has its exact trailing slash, JWKS is fixed HTTPS and backend
 URL ends exactly /api/v1. backend_secret_file is /etc/ov-http/backend-key,
 listen_host is 0.0.0.0 and listen_port is 8098 inside the container.
-The role renders TOML using JSON-compatible string/int literals.
-Semantic settings are deliberately unsupported by this packaging slice and
-remain OFF. Do not upgrade the backend or treat an inventory assertion as
-runtime/root-type qualification. The reader's separate opt-in profile at exact
-68e66ec8998957e1af3cae8a661947fe77cd9578 still requires admitted namespace
-directories and the documented native backend and immutable-root-type gates.
+The existing template renders the validated dictionary as sorted TOML keys using
+JSON-compatible literals. Legacy config/output receives no normalization or
+injected defaults and its rendered bytes remain unchanged.
+
+The full-resource selector requires the same seven fields plus exactly these
+four fields, all together and with these values:
+
+```yaml
+semantic_profile: resources-directories-v052-v1
+semantic_backend_revision: 7f3ae1af822d936c1d0b070537772b0f1d59122f
+namespace_roots: [viking://resources]
+mutation_profile: resources-document-mutations-v1
+```
+
+Partial or mixed profiles, extra keys, alternate roots and unsupported revisions
+refuse in the role's first validation task before managed writes. Legacy config
+refuses all four additional fields. There is no generic claims, URL or key escape
+hatch, and no separately selectable read-only semantic profile in this package.
+
+The namespace ceiling is not a grant. Signed per-request resources/actions and
+the fixed issuer/resource/helper contract remain separate. The backend revision
+above identifies the existing search-path contract, not an attestation for a
+patched backend artifact. Exact backend artifact qualification remains required.
+The new v1 wire checks do not establish all 19 tools' runtime behavior.
 
 Supply credential.source as an existing absolute protected controller file
 outside this repository, snapshots and fixtures. The existing credential guard
@@ -157,6 +186,19 @@ ansible-core==2.19.13, PyYAML==6.0.3, Jinja2==3.1.6 and community.docker:5.4.0
 inside the job. Run both suites via the launcher. Optionally set
 OV_HTTP_COMPOSE_PARSE=1 where Docker Compose CLI is present to parse the actual
 render without a daemon. YAML/Compose parsing remains source evidence only.
+A source-bound job can set OV_HTTP_CONFIG_SOURCE to a separately supplied,
+unchanged ov_http/config.py from accepted commit
+1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319, tree
+651a695611641667e63b9b1d78e27b6b5387dc7b, SHA256
+e02fc83629be65ebf40252450306f7787f1bc35b7f8cbfa017c77b73b7646fa9.
+The focused suite checks that hash before importing and records the actual import
+path/hash/pin. It loads actual Ansible-rendered legacy/full protected TOML and
+checks URI policy, namespace admission and mutation selection. A synthetic
+owner-only key under scratch HOME exercises secret loading through a temporary
+Config copy; the loaded rendered config retains its fixed runtime key path.
+Without this external input, ordinary packaging CI omits only the adapter-loader
+check. The adapter validator is not vendored into this repository.
+
 No test calls an actual Docker API or issuer/backend. In a single-ID Chaldea
 namespace, changing ownership to UID8098 fails EINVAL; that case explicitly
 simulates only the two regular leaves' numeric UID/GID metadata. Ancestor,
