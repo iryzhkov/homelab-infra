@@ -316,9 +316,19 @@ data directory, including WAL/SHM, under a separate local recovery path.
 Select and record the backup UTC timestamp and possible write-loss window.
 Gunzip the snapshot onto local supported storage, run SQLite integrity_check,
 and start an isolated instance of the same pinned image against that copy.
-Use the CLI to verify expected IDs/revisions, path aliases, historical content
-and search before replacing production. Rebuild search only with the server
-stopped, using the server's reindex operation if necessary.
+Verify expected IDs/revisions, path aliases, historical content and search
+through an authorized client bound explicitly to that isolated instance.
+For an image with HTTP MCP enabled, use `get` (including exact revisions),
+`history`, `list` and `search`. History is metadata: fetch each selected revision
+with `get` before comparing its complete content. Follow pagination and retain
+incomplete-search receipts; a partial result is not an exhaustive check.
+For older pinned images without MCP, use their existing read-only HTTP API:
+`/v1/get`, `/v1/history`, `/v1/list` and `/v1/search`. An installed Jocasta CLI
+is not required. Confirm the client's endpoint before calling it: the fleet's
+ordinary native MCP registration targets production and does not verify a
+separate restored copy. Keep the isolated instance out of production routing.
+Rebuild search only with the server stopped, using its reindex operation if
+necessary.
 
 Do not point SQLite at the NAS gzip file or at an NFS-uncompressed database.
 Do not overwrite a running database or discard the damaged copy. Reconcile
