@@ -77,7 +77,7 @@ with akasha_activate:false. That phase must retain the exact qualified packet an
 fresh per-call preservation evidence too. No PC or Normandy play is included above.
 
 Rollback removes the two route registrations first with
--e akasha_route_canary_enabled=false, retaining the exact original 28 and MC scope.
+-e '{"akasha_route_canary_enabled": false}', retaining the exact original 28 and MC scope.
 Disable the associated publisher/reader selection and signed/helper route grants
 under root's coordinated fleet rollback. Restore the captured matching config if
 necessary. For a runtime rollback, the previously selected host-v0.2.14 SHA is

@@ -416,12 +416,14 @@ class SnapshotTest(unittest.TestCase):
             root = Path(directory)
             target = root / "config.json"
 
-            def run(overrides, check=False, runtime=False):
+            def run(overrides, check=False, runtime=False, extra_args=(), canary_only=False):
                 play = root / "compose.yml"
                 play.write_text(yaml.safe_dump([{
                     "hosts": "localhost", "gather_facts": False,
                     "vars": values | overrides,
-                    "pre_tasks": source["pre_tasks"],
+                    "pre_tasks": ([task for task in source["pre_tasks"] if task["name"] ==
+                        "Require a compatible qualified host for the FATE canary"]
+                        if canary_only else source["pre_tasks"]),
                     "tasks": [{"name": "Render the canonical Akasha config in scratch",
                         "ansible.builtin.template": {
                             "src": str(ROOT / "roles/akasha/templates/config.json.j2"),
@@ -430,7 +432,7 @@ class SnapshotTest(unittest.TestCase):
                 }]))
                 return subprocess.run(
                     ["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)]
-                    + (["--check"] if check else []) + (["--tags", "runtime"] if runtime else []),
+                    + (["--check"] if check else []) + (["--tags", "runtime"] if runtime else []) + list(extra_args),
                     env={**os.environ, "ANSIBLE_LOCAL_TEMP": str(root / "local"),
                          "ANSIBLE_REMOTE_TEMP": str(root / "remote")},
                     capture_output=True, text=True)
@@ -484,9 +486,19 @@ class SnapshotTest(unittest.TestCase):
                 self.assertNotEqual(compare(rows).returncode, 0)
             self.assertNotEqual(compare(additions[:-1]).returncode, 0)
 
+            # Execute the exact documented JSON-typed override against active canary output.
+            rollback = '{"akasha_route_canary_enabled": false}'
+            self.assertIn("-e '" + rollback + "'", (ROOT / "docs/mission-control-hosted-packet.md").read_text())
+            for changed in (1, 0):
+                proc = run({}, extra_args=["-e", rollback])
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertRegex(proc.stdout, rf"changed={changed}\s+unreachable=0\s+failed=0")
+                self.assertEqual(json.loads(target.read_text()), baseline)
+            self.assertEqual(run({}).returncode, 0)
             before = target.read_bytes()
             refusals = [
                 {"akasha_route_canary_enabled": "true"},
+                {"akasha_route_canary_enabled": "false"},
                 {"akasha_enrollment_registry_enabled": False},
                 {"mission_control_laptop_qualified": False},
                 {"mission_control_laptop_host_sha256": "b" * 64},
@@ -496,8 +508,10 @@ class SnapshotTest(unittest.TestCase):
             for overrides in refusals:
                 # Always-tagged gates must also protect the artifact-only phase.
                 for runtime in (False, True):
-                    proc = run(overrides, runtime=runtime)
+                    # Isolate this gate so earlier MC checks cannot mask a missing canary clause.
+                    proc = run(overrides, runtime=runtime, canary_only=True)
                     self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                    self.assertIn("FATE canary registrations require enrollment and the exact qualified", proc.stdout)
                     self.assertNotIn("TASK [Compose explicitly enabled", proc.stdout)
                     self.assertEqual(target.read_bytes(), before)
 
