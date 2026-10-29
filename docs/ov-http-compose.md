@@ -50,7 +50,9 @@ or production variables.
   listen_host, listen_port.
 - credential: protected controller source path and its actual source_uid.
 
-image.reference requires an explicit image@sha256 digest and refuses latest.
+With image.kind absent, image.reference requires an explicit image@sha256
+distribution digest and refuses latest. Its existing grammar and semantics stay
+unchanged. The only additional selector is image.kind: local-config, described below.
 source_revision is the actual reviewed 40-hex ov-mcp build commit.
 contract_revision selects exactly one of the two contracts:
 - Legacy 5f5c52c2171a2fef9ebe1439342921b1e58169bd retains its existing
@@ -104,6 +106,58 @@ and diff:false for sensitive operations. Never read /srv/swarm/openviking/ov.con
 to manufacture this input. The destination key and TOML must actually be owned
 by 8098:8098; root-owned mode0600 is refused by the nonroot reader.
 
+## Explicit local config identity
+
+This optional image object admits exactly one measured full-resource HTTP release:
+
+```yaml
+kind: local-config
+reference: sha256:3e7ab808782cdae27d665455648927bd0bd76a4258ddb41c27b30fc96f58e971
+source_revision: 9a85b5072f4a1824a1cc93c910fd85640922a1b1
+contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/40931664135
+```
+
+All five fields must match together. The contract revision still names the
+existing full-resource interface. The separately accepted source is merged
+9a85b5072f4a1824a1cc93c910fd85640922a1b1, tree
+c764e84d552ad8535af004620d60dea0f00e6b07, with product audit
+4b1db3d3c59baae2e31a9812280d9e032845a0da, tree
+f6c96691110b8506b67f2d9eb821cf29e2ae08b1. This source is not added to the distribution-source allowlist.
+Other kinds, extra fields, canary/reader contracts and arbitrary release triples
+refuse. The full config and resource/action/namespace restrictions above are unchanged.
+
+The reference is the Docker image config ID. It commits to the immutable config
+and ordered RootFS diff_ids; it is not a registry distribution manifest.
+The retained Docker save is 176880128 bytes, SHA256
+768dc3aa49e9221b145f3de1a5ad5f77acb0300e50ff717e2b2acf5d54429f15.
+RepoDigests is empty. The save OCI manifest a73bc4... is save-only.
+The owning evidence is the source-map's Image selection restriction,
+production-transition-inventory-20261029.md and audit-http-hosted-build-result.md
+in the full-ov-backend-contract receipt bundle.
+
+Before protected credential inspection, managed writes, check-config or activation,
+the role uses docker_image_info on the fixed local socket and exact config ID.
+Missing images or mismatched ID, revision label, User, entrypoint, command or
+working directory refuse. Docker's immutable config ID supplies the config/RootFS
+commitment; this role adds no parallel hashing store or signature authority.
+A target store that reports a manifest/index ID instead of this config ID refuses.
+Later target qualification must confirm the daemon identity semantics as well as Compose.
+The image must already exist. This mode never pulls, tags, imports, installs or
+logs into a registry. Offline check-config also uses --pull=never.
+The regular activation retains pull:never and recreate:auto.
+
+Hosted build/save custody and the later root-owned 37-case external SDK matrix
+with real JWT/JWKS/CA, two ACL denials and audit qualify the isolated artifact.
+They do not qualify execution through this role or target Docker Compose's
+acceptance of a canonical config ID. Source tests render and validate that exact
+string; actual target Compose execution remains a later qualification.
+The existing old HTTP canary remains deployed, and production is OV 0.5.2 per
+the fresh production inventory. This option does not select an image or change
+canaries, stdio, inventory enablement, grants or backend configuration.
+Backend 09870's Swarm delivery remains unresolved. No registry location for
+318575... is established here, and Swarm acceptance of a local ID is not assumed.
+
 ## Stage, validate, activate and roll back
 
 Use an absolute standalone inventory outside repository inventory, containing
@@ -123,7 +177,8 @@ An interrupted unmarked directory deliberately refuses adoption. Inspect its
 evidence before separately authorized recovery; do not bypass the marker check.
 
 Staging inspects fixed Docker names and project/network labels, refuses unowned
-objects and any leftover check container, pulls only the selected digest, then
+objects and any leftover check container, pulls only the selected distribution
+digest in the legacy mode, then
 runs --check-config as 8098:8098 with network none, read-only root, dropped
 capabilities and the exact mounted files. This validates local schema, ownership
 and key format, with no backend/issuer access. It does not start a listening
