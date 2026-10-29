@@ -30,10 +30,10 @@ helper grants. Root owns those additions using the existing Normandy signer,
 H route append and PC route read only, audience akasha. No new signer or publisher
 role belongs to this packet. Root handles the existing AA example publisher units.
 
-Before integration, root must publish the reviewed fleet max-eight prerequisite
-and update scripts/check-installer-role-drift.py to its actual full commit SHA.
-The old PIN remains deliberately unchanged until that SHA is known. Do not weaken
-or skip this guard; CI/deployment remains blocked on that integration dependency.
+The published, independently reviewed fleet max-eight prerequisite is
+commit dba4e4c7c459ccfe2b433c5cf39ea71c910cb3d4 in fleet PR132.
+The installer-role drift check pins that exact public commit. Its full CI and
+merge remain deployment gates. Never weaken or skip the exact copied-role guard.
 The existing max-eight/ten-release CHECK/REAL/SECOND0 fixture receipt is
 89c72ff4-0060-4f80-86c2-9541810dddb7. Current composition checks additionally use
 the canonical preserve lists and render the real Akasha configuration template.
