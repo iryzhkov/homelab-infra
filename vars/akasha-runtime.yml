@@ -1,16 +1,15 @@
 ---
-# Homelab Akasha only; shared consumer trust remains on host-v0.2.2.
-# Candidate SHA only: ROOT must compare the official publication before activation.
-# Nine members: old022/023/024/026/027/028/029/0210 plus selected014.
-# runtime014 keeps seven explicit old022/023/024/026/027/028/029 + newest prior0210;
-# shared022 keeps seven explicit old023/024/026/027/028/029/0210 + newest prior014.
-# Seven is the installer's actual maximum; selected + newest prior are implicit.
-# Fresh release AND matching cache membership, ownership, no-symlink and directory
-# mtime evidence gate EACH call. STOP if the actual set or newest prior differs.
-# Never install missing old versions or write target mtimes to satisfy retention.
-# Use akasha_trust_preserve_versions for the trust call; never override the global
-# chaldea_host_artifact_preserve_versions through extra vars in the canonical full play.
-akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9, host-v0.2.10]
-chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9]
-akasha_host_version: host-v0.2.14
-akasha_host_sha256: 969319cb2dbde4978604edd109ce543711a6960c54d5e45cb1138d2a2f23c0ec
+# Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
+# Verified official host-v0.2.15 archive, qualified from source d0bc481.
+# Ten members: old022/023/024/026/027/028/029/0210/0214 plus selected0215.
+# runtime0215: eight explicit old022..0210 + implicit newest prior0214.
+# shared022: eight explicit old023..0214 + implicit newest prior0215.
+# Requires the reviewed fleet max-eight preservation prerequisite.
+# Fresh release AND matching cache membership, root ownership, no-symlink and
+# directory mtime evidence gate EACH call. STOP on another set or newest prior.
+# Never install missing old versions or alter target mtimes to satisfy retention.
+# The trust call uses its own list; never pass the runtime list as extra vars.
+akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9, host-v0.2.10, host-v0.2.14]
+chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9, host-v0.2.10]
+akasha_host_version: host-v0.2.15
+akasha_host_sha256: 550f5b5c2ff858ed34dcb1de400a8cb2db847e036d88f71f56486cce2a72ab9f
