@@ -5,7 +5,7 @@ Python 3 and Git. The existing Check workflow runs it alongside its focused
 unittest script, using a disposable scratch HOME and disk TMPDIR.
 
 The check fetches `iryzhkov/chaldea-fleet-config` at exact source commit
-`bc3d4c9c1ae3e2f0c88315c3c3d179a3b82944bf`, the independently pinned clock runtime installer.
+`dba4e4c7c459ccfe2b433c5cf39ea71c910cb3d4`, the independently pinned clock runtime installer.
 This exact commit must be public before CI or deployment.
 The check compares every file under
 `roles/chaldea_access_trust/` and `roles/chaldea_host_artifact/` with this
