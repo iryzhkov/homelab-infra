@@ -338,19 +338,58 @@ OV_FULL_CONFIG = {
 }
 
 
+# One measured HTTP release. This is a Docker config ID, not a registry manifest.
+OV_LOCAL_RELEASE = {
+    "kind": "local-config",
+    "reference": "sha256:3e7ab808782cdae27d665455648927bd0bd76a4258ddb41c27b30fc96f58e971",
+    "source_revision": "9a85b5072f4a1824a1cc93c910fd85640922a1b1",
+    "contract_revision": OV_FULL_CONTRACT,
+    "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/40931664135",
+}
+
+
+def ov_local_image(images):
+    # The daemon's immutable Id commits to the saved config and ordered RootFS
+    # diff_ids. Do not derive an expected identity from tags or observed fields.
+    require(isinstance(images, list) and len(images) == 1,
+            "required local OV image is absent or ambiguous")
+    image = images[0]
+    require(isinstance(image, dict) and image.get("Id") == OV_LOCAL_RELEASE["reference"],
+            "unaccepted local OV image ID")
+    config = image.get("Config")
+    if not isinstance(config, dict):
+        raise AnsibleFilterError("web-mcp: missing local OV config")
+    labels = config.get("Labels")
+    require(isinstance(labels, dict), "missing local OV revision label")
+    require(config.get("User") == "8098:8098"
+            and config.get("WorkingDir") == "/app"
+            and config.get("Entrypoint") == [
+                "python", "-m", "ov_http", "--config", "/etc/ov-http/runtime.toml"]
+            and config.get("Cmd") in (None, [])
+            and isinstance(labels, dict)
+            and labels.get("org.opencontainers.image.revision")
+                == OV_LOCAL_RELEASE["source_revision"],
+            "local OV image config mismatch")
+    return True
+
+
 def ov_contract(value):
     keys(value, ("release", "image", "listen", "config", "credential"))
     match(value["release"], r"[a-z0-9][a-z0-9-]{0,63}")
     private_address(value["listen"])
     image = value["image"]
-    keys(image, ("reference", "source_revision", "contract_revision", "provenance"))
-    match(image["reference"], r"[a-z0-9][a-z0-9./:_-]{0,240}@sha256:[0-9a-f]{64}")
-    require(":latest@" not in image["reference"], "no latest image tag")
+    keys(image, ("reference", "source_revision", "contract_revision", "provenance"), ("kind",))
+    local = "kind" in image
+    if local:
+        require(image == OV_LOCAL_RELEASE, "unaccepted local OV release binding")
+    else:
+        match(image["reference"], r"[a-z0-9][a-z0-9./:_-]{0,240}@sha256:[0-9a-f]{64}")
+        require(":latest@" not in image["reference"], "no latest image tag")
     match(image["source_revision"], r"[0-9a-f]{40}")
     require(image["contract_revision"] in (OV_CONTRACT, OV_FULL_CONTRACT),
             "unaccepted OV reader interface")
     full_resources = image["contract_revision"] == OV_FULL_CONTRACT
-    if full_resources:
+    if full_resources and not local:
         require(image["source_revision"] in OV_FULL_SOURCE_REVISIONS,
                 "unaccepted full-resource OV source revision")
     p = url(image["provenance"])
@@ -384,4 +423,5 @@ class FilterModule:
     def filters(self):
         return {"web_mcp_endpoint_contract": endpoint_contract,
                 "web_mcp_route_contract": route_contract,
-                "ov_http_contract": ov_contract}
+                "ov_http_contract": ov_contract,
+                "ov_http_local_image": ov_local_image}

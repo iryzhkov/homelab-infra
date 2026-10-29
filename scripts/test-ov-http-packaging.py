@@ -55,6 +55,26 @@ def full_fixture():
     return value
 
 
+def local_fixture():
+    value = full_fixture()
+    value["image"] = {
+        "kind": "local-config",
+        "reference": "sha256:3e7ab808782cdae27d665455648927bd0bd76a4258ddb41c27b30fc96f58e971",
+        "source_revision": "9a85b5072f4a1824a1cc93c910fd85640922a1b1",
+        "contract_revision": "1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319",
+        "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/40931664135"}
+    return value
+
+
+def local_inspect():
+    return [{"Id": local_fixture()["image"]["reference"], "RepoDigests": [],
+             "Config": {"User": "8098:8098", "WorkingDir": "/app",
+                        "Entrypoint": ["python", "-m", "ov_http", "--config",
+                                       "/etc/ov-http/runtime.toml"],
+                        "Labels": {"org.opencontainers.image.revision":
+                                   local_fixture()["image"]["source_revision"]}}}]
+
+
 def invalid_full_packages():
     good = full_fixture()
     semantic = ("semantic_profile", "semantic_backend_revision", "namespace_roots",
@@ -94,6 +114,95 @@ def invalid_full_packages():
 
 
 class OVPackagingTest(unittest.TestCase):
+    def test_local_release_is_a_closed_binding(self):
+        good = local_fixture()
+        before = copy.deepcopy(good)
+        self.assertIs(contract.ov_contract(good), good)
+        self.assertEqual(good, before)
+        for key, replacement in (
+            ("kind", "distribution"), ("kind", None), ("kind", {}),
+            ("reference", "sha256:" + "a" * 64),
+            ("reference", "registry.invalid/ov@sha256:" + good["image"]["reference"][7:]),
+            ("source_revision", full_fixture()["image"]["source_revision"]),
+            ("provenance", good["image"]["provenance"] + "/"),
+            ("contract_revision", contract.OV_CONTRACT), ("unknown", "refused")):
+            bad = copy.deepcopy(good)
+            bad["image"][key] = replacement
+            with self.subTest(key=key), self.assertRaises(AnsibleFilterError):
+                contract.ov_contract(bad)
+        bad = copy.deepcopy(good)
+        del bad["image"]["kind"]
+        with self.assertRaises(AnsibleFilterError):
+            contract.ov_contract(bad)
+        bad["image"]["reference"] = fixture()["image"]["reference"]
+        with self.assertRaises(AnsibleFilterError):
+            contract.ov_contract(bad)  # New source cannot enter the old full allowlist.
+        for name, invalid in invalid_full_packages():
+            bad = copy.deepcopy(good)
+            bad["config"] = invalid["config"]
+            if bad["config"] != good["config"]:
+                with self.subTest(config=name), self.assertRaises(AnsibleFilterError):
+                    contract.ov_contract(bad)
+
+    def test_local_inspection_refuses_before_role_writes(self):
+        tasks = yaml.safe_load((ROOT / "roles/ov_http_compose/tasks/main.yml").read_text())[0]["block"]
+        # Execute the actual role with only external inspection/guard boundaries mocked.
+        # The guard sentinel prevents any protected paths or actual Docker calls.
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            modules = base / "modules"
+            modules.mkdir()
+            (modules / "web_mcp_guard.py").write_text(
+                "from ansible.module_utils.basic import AnsibleModule\n"
+                "m=AnsibleModule(argument_spec=dict(kind=dict(type='str'),release=dict(type='str')))\n"
+                "m.fail_json(msg='REACHED_READ_ONLY_GUARD_BOUNDARY')\n")
+            collection = base / "collections/ansible_collections/community/docker/plugins/modules"
+            collection.mkdir(parents=True)
+            (collection / "docker_image_info.py").write_text(
+                "import json,os\nfrom ansible.module_utils.basic import AnsibleModule\n"
+                "m=AnsibleModule(argument_spec=dict(docker_host=dict(type='str'),name=dict(type='str')),supports_check_mode=True)\n"
+                "assert m.params['docker_host']=='unix:///var/run/docker.sock'\n"
+                "assert m.params['name']=='" + local_fixture()["image"]["reference"] + "'\n"
+                "m.exit_json(changed=False,images=json.loads(os.environ['OV_INSPECT_FIXTURE']))\n")
+            inventory = base / "inventory.yml"
+            inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
+            play = base / "play.yml"
+            play.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                "vars": {"ov_http_compose_enabled": True, "ov_http_state": "active",
+                         "ov_http_activate": True, "ov_http_package": local_fixture()},
+                "roles": ["ov_http_compose"]}]))
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                ANSIBLE_LIBRARY=str(modules),
+                ANSIBLE_COLLECTIONS_PATH=str(base / "collections") + ":" + os.environ.get(
+                    "ANSIBLE_COLLECTIONS_PATH", os.environ["HOME"] + "/.ansible/collections"),
+                ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"), ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+            cases = [("accepted", local_inspect()), ("absent", [])]
+            for key, wrong in (("User", "0:0"), ("WorkingDir", "/other"),
+                               ("Entrypoint", ["sh"]), ("Cmd", ["--other"]),
+                               ("Labels", {"org.opencontainers.image.revision": "a" * 40})):
+                bad = local_inspect()
+                bad[0]["Config"][key] = wrong
+                cases.append((key, bad))
+            bad = local_inspect()
+            bad[0]["Id"] = "sha256:" + "a" * 64
+            cases.append(("Id", bad))
+            for name, images in cases:
+                result = web.checked_run(["ansible-playbook", "-i", str(inventory), str(play)],
+                    env=dict(env, OV_INSPECT_FIXTURE=json.dumps(images)), check=False,
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("REACHED_READ_ONLY_GUARD_BOUNDARY" if name == "accepted"
+                              else "Require the measured local image identity", result.stdout)
+                if name != "accepted":
+                    self.assertNotIn("Guard all package ancestors", result.stdout)
+                for forbidden in ("Pull only the reviewed", "Validate actual mounted", "Activate only"):
+                    self.assertNotIn(forbidden, result.stdout)
+            pull = next(t for t in tasks if t["name"] == "Stage and validate an immutable release")["block"]
+            pull = next(t for t in pull if "community.docker.docker_compose_v2_pull" in t)
+            self.assertIn("!= 'local-config'", pull["when"])
+            activate = next(t for t in tasks if t["name"] == "Activate only the validated owned service")
+            self.assertEqual(activate["community.docker.docker_compose_v2"]["pull"], "never")
+
     def test_closed_full_contract_and_unchanged_legacy(self):
         legacy = fixture()
         before = copy.deepcopy(legacy)
@@ -368,6 +477,17 @@ class OVPackagingTest(unittest.TestCase):
             self.assertIn("changed=0", run(render).stdout)
             self.assertEqual(tomllib.loads((base / "runtime.toml").read_text()), full["config"])
             self.check_source_bound_loader(base / "runtime.toml", True, base)
+            values["ov_http"] = contract.ov_contract(local_fixture())
+            render.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                "vars": values, "tasks": [{"name": "Render local image Compose", "ansible.builtin.template":
+                    {"src": str(ROOT / "stacks/ov-http/compose.yml.j2"),
+                     "dest": str(base / "compose.yml"), "mode": "0600"}}]}]))
+            self.assertIn("changed=1", run(render).stdout)
+            local_service = yaml.safe_load((base / "compose.yml").read_text())["services"]["ov-http"]
+            self.assertEqual(local_service["image"], local_fixture()["image"]["reference"])
+            self.assertEqual(local_service["labels"]["org.opencontainers.image.revision"],
+                             local_fixture()["image"]["source_revision"])
+            self.assertEqual(len(local_service["volumes"]), 2)
             # Optional CLI parsing needs no daemon; CI still exercises actual Ansible/YAML.
             if os.environ.get("OV_HTTP_COMPOSE_PARSE") == "1":
                 parsed = subprocess.run(["docker", "compose", "-f", str(base / "compose.yml"),
