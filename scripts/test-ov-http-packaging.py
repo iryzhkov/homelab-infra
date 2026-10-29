@@ -164,6 +164,12 @@ class OVPackagingTest(unittest.TestCase):
                 "assert m.params['docker_host']=='unix:///var/run/docker.sock'\n"
                 "assert m.params['name']=='" + local_fixture()["image"]["reference"] + "'\n"
                 "m.exit_json(changed=False,images=json.loads(os.environ['OV_INSPECT_FIXTURE']))\n")
+            # Collection roots do not fall through module-by-module. Keep all
+            # role Docker boundaries resolvable in this isolated mock collection.
+            for module in ("docker_compose_v2", "docker_compose_v2_pull"):
+                (collection / (module + ".py")).write_text(
+                    "from ansible.module_utils.basic import AnsibleModule\n"
+                    "AnsibleModule(argument_spec={}).fail_json(msg='FORBIDDEN_DOCKER_MUTATION')\n")
             inventory = base / "inventory.yml"
             inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
             play = base / "play.yml"
