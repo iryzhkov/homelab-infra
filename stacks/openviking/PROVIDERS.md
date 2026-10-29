@@ -81,6 +81,63 @@ example playbooks/swarm.yml --tags stacks -e only=openviking with the explicit
 persisted selector. Node/registry maintenance plays are separate operations.
 This batch changes no inventory enablement or default image.
 
+## Candidate transition and rollback gates
+
+This source option is not a cutover controller. Root owns the concrete operation
+under existing version/CAS and custody primitives. The source analysis is retained
+in full-ov-backend-contract/ov-cutover-startup-compatibility-map.md: candidate
+71065c06ab5a1bc85ddc880166667fe1b00de423, upstream
+7f3ae1af822d936c1d0b070537772b0f1d59122f. These are prerequisites for later activation:
+
+1. Exclude mutating callers and competing deployers. Retain the exact current
+   original Spec, matched backend/config/data, HTTP and inference selections.
+   Stop the sole original backend with fresh observed-version CAS and confirm no
+   writer. Capture and independently file-restore a fresh complete cold matched
+   baseline from that final stopped state. The reviewed backup controller
+   restores the original Spec; it does not leave the service stopped or implement
+   cutover. Its historical15540 pin is not a current admission. No full-cutover
+   90-second guarantee follows from backup timing.
+2. While that original remains stopped, require a fresh owning-SQLite read-only
+   queue count on a disposable copy of the same final DB/WAL/SHM: integrity/schema
+   pass and total0. Historical snapshot0 cannot authorize later legacy replay.
+   Nonzero or unavailable means abort to the owned original service. No queue
+   drain, deletion or quarantine is authorized; intervening original writes
+   invalidate this observation.
+3. Before any candidate startup, use the already proved LocalFS-only identity
+   initializer, with exact artifact/native and closed before/after preservation.
+   Do not call account load, QueueFS or server startup for this step. Keep protected
+   ov.conf unchanged and server.account_store.params.initialize_creation_ids
+   false/default-off permanently. FileStore defaults that option to false
+   (legacy.py:104); normal startup backfills only when enabled. QueueFS opens and
+   workers start before auth/account loading (app.py:164-174, core.py:148-192,
+   721), so enabling the flag does not establish identity-before-consumers.
+4. Retain the separately owned normal-entrypoint disposable-data check as a root
+   runtime gate. It has not been qualified by this source batch. Account load can
+   hash plaintext keys under existing hashing configuration (legacy.py:420-493);
+   startup can create preset/assets/index work even with an initially empty queue
+   (core.py:493-541,724; directories.py:357-440; system_assets/sync.py:39-72).
+   No startup-order patch or permanent backfill flag is added.
+5. Only after root accepts those effects, select this release through the existing
+   stop-first path with no overlapping old task and fresh version/CAS ownership.
+   Preserve existing config/mount/HTTP/inference closure. Keep user writes excluded
+   until startup, identity continuity, health, authenticated read acceptance and
+   existing canaries pass. Record explicit admission of new user writes.
+
+Before candidate startup, abort restores the owned original Spec through current
+CAS. After identity/startup writes but before new user writes, retain the candidate
+tree and use an explicitly assessed matched restoration/current-data path. Preserve
+the authoritative baseline and verified restore; no blind PreviousSpec or image-only
+shortcut is authorized. Upstream readers tolerate creation_id, but upstream
+_save_accounts_json replaces updated account records and drops it
+(legacy.py:1332-1369); unrestricted old-image writers do not preserve lifetime.
+
+After new user writes, no destructive pre-cutover snapshot rollback or image-only
+rollback is preauthorized. Preserve current data and stop further writes if recovery
+is needed; root must assess forward repair or an old-code/current-data path with
+identity continuity and explicitly admit any loss/transformation. Persist the
+approved release selection or its assessed rollback selection in owning configuration
+so routine convergence cannot silently revert it. This batch activates neither.
+
 ## Historical 0.2.6 to 0.5.2 activation evidence
 
 Root supplied this evidence from the fresh accepted offline migration:
