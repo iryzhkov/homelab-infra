@@ -1298,7 +1298,8 @@ class SourceTest(Scratch):
                 result = subprocess.run(
                     ["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)],
                     env={**os.environ, "ANSIBLE_LOCAL_TEMP": str(self.base / "ansible"),
-                         "ANSIBLE_REMOTE_TEMP": str(self.base / "remote")},
+                         "ANSIBLE_REMOTE_TEMP": str(self.base / "remote"),
+                         "ANSIBLE_FILTER_PLUGINS": str(ROOT / "roles/swarm/filter_plugins")},
                     capture_output=True, text=True, timeout=120)
                 output = result.stdout + result.stderr
                 self.assertEqual(result.returncode, 2, output)
