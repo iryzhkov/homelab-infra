@@ -264,11 +264,11 @@ class SnapshotTest(unittest.TestCase):
                         self.assertEqual(actual, ["verify"])
                         self.assertNotIn("TASK [Start only", proc.stdout)
 
-    def test_nine_host_releases_survive_runtime_and_shared_artifact_calls(self):
+    def test_ten_host_releases_survive_runtime_and_shared_artifact_calls(self):
         scratch = Path(os.environ["TMPDIR"]).resolve()
         self.assertEqual(Path.home().resolve(), scratch / ".scratch-home")
         self.assertEqual(os.geteuid(), 0, "run the root-owned fixture in the disposable job")
-        versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10, 11)]
+        versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10, 14, 15)]
         programs = ("chaldea-job-server", "chaldea-job-image", "chaldea-job-toolchains",
                     "chaldea-retention", "chaldea-timer-report", "chaldea_outcome.py",
                     "chaldea-access-trust-fetch", "exec-protocol.json",
@@ -350,9 +350,9 @@ class SnapshotTest(unittest.TestCase):
                     capture_output=True, text=True)
 
             before = snapshot()
-            # Separate call lists: selected0211/newest0210, then selected022/newest0211.
-            calls = [(versions[-1], versions[:7], versions[-2]),
-                     (versions[0], versions[1:8], versions[-1])]
+            # Separate call lists: selected0215/newest0214, then selected022/newest0215.
+            calls = [(versions[-1], versions[:8], versions[-2]),
+                     (versions[0], versions[1:9], versions[-1])]
             for selected, preserved, prior in calls:
                 for phase, check in (("CHECK", True), ("REAL", False), ("SECOND0", False)):
                     with self.subTest(selected=selected, phase=phase):
@@ -361,11 +361,11 @@ class SnapshotTest(unittest.TestCase):
                         self.assertRegex(proc.stdout, r"changed=0\s+unreachable=0\s+failed=0")
                         self.assertEqual(snapshot(), before)
                         self.assertEqual(sorted(p.name for p in releases.iterdir()), sorted(versions))
-                        self.assertEqual(len(list(cache.iterdir())), 18)
-                        print(f"{selected} {phase}: selected + newest {prior} + explicit 7; "
-                              "nine releases, 18 cache files, bytes and persistent metadata unchanged")
+                        self.assertEqual(len(list(cache.iterdir())), 20)
+                        print(f"{selected} {phase}: selected + newest {prior} + explicit 8; "
+                              "ten releases, 20 cache files, bytes and persistent metadata unchanged")
             for label, preserved, failed_task in (
-                    ("eight", versions[:8], "Validate bounded explicit host release preservation"),
+                    ("nine", versions[:9], "Validate bounded explicit host release preservation"),
                     ("duplicate", [versions[0], versions[0]],
                      "Validate bounded explicit host release preservation"),
                     ("invalid", ["host-v0.2.2\ninvalid"],
