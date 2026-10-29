@@ -141,6 +141,8 @@ the role uses docker_image_info on the fixed local socket and exact config ID.
 Missing images or mismatched ID, revision label, User, entrypoint, command or
 working directory refuse. Docker's immutable config ID supplies the config/RootFS
 commitment; this role adds no parallel hashing store or signature authority.
+A target store that reports a manifest/index ID instead of this config ID refuses.
+Later target qualification must confirm the daemon identity semantics as well as Compose.
 The image must already exist. This mode never pulls, tags, imports, installs or
 logs into a registry. Offline check-config also uses --pull=never.
 The regular activation retains pull:never and recreate:auto.

@@ -169,7 +169,7 @@ class OVPackagingTest(unittest.TestCase):
             for module in ("docker_compose_v2", "docker_compose_v2_pull"):
                 (collection / (module + ".py")).write_text(
                     "from ansible.module_utils.basic import AnsibleModule\n"
-                    "AnsibleModule(argument_spec={}).fail_json(msg='FORBIDDEN_DOCKER_MUTATION')\n")
+                    "AnsibleModule(argument_spec={}).fail_json(msg='FORBIDDEN_" + module + "')\n")
             inventory = base / "inventory.yml"
             inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
             play = base / "play.yml"
@@ -201,7 +201,8 @@ class OVPackagingTest(unittest.TestCase):
                               else "Require the measured local image identity", result.stdout)
                 if name != "accepted":
                     self.assertNotIn("Guard all package ancestors", result.stdout)
-                for forbidden in ("Pull only the reviewed", "Validate actual mounted", "Activate only"):
+                for forbidden in ("FORBIDDEN_docker_compose_v2", "FORBIDDEN_docker_compose_v2_pull",
+                                  "Pull only the reviewed", "Validate actual mounted", "Activate only"):
                     self.assertNotIn(forbidden, result.stdout)
             pull = next(t for t in tasks if t["name"] == "Stage and validate an immutable release")["block"]
             pull = next(t for t in pull if "community.docker.docker_compose_v2_pull" in t)
