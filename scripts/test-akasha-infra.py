@@ -351,8 +351,12 @@ class SnapshotTest(unittest.TestCase):
 
             before = snapshot()
             # Separate call lists: selected0215/newest0214, then selected022/newest0215.
-            calls = [(versions[-1], versions[:8], versions[-2]),
-                     (versions[0], versions[1:9], versions[-1])]
+            pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
+            self.assertEqual(pin["akasha_host_version"], versions[-1])
+            self.assertEqual(pin["chaldea_host_artifact_preserve_versions"], versions[:8])
+            self.assertEqual(pin["akasha_trust_preserve_versions"], versions[1:9])
+            calls = [(pin["akasha_host_version"], pin["chaldea_host_artifact_preserve_versions"], versions[-2]),
+                     (versions[0], pin["akasha_trust_preserve_versions"], versions[-1])]
             for selected, preserved, prior in calls:
                 for phase, check in (("CHECK", True), ("REAL", False), ("SECOND0", False)):
                     with self.subTest(selected=selected, phase=phase):
@@ -379,6 +383,124 @@ class SnapshotTest(unittest.TestCase):
                         self.assertEqual(snapshot(), before)
                         print(f"{label} explicit selector rejected before file changes; check={check}")
 
+
+    def test_fate_canary_preserves_live_registry_and_refuses_unqualified_packets(self):
+        scratch = Path(os.environ["TMPDIR"]).resolve()
+        self.assertEqual(Path.home().resolve(), scratch / ".scratch-home")
+        source = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
+        # This fixture renders the real config without executing host-writing roles.
+        defaults = yaml.safe_load((ROOT / "roles/akasha/defaults/main.yml").read_text())
+        for name in source["vars_files"]:
+            defaults.update(yaml.safe_load((ROOT / "playbooks" / name).read_text()))
+        self.assertIs(defaults["akasha_route_canary_enabled"], False)
+        packet = yaml.safe_load((ROOT / "vars/mission-control-homelab.yml").read_text())
+        self.assertIs(packet["akasha_route_canary_enabled"], True)
+        self.assertIs(packet["akasha_activate"], False)
+        # Retain the currently selected MC sources/Operations scope as operator inputs.
+        values = defaults | packet | {
+            "mission_control_pc_permission": True, "mission_control_agent_b_permission": True,
+            "mission_control_laptop_permission": True, "mission_control_reader_operations_enabled": True,
+            "mission_control_laptop_qualified": True,
+            "mission_control_laptop_host_version": defaults["akasha_host_version"],
+            "mission_control_laptop_host_sha256": defaults["akasha_host_sha256"],
+        }
+        expected_routes = [
+            dict(issuer="chaldea:homelab", source="route", host="homelab", source_id="route-homelab",
+                 profile="route-service", project="chaldea", mode="service", kinds=["route_score_snapshot"]),
+            dict(issuer="chaldea:omarchy-pc", source="route", host="omarchy-pc", source_id="route-omarchy-pc",
+                 profile="route-service", project="chaldea", mode="service",
+                 kinds=["route_pick_changed"], route_scores_read=True),
+        ]
+        self.assertEqual(defaults["akasha_enrollment_route_canary"], expected_routes)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            root = Path(directory)
+            target = root / "config.json"
+
+            def run(overrides, check=False, runtime=False):
+                play = root / "compose.yml"
+                play.write_text(yaml.safe_dump([{
+                    "hosts": "localhost", "gather_facts": False,
+                    "vars": values | overrides,
+                    "pre_tasks": source["pre_tasks"],
+                    "tasks": [{"name": "Render the canonical Akasha config in scratch",
+                        "ansible.builtin.template": {
+                            "src": str(ROOT / "roles/akasha/templates/config.json.j2"),
+                            "dest": str(target), "mode": "0600"},
+                        "tags": ["runtime"]}],
+                }]))
+                return subprocess.run(
+                    ["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)]
+                    + (["--check"] if check else []) + (["--tags", "runtime"] if runtime else []),
+                    env={**os.environ, "ANSIBLE_LOCAL_TEMP": str(root / "local"),
+                         "ANSIBLE_REMOTE_TEMP": str(root / "remote")},
+                    capture_output=True, text=True)
+
+            proc = run({"akasha_route_canary_enabled": False})
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            baseline = json.loads(target.read_text())
+            old = baseline["registry"]
+            self.assertEqual(len(old), 28)
+            self.assertFalse(any(row["source"] == "route" for row in old))
+            reader = next(row for row in old if row["profile"] == "mission-control-reader")
+            self.assertEqual(reader["mission_control_read_sources"], [
+                "agent-a--mission-control", "omarchy-pc--mission-control",
+                "agent-b--mission-control", "omarchy-macbook-air-igor--mission-control"])
+            self.assertEqual(reader["kinds"], ["agent_status", "job_finished", "report"])
+            self.assertIs(reader["mission_control_operations_read"], True)
+            before = target.read_bytes()
+            for label, check, changed in (("CHECK", True, 1), ("REAL", False, 1), ("SECOND0", False, 0)):
+                proc = run({}, check=check)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertRegex(proc.stdout, rf"changed={changed}\s+unreachable=0\s+failed=0")
+                if check:
+                    self.assertEqual(target.read_bytes(), before)
+                else:
+                    config = json.loads(target.read_text())
+                    self.assertEqual(config, baseline | {"registry": old + expected_routes})
+                    self.assertEqual(len({(r["issuer"], r["source"]) for r in config["registry"]}), 30)
+                print(f"FATE registry {label}: exact 28 preserved + H append / PC read rows")
+
+            # The fixed comparator rejects any added reader capability, kind or tuple.
+            config = json.loads(target.read_text())
+            additions = config["registry"][len(defaults["akasha_registry"]):]
+            render = root / "enrollment.json"
+            command = [sys.executable, str(ROOT / "scripts/check-enrollment-registry.py"),
+                str(render), "--pc-reader", "--pc-quota", "--pc-mission-control",
+                "--agent-b-mission-control", "--laptop-mission-control", "--mission-control-operations"]
+
+            def compare(rows, flag=True):
+                render.write_text(json.dumps({"registry": rows}))
+                return subprocess.run(command + (["--fate-canary"] if flag else []),
+                                      capture_output=True, text=True)
+
+            self.assertEqual(compare(additions).returncode, 0)
+            self.assertNotEqual(compare(additions, flag=False).returncode, 0)
+            for index, mutation in [(0, {"route_scores_read": True}),
+                                    (0, {"project": "homelab"}),
+                                    (1, {"kinds": ["route_score_snapshot"]}),
+                                    (1, {"source_id": "route-agent-a"})]:
+                rows = [dict(row) for row in additions]
+                rows[-2 + index] |= mutation
+                self.assertNotEqual(compare(rows).returncode, 0)
+            self.assertNotEqual(compare(additions[:-1]).returncode, 0)
+
+            before = target.read_bytes()
+            refusals = [
+                {"akasha_route_canary_enabled": "true"},
+                {"akasha_enrollment_registry_enabled": False},
+                {"mission_control_laptop_qualified": False},
+                {"mission_control_laptop_host_sha256": "b" * 64},
+                {"akasha_host_version": "host-v0.2.14",
+                 "mission_control_laptop_host_version": "host-v0.2.14"},
+            ]
+            for overrides in refusals:
+                # Always-tagged gates must also protect the artifact-only phase.
+                for runtime in (False, True):
+                    proc = run(overrides, runtime=runtime)
+                    self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                    self.assertNotIn("TASK [Compose explicitly enabled", proc.stdout)
+                    self.assertEqual(target.read_bytes(), before)
+
     def test_mission_control_repair_packet_only_selects_existing_runtime(self):
         packet_path = ROOT / "vars/mission-control-repair-runtime.yml"
         self.assertEqual(yaml.safe_load(packet_path.read_text()), {
@@ -396,10 +518,10 @@ class SnapshotTest(unittest.TestCase):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
         self.assertEqual(shared["chaldea_host_version"], "host-v0.2.2")
-        self.assertEqual(pin["akasha_host_version"], "host-v0.2.14")
+        self.assertEqual(pin["akasha_host_version"], "host-v0.2.15")
         self.assertEqual(pin["akasha_host_sha256"],
-                         "969319cb2dbde4978604edd109ce543711a6960c54d5e45cb1138d2a2f23c0ec")
-        old_versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10)]
+                         "550f5b5c2ff858ed34dcb1de400a8cb2db847e036d88f71f56486cce2a72ab9f")
+        old_versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10, 14)]
         versions = old_versions + [pin["akasha_host_version"]]
         self.assertEqual(shared["chaldea_clock_host_version"], "host-v0.2.12")
         trust_tasks = yaml.safe_load((ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())
@@ -409,17 +531,17 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(clock_vars["chaldea_host_artifact_cache"], "/var/cache/chaldea-clock-host")
         self.assertEqual(clock_vars["chaldea_host_artifact_preserve_versions"], [])
         old_root = "/opt/chaldea-host/releases/host-v0.2.2/host"
-        new_root = "/opt/chaldea-host/releases/host-v0.2.14/host"
+        new_root = "/opt/chaldea-host/releases/host-v0.2.15/host"
         checks = {
             "chaldea_node": [
                 "chaldea_host_version == 'host-v0.2.2'",
                 "chaldea_node_version == '26.10.0'",
                 "chaldea_node_sha256 == 'ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022'"],
             "chaldea_host_artifact": [
-                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.14')",
+                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.15')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
                 "chaldea_host_artifact_preserve_versions == (fixture_old_versions[1:] if fixture_artifact_calls | default([]) | length else fixture_old_versions[:-1])",
-                "chaldea_host_artifact_preserve_versions | length == 7",
+                "chaldea_host_artifact_preserve_versions | length == 8",
                 "chaldea_host_artifact_root == '/opt/chaldea-host/releases/' ~ chaldea_host_version ~ '/host'"],
             "chaldea_access_trust": [
                 "chaldea_host_version == 'host-v0.2.2'",
@@ -427,7 +549,7 @@ class SnapshotTest(unittest.TestCase):
                 "chaldea_host_artifact_root == '" + old_root + "'",
                 "chaldea_access_trust_runtime == '/opt/chaldea-clock-host/releases/" + shared["chaldea_clock_host_version"] + "/host/access-maintenance.mjs'"],
             "akasha": [
-                "chaldea_host_version == 'host-v0.2.14'",
+                "chaldea_host_version == 'host-v0.2.15'",
                 "chaldea_host_artifact_root == '" + new_root + "'",
                 "'" + new_root + "/akasha-service.mjs' in akasha_exec_start"],
         }
@@ -436,9 +558,9 @@ class SnapshotTest(unittest.TestCase):
             releases, cache = root / "releases", root / "cache"
             releases.mkdir()
             cache.mkdir()
-            # All eight actual old releases plus selected014 must survive EACH call.
+            # All nine actual old releases plus selected0215 must survive EACH call.
             # The obsolete021 fixture proves GC runs. Controlled fixture mtimes make
-            # prior0210 then prior014 explicit; live evidence remains an operator gate.
+            # prior0214 then prior0215 explicit; live evidence remains an operator gate.
             for index, version in enumerate(["host-v0.2.1"] + versions):
                 release = releases / version
                 release.mkdir()
@@ -522,7 +644,7 @@ class SnapshotTest(unittest.TestCase):
                                   for path in play["vars_files"]]
             play["post_tasks"] = [{"ansible.builtin.assert": {"that": [
                 "chaldea_host_version == 'host-v0.2.2'",
-                "fixture_artifact_calls == ['host-v0.2.14', 'host-v0.2.2']",
+                "fixture_artifact_calls == ['host-v0.2.15', 'host-v0.2.2']",
                 "chaldea_host_artifact_root == '" + old_root + "'"], "quiet": True}}]
             path = root / "play.yml"
             path.write_text(yaml.safe_dump([play]))

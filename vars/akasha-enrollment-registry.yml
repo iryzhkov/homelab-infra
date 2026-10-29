@@ -14,6 +14,11 @@ mission_control_laptop_host_sha256: ""
 mission_control_reader_operations_enabled: false
 akasha_pc_global_reader_enabled: false
 akasha_pc_quota_events_enabled: false
+# H score append and PC score read only; selected by the canary packet.
+akasha_route_canary_enabled: false
+akasha_enrollment_route_canary:
+  - {"issuer":"chaldea:homelab","source":"route","host":"homelab","source_id":"route-homelab","profile":"route-service","project":"chaldea","mode":"service","kinds":["route_score_snapshot"]}
+  - {"issuer":"chaldea:omarchy-pc","source":"route","host":"omarchy-pc","source_id":"route-omarchy-pc","profile":"route-service","project":"chaldea","mode":"service","kinds":["route_pick_changed"],"route_scores_read":true}
 # Separate quota-only service sharing, not the seven-kind PC publisher.
 akasha_quota_laptop_publisher_enabled: false
 akasha_quota_pc_reader_enabled: false

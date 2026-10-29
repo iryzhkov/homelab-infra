@@ -44,6 +44,21 @@
         fail_msg: Operations reads require all four status sources and a qualified compatible host.
         quiet: true
       tags: [always]
+    - name: Require a compatible qualified host for the FATE canary
+      ansible.builtin.assert:
+        that:
+          - akasha_route_canary_enabled is boolean
+          - >-
+            not akasha_route_canary_enabled or
+            (akasha_enrollment_registry_enabled | bool and
+             mission_control_laptop_qualified | bool and
+             akasha_host_version is match('^host-v[0-9]+[.][0-9]+[.][0-9]+$') and
+             akasha_host_version | regex_replace('^host-v', '') is version('0.2.15', '>=') and
+             akasha_host_version == mission_control_laptop_host_version and
+             akasha_host_sha256 == mission_control_laptop_host_sha256)
+        fail_msg: FATE canary registrations require enrollment and the exact qualified route-capable host packet.
+        quiet: true
+      tags: [always]
     - name: Compose explicitly enabled fixed enrollment registrations
       ansible.builtin.set_fact:
         akasha_registry: >-
@@ -77,6 +92,11 @@
              + [(akasha_registry | selectattr('profile', 'equalto', 'mission-control-reader') | first)
                 | combine({'kinds': ['agent_status', 'job_finished', 'report'], 'mission_control_operations_read': true})] }}
       when: mission_control_reader_operations_enabled
+      tags: [always]
+    - name: Compose the approved H and PC FATE service registrations
+      ansible.builtin.set_fact:
+        akasha_registry: "{{ akasha_registry + akasha_enrollment_route_canary }}"
+      when: akasha_route_canary_enabled
       tags: [always]
   roles:
     - {role: chaldea_node, tags: [runtime]}
