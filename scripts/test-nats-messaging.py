@@ -68,7 +68,8 @@ class EnrollmentTest(unittest.TestCase):
                     result = subprocess.run(
                         ["ansible-playbook", "-i", "localhost,", "-c", "local", str(play)],
                         env={**os.environ, "ANSIBLE_LOCAL_TEMP": str(directory / "ansible"),
-                             "ANSIBLE_REMOTE_TEMP": str(directory / "remote")},
+                             "ANSIBLE_REMOTE_TEMP": str(directory / "remote"),
+                             "ANSIBLE_FILTER_PLUGINS": str(ROOT / "roles/swarm/filter_plugins")},
                         capture_output=True, text=True, timeout=30)
                     self.assertEqual(result.returncode, 0 if accepted else 2, result.stdout + result.stderr)
                     self.assertEqual(effects.exists(), accepted)

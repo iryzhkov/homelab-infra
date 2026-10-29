@@ -958,5 +958,164 @@ class NativeOV(Protocol):
             client.close()
 
 
+
+class BackendLocalRelease(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.f = load("swarm_local_release", "roles/swarm/filter_plugins/swarm_images.py")
+
+    def stack(self):
+        return {"name": "openviking", "pin": "homelab", "prepare_tasks": "swarm-prepare.yml"}
+
+    def image(self):
+        return [{"Id": "sha256:09870ea95d45c7b3aa7a5758c8268f4ea3c0e27937892ad485f75396cc1e40b0",
+                 "Os": "linux", "Architecture": "amd64",
+                 "Config": {"Entrypoint": ["openviking-entrypoint"], "WorkingDir": "/app/.openviking",
+                            "Labels": {"org.opencontainers.image.revision": "71065c06ab5a1bc85ddc880166667fe1b00de423",
+                            "io.openviking.candidate.native-sha256": "8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad"}}}]
+
+    def topology(self):
+        node = "riag6q8hi2ntp6eyyhyk735xa"
+        return ({"Driver": "overlay2", "OSType": "linux",
+                 "Swarm": {"NodeID": node, "LocalNodeState": "active", "ControlAvailable": True}},
+                [node], [{"ID": node, "Description": {"Hostname": "homelab"}, "Status": {"State": "ready"},
+                "Spec": {"Availability": "active", "Labels": {"host": "homelab", "pin.openviking": "true"}}}])
+
+    def test_closed_selection_and_legacy_mirror(self):
+        from ansible.errors import AnsibleFilterError
+        good = json.loads(json.dumps(self.f.OV_BACKEND_LOCAL_RELEASE))
+        self.assertEqual(self.f.ov_backend_release(good, self.stack(), "homelab", "homelab"), good)
+        for key in good:
+            bad = json.loads(json.dumps(good))
+            bad[key] = "wrong"
+            with self.subTest(key=key), self.assertRaises(AnsibleFilterError):
+                self.f.ov_backend_release(bad, self.stack(), "homelab", "homelab")
+        for value in (True, None, "false", {**good, "extra": True}):
+            with self.assertRaises(AnsibleFilterError):
+                self.f.ov_backend_release(value, self.stack(), "homelab", "homelab")
+        with self.assertRaises(AnsibleFilterError):
+            self.f.ov_backend_release(False, self.stack(), "homelab", "homelab", good["reference"])
+        with self.assertRaises(AnsibleFilterError):
+            self.f.ov_backend_release(good, self.stack(), "other", "homelab")
+        self.assertIs(self.f.ov_backend_release(False, self.stack(), "other", "other"), False)
+        self.assertIs(self.f.ov_backend_release(good, {"name": "another"}, "other", "other"), False)
+        with self.assertRaises(AnsibleFilterError):
+            self.f.swarm_mirror_ref(good["reference"], "registry.invalid", "owner")
+        mirror = self.f.swarm_mirror_ref("example/app@sha256:" + "a"*64, "registry.invalid", "owner")
+        self.assertEqual(mirror["pinned"], "sha256:" + "a"*64)
+        self.assertEqual(self.f.swarm_stack_deploy_argv("another"),
+                         ["docker","stack","deploy","--compose-file","deployed.yml.pending",
+                          "--with-registry-auth","--prune","--detach=false","another"])
+
+    def test_image_and_topology_refusals(self):
+        from ansible.errors import AnsibleFilterError
+        self.assertTrue(self.f.ov_backend_local_image(self.image(), *self.topology()))
+        for field, value in (("Id", "sha256:"+"a"*64), ("Architecture", "arm64"), ("Config", {})):
+            bad = self.image(); bad[0][field] = value
+            with self.subTest(field=field), self.assertRaises(AnsibleFilterError):
+                self.f.ov_backend_local_image(bad, *self.topology())
+        for field in ("org.opencontainers.image.revision", "io.openviking.candidate.native-sha256"):
+            bad = self.image(); bad[0]["Config"]["Labels"][field] = "bad"
+            with self.assertRaises(AnsibleFilterError):
+                self.f.ov_backend_local_image(bad, *self.topology())
+        for image in ([], self.image()*2):
+            with self.assertRaises(AnsibleFilterError):
+                self.f.ov_backend_local_image(image, *self.topology())
+        for index, value in ((0, {"Driver": "overlayfs"}), (1, []), (1, ["other"]), (2, [])):
+            t = list(self.topology()); t[index] = value
+            with self.assertRaises(AnsibleFilterError):
+                self.f.ov_backend_local_image(self.image(), *t)
+
+    def test_actual_ansible_preflight_write_order_render_and_deploy_argv(self):
+        with tempfile.TemporaryDirectory(dir=HOME) as directory:
+            base = Path(directory); binary = base/"bin"; binary.mkdir()
+            # Mock only the external Docker boundary; all tasks/filters/interpolation are real.
+            fake = binary/"docker"
+            fake.write_text("#!/usr/bin/env python3\nimport os,sys,json,re,pathlib,yaml\n"
+                "args=sys.argv[1:]\n"
+                "with open(os.environ['CALLS'],'a') as f:f.write(json.dumps(args)+'\\n')\n"
+                "if args and args[0].startswith('--host='):args=args[1:]\n"
+                "if args[:2]==['image','inspect']:print(os.environ['IMAGE_FIXTURE'])\n"
+                "elif args[0]=='info':print(os.environ['INFO_FIXTURE'])\n"
+                "elif args[:2]==['node','ls']:print(os.environ['PINS_FIXTURE'])\n"
+                "elif args[:2]==['node','inspect']:print(os.environ['NODE_FIXTURE'])\n"
+                "elif args[:2]==['stack','config']:\n"
+                " text=pathlib.Path('stack.yml').read_text()\n"
+                " text=re.sub(r'\\$\\{([A-Z_]+)(?::-|:\\?)([^}]*)\\}',lambda m:os.environ.get(m[1],m[2]),text)\n"
+                " print(text)\n"
+                "elif args[:2]==['stack','deploy']:print('recorded deployment boundary only')\n"
+                "else:sys.exit(88)\n")
+            fake.chmod(0o700)
+            tasks = yaml.safe_load((ROOT/"roles/swarm/tasks/stack.yml").read_text())
+            stop = next(i for i,t in enumerate(tasks) if t.get("name")=="Install the stack file")
+            prefix = json.loads(json.dumps(tasks[:stop+1]).replace("{{ playbook_dir }}/..",str(ROOT)))
+            wiring = next(t for t in yaml.safe_load((STACK/"embeddings-prepare.yml").read_text())
+                          if t.get("name")=="Add adapter revision and path to the stack interpolation environment")
+            render = next(t for t in tasks if t.get("name")=="Render {{ swarm_stack.name }}")
+            deploy = next(t for t in tasks if t.get("name")=="Deploy {{ swarm_stack.name }}")
+            info,pins,node = self.topology()
+            env = dict(os.environ, PATH=str(binary)+":"+os.environ["PATH"],
+                ANSIBLE_FILTER_PLUGINS=str(ROOT/"roles/swarm/filter_plugins"),
+                ANSIBLE_LOCAL_TEMP=str(base/"local"), ANSIBLE_REMOTE_TEMP=str(base/"remote"),
+                IMAGE_FIXTURE=json.dumps(self.image()), INFO_FIXTURE=json.dumps(info),
+                PINS_FIXTURE="\n".join(pins), NODE_FIXTURE=json.dumps(node), CALLS=str(base/"calls"))
+            inv = base/"inventory"; inv.write_text("all:\n  hosts:\n    homelab:\n      ansible_connection: local\n")
+            good = json.loads(json.dumps(self.f.OV_BACKEND_LOCAL_RELEASE))
+            cases = [("local",good,self.image(),True),("absent",good,[],False),
+                     ("wrong-image",good,[{**self.image()[0],"Id":"bad"}],False),
+                     ("provenance",{**good,"provenance":{}},self.image(),False),
+                     ("node-target",good,self.image(),False),
+                     ("default",False,self.image(),True)]
+            for name,selection,image,accepted in cases:
+                effects=base/name; calls=base/("calls-"+name)
+                values={"openviking_local_release":selection,"swarm_stack":self.stack(),
+                    "swarm_bootstrap_manager":"homelab","swarm_deploy_root":str(effects),
+                    "swarm_stack_env":{},"swarm_state_root":"/unused",
+                    "swarm_stack_needs_deploy":True,"swarm_stack_src":str(STACK)}
+                following=[wiring,render,{"ansible.builtin.copy": {"content": "{{ swarm_stack_rendered.stdout }}", "dest": str(effects/"rendered.yml")}},deploy] if accepted else []
+                play=base/"play.yml"; play.write_text(yaml.safe_dump([{"hosts":"homelab","gather_facts":False,
+                    "vars":values,"tasks":prefix+following}]))
+                p=subprocess.run(["ansible-playbook","-i",str(inv),str(play)],capture_output=True,text=True,
+                    timeout=45,env=dict(env,IMAGE_FIXTURE=json.dumps(image),CALLS=str(calls),
+                        INFO_FIXTURE=json.dumps(info if name!="node-target" else {**info,"Swarm":{**info["Swarm"],"NodeID":"wrong"}})))
+                self.assertEqual(p.returncode==0,accepted,p.stdout+p.stderr)
+                self.assertEqual(effects.exists(),accepted,p.stdout)
+                observed=[json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+                if not accepted:
+                    self.assertNotIn("Create the deployment directory",p.stdout)
+                    self.assertFalse(any("deploy" in row for row in observed))
+                    continue
+                deploy_args=observed[-1]
+                if selection is not False:
+                    self.assertTrue(all(row[0]=="--host=unix:///var/run/docker.sock" for row in observed))
+                    self.assertIn("--resolve-image",deploy_args);self.assertIn("never",deploy_args)
+                    self.assertNotIn("--with-registry-auth",deploy_args)
+                    rendered=yaml.safe_load((effects/"rendered.yml").read_text())
+                    source=yaml.safe_load((STACK/"stack.yml").read_text())
+                    self.assertEqual(rendered["services"]["openviking"]["image"],good["reference"])
+                    self.assertEqual(rendered["services"]["inference-adapter"]["image"],source["services"]["inference-adapter"]["image"])
+                    self.assertEqual(rendered["services"]["openviking"]["deploy"],source["services"]["openviking"]["deploy"])
+                    self.assertEqual(rendered["networks"],source["networks"])
+                else:
+                    self.assertIn("--with-registry-auth",deploy_args)
+                    self.assertNotIn("--resolve-image",deploy_args)
+                    self.assertFalse(any("inspect" in row for row in observed))
+                    rendered=yaml.safe_load((effects/"rendered.yml").read_text())
+                    self.assertEqual(rendered["services"]["openviking"]["image"],
+                        "ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f")
+            # Same actual argv task, unrelated stack, even when the global selector is present.
+            unrelated=base/"unrelated"; unrelated.mkdir()
+            values={"swarm_stack":{"name":"another"},"swarm_stack_needs_deploy":True,
+                "swarm_stack_dir":str(unrelated),"openviking_local_release":good,
+                "swarm_bootstrap_manager":"homelab"}
+            play.write_text(yaml.safe_dump([{"hosts":"homelab","gather_facts":False,"vars":values,
+                "tasks":tasks[:3]+[deploy]}]))
+            calls=base/"calls-unrelated"
+            p=subprocess.run(["ansible-playbook","-i",str(inv),str(play)],capture_output=True,text=True,
+                timeout=45,env=dict(env,CALLS=str(calls)))
+            self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+            self.assertEqual(json.loads(calls.read_text().splitlines()[-1]), self.f.swarm_stack_deploy_argv("another")[1:])
+
+
 if __name__ == "__main__":
     unittest.main()

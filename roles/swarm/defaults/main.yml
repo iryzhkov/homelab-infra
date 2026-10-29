@@ -1,4 +1,6 @@
 ---
+# Explicit closed local backend selection; no inventory enables this by default.
+openviking_local_release: false
 # Swarm's control-plane ports, allowed only from the other managers' mesh
 # addresses on nebula1.
 swarm_control_ports:

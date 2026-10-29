@@ -39,14 +39,14 @@
 
 - name: Find the node holding pin.{{ swarm_stack.name }}
   ansible.builtin.command:
-    argv: [docker, node, ls, -q, --filter, "node.label=pin.{{ swarm_stack.name }}=true"]
+    argv: "{{ (swarm_stack_docker | default(['docker'])) + ['node', 'ls', '-q', '--filter', 'node.label=pin.' ~ swarm_stack.name ~ '=true'] }}"
   register: swarm_prep_pinned
   changed_when: false
   check_mode: false
 
 - name: Read the pinned node's inventory name
   ansible.builtin.command:
-    argv: [docker, node, inspect, --format, "{{ swarm_prep_host_format }}", "{{ swarm_prep_pinned.stdout_lines[0] }}"]
+    argv: "{{ (swarm_stack_docker | default(['docker'])) + ['node', 'inspect', '--format', swarm_prep_host_format, swarm_prep_pinned.stdout_lines[0]] }}"
   vars:
     swarm_prep_host_format: !unsafe '{{index .Spec.Labels "host"}}'
   register: swarm_prep_pin_host
@@ -106,19 +106,14 @@
 
     - name: List the Compose project's running containers
       ansible.builtin.command:
-        argv:
-          - docker
-          - ps
-          - -q
-          - --filter
-          - label=com.docker.compose.project={{ swarm_stack.compose.project | default(swarm_stack.name) }}
+        argv: "{{ (swarm_stack_docker | default(['docker'])) + ['ps', '-q', '--filter', 'label=com.docker.compose.project=' ~ (swarm_stack.compose.project | default(swarm_stack.name))] }}"
       delegate_to: "{{ swarm_stack.compose.host }}"
       register: swarm_prep_running
       changed_when: false
 
     - name: Stop them, so the final copy reads quiescent files
       ansible.builtin.command:
-        argv: "{{ ['docker', 'stop', '--time', '30'] + swarm_prep_running.stdout_lines }}"
+        argv: "{{ (swarm_stack_docker | default(['docker'])) + ['stop', '--time', '30'] + swarm_prep_running.stdout_lines }}"
       delegate_to: "{{ swarm_stack.compose.host }}"
       changed_when: true
       when: swarm_prep_running.stdout_lines | length > 0

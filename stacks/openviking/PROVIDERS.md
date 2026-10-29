@@ -1,20 +1,144 @@
 # OV 0.5.2 provider integration
 
-This source sets the default OV image in `stack.yml` and `embeddings-prepare.yml`
-to the qualified official OV 0.5.2 linux/amd64 image,
+The default image in stack.yml and embeddings-prepare.yml remains the official
+OV 0.5.2 linux/amd64 image,
 `ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f`.
-It is prepared for root's controlled activation and does not record that
-production has been activated. Until root completes that cutover, production
-remains on OV 0.2.6 with its existing cloud providers.
+The fresh production-transition-inventory-20261029.md records production already
+on that official 0.5.2 image. The custom 09870 artifact is a separate candidate;
+source publication does not deploy it. This directory contains no server or tenant keys.
 
-Merge this source only inside root's controlled cutover. After the merge, any
-routine Swarm convergence deploys the 0.5.2 default, so the fresh
-production-derived migration, fresh tenant credentials and client rollover must
-already be in place. Never promote bootstrap, admin or auth keys from the old
-`ov-upgrade-052` candidate or any other staging candidate into production. This
-directory contains no server or tenant keys.
+## Closed local backend release
 
-## Activation evidence
+openviking_local_release defaults to false. A later authorized operator may select
+only this complete object in the existing owning configuration. A one-off extra
+variable does not persist the choice for future routine convergence.
+
+```yaml
+openviking_local_release:
+  kind: local-config
+  reference: sha256:09870ea95d45c7b3aa7a5758c8268f4ea3c0e27937892ad485f75396cc1e40b0
+  source_revision: 71065c06ab5a1bc85ddc880166667fe1b00de423
+  native_sha256: 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
+  provenance:
+    assembly_job: 71ac176e-9522-4b78-b50c-28775dcae996
+    archive_sha256: b0019de08edfd453c4f8bb428faa1eaf41242e64696e4b5104cc3e98c34c193f
+    custody_sha256: 4f5f813a9d14f1a48371fdbd433e98050dd4b0f457f7ea164421d7e20168fed5
+```
+
+These provenance fields identify the existing Chaldea assembly job, returned
+candidate-patch.tar and custody.json, as independently checked in
+account-embedding-candidate-assembly-result.md. They are closed receipt bindings,
+not a new URL, registry publication or credential flow. The measured distribution
+manifest318575b538fc9b3b7d066ecc9948f192a34f792deb102bc9eb3edcc32b965639
+has no established registry location and is not used as one.
+
+Before any stack-directory, secret, pin-label or preparation write, the existing
+stack wrapper validates the exact object and refuses unknown/partial fields,
+different provenance, conflicting image overrides, renamed stacks and other targets.
+The mode is confined to openviking with its unchanged source/preparation and
+homelab pin. It inspects the fixed local Unix Docker socket, classic overlay2
+store, exact active manager nodeIDriag6q8hi2ntp6eyyhyk735xa, sole existing
+pin.openviking label and ready/active homelab node. The local image must have the
+exact configID, linux/amd64 platform, product/native labels and original
+openviking-entrypoint, workdir and unset User/Cmd.
+
+The config ID is SHA256 of the retained11996-byte raw config object; that config
+commits to the complete config and ordered RootFS diff IDs. This reuses Docker's
+immutable local identity, without a second expected-manifest store or values
+learned from observed metadata. No API1.45 added fields are dropped or normalized
+to manufacture whole-object equality. Actual API1.55 full Config/RootFS equality
+and the one-task local-ID delivery were established by the owning retained proof;
+this role checks the sufficient immutable identity and closed source/platform
+constraints before effects.
+
+Every Docker command in this stack path selects the fixed local daemon in this
+mode, including render, ownership reads, preparation and deploy. The deployment
+uses --resolve-image never and omits --with-registry-auth. The existing pending
+render/deployed-file lifecycle and cutover/drift/ownership gates remain in place.
+No pull/tag/import/build step is added, and the config ID is refused by the
+named-image mirror helper. Ordinary stacks and named-image mode retain their
+existing daemon selection and auth/resolution arguments.
+
+The flags cover both services in this existing stack. The inference-adapter
+still names the same public immutable official2ae distribution digest, so skipping
+registry resolution does not change its identity, and forwarding registry auth
+is unnecessary for that public reference. Ordinary Swarm behavior for a missing
+public companion image remains separate; this option adds no image installer.
+The backend image must already exist on the only permitted node.
+Neither service's mounts, ports, networks, placement, resources, healthcheck or
+secret/config settings are changed.
+
+The accepted local-id-swarm-delivery-proof-r2-result.md qualifies only one data-free
+literal Python print on the real manager/worker path, with exact image, stdout,
+exit and controls, followed by exact cleanup. Its empty TaskTemplate.Networks
+produced actual runtime bridge networking. It does not qualify original entrypoint,
+backend semantics or data-bearing networking and does not change this stack's
+existing networks. Root owns activation and the matched backup/restore,
+identity/queue policy and runtime acceptance.
+
+Use only the existing stack-specific convergence path after those gates, for
+example playbooks/swarm.yml --tags stacks -e only=openviking with the explicit
+persisted selector. Node/registry maintenance plays are separate operations.
+This batch changes no inventory enablement or default image.
+
+## Candidate transition and rollback gates
+
+This source option is not a cutover controller. Root owns the concrete operation
+under existing version/CAS and custody primitives. The source analysis is retained
+in full-ov-backend-contract/ov-cutover-startup-compatibility-map.md: candidate
+71065c06ab5a1bc85ddc880166667fe1b00de423, upstream
+7f3ae1af822d936c1d0b070537772b0f1d59122f. These are prerequisites for later activation:
+
+1. Exclude mutating callers and competing deployers. Retain the exact current
+   original Spec, matched backend/config/data, HTTP and inference selections.
+   Stop the sole original backend with fresh observed-version CAS and confirm no
+   writer. Capture and independently file-restore a fresh complete cold matched
+   baseline from that final stopped state. The reviewed backup controller
+   restores the original Spec; it does not leave the service stopped or implement
+   cutover. Its historical15540 pin is not a current admission. No full-cutover
+   90-second guarantee follows from backup timing.
+2. While that original remains stopped, require a fresh owning-SQLite read-only
+   queue count on a disposable copy of the same final DB/WAL/SHM: integrity/schema
+   pass and total0. Historical snapshot0 cannot authorize later legacy replay.
+   Nonzero or unavailable means abort to the owned original service. No queue
+   drain, deletion or quarantine is authorized; intervening original writes
+   invalidate this observation.
+3. Before any candidate startup, use the already proved LocalFS-only identity
+   initializer, with exact artifact/native and closed before/after preservation.
+   Do not call account load, QueueFS or server startup for this step. Keep protected
+   ov.conf unchanged and server.account_store.params.initialize_creation_ids
+   false/default-off permanently. FileStore defaults that option to false
+   (legacy.py:104); normal startup backfills only when enabled. QueueFS opens and
+   workers start before auth/account loading (app.py:164-174, core.py:148-192,
+   721), so enabling the flag does not establish identity-before-consumers.
+4. Retain the separately owned normal-entrypoint disposable-data check as a root
+   runtime gate. It has not been qualified by this source batch. Account load can
+   hash plaintext keys under existing hashing configuration (legacy.py:420-493);
+   startup can create preset/assets/index work even with an initially empty queue
+   (core.py:493-541,724; directories.py:357-440; system_assets/sync.py:39-72).
+   No startup-order patch or permanent backfill flag is added.
+5. Only after root accepts those effects, select this release through the existing
+   stop-first path with no overlapping old task and fresh version/CAS ownership.
+   Preserve existing config/mount/HTTP/inference closure. Keep user writes excluded
+   until startup, identity continuity, health, authenticated read acceptance and
+   existing canaries pass. Record explicit admission of new user writes.
+
+Before candidate startup, abort restores the owned original Spec through current
+CAS. After identity/startup writes but before new user writes, retain the candidate
+tree and use an explicitly assessed matched restoration/current-data path. Preserve
+the authoritative baseline and verified restore; no blind PreviousSpec or image-only
+shortcut is authorized. Upstream readers tolerate creation_id, but upstream
+_save_accounts_json replaces updated account records and drops it
+(legacy.py:1332-1369); unrestricted old-image writers do not preserve lifetime.
+
+After new user writes, no destructive pre-cutover snapshot rollback or image-only
+rollback is preauthorized. Preserve current data and stop further writes if recovery
+is needed; root must assess forward repair or an old-code/current-data path with
+identity continuity and explicitly admit any loss/transformation. Persist the
+approved release selection or its assessed rollback selection in owning configuration
+so routine convergence cannot silently revert it. This batch activates neither.
+
+## Historical 0.2.6 to 0.5.2 activation evidence
 
 Root supplied this evidence from the fresh accepted offline migration:
 
@@ -74,7 +198,7 @@ ansible-playbook playbooks/ov-pc-coexistence.yml \
   -e ov_pc_apply=true -e ov_pc_allow_restart=true
 ```
 
-## Rollback
+## Historical 0.2.6 rollback
 
 Rollback restores a matched set, never the old image alone. Before activation,
 confirm that the old image
