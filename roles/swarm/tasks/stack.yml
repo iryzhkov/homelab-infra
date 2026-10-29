@@ -61,6 +61,48 @@
 # create cannot exist in a check run; a render that fails for that reason is
 # reported, not fatal.
 
+# Resolve per stack so a preceding local release cannot affect another stack.
+- name: Validate the optional local backend release before effects
+  ansible.builtin.set_fact:
+    swarm_stack_local_release: "{{ openviking_local_release | default(false) | ov_backend_release(swarm_stack, inventory_hostname, swarm_bootstrap_manager | default(''), openviking_image | default(none)) }}"
+
+- name: Inspect the fixed local backend daemon before protected writes
+  when: swarm_stack_local_release is not sameas false
+  block:
+    - name: Inspect local backend image
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, image, inspect, "{{ swarm_stack_local_release.reference }}"]
+      register: ov_backend_image
+      changed_when: false
+      check_mode: false
+    - name: Inspect local backend daemon identity
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, info, --format, "{{ '{{json .}}' }}"]
+      register: ov_backend_daemon
+      changed_when: false
+      check_mode: false
+    - name: Inspect the unchanged backend pin
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, node, ls, -q, --filter, node.label=pin.openviking=true]
+      register: ov_backend_pins
+      changed_when: false
+      check_mode: false
+    - name: Inspect the sole accepted backend node
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, node, inspect, riag6q8hi2ntp6eyyhyk735xa]
+      register: ov_backend_node
+      changed_when: false
+      check_mode: false
+    - name: Refuse mismatched local backend identity before writes
+      ansible.builtin.assert:
+        that:
+          - ov_backend_image.stdout | from_json | ov_backend_local_image(ov_backend_daemon.stdout | from_json, ov_backend_pins.stdout_lines, ov_backend_node.stdout | from_json)
+        quiet: true
+
+- name: Select this stack's Docker CLI
+  ansible.builtin.set_fact:
+    swarm_stack_docker: "{{ ['docker', '--host=unix:///var/run/docker.sock'] if swarm_stack_local_release is not sameas false else ['docker'] }}"
+
 # NATS public enrollment must fail before the wrapper writes files or labels.
 # Keep this scoped to the NATS source, including a renamed stack using it.
 - name: Validate NATS messaging enrollment before deployment effects
@@ -150,21 +192,18 @@
 
 - name: Ask whether {{ swarm_stack.name }} is deployed
   ansible.builtin.command:
-    argv: [docker, stack, ls, --format, "{{ '{{' }}.Name{{ '}}' }}"]
+    argv: "{{ swarm_stack_docker + ['stack', 'ls', '--format', swarm_stack_name_format] }}"
+  vars:
+    swarm_stack_name_format: "{{ '{{' }}.Name{{ '}}' }}"
   register: swarm_stack_list
   changed_when: false
   check_mode: false
 
 - name: Look for the Compose project this stack replaces
   ansible.builtin.command:
-    argv:
-      - docker
-      - ps
-      - -a
-      - --filter
-      - label=com.docker.compose.project={{ swarm_stack.compose.project | default(swarm_stack.name) }}
-      - --format
-      - "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Label \"com.docker.swarm.service.id\"{{ '}}' }}"
+    argv: "{{ swarm_stack_docker + ['ps', '-a', '--filter', 'label=com.docker.compose.project=' ~ (swarm_stack.compose.project | default(swarm_stack.name)), '--format', swarm_stack_compose_format] }}"
+  vars:
+    swarm_stack_compose_format: "{{ \"{{\" }}.ID{{ \"}}\" }} {{ \"{{\" }}.Label \"com.docker.swarm.service.id\"{{ \"}}\" }}"
   # delegate_to is templated before when, so it needs a value for a stack
   # without a compose key too.
   delegate_to: "{{ swarm_stack.compose.host | default(inventory_hostname) }}"
@@ -212,14 +251,16 @@
   block:
     - name: Find the node holding pin.{{ swarm_stack.name }}
       ansible.builtin.command:
-        argv: [docker, node, ls, --filter, "node.label=pin.{{ swarm_stack.name }}=true", -q]
+        argv: "{{ swarm_stack_docker + ['node', 'ls', '--filter', 'node.label=pin.' ~ swarm_stack.name ~ '=true', '-q'] }}"
       register: swarm_stack_pinned
       changed_when: false
       check_mode: false
 
     - name: Read the first node's ID
       ansible.builtin.command:
-        argv: [docker, info, --format, "{{ '{{' }}.Swarm.NodeID{{ '}}' }}"]
+        argv: "{{ swarm_stack_docker + ['info', '--format', swarm_stack_node_format] }}"
+      vars:
+        swarm_stack_node_format: "{{ '{{' }}.Swarm.NodeID{{ '}}' }}"
       delegate_to: "{{ swarm_stack.pin | default(inventory_hostname) }}"
       register: swarm_stack_pin_node
       changed_when: false
@@ -228,13 +269,7 @@
 
     - name: Label the first node
       ansible.builtin.command:
-        argv:
-          - docker
-          - node
-          - update
-          - --label-add
-          - pin.{{ swarm_stack.name }}=true
-          - "{{ swarm_stack_pin_node.stdout | trim }}"
+        argv: "{{ swarm_stack_docker + ['node', 'update', '--label-add', 'pin.' ~ swarm_stack.name ~ '=true', swarm_stack_pin_node.stdout | trim] }}"
       changed_when: true
       when: swarm_stack_pinned.stdout | trim | length == 0
 
@@ -254,7 +289,7 @@
 
 - name: Render {{ swarm_stack.name }}
   ansible.builtin.command:
-    argv: [docker, stack, config, -c, stack.yml]
+    argv: "{{ swarm_stack_docker + ['stack', 'config', '-c', 'stack.yml'] }}"
     chdir: "{{ swarm_stack_dir }}"
   environment: "{{ swarm_stack_env }}"
   register: swarm_stack_rendered
@@ -314,7 +349,7 @@
 
     - name: Render
       ansible.builtin.command:
-        argv: [docker, stack, config, -c, stack.yml]
+        argv: "{{ swarm_stack_docker + ['stack', 'config', '-c', 'stack.yml'] }}"
         chdir: "{{ swarm_stack_scratch.path }}"
       environment: "{{ swarm_stack_env }}"
       register: swarm_stack_rendered_check
@@ -414,12 +449,7 @@
 
 - name: Stop and remove the Compose project, keeping its volumes
   ansible.builtin.command:
-    argv:
-      - docker
-      - compose
-      - --project-name
-      - "{{ swarm_stack.compose.project | default(swarm_stack.name) }}"
-      - down
+    argv: "{{ swarm_stack_docker + ['compose', '--project-name', swarm_stack.compose.project | default(swarm_stack.name), 'down'] }}"
     chdir: "{{ swarm_stack.compose.dir | default(omit) }}"
   delegate_to: "{{ swarm_stack.compose.host | default(inventory_hostname) }}"
   changed_when: true
@@ -442,16 +472,7 @@
 
 - name: Deploy {{ swarm_stack.name }}
   ansible.builtin.command:
-    argv:
-      - docker
-      - stack
-      - deploy
-      - --compose-file
-      - deployed.yml.pending
-      - --with-registry-auth
-      - --prune
-      - --detach=false
-      - "{{ swarm_stack.name }}"
+    argv: "{{ swarm_stack.name | swarm_stack_deploy_argv(swarm_stack_local_release is not sameas false) }}"
     chdir: "{{ swarm_stack_dir }}"
   changed_when: true
   when:
