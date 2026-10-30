@@ -62,6 +62,8 @@
           - not (holonet_catalog_apply | default(false) | bool)
           - not (holonet_catalog_online_check | default(false) | bool)
           - not (holonet_catalog_recommendations_enabled | bool)
+          - holonet_catalog_baseline_checkpoint | default('historical') in ['historical', 'ordinary-reader']
+          - holonet_catalog_baseline_checkpoint | default('historical') != 'ordinary-reader' or holonet_catalog_interactive_enabled | bool
         fail_msg: The baseline read runs alone, in check mode, without apply or the online preflight.
         quiet: true
       when: holonet_catalog_baseline_mode | bool
@@ -225,7 +227,14 @@
         name: authentik_machine_identities
         tasks_from: baseline.yml
       vars:
-        machine_identity_baseline_anchor: "{{ holonet_catalog_baseline_anchor }}"
-        # The stored content owns only the historical homelab identity.
-        machine_identity_baseline_identities: "{{ authentik_machine_identities[:1] }}"
+        # Receipt 1cbf42fd1e0082eab6e5c3150fb92919@1 independently matched
+        # these successful three-reader bytes. Unknown drift must refuse.
+        machine_identity_baseline_anchor: >-
+          {{ {'blueprint_pk': '2514696c-15e3-494e-8df6-eb0c098a9efb',
+              'content_sha256': '7bfb4856b2a0af4ef437182c944b30a4b88dcabd8cc1e00143f14633ce804c9a'}
+             if holonet_catalog_baseline_checkpoint | default('historical') == 'ordinary-reader'
+             else holonet_catalog_baseline_anchor }}
+        machine_identity_baseline_identities: >-
+          {{ authentik_machine_identities if holonet_catalog_baseline_checkpoint | default('historical') == 'ordinary-reader'
+             else authentik_machine_identities[:1] }}
       when: holonet_catalog_baseline_mode | bool
