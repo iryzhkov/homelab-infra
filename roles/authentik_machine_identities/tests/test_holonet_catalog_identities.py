@@ -389,6 +389,49 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual(self.homelab_snapshot(), before)
         self.assertFalse(self.secret("laptop", LAPTOP).exists())
 
+    def test_ordinary_reader_checkpoint_is_pinned_read_only_and_requires_exact_cohort(self):
+        x = self.x
+        options = {"check": True, "baseline_read": True,
+                   "holonet_catalog_baseline_checkpoint": "ordinary-reader",
+                   "holonet_catalog_interactive_enabled": True}
+        for changed in ({"holonet_catalog_baseline_checkpoint": "unknown"},
+                        {"holonet_catalog_interactive_enabled": False},
+                        {"holonet_catalog_recommendations_enabled": True},
+                        {"apply": True, "check": False}):
+            self.refused("The baseline read runs alone", **(options | changed))
+            self.assertFalse(x.state.requests or (x.base / "sops-loaded").exists())
+        code, output = x.run(COHORT + [INTERACTIVE], services={"holonet": self.holonet},
+                             extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
+        self.assertEqual(code, 0, output)
+        before = self.homelab_snapshot()
+        baseline = self.baseline()
+        # Real literal refuses synthetic stored bytes after discovery, without writes.
+        self.refused("Derive the baseline only from content matching the anchor",
+                     patched=True, **options)
+        self.assertEqual((x.writes(), x.key_reads(), self.private_reads()), ([], [], []))
+        # Fixture transport and trusted-anchor substitution only. Never adopt a
+        # response hash in production; the source literal is pinned above.
+        entrypoint = self.entrypoint
+        content = next(iter(x.state.blueprints.values()))["content"]
+        fixture_hash = hashlib.sha256(content.encode()).hexdigest()
+        def fixture_entrypoint(patched):
+            path = entrypoint(True)
+            text = path.read_text()
+            literal = "7bfb4856b2a0af4ef437182c944b30a4b88dcabd8cc1e00143f14633ce804c9a"
+            self.assertEqual(text.count(literal), 1)
+            path.write_text(text.replace(literal, fixture_hash))
+            return path
+        self.entrypoint = fixture_entrypoint
+        output = self.ok(**options)
+        self.assertIn(baseline["content_sha512"], output)
+        self.assertEqual(len(x.state.requests), 4)
+        self.assertEqual((x.writes(), x.key_reads(), self.private_reads()), ([], [], []))
+        self.assertEqual(self.homelab_snapshot(), before)
+        # Even a matching content hash cannot excuse a different declared cohort.
+        self.refused("Derive the baseline only from content matching the anchor",
+                     **(options | {"holonet_catalog_interactive_identity": INTERACTIVE | {"generation": 2}}))
+        self.assertEqual((x.writes(), x.key_reads(), self.private_reads()), ([], [], []))
+
     def test_baseline_read_and_guards_refuse_before_any_change(self):
         x = self.x
         # Fixture-only stand-in for the existing persistent homelab enrollment.

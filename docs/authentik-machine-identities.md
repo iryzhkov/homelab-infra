@@ -794,6 +794,26 @@ promise byte-identical restoration of an older blueprint. Flag false alone
 is not a retirement procedure. Native registration, public-policy retirement,
 service activation and live/client acceptance remain separate stages.
 
+### Confirmed ordinary-reader baseline read
+
+For the independently confirmed three-reader checkpoint, use the same read-only
+producer with `holonet_catalog_baseline_checkpoint=ordinary-reader` and
+`holonet_catalog_interactive_enabled=true`, in check mode with
+`holonet_catalog_baseline_read=true`. Writer selection, apply and online
+preflight must remain off. The selector accepts only `historical` (default)
+or `ordinary-reader`; it accepts no arbitrary anchor.
+
+The ordinary-reader selector pins blueprint
+`2514696c-15e3-494e-8df6-eb0c098a9efb` and successful content SHA256
+`7bfb4856b2a0af4ef437182c944b30a4b88dcabd8cc1e00143f14633ce804c9a`,
+independently confirmed in enrollment receipt
+`jocasta:1cbf42fd1e0082eab6e5c3150fb92919@1`. It checks the exact
+declared three-reader ownership set, then uses the unchanged four discovery
+GETs and allowlisted output. This is a drift check against prior evidence,
+not permission to adopt unknown current bytes. Any mismatch refuses; do not
+replace the anchor from a response or replay the old enrollment window.
+No password, OAuth detail, token, key, media or history reads are added.
+
 ### Existing-only baseline read
 
 The existing-only gate needs the current provider PK, application UUID and
