@@ -117,30 +117,33 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:2dfb396ca804482ed29c087d3ab258312b75c57a25848da0c1c96636a875a89f
-source_revision: be4cda7c376986360158fb6488b808dec90d81c2
+reference: sha256:c7030fad1a8a47c8976739aacfdae5e50ffaa93600e1dadf6924f56b54067859
+source_revision: 6b30cf13a6193fc61385d08e0d255da58741116f
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41114422316
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41139046693
 ```
 
 All five fields must match together. The contract revision still names the
 existing full-resource interface. Accepted source
-e094cb32a085e9ad3fc9976aba7824db830c8999 and measured publication
-be4cda7c376986360158fb6488b808dec90d81c2 share tree
-bcb8c0e5813138aa3fbb4b03fb90475ca09bbf8d. The closed object and image label
-use the publication revision. Neither revision enters the distribution-source
-allowlist. See [qualified activation](ov-personal-qualified-release.md).
+4b21a6a4d6772d5a54b0013add629ad75ae33242 and publication
+6b30cf13a6193fc61385d08e0d255da58741116f share tree
+889fa634346a079041914962fe391a9385df5c32. This release adds read-only
+document-write preflight diagnostics, including a non-GET dispatch guard and
+in-flight authority recheck. The closed object and image label use the
+publication revision. Neither revision enters the distribution-source allowlist.
+Prior personal enablement is recorded in
+[its qualified activation](ov-personal-qualified-release.md).
 Other kinds, extra fields, canary/reader contracts and arbitrary release triples
 refuse. The full config and resource/action/namespace restrictions above are unchanged.
 
 The reference is the Docker image config ID. It commits to the immutable config
 and ordered RootFS diff_ids; it is not a registry distribution manifest.
-The retained Docker save is 176900096 bytes, SHA256
-547951c96232546c3d7df42e7d03f3a0f59b754fa08eb8fc733469478d25f605.
-RepoDigests is empty. No registry distribution manifest is claimed.
-The owning evidence is http-personal-artifact-result.md and the image-only
-HTTP staging receipt named in the qualified release. Compressed registry bytes
-are absent; saved config and all ten uncompressed diffIDs were verified.
+The retained Docker save is 176902656 bytes, SHA256
+136d85d2d973f19dbd358e5c73c096eee7fefbcfdc82ff57f493c9186534ade7.
+No registry distribution manifest is claimed. Hosted custody and the independent
+operator artifact check verified all eleven source inputs, the saved config
+and all ten uncompressed diffIDs. Compressed registry bytes are absent.
+Artifact qualification does not establish target loading or runtime acceptance.
 
 Before protected credential inspection, managed writes, check-config or activation,
 the role uses docker_image_info on the fixed local socket and exact config ID.
@@ -153,11 +156,11 @@ The image must already exist. This mode never pulls, tags, imports, installs or
 logs into a registry. Offline check-config also uses --pull=never.
 The regular activation retains pull:never and recreate:auto.
 
-The current artifact's hosted custody and image-only target load do not qualify
-personal runtime behavior through this role. Source tests render and validate
-the exact binding; target activation and four-client proof remain root-owned.
-Current resource-only runtime continues. This HTTP option does not enable
-personal tools in inventory or change stdio, grants or backend configuration.
+This diagnostic release preserves the qualified personal and resource profiles.
+Source tests render and validate the exact image binding; target staging,
+activation and native dry-run acceptance remain separate operator checks.
+It changes no issuer, subjects, grants, credentials, stdio registrations or
+backend configuration. A successful dry run is not a successful curator pilot.
 Historical canary and earlier backend delivery limitations are retained in the
 prior receipts; they are not evidence about this release's live state.
 
