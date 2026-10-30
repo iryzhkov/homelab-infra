@@ -19,6 +19,10 @@ class Refused(RuntimeError):
     """No safe automatic action is available."""
 
 
+class NotDispatched(Refused):
+    """The trusted adapter proves no mutation transport was attempted."""
+
+
 def require(condition, message):
     if not condition:
         raise Refused(message)
@@ -367,7 +371,12 @@ class Operator:
                 require(self._read() == s, "Concurrent drift before mutation")
                 d["pending"] = dict(operation=operation, args=copy.deepcopy(args), before=s)
                 self.journal.save(d)
-                self._dispatch(operation, args, playlist)
+                try:
+                    self._dispatch(operation, args, playlist)
+                except NotDispatched:
+                    d["pending"] = None
+                    self.journal.save(d)
+                    raise
                 writes += 1
             raise Refused("Mutation budget exhausted")
 

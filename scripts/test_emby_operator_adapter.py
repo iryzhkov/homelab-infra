@@ -550,6 +550,40 @@ class LifecycleHTTPTests(unittest.TestCase):
         self.operator.apply('first', ['m1'])
         self.assertEqual([w[0] for w in self.backend.writes].count('create'), 1)
 
+    def test_presend_get_failure_can_resume_without_duplicate_share(self):
+        original = self.http.open
+        def fail_share_preflight(request, *args, **kwargs):
+            pending = self.journal.load().get('pending') if self.journal.load() else None
+            if pending and pending['operation'] == 'share' and request.get_method() == 'GET':
+                raise OSError('synthetic GET failure before mutation')
+            return original(request, *args, **kwargs)
+        with patch.object(self.http, 'open', side_effect=fail_share_preflight):
+            with self.assertRaises(adapter.NotDispatched):
+                self.apply()
+        with self.journal.locked():
+            self.assertIsNone(self.journal.load()['pending'])
+        self.assertEqual([w[0] for w in self.backend.writes], ['create'])
+        self.fresh_session()
+        self.operator.apply('first', ['m1'])
+        self.assertEqual([w[0] for w in self.backend.writes].count('share'), 1)
+        self.assertEqual([w[0] for w in self.backend.writes].count('create'), 1)
+
+    def test_presend_post_budget_refusal_can_resume(self):
+        original = self.api._http
+        def exhaust_before_post(method, path, *args, **kwargs):
+            if method == 'POST' and path == '/Playlists':
+                self.api._requests = adapter.MAX_REQUESTS
+            return original(method, path, *args, **kwargs)
+        with patch.object(self.api, '_http', side_effect=exhaust_before_post):
+            with self.assertRaises(adapter.NotDispatched):
+                self.apply()
+        with self.journal.locked():
+            self.assertIsNone(self.journal.load()['pending'])
+        self.assertEqual(self.backend.writes, [])
+        self.fresh_session()
+        self.operator.apply('first', ['m1'])
+        self.assertEqual([w[0] for w in self.backend.writes].count('create'), 1)
+
     def test_uncertain_unchanged_create_is_never_retried(self):
         self.backend.fail_before = 'create'
         with self.assertRaises(Refused):

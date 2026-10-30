@@ -11,7 +11,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from emby_operator_recommendations import Refused, require, movie_ids, opaque, row_id, digest
+from functools import wraps
+from emby_operator_recommendations import NotDispatched, Refused, require, movie_ids, opaque, row_id, digest
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_BODY = 16 * 1024
@@ -146,6 +147,20 @@ def normalize_home(dto):
              if k not in ('ParentItem', 'UserData')} for r in rows]
 
 
+def mutation_dispatch(method):
+    """Classify failures only while this invocation has attempted no POST."""
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        attempted = self._mutation_attempts
+        try:
+            return method(self, *args, **kwargs)
+        except Exception:
+            if self._mutation_attempts == attempted:
+                raise NotDispatched("Mutation not dispatched; resume same request") from None
+            raise
+    return guarded
+
+
 class OperatorAdapter:
     """Typed transport bound to the core journal under its existing lock.
 
@@ -162,6 +177,7 @@ class OperatorAdapter:
         self.session_binding = secrets.token_hex(16)
         self._started = time.monotonic()
         self._requests = 0
+        self._mutation_attempts = 0
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), NoRedirect())
 
@@ -199,6 +215,8 @@ class OperatorAdapter:
             headers['X-Emby-Token'] = self._token
         request = urllib.request.Request(url, data=raw, headers=headers, method=method)
         self._requests += 1  # Count dispatch before attempting, including errors.
+        if method == 'POST' and not authenticating:
+            self._mutation_attempts += 1  # From here onward a write is uncertain.
         try:
             with self._opener.open(request, timeout=min(TIMEOUT, remaining)) as response:
                 require(response.status in ((200,) if method == 'GET' or authenticating else (200, 204)) and response.geturl() == url,
@@ -397,12 +415,14 @@ class OperatorAdapter:
                 current['playlists'][0]['id'] == opaque(playlist), 'Foreign playlist mutation')
         return current, marker
 
+    @mutation_dispatch
     def create_playlist(self, actor, marker):
         require(actor == self._config['actor'], 'Foreign creator')
         current, expected = self._intent('create', None)
         require(marker == expected and not current['playlists'], 'Existing or foreign playlist')
         self._post('/Playlists', query={'Name': marker, 'userId': actor})
 
+    @mutation_dispatch
     def share_read(self, playlist, recipient):
         require(recipient == self._config['recipient'], 'Foreign share recipient')
         current, _ = self._owned('share', None, playlist)
@@ -410,6 +430,7 @@ class OperatorAdapter:
         self._post('/Items/Access', body={'UserIds': [recipient], 'ItemIds': [playlist],
                                          'ItemAccess': 'Read'})
 
+    @mutation_dispatch
     def create_row(self, recipient, body):
         require(recipient == self._config['recipient'] and type(body) is dict and 'Id' not in body,
                 'Foreign row request')
@@ -419,6 +440,7 @@ class OperatorAdapter:
                 not any(r.get('CustomName') == marker for r in current['home']), 'Foreign row marker')
         self._post('/Users/' + recipient + '/HomeSections', body=body)
 
+    @mutation_dispatch
     def delete_entries(self, playlist, actor, entries):
         require(actor == self._config['actor'] and type(entries) is list, 'Foreign occurrence actor')
         current, _ = self._owned('clear', entries, playlist)
@@ -426,6 +448,7 @@ class OperatorAdapter:
                 'Stale occurrences')
         self._post('/Playlists/' + playlist + '/Items/Delete', body={'EntryIds': ','.join(entries)})
 
+    @mutation_dispatch
     def add_movies(self, playlist, actor, movies):
         require(actor == self._config['actor'], 'Foreign membership actor')
         movies = movie_ids(movies)
@@ -435,6 +458,7 @@ class OperatorAdapter:
         self._post('/Playlists/' + playlist + '/Items', body={
             'Ids': ','.join(movies), 'userId': actor, 'SkipDuplicates': False})
 
+    @mutation_dispatch
     def delete_row(self, recipient, row):
         require(recipient == self._config['recipient'], 'Foreign row recipient')
         current, marker = self._intent('unrow', row)
@@ -446,6 +470,7 @@ class OperatorAdapter:
                 matches[0].get('ParentId') == current['playlists'][0]['id'], 'Foreign saved row')
         self._post('/Users/' + recipient + '/HomeSections/Delete', body={'ids': [row]})
 
+    @mutation_dispatch
     def delete_owned_playlist(self, playlist, marker, actor):
         require(actor == self._config['actor'], 'Foreign delete actor')
         current, expected = self._owned('delete', None, playlist)

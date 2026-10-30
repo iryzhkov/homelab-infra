@@ -165,6 +165,11 @@ reports clean/drift or observed-applied/unresolved pending intent. It never retr
 Resume only the same unfinished key/request in a fresh authenticated invocation.
 Only exact postcondition readback lets the core continue remaining approved steps.
 An unchanged precondition after uncertainty is never proof of nonexecution.
+If the trusted adapter proves that a failure occurred before any mutation transport
+attempt, it raises NotDispatched. The core durably clears only that pending step
+and keeps the same unfinished request. A fresh invocation can resume after full
+identity, visibility and snapshot revalidation. Once the mutation transport is
+attempted, all failures remain uncertain, even if the response suggests no change.
 
 Updates clear exact current occurrences and add the validated desired sequence;
 the Home row stays stable. Removal deletes only the saved row and playlist and
