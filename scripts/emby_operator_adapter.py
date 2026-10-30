@@ -143,8 +143,14 @@ def normalize_home(dto):
             all(type(r) is dict for r in rows), "Invalid Home response")
     ids = [row_id(r.get('Id')) for r in rows]
     require(len(ids) == len(set(ids)), "Duplicate Home IDs")
-    return [{k: copy.deepcopy(v) for k, v in r.items()
-             if k not in ('ParentItem', 'UserData')} for r in rows]
+    result = [{k: copy.deepcopy(v) for k, v in r.items()
+               if k not in ('ParentItem', 'UserData')} for r in rows]
+    empty_query = {k: [] for k in ('StudioIds', 'TagIds', 'GenreIds', 'CollectionTypes')}
+    for row in result:
+        # Exact 4.10.1.0 empty-query expansion; retain every other query value.
+        if row.get('Query') == empty_query:
+            row['Query'] = {}
+    return result
 
 
 def mutation_dispatch(method):

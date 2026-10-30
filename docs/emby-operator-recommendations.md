@@ -97,7 +97,10 @@ There is no name-only adoption, including after journal loss.
 
 `snapshot(recipient, marker)` returns only `home` and `playlists`. Home preserves
 row order, typed IDs, nested values and unknown stable fields, omitting only
-ParentItem and UserData enrichments. Playlist discovery reads the actor Items
+ParentItem and UserData enrichments. The exact Emby 4.10.1.0 Query expansion
+with StudioIds, TagIds, GenreIds and CollectionTypes all empty arrays normalizes
+to an empty object. Nonempty, missing or additional query fields are preserved
+and remain part of drift checks. Playlist discovery reads the actor Items
 namespace, recursively typed Playlist, StartIndex=0, Limit=129, refusing above 128,
 truncation, duplicate IDs, non-Playlist DTOs and ambiguous markers. Exact item read
 must match saved/discovered ID, Type=Playlist, marker Name, CanManageAccess=true

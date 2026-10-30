@@ -300,6 +300,16 @@ class CustodyTests(unittest.TestCase):
         with self.assertRaises(Refused):
             adapter.normalize_home({'Items': [], 'TotalRecordCount': 1})
 
+    def test_only_exact_empty_query_expansion_is_normalized(self):
+        empty = {k: [] for k in ('StudioIds', 'TagIds', 'GenreIds', 'CollectionTypes')}
+        self.assertEqual(adapter.normalize_home([{'Id': 'r', 'Query': empty}]),
+                         [{'Id': 'r', 'Query': {}}])
+        variants = [dict(empty, TagIds=['restricted']), dict(empty, Unknown=[]),
+                    {'StudioIds': []}, None, {'StudioIds': False}]
+        for query in variants:
+            self.assertEqual(adapter.normalize_home([{'Id': 'r', 'Query': query}]),
+                             [{'Id': 'r', 'Query': query}])
+
     def test_origin_default_off_and_invalid_request_before_secret_network(self):
         c = config()
         c['enabled'] = False
@@ -404,7 +414,8 @@ class SyntheticBackend:
             self.grant = 'Read'
         elif op == 'row':
             assert path == '/Users/' + R + '/HomeSections' and body == pending['args']
-            self.home.append(dict(body, Id='2', ServerDefault={'keep': True}))
+            self.home.append(dict(body, Id='2', ServerDefault={'keep': True},
+                                  Query={k: [] for k in ('StudioIds', 'TagIds', 'GenreIds', 'CollectionTypes')}))
         elif op == 'add':
             assert path == '/Playlists/p1/Items' and body == {
                 'Ids': ','.join(pending['args']), 'userId': A, 'SkipDuplicates': False}
