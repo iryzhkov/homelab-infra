@@ -37,7 +37,7 @@ def _changes(before, after, path=""):
     return []
 
 
-def inspect(snapshot):
+def _inspect(snapshot):
     """Normalize version-1 resolved policy input; malformed input is diagnostic."""
     diagnostics = []
 
@@ -339,6 +339,19 @@ def inspect(snapshot):
             "planning_ready": not diagnostics, "deployment_ready": False}
 
 
+def inspect(snapshot):
+    """Reject malformed JSON shapes without exposing a partial valid model."""
+    try:
+        return _inspect(snapshot)
+    except (TypeError, ValueError, KeyError, RecursionError):
+        return {"schema_version": 1, "source_pin": None, "placement": {},
+                "backends": {}, "services": {}, "channels": {},
+                "unmodelled_routes": [], "diagnostics": [{
+                    "code": "input_shape", "path": "",
+                    "message": "Malformed input shape; see the version-1 schema."}],
+                "planning_ready": False, "deployment_ready": False}
+
+
 def plan(snapshot, baseline=None, move_set=None, available=None):
     """Return normalized inspection and conservative modeled semantic changes.
 
@@ -375,6 +388,8 @@ def plan(snapshot, baseline=None, move_set=None, available=None):
                             result["diagnostics"].append({"code": "move_dependency", "path": "/move_set/" + name, "message": "Unserved dependency: " + dep})
     result["diagnostics"].sort(key=lambda x: (x["path"], x["code"], x["message"]))
     result["planning_ready"] = not result["diagnostics"]
+    if result["diagnostics"] and result["model_equivalent"] is not None:
+        result["model_equivalent"] = False
     return result
 
 

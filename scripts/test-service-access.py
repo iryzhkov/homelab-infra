@@ -2,7 +2,6 @@
 """Synthetic contract tests. Run only in an isolated job with asserted HOME."""
 import copy
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -198,7 +197,9 @@ class Contract(unittest.TestCase):
         self.assertIn("unsupported_field", codes(sa.plan(data)))
 
     def test_malformed_input_returns_diagnostics(self):
-        for value in (None, [], {"version": 1}, dict(sample(), services=[{"id": []}])):
+        for value in (None, [], {"version": 1}, dict(sample(), services=[{"id": []}]),
+                      dict(sample(), channels=[{"id": "bad", "context": []}]),
+                      dict(sample(), backends=[{"id": "bad", "kind": []}])):
             with self.subTest(value=value):
                 self.assertFalse(sa.plan(value)["planning_ready"])
 
