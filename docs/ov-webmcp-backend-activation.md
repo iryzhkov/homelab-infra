@@ -15,15 +15,18 @@ render has been reconciled. An extra variable or one-off Engine update is not a
 persistent selection.
 
 The accepted fixed operation is identified by bundle manifest SHA256
-`648ff59e7254d8aa4b2792cfb6a4af0127d994086ab05cd51752ab5ef3a22b91`.
+`53b8037fb89ce0c743535d73058126148a06d877ceb77162a33c7efea3f63a9e`.
 Its exact-source independent main and peer reviews accepted the operation after
-the maintenance-control correction. Chaldea job `53a062a3-ea12-4d63-a703-7ff632f36399`
-passed 42 selected synthetic checks. Those checks and reviews do not claim a
+the maintenance-control and actual-topology corrections. Chaldea job
+`4544a2cd-98cc-47e0-aec5-cb633b539e52` passed 51 selected synthetic checks. Those checks and reviews do not claim a
 production cutover, current queue state or interactive client acceptance.
 
 Root must collect fresh service/version, writer exclusions and image custody.
 The fixed maintenance control requires the first non-loopback TCP/1933 raw
-PREROUTING drop in both IP families. Root must prove the actual published caller
+PREROUTING drop in both IP families on both active nodes, homelab and Normandy.
+Only homelab may carry the backend placement pin. The exact peer ingress receipt
+is a root attestation, not an automated remote firewall observation. Root retains
+peer rule continuity and cleanup ownership. Root must prove the actual published caller
 paths are blocked while local health remains available. Empty deployer units are
 recorded honestly with the protected current inventory. No client-process stop or
 universal overlay exclusion is claimed. Remove only the owned rules after verified
