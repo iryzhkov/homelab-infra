@@ -384,10 +384,10 @@ OV_FULL_CONFIG = {
 # One measured HTTP release. This is a Docker config ID, not a registry manifest.
 OV_LOCAL_RELEASE = {
     "kind": "local-config",
-    "reference": "sha256:9fc44fb1bb2410e327fd450cd4a83a46d36ed851ca2724fb9a13f30edfcb1e31",
-    "source_revision": "d5b1b104b5a39f15c9443c117bca9dd1c52eac68",
+    "reference": "sha256:2dfb396ca804482ed29c087d3ab258312b75c57a25848da0c1c96636a875a89f",
+    "source_revision": "be4cda7c376986360158fb6488b808dec90d81c2",
     "contract_revision": OV_FULL_CONTRACT,
-    "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/40992612927",
+    "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/41114422316",
 }
 
 
@@ -416,12 +416,14 @@ def ov_local_image(images):
     return True
 
 
+OV_PERSONAL_BACKEND_REVISION = "7f3faf6982f81116d6626bc7091f87f786a309c7"
+
 OV_PERSONAL_FIELDS = ("personal_profile", "personal_account", "personal_user",
                       "personal_subjects", "personal_backend_revision")
 
 
 def ov_personal_config(config):
-    """Validate future protected installer inputs without asserting artifact qualification."""
+    """Validate protected owner inputs; package validation binds the qualified artifacts."""
     profile = config.get("personal_profile", "disabled")
     require(profile in ("disabled", "shared-owner-v1"), "invalid OV personal profile")
     if profile == "disabled":
@@ -470,10 +472,10 @@ def ov_contract(value):
                 "backend_secret_file", "listen_host", "listen_port")
     keys(config, required + (tuple(OV_FULL_CONFIG) if full_resources else ()), OV_PERSONAL_FIELDS)
     ov_personal_config(config)
-    # Existing producer images contain no personal implementation. Root must bind
-    # a qualified backend and HTTP artifact before enabling this profile.
-    require(config.get("personal_profile", "disabled") == "disabled",
-            "OV personal activation awaits qualified backend and HTTP artifact binding")
+    if config.get("personal_profile", "disabled") != "disabled":
+        require(local and image == OV_LOCAL_RELEASE
+                and config["personal_backend_revision"] == OV_PERSONAL_BACKEND_REVISION,
+                "OV personal activation requires the exact qualified backend and HTTP binding")
     if full_resources:
         require(all(config[key] == fixed for key, fixed in OV_FULL_CONFIG.items()),
                 "full-resource OV requires the exact resources and mutation profiles")

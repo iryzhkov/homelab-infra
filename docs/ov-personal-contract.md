@@ -13,8 +13,9 @@ and approved subjects, and its backend binding before enabling issuer personal
 grants. Verify that live HTTP deployment before selecting
 `ov_http_identities_personal=true`. The currently accepted resources-only
 HTTP artifact cannot accept personal claims; enabling issuance first would
-deny existing resources access for those tokens. This source's image hold
-remains in place until root accepts the replacement artifact.
+deny existing resources access for those tokens. The replacement source binding
+is now closed to [the qualified release](ov-personal-qualified-release.md);
+live activation remains root-owned.
 
 ## Issuer installer inputs
 
@@ -67,19 +68,19 @@ Placeholders are documentation only. Subjects are exact approved OAuth subject
 strings, not account names or requested scopes. The validator bounds the list
 to 1..16 unique nonempty strings of at most 256 characters with no whitespace
 below ASCII 33. Owner values are exactly default/default. Revision input must
-be 40 lowercase hex characters. It does not establish qualification.
+be 40 lowercase hex characters and match the qualified backend revision below.
 
-`ov_personal_config` validates this future shape. `ov_http_contract` refuses
-every enabled personal package until root binds the qualified backend and HTTP
-artifact. All existing closed image bindings remain unchanged. The maintained
+`ov_personal_config` validates the protected shape. `ov_http_contract` permits
+personal enablement only with the exact new local HTTP binding and backend
+revision 7f3faf6982f81116d6626bc7091f87f786a309c7. Legacy and distribution
+bindings cannot enable it. The maintained
 sorted TOML template needs no alternate rendering path; the role already stages
 it mode0600 with no_log and diff disabled.
 
-HTTP source af26cfcd7a45c188ac6a468092ffa005f7fc0c42 documents the
-shared-owner-v1 contract and an older source pin. It refuses append before
-dispatch. Root owns the ongoing append qualification, final backend revision,
-HTTP source/image identity, complete build context and artifact receipts.
-This infra change does not accept that older pin as a final artifact.
+HTTP accepted source e094cb32a085e9ad3fc9976aba7824db830c8999 implements
+shared-owner-v1 with qualified append. Its measured publication binding and
+backend artifact are recorded in the qualified release. The resource interface
+contract remains 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319.
 
 ## Fleet helper owner
 

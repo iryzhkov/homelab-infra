@@ -59,10 +59,10 @@ def local_fixture():
     value = full_fixture()
     value["image"] = {
         "kind": "local-config",
-        "reference": "sha256:9fc44fb1bb2410e327fd450cd4a83a46d36ed851ca2724fb9a13f30edfcb1e31",
-        "source_revision": "d5b1b104b5a39f15c9443c117bca9dd1c52eac68",
+        "reference": "sha256:2dfb396ca804482ed29c087d3ab258312b75c57a25848da0c1c96636a875a89f",
+        "source_revision": "be4cda7c376986360158fb6488b808dec90d81c2",
         "contract_revision": "1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319",
-        "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/40992612927"}
+        "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/41114422316"}
     return value
 
 
@@ -118,7 +118,7 @@ class OVPackagingTest(unittest.TestCase):
     def test_personal_config_is_closed_and_cannot_select_old_images(self):
         good = {"personal_profile": "shared-owner-v1", "personal_account": "default",
                 "personal_user": "default", "personal_subjects": ["synthetic-pc", "synthetic-laptop"],
-                "personal_backend_revision": "a" * 40}
+                "personal_backend_revision": "7f3faf6982f81116d6626bc7091f87f786a309c7"}
         self.assertIs(contract.ov_personal_config(good), good)
         for key in good:
             bad = dict(good)
@@ -133,10 +133,31 @@ class OVPackagingTest(unittest.TestCase):
                            ("personal_backend_revision", ""), ("personal_backend_revision", "HEAD")):
             with self.subTest(key=key), self.assertRaises(AnsibleFilterError):
                 contract.ov_personal_config(good | {key: value})
-        for package in (fixture(), full_fixture(), local_fixture()):
+        accepted = local_fixture()
+        accepted["config"].update(good)
+        before = copy.deepcopy(accepted)
+        self.assertIs(contract.ov_contract(accepted), accepted)
+        self.assertEqual(accepted, before)
+        old = local_fixture()
+        old["image"].update({
+            "reference": "sha256:9fc44fb1bb2410e327fd450cd4a83a46d36ed851ca2724fb9a13f30edfcb1e31",
+            "source_revision": "d5b1b104b5a39f15c9443c117bca9dd1c52eac68",
+            "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/40992612927"})
+        for package in (fixture(), full_fixture(), old):
             package["config"].update(good)
-            with self.assertRaisesRegex(AnsibleFilterError, "awaits qualified"):
+            with self.assertRaises(AnsibleFilterError):
                 contract.ov_contract(package)
+        for revision in ("a" * 40, "7adf8b5fbcaa3293ef2a0b0ed44f864477401c39"):
+            bad = copy.deepcopy(accepted)
+            bad["config"]["personal_backend_revision"] = revision
+            with self.assertRaisesRegex(AnsibleFilterError, "exact qualified"):
+                contract.ov_contract(bad)
+        # The accepted review commit has the same tree as publication, but the
+        # image label and closed object bind the measured publication revision.
+        bad = copy.deepcopy(accepted)
+        bad["image"]["source_revision"] = "e094cb32a085e9ad3fc9976aba7824db830c8999"
+        with self.assertRaises(AnsibleFilterError):
+            contract.ov_contract(bad)
         for package in (fixture(), full_fixture(), local_fixture()):
             package["config"]["personal_profile"] = "disabled"
             self.assertIs(contract.ov_contract(package), package)
@@ -144,7 +165,7 @@ class OVPackagingTest(unittest.TestCase):
             with self.assertRaises(AnsibleFilterError) as caught:
                 contract.ov_contract(package)
             self.assertNotIn("PRIVATE_SUBJECT_SENTINEL", str(caught.exception))
-        # The same template carries validated future inputs, without defaults.
+        # The same template carries validated personal inputs, without defaults.
         import jinja2
         template = (ROOT / "roles/ov_http_compose/templates/runtime.toml.j2").read_text()
         env = jinja2.Environment()

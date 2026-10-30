@@ -6,6 +6,7 @@ The ordinary CI command runs all other tests; native checks use a separate pinne
 """
 import asyncio
 import contextlib
+import copy
 import hashlib
 import http.client
 import importlib.util
@@ -968,10 +969,10 @@ class BackendLocalRelease(unittest.TestCase):
         return {"name": "openviking", "pin": "homelab", "prepare_tasks": "swarm-prepare.yml"}
 
     def image(self):
-        return [{"Id": "sha256:12c8b14fde92eec32a3cc851d630e98acfb885a0ae580e4b0b76316393661ae3",
+        return [{"Id": "sha256:33ce088da598bbc1915ba488e63330f0f40d8417e5f2783d384df6eb0f8dd98b",
                  "Os": "linux", "Architecture": "amd64",
                  "Config": {"Entrypoint": ["openviking-entrypoint"], "WorkingDir": "/app/.openviking",
-                            "Labels": {"org.opencontainers.image.revision": "7adf8b5fbcaa3293ef2a0b0ed44f864477401c39",
+                            "Labels": {"org.opencontainers.image.revision": "7f3faf6982f81116d6626bc7091f87f786a309c7",
                             "io.openviking.candidate.native-sha256": "8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad"}}}]
 
     def topology(self):
@@ -985,6 +986,17 @@ class BackendLocalRelease(unittest.TestCase):
         from ansible.errors import AnsibleFilterError
         good = json.loads(json.dumps(self.f.OV_BACKEND_LOCAL_RELEASE))
         self.assertEqual(self.f.ov_backend_release(good, self.stack(), "homelab", "homelab"), good)
+        inventory = yaml.safe_load((ROOT / "inventory/host_vars/homelab.yml").read_text())
+        self.assertEqual(inventory["openviking_local_release"], good)
+        old = {**good, "reference": "sha256:12c8b14fde92eec32a3cc851d630e98acfb885a0ae580e4b0b76316393661ae3",
+               "source_revision": "7adf8b5fbcaa3293ef2a0b0ed44f864477401c39"}
+        with self.assertRaises(AnsibleFilterError):
+            self.f.ov_backend_release(old, self.stack(), "homelab", "homelab")
+        for key in good["provenance"]:
+            bad = copy.deepcopy(good)
+            bad["provenance"][key] = "wrong"
+            with self.subTest(provenance=key), self.assertRaises(AnsibleFilterError):
+                self.f.ov_backend_release(bad, self.stack(), "homelab", "homelab")
         for key in good:
             bad = json.loads(json.dumps(good))
             bad[key] = "wrong"
