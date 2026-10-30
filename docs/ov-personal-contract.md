@@ -6,6 +6,16 @@ The implementation follows the full Jocasta authoring guide revision 45,
 document 38a63cf8918eebae2dd7c8911eacd89c, SHA256
 a2dd0cb0f9d8ca9f57ca49b24e4346526a1de350089f780c3924d7e94a762d51.
 
+## Activation order
+
+Root must qualify and activate the HTTP personal artifact, its protected owner
+and approved subjects, and its backend binding before enabling issuer personal
+grants. Verify that live HTTP deployment before selecting
+`ov_http_identities_personal=true`. The currently accepted resources-only
+HTTP artifact cannot accept personal claims; enabling issuance first would
+deny existing resources access for those tokens. This source's image hold
+remains in place until root accepts the replacement artifact.
+
 ## Issuer installer inputs
 
 The existing isolated playbook accepts a separate default-off
@@ -82,6 +92,13 @@ After RS256 verification, check the existing issuer, client/resource, lifetime,
 resource/action claims and host binding, plus exact signed
 `ov_personal = {account: default, user: default, actions: [...]}`.
 Validate a nonempty canonical action subset and each corresponding scope.
+The fixed expanded request retains all five known personal scopes even when
+the operator declares fewer actions. Signed actions alone confer personal
+authority; additional known personal scopes are inert when the claim is present.
+Do not require a scope/action bijection or narrow issued scopes to manufacture
+one. The HTTP af26 personal verifier uses this one-way action-to-scope rule.
+The separate helper owner must implement the same rule; this infra fixture
+records that intended contract and does not claim to execute the helper.
 The runtime also requires the observed subject in protected personal_subjects.
 Never infer a grant from requested scopes or send backend owner headers.
 

@@ -121,6 +121,40 @@ class PersonalContractTest(unittest.TestCase):
         self.assertEqual(profiles.merged_claims(mappings, user, app["group"], app["scope"].split())
                          ["ov_personal"]["actions"], ["session.read"])
 
+    def test_expanded_scope_reduced_claim_cross_contract(self):
+        # Fixed helper request, reduced operator declaration. No invented scope
+        # reduction: Authentik's token.scope remains the supported request list.
+        # IDToken.to_access_token uses mapped scope if supplied, otherwise the
+        # joined token.scope; these mappings deliberately supply no override.
+        s = self.personal_spec(["session.read"])
+        app = s["services"]["ov"]
+        requested = FULL_SCOPE.split() + list(mi.OV_PERSONAL_SCOPES)
+        item = s["identities"][3]
+        user = types.SimpleNamespace(username=item["username"], type="service_account",
+                                     attributes=item["grant_attributes"])
+        mappings = [{"scope_name": k, "expression": v} for k, v in app["scope_expressions"].items()]
+        mapped = profiles.merged_claims(mappings, user, app["group"], requested)
+        self.assertNotIn("scope", mapped)
+        signed_claims = dict(mapped)
+        signed_claims.setdefault("scope", " ".join(requested))
+        response_scope = " ".join(requested)  # token endpoint uses token.scope.
+        self.assertEqual(signed_claims["scope"], response_scope)
+        self.assertEqual(signed_claims["scope"].split(), requested)
+        self.assertEqual(signed_claims["ov_personal"],
+                         {"account": "default", "user": "default", "actions": ["session.read"]})
+        self.assertEqual(signed_claims["ov_namespaces"], ["viking://resources"])
+        self.assertEqual(signed_claims["ov_actions"], ALL_ACTIONS)
+        # HTTP af26 and the intended helper contract require each signed action's
+        # scope, not the inverse. Extra known personal scopes grant no actions.
+        authority = signed_claims["ov_personal"]["actions"]
+        self.assertTrue(all("ov.personal." + a in signed_claims["scope"].split() for a in authority))
+        self.assertNotIn("memory.write", authority)
+        self.assertIn("ov.personal.memory.write", signed_claims["scope"].split())
+        self.assertEqual(authority, ["session.read"])
+        # Removing its required scope fails the one-way contract as before.
+        missing = [s for s in requested if s != "ov.personal.session.read"]
+        self.assertFalse(all("ov.personal." + a in missing for a in authority))
+
     def test_invalid_closed_grants_profiles_and_scopes(self):
         good = {"account": "default", "user": "default", "actions": list(mi.OV_PERSONAL_ACTIONS)}
         for bad in (None, [], {}, good | {"account": "foreign"}, good | {"user": "foreign"},
