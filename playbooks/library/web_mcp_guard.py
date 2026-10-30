@@ -16,6 +16,9 @@ EDGE = Path("/home/igor/apps/traefik/file_provider")
 PACKAGE_ROOT = Path("/opt/web-mcp")
 
 
+JOURNAL_ROOT = Path("/var/lib/holonet")
+
+
 def need(condition):
     if not condition:
         raise ValueError("protected path, ownership or dedicated identity precondition failed")
@@ -67,7 +70,7 @@ def dedicated(service, uid, gid):
              if entry.pw_uid == uid or entry.pw_gid == gid))
 
 
-def endpoint(service, uid, gid, sha256, credential_names):
+def endpoint(service, uid, gid, sha256, credential_names, journal=False):
     dedicated(service, uid, gid)
     inspect("/etc/ssl/certs/ca-certificates.crt", {0}, exact_mode=0o644, required=True)
     root = PACKAGE_ROOT / service
@@ -89,6 +92,18 @@ def endpoint(service, uid, gid, sha256, credential_names):
              name == "backend.json" if service == "holonet" else name.startswith("gatus-") and name.endswith(".json") and "/" not in name)
         inspect(config / name, {0, uid}, exact_mode=0o600)
     inspect(root / "releases" / sha256 / service, {0}, exact_mode=0o555)
+    if journal:
+        need(service == "holonet")
+        recommendation_journal(uid, gid)
+
+
+def recommendation_journal(uid, gid):
+    parent = inspect(JOURNAL_ROOT, {0}, directory=True)
+    if parent:
+        need(stat.S_IMODE(parent.st_mode) == 0o755 and parent.st_gid == 0)
+    current = inspect(JOURNAL_ROOT / "recommendations", {0, uid}, directory=True)
+    if current:
+        need(current.st_uid == uid and current.st_gid == gid and stat.S_IMODE(current.st_mode) == 0o700)
 
 
 def route(service, uid):
@@ -202,6 +217,7 @@ def main():
         "gid": {"type": "int"},
         "sha256": {"type": "str"},
         "credential_names": {"type": "list", "elements": "str", "default": []},
+        "journal": {"type": "bool", "default": False},
         "source": {"type": "path", "no_log": True},
         "release": {"type": "str"},
     }, supports_check_mode=True)
@@ -227,7 +243,7 @@ def main():
             if p["kind"] == "endpoint":
                 need(p["uid"] is not None and 100 <= p["uid"] <= 999
                      and p["gid"] is not None and 100 <= p["gid"] <= 999)
-                endpoint(p["service"], p["uid"], p["gid"], p["sha256"], p["credential_names"])
+                endpoint(p["service"], p["uid"], p["gid"], p["sha256"], p["credential_names"], p["journal"])
             elif p["kind"] == "binary":
                 binary(p["service"], p["sha256"])
             else:

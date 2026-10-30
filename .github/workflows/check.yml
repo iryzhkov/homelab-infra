@@ -231,6 +231,8 @@ jobs:
             -s roles/authentik_machine_identities/tests -p test_ov_full_rollback.py -v
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
             -s roles/authentik_machine_identities/tests -p test_holonet_catalog_identities.py -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+            -s roles/authentik_machine_identities/tests -p test_holonet_writer_grants.py -v
 
   akasha:
     runs-on: ubuntu-24.04

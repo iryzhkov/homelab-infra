@@ -34,6 +34,9 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/etc/{{ web_mcp.service }} /etc/ssl/certs
+{% if web_mcp.service == 'holonet' and web_mcp.config.get('recommendations') %}
+ReadWritePaths=/var/lib/holonet/recommendations
+{% endif %}
 MemoryMax=256M
 CPUQuota=100%
 TasksMax=64

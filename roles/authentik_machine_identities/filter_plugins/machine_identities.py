@@ -261,8 +261,13 @@ HOLONET_FIELDS = {"holonet_server", "holonet_libraries", "holonet_catalog_users"
                   "holonet_history_users", "holonet_target_users", "holonet_actions", "holonet_namespace"}
 
 
+HOLONET_WRITER_SCOPES = ("holonet.read", "holonet.curate", "holonet.home")
+HOLONET_WRITER_ACTIONS = ("catalog.read", "playlist.read", "playlist.manage",
+                          "object.share", "home.read", "home.manage")
+
+
 def _holonet_grant(item, name):
-    # Initial catalog-only profile deliberately cannot enroll broader roadmap actions.
+    # A separate explicit writer tuple never upgrades a catalog declaration.
     grant = {key: item[key] for key in sorted(HOLONET_FIELDS)}
     _match(re.compile(r"[0-9a-f]{32}\Z"), grant["holonet_server"], name + " server")
     _match(re.compile(r"[a-z][a-z0-9-]{0,31}\Z"), grant["holonet_namespace"], name + " namespace")
@@ -272,9 +277,19 @@ def _holonet_grant(item, name):
         _refuse(name + " library ID exceeds int64")
     grant["holonet_catalog_users"] = _bounded_grants(grant["holonet_catalog_users"], name + " users",
                                                     re.compile(r"[0-9a-f]{32}\Z"), 1, 1)
-    if (grant["holonet_history_users"] != [] or grant["holonet_target_users"] != []
-            or grant["holonet_actions"] != ["catalog.read"]):
-        _refuse(name + " requires catalog.read only and empty history/target grants")
+    if grant["holonet_history_users"] != []:
+        _refuse(name + " does not grant viewing history")
+    if grant["holonet_actions"] == ["catalog.read"]:
+        if grant["holonet_target_users"] != []:
+            _refuse(name + " catalog readers require empty target grants")
+    else:
+        actions = grant["holonet_actions"]
+        if actions not in (list(HOLONET_WRITER_ACTIONS),
+                            list(HOLONET_WRITER_ACTIONS) + ["object.delete"]):
+            _refuse(name + " requires the exact managed recommendation action tuple")
+        grant["holonet_target_users"] = _bounded_grants(
+            grant["holonet_target_users"], name + " targets",
+            re.compile(r"[0-9a-f]{32}\Z"), 16, 1)
     return grant, {"chaldea_holonet": grant}
 
 
@@ -292,11 +307,27 @@ def _bounded_expression(access, service, scope=None):
         "    return {}",
     ]
     if service == "holonet":
-        lines += [
-            "if token.scope != ['holonet.read']:",
-            "    return {}",
-            f"return dict(grant, aud={access['resource']!r})",
-        ]
+        if access["scope"] == "holonet.read":
+            # Preserve the historical catalog mapping byte-for-byte.
+            lines += [
+                "if token.scope != ['holonet.read']:",
+                "    return {}",
+                f"return dict(grant, aud={access['resource']!r})",
+            ]
+        else:
+            # Authentik deepmerge appends arrays. Exactly one selected mapping
+            # emits the full grant; catalog accounts retain their read-only tuple.
+            lines += [
+                "requested = token.scope",
+                "needed = (['holonet.read'] if grant['holonet_actions'] == ['catalog.read']",
+                f"          else {list(HOLONET_WRITER_SCOPES)!r})",
+                "if (not isinstance(requested, list) or len(requested) != len(needed)",
+                "        or set(requested) != set(needed)):",
+                "    return {}",
+                f"if {scope!r} != sorted(requested)[0]:",
+                "    return {}",
+                f"return dict(grant, aud={access['resource']!r})",
+            ]
     elif service == "ha":
         # Authentik 2026.8.4 get_claims evaluates requested mappings with token
         # and deepmerge appends arrays. Elect one selected mapping to emit both
@@ -371,6 +402,8 @@ def _application(raw, service):
     else:
         if service == "ha":
             scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read")
+        elif service == "holonet":
+            scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES))
         elif service == "ov":
             # ov.read first, then any optional families in canonical order.
             optional = OV_SCOPES[1:]
@@ -480,6 +513,9 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         profile = _match(PROFILE, item["profile"], name + " profile")
         name = f"identity {host}/{profile}"
         grant, grant_attributes = profile_spec["grant"](item, name)
+        if (service == "holonet" and grant["holonet_actions"] != ["catalog.read"]
+                and access["scope"] != " ".join(HOLONET_WRITER_SCOPES)):
+            _refuse(name + " managed recommendations require the explicit three-scope application")
         if service == "ha":
             scopes = access["scope"].split(" ")
             for action in grant["ha_actions"]:
@@ -544,7 +580,7 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
             access["expression"] = _bounded_expression(access, service, next(iter(access["scope_mappings"])))
         access["scope_expressions"] = {
             scope: (_bounded_expression(access, service, scope)
-                    if service == "ha" or (service == "ov" and len(access["scope_mappings"]) > 1)
+                    if service == "ha" or (service in ("ov", "holonet") and len(access["scope_mappings"]) > 1)
                     else access["expression"])
             for scope in access["scope_mappings"]}
         for mapping in access["scope_mappings"].values():

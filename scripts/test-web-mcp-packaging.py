@@ -141,7 +141,8 @@ class PackagingTest(unittest.TestCase):
     def test_holonet_reviewed_catalog_upgrade_and_original_rollback(self):
         old = "4aceab9770f0098b4369e37657f6b64051884baf"
         new = "31817f70f7fed5900622bc7274c6a8a31275189b"
-        self.assertEqual(contract.HOLONET_SOURCE_REVISIONS, {old, new})
+        self.assertEqual(contract.HOLONET_CATALOG_SOURCE_REVISIONS, {old, new})
+        self.assertEqual(contract.HOLONET_SOURCE_REVISIONS, {old, new, contract.HOLONET_WRITER_SOURCE})
         self.assertEqual(contract.SERVICES["holonet"][1], old)
         for revision in (old, new, old):
             value = fixture("holonet")
@@ -167,6 +168,133 @@ class PackagingTest(unittest.TestCase):
                 broken = copy.deepcopy(value)
                 broken["artifact"]["contract_revision"] = interface
                 self.rejected(broken)
+
+    def test_holonet_writer_config_requires_exact_new_artifact_and_bounded_policy(self):
+        value = fixture("holonet")
+        value["artifact"].update(source_revision=contract.HOLONET_WRITER_SOURCE,
+                                 contract_revision=contract.HOLONET_WRITER_CONTRACT)
+        policy = {
+            "state_directory": "/var/lib/holonet/recommendations", "owner": "c" * 32,
+            "subjects": ["writer-subject"], "namespaces": ["managed-recommendations"],
+            "actions": ["catalog.read", "playlist.read", "playlist.manage", "object.share", "home.read", "home.manage"],
+            "libraries": ["1"], "catalog_users": ["c" * 32],
+            "targets": {"e" * 32: {"baseline_ids": ["baseline", 1], "anchor_id": "baseline"}},
+        }
+        value["config"]["recommendations"] = policy
+        before = copy.deepcopy(value)
+        self.assertEqual(contract.endpoint_contract(value), before)
+        for source in contract.HOLONET_CATALOG_SOURCE_REVISIONS:
+            bad = copy.deepcopy(value)
+            bad["artifact"].update(source_revision=source, contract_revision=contract.SERVICES["holonet"][1])
+            self.rejected(bad)
+        bad = copy.deepcopy(value)
+        bad["artifact"]["contract_revision"] = contract.SERVICES["holonet"][1]
+        self.rejected(bad)
+        for key, item in (
+                ("state_directory", "/var/lib/holonet"), ("state_directory", "/var/lib/holonet/../other"),
+                ("owner", "e" * 32), ("subjects", []), ("subjects", ["same", "same"]),
+                ("subjects", ["a b"]), ("namespaces", ["other"]),
+                ("actions", ["playlist.manage"]), ("actions", policy["actions"] + ["media.delete"]),
+                ("libraries", ["2"]), ("catalog_users", ["e" * 32]), ("targets", {}),
+                ("targets", {"e" * 32: {"baseline_ids": ["baseline"], "anchor_id": "missing"}}),
+                ("targets", {"e" * 32: {"baseline_ids": [True], "anchor_id": True}}),
+                ("targets", {"e" * 32: {"baseline_ids": [1, 1], "anchor_id": 1}})):
+            bad = copy.deepcopy(value)
+            bad["config"]["recommendations"][key] = item
+            with self.subTest(key=key, item=item):
+                self.rejected(bad)
+        value["config"]["recommendations"]["actions"].append("object.delete")
+        contract.endpoint_contract(value)
+        template = (ROOT / "roles/web_mcp_endpoint/templates/endpoint.service.j2").read_text()
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+        enabled = env.from_string(template).render(web_mcp=value)
+        self.assertEqual(enabled.count("ReadWritePaths="), 1)
+        self.assertIn("ReadWritePaths=/var/lib/holonet/recommendations", enabled)
+        self.assertIn("ProtectSystem=strict", enabled)
+        value["config"].pop("recommendations")
+        self.assertNotIn("ReadWritePaths", env.from_string(template).render(web_mcp=value))
+
+    def test_holonet_private_journal_preflight_preserves_unknown_paths(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as scratch:
+            state = Path(scratch) / "state"
+            with mock.patch.object(guard, "JOURNAL_ROOT", state):
+                guard.recommendation_journal(os.getuid(), os.getgid())
+                state.mkdir(mode=0o755)
+                state.chmod(0o755)  # Job umask must not change the intended parent fixture.
+                journal = state / "recommendations"
+                journal.mkdir(mode=0o700)
+                guard.recommendation_journal(os.getuid(), os.getgid())
+                sentinel = journal / "state.json"
+                sentinel.write_text("synthetic existing state")
+                original = sentinel.read_bytes()
+                journal.chmod(0o755)
+                with self.assertRaises(ValueError):
+                    guard.recommendation_journal(os.getuid(), os.getgid())
+                self.assertEqual(sentinel.read_bytes(), original)
+                journal.chmod(0o700)
+                with self.assertRaises(ValueError):
+                    guard.recommendation_journal(os.getuid() + 1, os.getgid())
+                with self.assertRaises(ValueError):
+                    guard.recommendation_journal(os.getuid(), os.getgid() + 1)
+                journal.rename(state / "saved")
+                journal.symlink_to(state / "saved", target_is_directory=True)
+                with self.assertRaises(ValueError):
+                    guard.recommendation_journal(os.getuid(), os.getgid())
+                self.assertEqual(sentinel.read_bytes(), original)
+
+    def test_holonet_journal_tasks_check_apply_repeat_and_preserve(self):
+        original = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text())[0]["block"]
+        names = [task["name"] for task in original]
+        parent_name = "Create the fixed root-owned HoloNet state parent"
+        child_name = "Create only the private runtime-owned recommendation journal directory"
+        self.assertLess(names.index("Guard fixed paths and dedicated identities without reading secrets"),
+                        names.index(parent_name))
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            state = base / "state"
+            tasks = []
+            for task in original:
+                if task["name"] in (parent_name, child_name):
+                    task = copy.deepcopy(task)
+                    args = task["ansible.builtin.file"]
+                    args["path"] = args["path"].replace("/var/lib/holonet", str(state))
+                    for field in ("owner", "group"):
+                        if args.get(field) == "root":
+                            args[field] = "0"
+                    tasks.append(task)
+            self.assertEqual(len(tasks), 2)
+            play = base / "journal.yml"
+            play.write_text(yaml.safe_dump([{"hosts": "localhost", "connection": "local",
+                "gather_facts": False, "vars": {"web_mcp": {"service": "holonet",
+                    "uid": os.getuid(), "gid": os.getgid(), "config": {"recommendations": {"selected": True}}}},
+                "tasks": tasks}]))
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                       ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"), ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+            def run(*flags):
+                with mock.patch.object(guard, "JOURNAL_ROOT", state):
+                    guard.recommendation_journal(os.getuid(), os.getgid())
+                result = subprocess.run(["ansible-playbook", "-i", "localhost,", str(play), *flags],
+                                        env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                return result.stdout
+            run("--check")
+            self.assertFalse(state.exists())
+            run()
+            journal = state / "recommendations"
+            self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE(journal.stat().st_mode), 0o700)
+            sentinel = journal / "state.json"
+            sentinel.write_text("synthetic retained journal")
+            self.assertIn("changed=0", run())
+            self.assertIn("changed=0", run("--check"))
+            self.assertEqual(sentinel.read_text(), "synthetic retained journal")
+            # Existing unsafe state refuses in the exact production preflight
+            # before the selected role tasks get an opportunity to chmod it.
+            journal.chmod(0o755)
+            with self.assertRaises(ValueError):
+                run()
+            self.assertEqual(stat.S_IMODE(journal.stat().st_mode), 0o755)
+            self.assertEqual(sentinel.read_text(), "synthetic retained journal")
 
     def test_holonet_catalog_only_contract_and_protected_artifact(self):
         value = fixture("holonet")
