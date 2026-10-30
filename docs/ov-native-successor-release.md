@@ -1,6 +1,6 @@
 # OV native mutation successor
 
-This selection fixes two failures observed in ordinary Codex and Claude sessions.
+This selection fixes failures observed in ordinary Codex and Claude sessions.
 The backend permits USER resources vectors-only reindex only after READ and MANAGE,
 and checks every bounded effect URI under the original lease. HTTP preserves a
 known write commit when verification is busy and gives move/reindex finite longer
@@ -8,14 +8,23 @@ deadlines capped by JWT expiry. There are no retries, new grants or credentials.
 
 ## Exact artifacts
 
-Backend source 98b5466b666d9f5597443b896c5299471e3dc159, tree
-07d712cc767a1c952b7eff3d2190dff0ed0e77c7, passed three native cases and six
-source-identical authorization cases. Both independent reviews accepted it.
-Inherited public fork workflows are disabled; empty CI status is not a pass.
-Chaldea assembly a3a47428-0847-4b82-9a77-d928ea340ca3 succeeded. All 20 custody
-entries were independently checked. The config ID is 93d5fb1320e942b4471a75e2e708fc48bf06ee08f04bafc4e7110c6dc525d980.
-Native bytes, dependencies and base are unchanged. Assembly proves file custody,
-not target runtime acceptance.
+Backend source 7adf8b5fbcaa3293ef2a0b0ed44f864477401c39, tree
+33213b6dc98651a58efad0190af9ab6bb4c6fa17, retains the USER reindex fix and
+acknowledges qualified no_replace moves after committed transfer and durable
+parent refresh dispatch. It no longer waits for descendant summary Work.
+Those Work items remain tracked; later failures do not change an already
+acknowledged commit into a synchronous PROCESSING_ERROR. The ACK exposes no
+Task ID for polling and makes no revision-bound indexing claim.
+Both final reviews accepted the source. Chaldea f2099491-2418-478a-98e7-7878e717f4e4
+passed 73 TaskTracker and four real native move cases, plus an expected old-policy
+red regression. Earlier full FSService fixture failures remain recorded separately;
+this is not a full-suite green claim. Inherited public fork workflows are disabled;
+empty CI status is not a pass.
+Chaldea assembly ebcc2ead-a53c-402e-886d-b36ff40f6fa5 succeeded. All 20 custody
+entries were independently checked. The config ID is
+12c8b14fde92eec32a3cc851d630e98acfb885a0ae580e4b0b76316393661ae3.
+Only FSService changes among the 915 runtime files. Native bytes, dependencies
+and base remain unchanged. Assembly proves file custody, not target runtime acceptance.
 
 HTTP source d5b1b104b5a39f15c9443c117bca9dd1c52eac68, tree
 f21fd8c04725279482a50914a797c339174e34ae, passed 13 focused SDK and commit-state

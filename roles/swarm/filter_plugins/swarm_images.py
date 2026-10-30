@@ -20,13 +20,13 @@ from ansible.errors import AnsibleFilterError
 # One accepted local backend artifact; the config ID commits to Config/RootFS.
 OV_BACKEND_LOCAL_RELEASE = {
     "kind": "local-config",
-    "reference": "sha256:93d5fb1320e942b4471a75e2e708fc48bf06ee08f04bafc4e7110c6dc525d980",
-    "source_revision": "98b5466b666d9f5597443b896c5299471e3dc159",
+    "reference": "sha256:12c8b14fde92eec32a3cc851d630e98acfb885a0ae580e4b0b76316393661ae3",
+    "source_revision": "7adf8b5fbcaa3293ef2a0b0ed44f864477401c39",
     "native_sha256": "8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad",
     "provenance": {
-        "assembly_job": "a3a47428-0847-4b82-9a77-d928ea340ca3",
-        "archive_sha256": "71d09e8b9c87c5783a9373162358238b33cb5b32f568acc4b950d61ca9c233c3",
-        "custody_sha256": "86ccc30e33c512ffddae5f211a8dea9937e55207230aa0d4220205c9492f53db"
+        "assembly_job": "ebcc2ead-a53c-402e-886d-b36ff40f6fa5",
+        "archive_sha256": "abcea84e902f73270f6f32f39ed28dabe54bbb234ab406892dc48a02df2bb23e",
+        "custody_sha256": "9c28eb188dcdd9b02e3a9d5c86f7dcdcfcf58c25b0877b752d2a9f1d81544d72"
     }
 }
 OV_BACKEND_NODE = "riag6q8hi2ntp6eyyhyk735xa"

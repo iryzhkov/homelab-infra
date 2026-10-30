@@ -19,20 +19,20 @@ variable does not persist the choice for future routine convergence.
 ```yaml
 openviking_local_release:
   kind: local-config
-  reference: sha256:93d5fb1320e942b4471a75e2e708fc48bf06ee08f04bafc4e7110c6dc525d980
-  source_revision: 98b5466b666d9f5597443b896c5299471e3dc159
+  reference: sha256:12c8b14fde92eec32a3cc851d630e98acfb885a0ae580e4b0b76316393661ae3
+  source_revision: 7adf8b5fbcaa3293ef2a0b0ed44f864477401c39
   native_sha256: 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
   provenance:
-    assembly_job: a3a47428-0847-4b82-9a77-d928ea340ca3
-    archive_sha256: 71d09e8b9c87c5783a9373162358238b33cb5b32f568acc4b950d61ca9c233c3
-    custody_sha256: 86ccc30e33c512ffddae5f211a8dea9937e55207230aa0d4220205c9492f53db
+    assembly_job: ebcc2ead-a53c-402e-886d-b36ff40f6fa5
+    archive_sha256: abcea84e902f73270f6f32f39ed28dabe54bbb234ab406892dc48a02df2bb23e
+    custody_sha256: 9c28eb188dcdd9b02e3a9d5c86f7dcdcfcf58c25b0877b752d2a9f1d81544d72
 ```
 
 These provenance fields identify the existing Chaldea assembly job, returned
 candidate-patch.tar and custody.json, as independently checked in
-native-full-acceptance-20261030/backend-successor-assembly-evidence. They are closed receipt bindings,
+native-full-acceptance-20261030/move-ack-assembly-evidence. They are closed receipt bindings,
 not a new URL, registry publication or credential flow. The measured distribution
-manifest48f849381c2afb2c73e47d071a3193a9485efbc34c7d3472c5ad2b8ab47901d7
+manifest3612da1fb3b0c7ca09ee4a53a85b8e8fb2fcb1895d6e37922ab2c1677d4366f4
 has no established registry location and is not used as one.
 
 Before any stack-directory, secret, pin-label or preparation write, the existing
