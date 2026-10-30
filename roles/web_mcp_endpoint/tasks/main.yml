@@ -24,6 +24,7 @@
         gid: "{{ web_mcp.gid }}"
         sha256: "{{ web_mcp.artifact.sha256 }}"
         credential_names: "{{ web_mcp.credentials | map(attribute='name') | list }}"
+        journal: "{{ web_mcp.service == 'holonet' and web_mcp.config.recommendations is defined }}"
 
     - name: Validate protected controller sources before managed writes
       web_mcp_guard:
@@ -155,6 +156,24 @@
         owner: root
         group: "{{ web_mcp.service }}"
         mode: "0750"
+
+    - name: Create the fixed root-owned HoloNet state parent
+      ansible.builtin.file:
+        path: /var/lib/holonet
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: web_mcp.service == 'holonet' and web_mcp.config.recommendations is defined
+
+    - name: Create only the private runtime-owned recommendation journal directory
+      ansible.builtin.file:
+        path: /var/lib/holonet/recommendations
+        state: directory
+        owner: "{{ web_mcp.uid }}"
+        group: "{{ web_mcp.gid }}"
+        mode: "0700"
+      when: web_mcp.service == 'holonet' and web_mcp.config.recommendations is defined
 
     - name: Install the runtime-owned configuration
       ansible.builtin.copy:

@@ -11,13 +11,16 @@ SERVICES = {
     "holonet": ("homelab-cli", "4aceab9770f0098b4369e37657f6b64051884baf"),
 }
 
-# Both reviewed builds keep the accepted command/config/catalog-only boundary.
+# The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-HOLONET_SOURCE_REVISIONS = frozenset({
+HOLONET_CATALOG_SOURCE_REVISIONS = frozenset({
     SERVICES["holonet"][1],
     "31817f70f7fed5900622bc7274c6a8a31275189b",
 })
+HOLONET_WRITER_SOURCE = "f0620d641710b6da89b0cd04587b68a998fe22b4"
+HOLONET_WRITER_CONTRACT = "c0c429ed04aa06f46c5e0c639a4dcc000dde4431"
+HOLONET_SOURCE_REVISIONS = HOLONET_CATALOG_SOURCE_REVISIONS | {HOLONET_WRITER_SOURCE}
 
 
 def require(ok, message):
@@ -205,7 +208,7 @@ def observer_config(config):
 
 def holonet_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
-                  "credential_file", "policy_revision", "policy", "library_guids"))
+                  "credential_file", "policy_revision", "policy", "library_guids"), ("recommendations",))
     require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
             "HoloNet resource is fixed")
     trust(config, "resource", "issuer", ha_canonical_url)
@@ -233,7 +236,43 @@ def holonet_config(config):
             "exact catalog-to-policy folder mapping required")
     for guid in mapping.values():
         match(guid, r"[0-9a-f]{32}")
+    if "recommendations" in config:
+        holonet_recommendations(config["recommendations"], libraries, users)
     return {"backend.json"}
+
+
+def holonet_recommendations(value, libraries, users):
+    keys(value, ("state_directory", "owner", "subjects", "namespaces", "actions",
+                 "libraries", "catalog_users", "targets"))
+    require(value["state_directory"] == "/var/lib/holonet/recommendations", "fixed private journal required")
+    require(value["owner"] == users[0], "recommendation owner must be the dedicated catalog user")
+    require(value["libraries"] == libraries and value["catalog_users"] == users,
+            "recommendations cannot widen the independent catalog ceiling")
+    subjects = records(value["subjects"], 1, 16)
+    unique(subjects)
+    for subject in subjects:
+        require(isinstance(subject, str) and 1 <= len(subject) <= 128
+                and all(33 <= ord(c) <= 126 for c in subject), "invalid bounded subject")
+    require(value["namespaces"] == ["managed-recommendations"], "fixed writer namespace required")
+    actions = ["catalog.read", "playlist.read", "playlist.manage", "object.share", "home.read", "home.manage"]
+    require(value["actions"] in (actions, actions + ["object.delete"]), "exact writer actions required")
+    targets = value["targets"]
+    require(isinstance(targets, dict) and 1 <= len(targets) <= 16, "explicit bounded recipient map required")
+
+    def row_id(raw):
+        if type(raw) is int:
+            require(0 <= raw <= 9223372036854775807, "invalid numeric home row ID")
+            return ("integer", raw)
+        require(isinstance(raw, str) and 1 <= len(raw) <= 128
+                and all(33 <= ord(c) <= 126 for c in raw), "invalid string home row ID")
+        return ("string", raw)
+
+    for target, home in targets.items():
+        match(target, r"[0-9a-f]{32}")
+        keys(home, ("baseline_ids", "anchor_id"))
+        baseline = [row_id(raw) for raw in records(home["baseline_ids"], 1, 64)]
+        unique(baseline)
+        require(row_id(home["anchor_id"]) in baseline, "placement anchor must be a baseline row")
 
 
 def endpoint_contract(value):
@@ -250,6 +289,8 @@ def endpoint_contract(value):
     match(artifact["sha256"], r"[0-9a-f]{64}")
     match(artifact["source_revision"], r"[0-9a-f]{40}")
     _, contract = SERVICES[service]
+    if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
+        contract = HOLONET_WRITER_CONTRACT
     require(artifact["contract_revision"] == contract, "unaccepted source interface")
     if "url" in artifact:
         p = url(artifact["url"])
@@ -267,6 +308,8 @@ def endpoint_contract(value):
         integer(source["owner_uid"], 0, 2147483647)
     if service == "holonet":
         require(artifact["source_revision"] in HOLONET_SOURCE_REVISIONS, "unaccepted HoloNet source revision")
+        require("recommendations" not in value["config"] or artifact["source_revision"] == HOLONET_WRITER_SOURCE,
+                "writer configuration requires its exact reviewed artifact")
         expected = holonet_config(value["config"])
     else:
         expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"

@@ -107,6 +107,44 @@ push39377683292 and PR39377687338 succeeded at exact e713583. The observer
 interface remains accepted at 8af2460. This also establishes source publication
 only; no binary release asset or deployment is claimed.
 
+## Opt-in HoloNet managed recommendations source
+
+The guarded installer also admits source f0620d641710b6da89b0cd04587b68a998fe22b4
+with contract c0c429ed04aa06f46c5e0c639a4dcc000dde4431, the merged recommendation
+membership interface. Historical catalog artifacts retain their original exact
+contract and remain available for rollback. Writer configuration is rejected
+with those older artifacts. Every build still needs its own reviewed SHA256,
+static executable and custody proof; the source pin is not an activation.
+
+The optional recommendations object requires the fixed state directory
+/var/lib/holonet/recommendations, the dedicated catalog owner, bounded subjects,
+namespace managed-recommendations, the same library/catalog-user ceiling,
+the exact catalog.read/playlist.read/playlist.manage/object.share/home.read/
+home.manage action tuple and an explicit recipient map. object.delete is the
+only optional additional action. Each recipient has explicit baseline_ids and
+an anchor_id contained in that baseline. No history permission is added.
+
+The role guards existing state ancestors and directory ownership before any
+managed write, creates the root-owned 0755 state parent and runtime-owned 0700
+journal directory only when selected, and permits writes only to that journal
+in the hardened unit. It does not read, rewrite, prune or remove existing
+journal files. Omitting recommendations keeps the catalog unit and configuration
+behavior and retains any old journal for explicit recovery.
+
+The existing HoloNet issuer role accepts a separate writer grant only with all
+three explicit holonet.read/holonet.curate/holonet.home scopes, a nonempty bounded
+target list, the exact managed action tuple and empty history. Existing catalog
+declarations and their historical read-only scope expression remain unchanged.
+Composed scopes elect one mapping to emit the arrays once under Authentik's
+deepmerge behavior. No live identity declaration or native helper is enabled by
+these generic source contracts.
+
+Source checks, real issuer/helper custody, named cohort and baseline ownership,
+minimum production backend reach, exact reviewed artifact, deployment and
+native client acceptance remain separate gates. In particular, the isolated
+owner's deletion permission is not a production grant. No deployment, account,
+grant, history collection, recurrence or live canary follows from this section.
+
 ## HoloNet catalog-only boundary
 
 The accepted HoloNet command/config interface remains homelab-cli
