@@ -112,26 +112,27 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:3e7ab808782cdae27d665455648927bd0bd76a4258ddb41c27b30fc96f58e971
-source_revision: 9a85b5072f4a1824a1cc93c910fd85640922a1b1
+reference: sha256:9fc44fb1bb2410e327fd450cd4a83a46d36ed851ca2724fb9a13f30edfcb1e31
+source_revision: d5b1b104b5a39f15c9443c117bca9dd1c52eac68
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/40931664135
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/40992612927
 ```
 
 All five fields must match together. The contract revision still names the
-existing full-resource interface. The separately accepted source is merged
-9a85b5072f4a1824a1cc93c910fd85640922a1b1, tree
-c764e84d552ad8535af004620d60dea0f00e6b07, with product audit
-4b1db3d3c59baae2e31a9812280d9e032845a0da, tree
-f6c96691110b8506b67f2d9eb821cf29e2ae08b1. This source is not added to the distribution-source allowlist.
+existing full-resource interface. The independently accepted source is
+d5b1b104b5a39f15c9443c117bca9dd1c52eac68, tree
+f21fd8c04725279482a50914a797c339174e34ae. Its native incident fixes preserve
+committed writes during busy verification and bound slow move/reindex replies.
+This source is not added to the distribution-source allowlist. See
+[successor activation](ov-native-successor-release.md) before convergence.
 Other kinds, extra fields, canary/reader contracts and arbitrary release triples
 refuse. The full config and resource/action/namespace restrictions above are unchanged.
 
 The reference is the Docker image config ID. It commits to the immutable config
 and ordered RootFS diff_ids; it is not a registry distribution manifest.
-The retained Docker save is 176880128 bytes, SHA256
-768dc3aa49e9221b145f3de1a5ad5f77acb0300e50ff717e2b2acf5d54429f15.
-RepoDigests is empty. The save OCI manifest a73bc4... is save-only.
+The retained Docker save is 176881152 bytes, SHA256
+b04eb880aac337d5a5944c403690684602f598e37f6e8adcb1cb7dab09c97759.
+RepoDigests is empty. No registry distribution manifest is claimed.
 The owning evidence is the source-map's Image selection restriction,
 production-transition-inventory-20261029.md and audit-http-hosted-build-result.md
 in the full-ov-backend-contract receipt bundle.

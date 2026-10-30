@@ -3,33 +3,36 @@
 The default image in stack.yml and embeddings-prepare.yml remains the official
 OV 0.5.2 linux/amd64 image,
 `ghcr.io/volcengine/openviking@sha256:2ae2799dac1e606218d9ffeb06af3b65c8218b3556555620a369ed81b7c5aa1f`.
-The fresh production-transition-inventory-20261029.md records production already
-on that official 0.5.2 image. The custom 09870 artifact is a separate candidate;
-source publication does not deploy it. This directory contains no server or tenant keys.
+The 2026-10-29 transition inventory predates the completed custom-backend
+cutover. Homelab now selects the closed local release below; the upstream image
+remains the default for unselected hosts. The successor release and its activation
+hold are documented in docs/ov-native-successor-release.md. This directory
+contains no server or tenant keys.
 
 ## Closed local backend release
 
 openviking_local_release defaults to false. A later authorized operator may select
-only this complete object in the existing owning configuration. A one-off extra
+only this complete object in the existing owning configuration. Homelab selects
+it under the successor activation hold. A one-off extra
 variable does not persist the choice for future routine convergence.
 
 ```yaml
 openviking_local_release:
   kind: local-config
-  reference: sha256:09870ea95d45c7b3aa7a5758c8268f4ea3c0e27937892ad485f75396cc1e40b0
-  source_revision: 71065c06ab5a1bc85ddc880166667fe1b00de423
+  reference: sha256:93d5fb1320e942b4471a75e2e708fc48bf06ee08f04bafc4e7110c6dc525d980
+  source_revision: 98b5466b666d9f5597443b896c5299471e3dc159
   native_sha256: 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
   provenance:
-    assembly_job: 71ac176e-9522-4b78-b50c-28775dcae996
-    archive_sha256: b0019de08edfd453c4f8bb428faa1eaf41242e64696e4b5104cc3e98c34c193f
-    custody_sha256: 4f5f813a9d14f1a48371fdbd433e98050dd4b0f457f7ea164421d7e20168fed5
+    assembly_job: a3a47428-0847-4b82-9a77-d928ea340ca3
+    archive_sha256: 71d09e8b9c87c5783a9373162358238b33cb5b32f568acc4b950d61ca9c233c3
+    custody_sha256: 86ccc30e33c512ffddae5f211a8dea9937e55207230aa0d4220205c9492f53db
 ```
 
 These provenance fields identify the existing Chaldea assembly job, returned
 candidate-patch.tar and custody.json, as independently checked in
-account-embedding-candidate-assembly-result.md. They are closed receipt bindings,
+native-full-acceptance-20261030/backend-successor-assembly-evidence. They are closed receipt bindings,
 not a new URL, registry publication or credential flow. The measured distribution
-manifest318575b538fc9b3b7d066ecc9948f192a34f792deb102bc9eb3edcc32b965639
+manifest48f849381c2afb2c73e47d071a3193a9485efbc34c7d3472c5ad2b8ab47901d7
 has no established registry location and is not used as one.
 
 Before any stack-directory, secret, pin-label or preparation write, the existing
@@ -82,6 +85,10 @@ persisted selector. Node/registry maintenance plays are separate operations.
 This batch changes no inventory enablement or default image.
 
 ## Candidate transition and rollback gates
+
+The following gates describe the original identity transition, now completed.
+Do not replay the initializer or restore pre-cutover data for this source-only
+successor. Follow docs/ov-native-successor-release.md for the ordinary upgrade.
 
 This source option is not a cutover controller. Root owns the concrete operation
 under existing version/CAS and custody primitives. The source analysis is retained
