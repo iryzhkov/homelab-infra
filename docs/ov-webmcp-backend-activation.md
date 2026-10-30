@@ -2,7 +2,8 @@
 
 This selection retains the resource-document backend through ordinary owning
 Swarm convergence on homelab. It uses the closed local release already validated
-by the Swarm role. It changes no service mounts, ports, networks, process controls,
+by the Swarm role. See [Closed local backend release](../stacks/openviking/PROVIDERS.md#closed-local-backend-release).
+It changes no service mounts, ports, networks, process controls,
 credentials, inference selection or image installation path.
 
 ## Merge and convergence hold
@@ -14,13 +15,20 @@ render has been reconciled. An extra variable or one-off Engine update is not a
 persistent selection.
 
 The accepted fixed operation is identified by bundle manifest SHA256
-`96a01b57e9bc1cf1b5c9d4ad8b581ad2f51211648456fa62c08cc9cb3fb6b520`.
+`648ff59e7254d8aa4b2792cfb6a4af0127d994086ab05cd51752ab5ef3a22b91`.
 Its exact-source independent main and peer reviews accepted the operation after
-one fix round. Chaldea job `3720d406-f3e1-4cae-8a96-67ead90eebcc`
-passed 21 selected synthetic checks. Those checks and reviews do not claim a
+the maintenance-control correction. Chaldea job `53a062a3-ea12-4d63-a703-7ff632f36399`
+passed 42 selected synthetic checks. Those checks and reviews do not claim a
 production cutover, current queue state or interactive client acceptance.
 
 Root must collect fresh service/version, writer exclusions and image custody.
+The fixed maintenance control requires the first non-loopback TCP/1933 raw
+PREROUTING drop in both IP families. Root must prove the actual published caller
+paths are blocked while local health remains available. Empty deployer units are
+recorded honestly with the protected current inventory. No client-process stop or
+universal overlay exclusion is claimed. Remove only the owned rules after verified
+closure and appropriate write admission; loss of the fence must not resume the
+old writer. This selection itself installs no firewall rules.
 The operation stops the original before capturing a matched cold backup and
 independent restore, checks the same stopped-state queue through owning SQLite
 on a disposable copy, initializes the new account lifetime offline before
