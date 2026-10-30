@@ -968,10 +968,10 @@ class BackendLocalRelease(unittest.TestCase):
         return {"name": "openviking", "pin": "homelab", "prepare_tasks": "swarm-prepare.yml"}
 
     def image(self):
-        return [{"Id": "sha256:93d5fb1320e942b4471a75e2e708fc48bf06ee08f04bafc4e7110c6dc525d980",
+        return [{"Id": "sha256:12c8b14fde92eec32a3cc851d630e98acfb885a0ae580e4b0b76316393661ae3",
                  "Os": "linux", "Architecture": "amd64",
                  "Config": {"Entrypoint": ["openviking-entrypoint"], "WorkingDir": "/app/.openviking",
-                            "Labels": {"org.opencontainers.image.revision": "98b5466b666d9f5597443b896c5299471e3dc159",
+                            "Labels": {"org.opencontainers.image.revision": "7adf8b5fbcaa3293ef2a0b0ed44f864477401c39",
                             "io.openviking.candidate.native-sha256": "8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad"}}}]
 
     def topology(self):
