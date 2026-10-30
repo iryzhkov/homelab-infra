@@ -77,6 +77,18 @@ local_mounts:
 # /var/lib/docker is kept on the root disk as the rollback copy.
 docker_data_root: /mnt/docker-data/docker
 
+# Retain the reviewed resource-document backend after the controlled cutover.
+# Merge hold and recovery bounds: docs/ov-webmcp-backend-activation.md.
+openviking_local_release:
+  kind: local-config
+  reference: sha256:09870ea95d45c7b3aa7a5758c8268f4ea3c0e27937892ad485f75396cc1e40b0
+  source_revision: 71065c06ab5a1bc85ddc880166667fe1b00de423
+  native_sha256: 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
+  provenance:
+    assembly_job: 71ac176e-9522-4b78-b50c-28775dcae996
+    archive_sha256: b0019de08edfd453c4f8bb428faa1eaf41242e64696e4b5104cc3e98c34c193f
+    custody_sha256: 4f5f813a9d14f1a48371fdbd433e98050dd4b0f457f7ea164421d7e20168fed5
+
 # Desired capacity-fix image: reviewed source d473d2b, exact-head CI
 # 40146155685, retained artifact 12581331195, published without a rebuild.
 # This is desired source state, not a receipt of homelab/native convergence.
