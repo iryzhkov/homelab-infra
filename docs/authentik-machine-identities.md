@@ -1,4 +1,7 @@
-# Authentik machine identities for Chaldea hosts
+# Authentik machine identities
+
+The separate default-off shared Igor personal grant and future installer inputs
+are documented in [the personal contract](ov-personal-contract.md). for Chaldea hosts
 
 `roles/authentik_machine_identities` lets a named Chaldea host obtain short-lived
 web MCP access tokens from Authentik without holding any administrative

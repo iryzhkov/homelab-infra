@@ -114,6 +114,45 @@ def invalid_full_packages():
 
 
 class OVPackagingTest(unittest.TestCase):
+
+    def test_personal_config_is_closed_and_cannot_select_old_images(self):
+        good = {"personal_profile": "shared-owner-v1", "personal_account": "default",
+                "personal_user": "default", "personal_subjects": ["synthetic-pc", "synthetic-laptop"],
+                "personal_backend_revision": "a" * 40}
+        self.assertIs(contract.ov_personal_config(good), good)
+        for key in good:
+            bad = dict(good)
+            del bad[key]
+            with self.subTest(missing=key), self.assertRaises(AnsibleFilterError):
+                contract.ov_personal_config(bad)
+        for key, value in (("personal_profile", "future"), ("personal_account", "other"),
+                           ("personal_user", "other"), ("personal_subjects", []),
+                           ("personal_subjects", "subject"), ("personal_subjects", ["same", "same"]),
+                           ("personal_subjects", ["a"] * 17), ("personal_subjects", [None]),
+                           ("personal_subjects", ["x" * 257]), ("personal_subjects", ["has space"]),
+                           ("personal_backend_revision", ""), ("personal_backend_revision", "HEAD")):
+            with self.subTest(key=key), self.assertRaises(AnsibleFilterError):
+                contract.ov_personal_config(good | {key: value})
+        for package in (fixture(), full_fixture(), local_fixture()):
+            package["config"].update(good)
+            with self.assertRaisesRegex(AnsibleFilterError, "awaits qualified"):
+                contract.ov_contract(package)
+        for package in (fixture(), full_fixture(), local_fixture()):
+            package["config"]["personal_profile"] = "disabled"
+            self.assertIs(contract.ov_contract(package), package)
+            package["config"]["personal_subjects"] = ["PRIVATE_SUBJECT_SENTINEL"]
+            with self.assertRaises(AnsibleFilterError) as caught:
+                contract.ov_contract(package)
+            self.assertNotIn("PRIVATE_SUBJECT_SENTINEL", str(caught.exception))
+        # The same template carries validated future inputs, without defaults.
+        import jinja2
+        template = (ROOT / "roles/ov_http_compose/templates/runtime.toml.j2").read_text()
+        env = jinja2.Environment()
+        env.filters["to_json"] = json.dumps
+        rendered = env.from_string(template).render(ov_http={"config": good})
+        self.assertEqual(tomllib.loads(rendered), good)
+
+
     def test_local_release_is_a_closed_binding(self):
         good = local_fixture()
         before = copy.deepcopy(good)

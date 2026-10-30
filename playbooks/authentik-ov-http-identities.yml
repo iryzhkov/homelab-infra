@@ -47,6 +47,27 @@
         file: vars/authentik-ov-http-full-interactive.yml
       when: ov_http_identities_full_interactive | default(false) | bool
 
+    - name: Require explicit full mode and a closed operator personal grant
+      ansible.builtin.assert:
+        that:
+          - ov_http_identities_full_interactive | default(false) | bool
+          - ov_http_identities_personal_grant is defined
+        quiet: true
+      when: ov_http_identities_personal | default(false) | bool
+
+    - name: Add personal authority only to the two full interactive declarations
+      ansible.builtin.set_fact:
+        authentik_machine_services: >-
+          {{ {'ov': authentik_machine_services.ov | combine(
+          {'scope': authentik_machine_services.ov.scope ~
+          ' ov.personal.memory.read ov.personal.memory.write ov.personal.session.read ov.personal.session.create ov.personal.session.append'})} }}
+        authentik_machine_identities: >-
+          {{ authentik_machine_identities[:3] +
+          (authentik_machine_identities[3:] | map('combine',
+          {'ov_personal': ov_http_identities_personal_grant}) | list) }}
+      no_log: true
+      when: ov_http_identities_personal | default(false) | bool
+
     # Literal values, so an extra-vars file cannot drop or change the existing
     # canary reader or the limited laptop identity, add another account, or
     # widen this run beyond the one owned OV application and its single node.
@@ -67,7 +88,9 @@
             'name': 'OV HTTP a63e197f machine access', 'group': 'ov-http-a63e197f-machine-identities',
             'client_id': 'ov-http-a63e197f-machine', 'resource': 'https://ov.mcp.ryzhkov.dev/mcp',
             'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29',
-            'scope': ('ov.read ov.write ov.remove ov.maintain' if ov_full | bool else 'ov.read'), 'token_seconds': 300}
+            'scope': (('ov.read ov.write ov.remove ov.maintain' if ov_full | bool else 'ov.read') ~
+            (' ov.personal.memory.read ov.personal.memory.write ov.personal.session.read ov.personal.session.create ov.personal.session.append'
+            if ov_http_identities_personal | default(false) | bool else '')), 'token_seconds': 300}
           - >-
             authentik_machine_identities | selectattr('host', 'equalto', 'controller') | list ==
             [{'host': 'controller', 'profile': 'ov-http-a63e197f-reader', 'service': 'ov',
@@ -94,7 +117,7 @@
           # One resource-root account per selected host, all four actions.
           - >-
             (authentik_machine_identities[3:] | map('dict2items')
-            | map('rejectattr', 'key', 'in', ['generation', 'expires', 'state'])
+            | map('rejectattr', 'key', 'in', ['generation', 'expires', 'state', 'ov_personal'])
             | map('list') | map('items2dict') | list) ==
             ([{'host': 'laptop', 'profile': 'ov-full-interactive', 'service': 'ov',
                'ov_namespaces': ['viking://resources'],
@@ -102,6 +125,9 @@
               {'host': 'omarchy-pc', 'profile': 'ov-full-interactive', 'service': 'ov',
                'ov_namespaces': ['viking://resources'],
                'ov_actions': ['read', 'write', 'remove', 'maintain']}] if ov_full | bool else [])
+          - >-
+            (authentik_machine_identities | selectattr('ov_personal', 'defined') | list | length) ==
+            (2 if ov_http_identities_personal | default(false) | bool else 0)
           - authentik_machine_identity_destinations | default({}) | length > 0
         fail_msg: >-
           This entrypoint only adds to the existing owned OV application and keeps

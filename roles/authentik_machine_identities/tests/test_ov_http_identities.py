@@ -65,6 +65,79 @@ def evaluate(expression, user, group):
     return scope["mapping"]()
 
 
+
+class PersonalContractTest(unittest.TestCase):
+    def personal_spec(self, actions=None, cohort=None):
+        grant = {"account": "default", "user": "default",
+                 "actions": list(mi.OV_PERSONAL_ACTIONS) if actions is None else actions}
+        identities = COHORT + [i | {"ov_personal": grant} for i in (FULL_LAPTOP, FULL_PC)]
+        return spec(identities if cohort is None else cohort,
+                    {"ov": OV | {"scope": FULL_SCOPE + " " + " ".join(mi.OV_PERSONAL_SCOPES)}},
+                    FULL_BINDINGS, FULL_HOSTS)
+
+    def test_composed_full_reduced_and_no_implicit_authority(self):
+        s = self.personal_spec()
+        app = s["services"]["ov"]
+        mappings = [{"scope_name": k, "expression": v} for k, v in app["scope_expressions"].items()]
+        old = spec(COHORT, destinations=BINDINGS)
+        self.assertEqual(s["identities"][:3], old["identities"])
+        for index, item in enumerate(s["identities"]):
+            user = types.SimpleNamespace(username=item["username"], type="service_account",
+                                         attributes=copy.deepcopy(item["grant_attributes"]))
+            for selected in ([], list(mi.OV_PERSONAL_SCOPES), [mi.OV_PERSONAL_SCOPES[2]],
+                             [mi.OV_PERSONAL_SCOPES[0], mi.OV_PERSONAL_SCOPES[4]]):
+                requested = FULL_SCOPE.split() + selected
+                claims = profiles.merged_claims(mappings, user, app["group"], requested)
+                expected = dict(item["grant"], aud=OV["resource"])
+                expected.pop("ov_personal", None)
+                if index >= 3 and selected:
+                    expected["ov_personal"] = {"account": "default", "user": "default",
+                        "actions": [a for a in mi.OV_PERSONAL_ACTIONS if "ov.personal." + a in selected]}
+                self.assertEqual(claims, expected)
+            foreign = copy.deepcopy(user)
+            foreign.username = "foreign"
+            self.assertEqual(profiles.merged_claims(mappings, foreign, app["group"],
+                                                    app["scope"].split()), {})
+            changed = copy.deepcopy(user)
+            changed.attributes["chaldea_ov"]["ov_personal"] = {
+                "account": "default", "user": "foreign", "actions": list(mi.OV_PERSONAL_ACTIONS)}
+            self.assertEqual(profiles.merged_claims(mappings, changed, app["group"],
+                                                    app["scope"].split()), {})
+        broad = self.personal_spec(cohort=FULL_COHORT)
+        app = broad["services"]["ov"]
+        mappings = [{"scope_name": k, "expression": v} for k, v in app["scope_expressions"].items()]
+        for item in broad["identities"][3:]:
+            user = types.SimpleNamespace(username=item["username"], type="service_account",
+                                         attributes=item["grant_attributes"])
+            self.assertEqual(profiles.merged_claims(mappings, user, app["group"], app["scope"].split()),
+                             dict(item["grant"], aud=OV["resource"]))
+        # Explicit reductions in the operator grant cannot be widened by scopes.
+        reduced = self.personal_spec(["session.read"])
+        item = reduced["identities"][3]
+        user = types.SimpleNamespace(username=item["username"], type="service_account",
+                                     attributes=item["grant_attributes"])
+        app = reduced["services"]["ov"]
+        mappings = [{"scope_name": k, "expression": v} for k, v in app["scope_expressions"].items()]
+        self.assertEqual(profiles.merged_claims(mappings, user, app["group"], app["scope"].split())
+                         ["ov_personal"]["actions"], ["session.read"])
+
+    def test_invalid_closed_grants_profiles_and_scopes(self):
+        good = {"account": "default", "user": "default", "actions": list(mi.OV_PERSONAL_ACTIONS)}
+        for bad in (None, [], {}, good | {"account": "foreign"}, good | {"user": "foreign"},
+                    good | {"extra": True}, good | {"actions": []}, good | {"actions": "memory.read"},
+                    good | {"actions": ["session.commit"]}, good | {"actions": ["memory.read"] * 2},
+                    good | {"actions": list(reversed(mi.OV_PERSONAL_ACTIONS))}):
+            with self.subTest(bad=bad), self.assertRaises(mi.AnsibleFilterError):
+                self.personal_spec(cohort=COHORT + [FULL_LAPTOP | {"ov_personal": bad}, FULL_PC])
+        for item in (LAPTOP, INTERACTIVE, CONTROLLER,
+                     FULL_PC | {"host": "controller"}, FULL_PC | {"profile": "ov-observer"}):
+            with self.subTest(profile=item["profile"]), self.assertRaises(mi.AnsibleFilterError):
+                self.personal_spec(cohort=[item | {"ov_personal": good}])
+        with self.assertRaises(mi.AnsibleFilterError):
+            spec([FULL_PC | {"ov_personal": good}], {"ov": OV | {"scope": FULL_SCOPE}},
+                 hosts=FULL_HOSTS)
+
+
 class DeclarationTest(unittest.TestCase):
     def test_source_declaration_is_exact_isolated_and_bound(self):
         values = yaml.safe_load(VARS.read_text())
@@ -235,12 +308,14 @@ class EntrypointTest(unittest.TestCase):
             f"        Path({str(x.base / 'sops-loaded')!r}).touch()\n"
             f"        return {{'changed': False, 'ansible_facts': {{'authentik_api': {api!r}}}}}\n")
 
-    def play(self, baseline=None, apply=True, check=False, online=False, **overrides):
+    def play(self, baseline=None, apply=True, check=False, online=False, use_declared_services=False, **overrides):
         x = self.x
         extra = {"authentik_machine_services": {"ov": self.ov},
                  "ov_http_identities_authentik_origin": self.origin,
                  "authentik_machine_identity_destinations": self.bindings,
                  "authentik_machine_identity_existing_provider_baseline": baseline or {}} | overrides
+        if use_declared_services:
+            extra.pop("authentik_machine_services")
         extra_path = x.base / "entrypoint-extra.yml"
         extra_path.write_text(yaml.safe_dump(extra))
         (x.base / "sops-loaded").unlink(missing_ok=True)
@@ -293,6 +368,25 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual(self.controller_snapshot(), before)
         self.assertFalse(self.secret("laptop", LAPTOP).exists())
         self.assertFalse(self.secret("laptop", INTERACTIVE).exists())
+
+    def test_personal_selector_is_explicit_offline_and_secret_safe(self):
+        opts = {"check": True, "use_declared_services": True,
+                "ov_http_identities_full_interactive": True,
+                "ov_http_identities_personal": True,
+                "authentik_machine_identity_destinations": self.bindings |
+                    {"omarchy-pc": dict(self.bindings["laptop"])}}
+        grant = {"account": "default", "user": "default", "actions": list(mi.OV_PERSONAL_ACTIONS)}
+        self.ok(**opts, ov_http_identities_personal_grant=grant)
+        self.ok(**opts, ov_http_identities_personal_grant=grant | {"actions": ["session.read"]})
+        self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+        for bad in ({}, grant | {"user": "PRIVATE_OWNER_SENTINEL"},
+                    grant | {"actions": ["session.commit"]}):
+            code, output = self.play(**opts, ov_http_identities_personal_grant=bad)
+            self.assertNotEqual(code, 0, output)
+            self.assertNotIn("PRIVATE_OWNER_SENTINEL", output)
+            self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+        self.refused("Require explicit full mode", **(opts | {"ov_http_identities_full_interactive": False}),
+                     ov_http_identities_personal_grant=grant)
 
     def test_laptop_addition_preserves_controller_custody_and_converges(self):
         x = self.x
