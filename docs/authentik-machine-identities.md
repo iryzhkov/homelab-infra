@@ -755,6 +755,45 @@ Neither this source declaration nor an issuer success proves ordinary native
 MCP use or renewal. Enrollment, helper deployment and live/native lifetime
 qualification are separate guarded stages.
 
+### Optional managed recommendation writer
+
+The same entrypoint can add `chaldea-laptop-holonet-recommendations` with
+`holonet_catalog_recommendations_enabled: true`. It defaults to false.
+Supply the complete `holonet_catalog_recommendations_identity` object from
+the vars file with an explicit expiry, generation, state and 1..16 unique
+hex32 recipient IDs in `holonet_target_users`. Empty defaults refuse before
+credential loading. Keep the fixed laptop/profile/server/Movies/catalog-user
+tuple, empty history, `managed-recommendations` namespace and exact seven
+actions, including `object.delete` for owned-object cleanup.
+
+Writer selection sets the owned application's scope to exactly
+`holonet.read holonet.curate holonet.home`. Reader grants and their separate
+passwords stay unchanged; reader tokens still request only `holonet.read`.
+Keep the existing ordinary-reader opt-in if that account is enrolled. The
+writer password is delivered separately to the bound laptop account at
+`~/.config/chaldea/authentik/holonet-recommendations.app-password`.
+Use the same explicit recipient cohort for the native helper's root-owned
+public policy and the service's bounded recommendations configuration.
+Neither an empty cohort nor a broader backend account is a substitute.
+
+A fresh confirmed current provider/application/stored-content baseline is
+still required. The historical baseline-read mode below owns only the
+original homelab-only content and cannot establish today's expanded cohort.
+Writer selection is refused in that mode. Qualify the current public
+ownership/baseline through a separately bounded readiness operation before
+live enrollment; do not guess hashes or replace the historical anchor to
+bypass its refusal. Source tests use a synthetic issuer and grant no live
+enrollment or backend permissions.
+
+Keep the writer opt-in true for later applies. For its inverse, keep that
+flag true and provide the complete same identity with only `state: absent`
+(the role's lifecycle rules still apply), plus a freshly confirmed baseline.
+Verify only its account/token/password disappear and every reader remains.
+The three application scopes/mappings may remain; this inverse does not
+promise byte-identical restoration of an older blueprint. Flag false alone
+is not a retirement procedure. Native registration, public-policy retirement,
+service activation and live/client acceptance remain separate stages.
+
 ### Existing-only baseline read
 
 The existing-only gate needs the current provider PK, application UUID and
