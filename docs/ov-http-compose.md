@@ -1,9 +1,11 @@
 # OV HTTP Compose source
 
 The default-off personal owner/subject inputs are in
-[the shared personal contract](ov-personal-contract.md). The exact replacement
-artifact and live hold are in [the qualified release](ov-personal-qualified-release.md).
-Only that local binding permits personal tools; inventory does not enable them.
+[the shared personal contract](ov-personal-contract.md). The accepted replacement
+artifact is in [Explicit local config identity](#explicit-local-config-identity)
+below. Only that exact local binding permits personal tools; inventory does not
+enable them. The earlier personal binding document is historical source evidence,
+not the current image selection or an activation receipt.
 
 The standalone playbook playbooks/ov-http.yml and ov_http_compose role package
 two closed iryzhkov/ov-mcp HTTP interfaces. The legacy reader contract remains
@@ -131,8 +133,9 @@ existing full-resource interface. Accepted source
 document-write preflight diagnostics, including a non-GET dispatch guard and
 in-flight authority recheck. The closed object and image label use the
 publication revision. Neither revision enters the distribution-source allowlist.
-Prior personal enablement is recorded in
-[its qualified activation](ov-personal-qualified-release.md).
+The [earlier personal binding record](ov-personal-qualified-release.md)
+retains the prior source selection and planned operator procedure, not an
+activation receipt or the current accepted HTTP image.
 Other kinds, extra fields, canary/reader contracts and arbitrary release triples
 refuse. The full config and resource/action/namespace restrictions above are unchanged.
 
