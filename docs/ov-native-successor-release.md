@@ -1,5 +1,8 @@
 # OV native mutation successor
 
+Historical resource-only release. The selected replacement and current live hold
+are in [the personal qualified release](ov-personal-qualified-release.md).
+
 This selection fixes failures observed in ordinary Codex and Claude sessions.
 The backend permits USER resources vectors-only reindex only after READ and MANAGE,
 and checks every bounded effect URI under the original lease. HTTP preserves a

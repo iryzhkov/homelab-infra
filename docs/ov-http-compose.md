@@ -1,8 +1,9 @@
 # OV HTTP Compose source
 
-The default-off future personal owner/subject inputs and artifact hold are in
-[the shared personal contract](ov-personal-contract.md). Existing image pins
-remain unchanged; no current package can enable personal tools.
+The default-off personal owner/subject inputs are in
+[the shared personal contract](ov-personal-contract.md). The exact replacement
+artifact and live hold are in [the qualified release](ov-personal-qualified-release.md).
+Only that local binding permits personal tools; inventory does not enable them.
 
 The standalone playbook playbooks/ov-http.yml and ov_http_compose role package
 two closed iryzhkov/ov-mcp HTTP interfaces. The legacy reader contract remains
@@ -116,30 +117,30 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:9fc44fb1bb2410e327fd450cd4a83a46d36ed851ca2724fb9a13f30edfcb1e31
-source_revision: d5b1b104b5a39f15c9443c117bca9dd1c52eac68
+reference: sha256:2dfb396ca804482ed29c087d3ab258312b75c57a25848da0c1c96636a875a89f
+source_revision: be4cda7c376986360158fb6488b808dec90d81c2
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/40992612927
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41114422316
 ```
 
 All five fields must match together. The contract revision still names the
-existing full-resource interface. The independently accepted source is
-d5b1b104b5a39f15c9443c117bca9dd1c52eac68, tree
-f21fd8c04725279482a50914a797c339174e34ae. Its native incident fixes preserve
-committed writes during busy verification and bound slow move/reindex replies.
-This source is not added to the distribution-source allowlist. See
-[successor activation](ov-native-successor-release.md) before convergence.
+existing full-resource interface. Accepted source
+e094cb32a085e9ad3fc9976aba7824db830c8999 and measured publication
+be4cda7c376986360158fb6488b808dec90d81c2 share tree
+bcb8c0e5813138aa3fbb4b03fb90475ca09bbf8d. The closed object and image label
+use the publication revision. Neither revision enters the distribution-source
+allowlist. See [qualified activation](ov-personal-qualified-release.md).
 Other kinds, extra fields, canary/reader contracts and arbitrary release triples
 refuse. The full config and resource/action/namespace restrictions above are unchanged.
 
 The reference is the Docker image config ID. It commits to the immutable config
 and ordered RootFS diff_ids; it is not a registry distribution manifest.
-The retained Docker save is 176881152 bytes, SHA256
-b04eb880aac337d5a5944c403690684602f598e37f6e8adcb1cb7dab09c97759.
+The retained Docker save is 176900096 bytes, SHA256
+547951c96232546c3d7df42e7d03f3a0f59b754fa08eb8fc733469478d25f605.
 RepoDigests is empty. No registry distribution manifest is claimed.
-The owning evidence is the source-map's Image selection restriction,
-production-transition-inventory-20261029.md and audit-http-hosted-build-result.md
-in the full-ov-backend-contract receipt bundle.
+The owning evidence is http-personal-artifact-result.md and the image-only
+HTTP staging receipt named in the qualified release. Compressed registry bytes
+are absent; saved config and all ten uncompressed diffIDs were verified.
 
 Before protected credential inspection, managed writes, check-config or activation,
 the role uses docker_image_info on the fixed local socket and exact config ID.
@@ -152,16 +153,13 @@ The image must already exist. This mode never pulls, tags, imports, installs or
 logs into a registry. Offline check-config also uses --pull=never.
 The regular activation retains pull:never and recreate:auto.
 
-Hosted build/save custody and the later root-owned 37-case external SDK matrix
-with real JWT/JWKS/CA, two ACL denials and audit qualify the isolated artifact.
-They do not qualify execution through this role or target Docker Compose's
-acceptance of a canonical config ID. Source tests render and validate that exact
-string; actual target Compose execution remains a later qualification.
-The existing old HTTP canary remains deployed, and production is OV 0.5.2 per
-the fresh production inventory. This option does not select an image or change
-canaries, stdio, inventory enablement, grants or backend configuration.
-Backend 09870's Swarm delivery remains unresolved. No registry location for
-318575... is established here, and Swarm acceptance of a local ID is not assumed.
+The current artifact's hosted custody and image-only target load do not qualify
+personal runtime behavior through this role. Source tests render and validate
+the exact binding; target activation and four-client proof remain root-owned.
+Current resource-only runtime continues. This HTTP option does not enable
+personal tools in inventory or change stdio, grants or backend configuration.
+Historical canary and earlier backend delivery limitations are retained in the
+prior receipts; they are not evidence about this release's live state.
 
 ## Stage, validate, activate and roll back
 
