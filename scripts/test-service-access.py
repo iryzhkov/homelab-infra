@@ -23,7 +23,8 @@ def sample():
     return {
         "version": 1, "resolved": True, "source_pin": "0" * 40, "placement": placement,
         "channels": [{"id": x, "context": x, "classification": "transport",
-                      "owner": "fixture", "qualified": True} for x in sa.CONTEXTS],
+                      "owner": "fixture", "qualified": True,
+                      "qualification_ref": "fixture:transport-proof"} for x in sa.CONTEXTS],
         "backends": [{"id": "app", "kind": "swarm", "strategy": "load_balance",
                       "owner": "fixture", "provenance": "fixture:app",
                       "endpoints": [{"host": "worker-b", "url": "http://b.invalid:8080/root"},
@@ -31,6 +32,7 @@ def sample():
                       "health": False}],
         "services": [{
             "id": "app", "hostname": "app.invalid", "owner": "fixture", "backend_ref": "app",
+            "access_class": "ordinary", "admin": False,
             "application_auth": {"mode": "native_login", "owner": "fixture", "coverage": "fixture/API"},
             "contexts": {x: {"allowed": True, "channel": x, "proxy_auth": "none"} for x in sa.CONTEXTS},
             "publication": {"approved": False}, "dependencies": [], "dns_ref": "fixture:dns",
@@ -169,7 +171,8 @@ class Contract(unittest.TestCase):
     def test_whisper_private_policy_and_forwarder_boundary(self):
         data = sample()
         svc = data["services"][0]
-        svc.update(id="whisper", lan_segments=sorted(sa.TRUSTED_LAN), nebula_peers="all-valid-direct",
+        svc["application_auth"] = {"mode": "none"}
+        svc.update(id="whisper", access_class="whisper", lan_segments=sorted(sa.TRUSTED_LAN), nebula_peers="all-valid-direct",
             controls={"ordinary_denied_paths": ["/load"], "owner_ref": "fixture",
                       "backend_policy_ref": "fixture"})
         svc["contexts"]["public"]["allowed"] = False
@@ -195,6 +198,119 @@ class Contract(unittest.TestCase):
         self.assertIn("unresolved_lookup", codes(sa.plan(data)))
         data["services"][0]["password"] = "not-a-real-password"
         self.assertIn("unsupported_field", codes(sa.plan(data)))
+
+    def test_listener_collisions_ignore_labels_and_partial_sets(self):
+        for variant in ("context", "entrypoints", "hostname"):
+            data = sample()
+            first = data["services"][0]["routes"][0]
+            route = copy.deepcopy(first)
+            route["id"] = "second"
+            if variant == "context":
+                route["context"] = "public"
+                data["services"][0]["routes"].append(route)
+            elif variant == "entrypoints":
+                first["entrypoints"].append("extra")
+                data["services"][0]["routes"].append(route)
+            else:
+                second = copy.deepcopy(data["services"][0])
+                second.update(id="other", hostname="other.invalid", routes=[route])
+                data["services"].append(second)
+            with self.subTest(variant=variant):
+                self.assertIn("router_overlap", codes(sa.plan(data)))
+
+    def test_classification_not_id_controls_private_service(self):
+        for kind in ("whisper", "ollama"):
+            data = sample()
+            svc = data["services"][0]
+            svc.update(id=kind + "-gpu", access_class=kind,
+                       publication={"approved": True, "owner": "fixture", "channel": "public"})
+            result = sa.plan(data)
+            self.assertIn("private_service", codes(result))
+            if kind == "whisper":
+                self.assertIn("trusted_lan", codes(result))
+                self.assertIn("nebula_entitlement", codes(result))
+                self.assertIn("control_path", codes(result))
+        data = sample()
+        del data["services"][0]["access_class"]
+        self.assertIn("access_class", codes(sa.plan(data)))
+        data["services"][0]["access_class"] = "guess"
+        self.assertIn("access_class", codes(sa.plan(data)))
+
+    def test_admin_is_explicit_boolean(self):
+        for value in (None, "true", 1):
+            data = sample()
+            svc = data["services"][0]
+            svc["admin"] = value
+            svc["publication"] = {"approved": True, "owner": "fixture", "channel": "public"}
+            self.assertIn("admin_unknown", codes(sa.plan(data)))
+        data["services"][0]["admin"] = True
+        self.assertIn("admin_publication", codes(sa.plan(data)))
+
+    def test_evidence_requires_text_references(self):
+        for value in (None, True, 1, " "):
+            data = sample()
+            data["channels"][0]["qualification_ref"] = value
+            self.assertFalse(sa.plan(data)["planning_ready"])
+            data = sample()
+            data["services"][0]["contexts"]["public"].update(
+                proxy_auth="forward_auth", provider_ref="fixture:provider",
+                callback_ref="fixture:callback", extra_gate_decision=value)
+            self.assertIn("extra_gate", codes(sa.plan(data)))
+
+    def test_whisper_login_and_private_entitlement(self):
+        data = sample()
+        svc = data["services"][0]
+        svc.update(id="transcription-gpu", access_class="whisper",
+                   application_auth={"mode": "none"},
+                   lan_segments=sorted(sa.TRUSTED_LAN), nebula_peers="all-valid-direct",
+                   controls={"ordinary_denied_paths": ["/load"], "owner_ref": "fixture",
+                             "backend_policy_ref": "fixture"})
+        svc["contexts"]["public"]["allowed"] = False
+        self.assertTrue(sa.plan(data)["planning_ready"])
+        for mode in ("native_login", "native_oidc"):
+            candidate = copy.deepcopy(data)
+            candidate["services"][0]["application_auth"]["mode"] = mode
+            self.assertIn("whisper_login", codes(sa.plan(candidate)))
+        for context in ("lan", "nebula"):
+            for change in ({"allowed": False}, {"proxy_auth": "forward_auth"}):
+                candidate = copy.deepcopy(data)
+                candidate["services"][0]["contexts"][context].update(change)
+                self.assertIn("whisper_entitlement", codes(sa.plan(candidate)))
+
+    def test_forward_auth_resolves_gate_and_callback(self):
+        data = sample()
+        svc = data["services"][0]
+        svc["application_auth"] = {"mode": "none"}
+        svc["contexts"]["public"].update(proxy_auth="forward_auth",
+            provider_ref="fixture:provider", callback_ref="fixture:callback",
+            middleware_ref="fixture:gate")
+        route = svc["routes"][0]
+        route.update(context="public", entrypoints=["public"],
+                     middlewares=["fixture:gate"],
+                     callback={"ref": "fixture:callback", "path": "/callback",
+                               "priority": 100, "proxy_auth": "none", "backend_ref": "app"})
+        self.assertTrue(sa.plan(data)["planning_ready"])
+        for field, value, code in (
+            ("middlewares", [], "forward_auth_gate"),
+            ("middlewares", ["unrelated"], "forward_auth_gate"),
+            ("callback", {}, "forward_auth_callback"),
+            ("callback", dict(route["callback"], ref="wrong"), "forward_auth_callback"),
+        ):
+            candidate = copy.deepcopy(data)
+            candidate["services"][0]["routes"][0][field] = value
+            self.assertIn(code, codes(sa.plan(candidate)))
+        svc["routes"] = []
+        self.assertIn("forward_auth_route", codes(sa.plan(data)))
+
+    def test_numeric_publication_and_schema_version_rejected(self):
+        for value in (0, 1, None, "true", "false"):
+            data = sample()
+            data["services"][0]["publication"] = {"approved": value}
+            self.assertIn("publication_unknown", codes(sa.plan(data)))
+        for value in (True, 1.0, "1"):
+            data = sample()
+            data["version"] = value
+            self.assertIn("resolved_input", codes(sa.plan(data)))
 
     def test_malformed_input_returns_diagnostics(self):
         for value in (None, [], {"version": 1}, dict(sample(), services=[{"id": []}]),

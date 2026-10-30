@@ -92,7 +92,7 @@ def _inspect(snapshot):
     templates(snapshot)
     fields(snapshot, {"version", "source_pin", "resolved", "placement", "backends",
                       "services", "channels", "unmodelled_routes"}, "")
-    if snapshot.get("version") != 1 or snapshot.get("resolved") is not True:
+    if type(snapshot.get("version")) is not int or snapshot.get("version") != 1 or snapshot.get("resolved") is not True:
         issue("resolved_input", "", "Require version 1 and resolved: true.")
     pin = snapshot.get("source_pin")
     if not isinstance(pin, str) or not re.fullmatch(r"[0-9a-f]{40}", pin):
@@ -115,12 +115,13 @@ def _inspect(snapshot):
     channels = unique(snapshot.get("channels"), "/channels")
     for name, channel in channels.items():
         path = "/channels/" + name
-        fields(channel, {"id", "context", "classification", "owner", "qualified"}, path)
+        fields(channel, {"id", "context", "classification", "owner", "qualified", "qualification_ref"}, path)
         if channel.get("context") not in CONTEXTS:
             issue("context", path, "Unknown context.")
         if channel.get("classification") != "transport":
             issue("source_classification", path, "Headers or source CIDR cannot select ingress context.")
         text(channel.get("owner"), path + "/owner")
+        text(channel.get("qualification_ref"), path + "/qualification_ref")
         if channel.get("qualified") is not True:
             issue("channel_unqualified", path, "Channel requires a separate transport qualification receipt.")
 
@@ -188,10 +189,15 @@ def _inspect(snapshot):
         path = "/services/" + name
         fields(service, {"id", "hostname", "owner", "backend_ref", "application_auth",
                          "contexts", "routes", "dependencies", "publication",
-                         "admin", "lan_segments", "nebula_peers", "controls",
+                         "admin", "access_class", "lan_segments", "nebula_peers", "controls",
                          "dns_ref", "hold_ref", "custody_ref"}, path)
         for key in ("hostname", "owner", "backend_ref", "dns_ref", "hold_ref", "custody_ref"):
             text(service.get(key), path + "/" + key)
+        access_class = service.get("access_class")
+        if access_class not in ("ordinary", "whisper", "ollama"):
+            issue("access_class", path + "/access_class", "Explicit ordinary/whisper/ollama classification required.")
+        if not isinstance(service.get("admin"), bool):
+            issue("admin_unknown", path + "/admin", "Administration status must be an explicit boolean.")
         hostname = service.get("hostname", "")
         if not isinstance(hostname, str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", hostname):
             issue("hostname", path, "Supply a canonical lowercase hostname.")
@@ -214,7 +220,7 @@ def _inspect(snapshot):
             cp = path + "/contexts/" + context
             policy = mapping(contexts.get(context), cp)
             fields(policy, {"allowed", "channel", "proxy_auth", "extra_gate_decision",
-                            "provider_ref", "callback_ref", "groups"}, cp)
+                            "provider_ref", "callback_ref", "middleware_ref", "groups"}, cp)
             if not isinstance(policy.get("allowed"), bool):
                 issue("context_unknown", cp, "Explicit allowed/denied policy required.")
             if policy.get("proxy_auth") not in ("none", "forward_auth"):
@@ -223,18 +229,20 @@ def _inspect(snapshot):
             if policy.get("allowed") is True and (not channel or channel.get("context") != context):
                 issue("channel_missing", cp, "Context needs a matching explicit transport channel.")
             if policy.get("proxy_auth") == "forward_auth":
-                for key in ("provider_ref", "callback_ref"):
+                for key in ("provider_ref", "callback_ref", "middleware_ref"):
                     text(policy.get(key), cp + "/" + key)
-                if mode in ("native_login", "native_oidc") and not policy.get("extra_gate_decision"):
-                    issue("extra_gate", cp, "Native auth has no default second gate.")
+                if mode in ("native_login", "native_oidc"):
+                    decision = policy.get("extra_gate_decision")
+                    if not isinstance(decision, str) or not decision.strip():
+                        issue("extra_gate", cp, "Native auth requires a nonempty service-specific decision reference.")
             if context == "public" and policy.get("allowed") is True:
-                if name in ("whisper", "ollama"):
+                if access_class in ("whisper", "ollama"):
                     issue("private_service", cp, "Public Whisper/Ollama is forbidden.")
                 if mode == "none" and policy.get("proxy_auth") != "forward_auth":
                     issue("public_unprotected", cp, "Public application without native auth requires forward auth.")
         publication = mapping(service.get("publication"), path + "/publication")
         fields(publication, {"approved", "owner", "channel"}, path + "/publication")
-        if publication.get("approved") not in (True, False):
+        if not isinstance(publication.get("approved"), bool):
             issue("publication_unknown", path, "Publication approval must be explicit.")
         if publication.get("approved") is True:
             public = contexts.get("public", {})
@@ -244,7 +252,7 @@ def _inspect(snapshot):
             if channel.get("context") != "public":
                 issue("publication_channel", path, "Public forwarders require the public transport channel.")
             text(publication.get("owner"), path + "/publication/owner")
-            if name in ("whisper", "ollama"):
+            if access_class in ("whisper", "ollama"):
                 issue("private_service", path, "Private service cannot be published.")
         if service.get("admin") is True and publication.get("approved") is not False:
             issue("admin_publication", path, "Administration publication requires a separate future supported decision.")
@@ -253,7 +261,14 @@ def _inspect(snapshot):
         for dependency in dependencies:
             if not isinstance(dependency, str) or dependency not in services:
                 issue("dependency_missing", path, "Unresolved service dependency.")
-        if name == "whisper":
+        if access_class == "whisper":
+            if mode != "none":
+                issue("whisper_login", path, "Ordinary Whisper transcription requires no application login.")
+            for private_context in ("lan", "nebula"):
+                private_policy = contexts.get(private_context, {})
+                if not isinstance(private_policy, dict) or private_policy.get("allowed") is not True or private_policy.get("proxy_auth") != "none":
+                    issue("whisper_entitlement", path + "/contexts/" + private_context,
+                          "Direct Trusted LAN and all valid Nebula peers require ordinary access without proxy login.")
             segments = service.get("lan_segments")
             if not isinstance(segments, list) or any(not isinstance(x, str) for x in segments) or set(segments) != TRUSTED_LAN:
                 issue("trusted_lan", path, "Whisper requires the four explicit Trusted LAN IPv4 segments.")
@@ -268,6 +283,11 @@ def _inspect(snapshot):
         routes = sequence(service.get("routes"), path + "/routes")
         if not routes:
             issue("route_missing", path, "Explicit supported route records required.")
+        for context in CONTEXTS:
+            policy = contexts.get(context, {})
+            if isinstance(policy, dict) and policy.get("allowed") is True and policy.get("proxy_auth") == "forward_auth":
+                if not any(isinstance(route, dict) and route.get("context") == context for route in routes):
+                    issue("forward_auth_route", path + "/contexts/" + context, "Forward-auth context has no modelled route.")
         for i, route in enumerate(routes):
             rp = path + "/routes/" + str(i)
             route = mapping(route, rp)
@@ -288,15 +308,24 @@ def _inspect(snapshot):
             rule = text(route.get("rule"), rp + "/rule")
             if not isinstance(route.get("priority"), int) or isinstance(route.get("priority"), bool):
                 issue("priority", rp, "Explicit integer priority required.")
-            signature = canonical([hostname, context, sorted(ep, key=canonical), rule, route.get("priority")])
-            if signature in matches:
-                issue("router_overlap", rp, "Duplicate match/priority/context needs an explicitly modelled relationship.")
-            matches.add(signature)
+            for entrypoint in ep:
+                signature = canonical([entrypoint, rule, route.get("priority")])
+                if signature in matches:
+                    issue("router_overlap", rp, "Duplicate rule/priority on a shared entrypoint.")
+                matches.add(signature)
             middlewares = sequence(route.get("middlewares"), rp + "/middlewares")
             if any(not isinstance(x, str) for x in middlewares):
                 issue("middleware", rp, "Middleware references must be strings in behavior order.")
             callback = mapping(route.get("callback"), rp + "/callback")
-            fields(callback, {"path", "priority", "proxy_auth", "backend_ref"}, rp + "/callback")
+            fields(callback, {"ref", "path", "priority", "proxy_auth", "backend_ref"}, rp + "/callback")
+            route_policy = contexts.get(context, {})
+            if isinstance(route_policy, dict) and route_policy.get("proxy_auth") == "forward_auth":
+                gate = route_policy.get("middleware_ref")
+                if not isinstance(gate, str) or not gate.strip() or gate not in middlewares:
+                    issue("forward_auth_gate", rp, "Route must explicitly include its context middleware reference.")
+                callback_ref = route_policy.get("callback_ref")
+                if not callback or not isinstance(callback_ref, str) or not callback_ref.strip() or callback.get("ref") != callback_ref:
+                    issue("forward_auth_callback", rp, "Route must resolve its explicit context callback reference.")
             if callback:
                 if callback.get("proxy_auth") != "none":
                     issue("callback_recursion", rp, "Callback cannot require its own proxy gate.")
