@@ -32,6 +32,9 @@
     state: absent
   when: not mission_control_route_enabled | bool
 
+- name: Render or remove the opt-in Jocasta MCP canary route
+  ansible.builtin.import_tasks: jocasta-mcp-canary.yml
+
 - name: Render the push-only observability routes
   ansible.builtin.template:
     src: observability-ingest.yml.j2
