@@ -1,5 +1,10 @@
 # OV personal qualified release
 
+Historical source-binding record. The HTTP image selection below is superseded
+by the current [exact local binding](ov-http-compose.md#explicit-local-config-identity).
+Its source-only status and planned procedure do not record a live activation.
+The backend binding is unchanged by the later HTTP diagnostic release.
+
 Source binding only. No personal inventory enablement, grants, subjects, secrets
 or live changes belong to this batch. Current resource-only runtime continues.
 Root owns final review, source CI, activation and native acceptance.
