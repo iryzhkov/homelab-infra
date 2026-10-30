@@ -416,6 +416,33 @@ def ov_local_image(images):
     return True
 
 
+OV_PERSONAL_FIELDS = ("personal_profile", "personal_account", "personal_user",
+                      "personal_subjects", "personal_backend_revision")
+
+
+def ov_personal_config(config):
+    """Validate future protected installer inputs without asserting artifact qualification."""
+    profile = config.get("personal_profile", "disabled")
+    require(profile in ("disabled", "shared-owner-v1"), "invalid OV personal profile")
+    if profile == "disabled":
+        require(all(config.get(k, [] if k == "personal_subjects" else "") ==
+                    ([] if k == "personal_subjects" else "") for k in OV_PERSONAL_FIELDS[1:]),
+                "disabled OV personal profile cannot bind an owner")
+        return config
+    require(all(k in config for k in OV_PERSONAL_FIELDS), "incomplete OV personal configuration")
+    require(config["personal_account"] == "default" and config["personal_user"] == "default",
+            "OV personal owner must be the shared default owner")
+    subjects = config["personal_subjects"]
+    require(isinstance(subjects, list) and 1 <= len(subjects) <= 16,
+            "invalid OV personal subject list")
+    require(all(isinstance(s, str) and 1 <= len(s) <= 256
+                and all(ord(c) >= 33 for c in s) for s in subjects),
+            "invalid OV personal subject")
+    require(len(set(subjects)) == len(subjects), "duplicate OV personal subject")
+    match(config["personal_backend_revision"], r"[0-9a-f]{40}")
+    return config
+
+
 def ov_contract(value):
     keys(value, ("release", "image", "listen", "config", "credential"))
     match(value["release"], r"[a-z0-9][a-z0-9-]{0,63}")
@@ -441,7 +468,12 @@ def ov_contract(value):
     config = value["config"]
     required = ("resource", "issuer", "jwks_url", "backend_url",
                 "backend_secret_file", "listen_host", "listen_port")
-    keys(config, required + (tuple(OV_FULL_CONFIG) if full_resources else ()))
+    keys(config, required + (tuple(OV_FULL_CONFIG) if full_resources else ()), OV_PERSONAL_FIELDS)
+    ov_personal_config(config)
+    # Existing producer images contain no personal implementation. Root must bind
+    # a qualified backend and HTTP artifact before enabling this profile.
+    require(config.get("personal_profile", "disabled") == "disabled",
+            "OV personal activation awaits qualified backend and HTTP artifact binding")
     if full_resources:
         require(all(config[key] == fixed for key, fixed in OV_FULL_CONFIG.items()),
                 "full-resource OV requires the exact resources and mutation profiles")

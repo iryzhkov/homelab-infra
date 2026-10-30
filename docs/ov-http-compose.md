@@ -1,5 +1,9 @@
 # OV HTTP Compose source
 
+The default-off future personal owner/subject inputs and artifact hold are in
+[the shared personal contract](ov-personal-contract.md). Existing image pins
+remain unchanged; no current package can enable personal tools.
+
 The standalone playbook playbooks/ov-http.yml and ov_http_compose role package
 two closed iryzhkov/ov-mcp HTTP interfaces. The legacy reader contract remains
 5f5c52c2171a2fef9ebe1439342921b1e58169bd. The full-resource contract is

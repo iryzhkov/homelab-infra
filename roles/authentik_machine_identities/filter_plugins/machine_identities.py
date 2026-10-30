@@ -205,6 +205,20 @@ OV_ROOT = re.compile(r"viking://resources(?:/(?:[A-Za-z0-9_@+.,=-]+/)*[A-Za-z0-9
 # ov.read is always required; old grants without ov_actions mean read only.
 OV_ACTIONS = ("read", "write", "remove", "maintain")
 OV_SCOPES = tuple("ov." + action for action in OV_ACTIONS)
+OV_PERSONAL_ACTIONS = ("memory.read", "memory.write", "session.read", "session.create", "session.append")
+OV_PERSONAL_SCOPES = tuple("ov.personal." + action for action in OV_PERSONAL_ACTIONS)
+
+
+def _ov_personal_grant(value, name):
+    _keys(value, {"account", "user", "actions"}, name + " ov_personal")
+    actions = value["actions"]
+    if (value["account"] != "default" or value["user"] != "default"
+            or not isinstance(actions, list) or not actions
+            or any(not isinstance(a, str) or a not in OV_PERSONAL_ACTIONS for a in actions)
+            or actions != [a for a in OV_PERSONAL_ACTIONS if a in actions]):
+        _refuse(name + " requires the shared default owner and ordered unique personal actions")
+    return {"account": "default", "user": "default", "actions": list(actions)}
+
 OBSERVER_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\Z")
 HA_ENTITY = re.compile(r"(light|switch|sensor|binary_sensor)\.[a-z0-9_]{1,96}\Z")
 HA_ACTION = re.compile(r"(state\.read|light\.control|switch\.control)\Z")
@@ -227,7 +241,7 @@ def _ov_grant(item, name):
     if any(a == b or a.startswith(b + "/") or b.startswith(a + "/")
            for n, a in enumerate(roots) for b in roots[n + 1:]):
         _refuse(name + " ov_namespaces must not overlap")
-    grant = {"ov_namespaces": roots}
+    grant: dict = {"ov_namespaces": roots}
     if "ov_actions" in item:
         actions = item["ov_actions"]
         # An explicit, duplicate-free allowlist in canonical order that always
@@ -239,6 +253,12 @@ def _ov_grant(item, name):
             _refuse(name + " ov_actions must be a canonical subset of "
                     + ", ".join(OV_ACTIONS) + " that includes read")
         grant["ov_actions"] = list(actions)
+    if "ov_personal" in item:
+        if (item["host"] not in ("omarchy-pc", "laptop")
+                or item["profile"] != "ov-full-interactive"
+                or roots != ["viking://resources"] or grant.get("ov_actions") != list(OV_ACTIONS)):
+            _refuse(name + " personal authority requires an approved full interactive profile")
+        grant["ov_personal"] = _ov_personal_grant(item["ov_personal"], name)
     return grant, {"chaldea_ov": grant}
 
 
@@ -366,7 +386,13 @@ def _bounded_expression(access, service, scope=None):
             "if 'ov_actions' not in grant:",
             f"    return dict(grant, aud={access['resource']!r})",
             "actions = [a for a in grant['ov_actions'] if 'ov.' + a in requested]",
-            f"return {{'aud': {access['resource']!r}, 'ov_namespaces': grant['ov_namespaces'], 'ov_actions': actions}}",
+            f"result = {{'aud': {access['resource']!r}, 'ov_namespaces': grant['ov_namespaces'], 'ov_actions': actions}}",
+            "personal = grant.get('ov_personal')",
+            "if personal:",
+            "    selected = [a for a in personal['actions'] if 'ov.personal.' + a in requested]",
+            "    if selected:",
+            "        result['ov_personal'] = dict(personal, actions=selected)",
+            "return result",
         ]
     else:
         lines.append(f"return dict(grant, aud={access['resource']!r})")
@@ -377,7 +403,7 @@ SERVICES = {
     "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS, "scope": "holonet.read",
                 "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},
     "jocasta": SERVICE,
-    "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "optional_account_keys": {"ov_actions"},
+    "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "optional_account_keys": {"ov_actions", "ov_personal"},
            "scope": "ov.read", "resource": "https://ov.mcp.ryzhkov.dev/mcp", "grant": _ov_grant},
     "ha": {"name": "ha", "account_keys": {"ha_entities", "ha_actions"}, "scope": "ha.read",
            "resource": "https://ha.mcp.ryzhkov.dev/mcp", "grant": _ha_grant},
@@ -406,7 +432,7 @@ def _application(raw, service):
             scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES))
         elif service == "ov":
             # ov.read first, then any optional families in canonical order.
-            optional = OV_SCOPES[1:]
+            optional = OV_SCOPES[1:] + OV_PERSONAL_SCOPES
             scopes = tuple(" ".join((OV_SCOPES[0],) + chosen) for size in range(len(optional) + 1)
                            for chosen in combinations(optional, size))
         else:
@@ -525,6 +551,9 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         if service == "ov" and any("ov." + a not in access["scope"].split(" ")
                                    for a in grant.get("ov_actions", [])):
             _refuse(name + " ov_actions require the corresponding explicit scope")
+        if service == "ov" and any("ov.personal." + a not in access["scope"].split()
+                                  for a in grant.get("ov_personal", {}).get("actions", [])):
+            _refuse(name + " personal actions require corresponding explicit scopes")
         state = item["state"]
         if state not in STATES:
             _refuse(name + " state must be present or absent")
