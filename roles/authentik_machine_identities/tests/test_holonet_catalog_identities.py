@@ -419,7 +419,10 @@ class EntrypointTest(unittest.TestCase):
             text = path.read_text()
             literal = "7bfb4856b2a0af4ef437182c944b30a4b88dcabd8cc1e00143f14633ce804c9a"
             self.assertEqual(text.count(literal), 1)
-            path.write_text(text.replace(literal, fixture_hash))
+            text = text.replace(literal, fixture_hash)
+            pk_literal = "{{ {'blueprint_pk': '2514696c-15e3-494e-8df6-eb0c098a9efb'"
+            self.assertEqual(text.count(pk_literal), 1)
+            path.write_text(text.replace(pk_literal, "{{ {'blueprint_pk': " + repr(next(iter(x.state.blueprints)))))
             return path
         self.entrypoint = fixture_entrypoint
         output = self.ok(**options)
