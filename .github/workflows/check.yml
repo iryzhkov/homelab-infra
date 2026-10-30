@@ -51,6 +51,14 @@ jobs:
           python3 scripts/test_emby_home_ownership.py
           python3 scripts/test_holonet_p0_readonly.py
           ansible-playbook playbooks/emby-experience.yml --syntax-check
+      - name: Test operator recommendation state and preservation
+        run: |
+          export HOME="${PWD%/}/.cache/holonet-operator-tests/home"
+          export TMPDIR="$HOME/tmp" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "${PWD%/}/.cache/holonet-operator-tests/home"
+          mkdir -p "$TMPDIR"
+          python3 scripts/test_emby_operator_recommendations.py
+          python3 scripts/test_emby_operator_adapter.py
       - name: Test opt-in Jocasta MCP stack configuration
         run: |
           export HOME="$PWD/.cache/jocasta-mcp-tests/home"
