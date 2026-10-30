@@ -61,6 +61,7 @@
           - ansible_check_mode
           - not (holonet_catalog_apply | default(false) | bool)
           - not (holonet_catalog_online_check | default(false) | bool)
+          - not (holonet_catalog_recommendations_enabled | bool)
         fail_msg: The baseline read runs alone, in check mode, without apply or the online preflight.
         quiet: true
       when: holonet_catalog_baseline_mode | bool
@@ -69,6 +70,33 @@
       ansible.builtin.set_fact:
         authentik_machine_identities: "{{ authentik_machine_identities + [holonet_catalog_interactive_identity] }}"
       when: holonet_catalog_interactive_enabled | bool
+
+    - name: Require an explicit bounded writer cohort and lifecycle before credential loading
+      ansible.builtin.assert:
+        that:
+          - holonet_catalog_recommendations_identity.holonet_target_users is sequence
+          - holonet_catalog_recommendations_identity.holonet_target_users is not string
+          - holonet_catalog_recommendations_identity.holonet_target_users is not mapping
+          - 1 <= holonet_catalog_recommendations_identity.holonet_target_users | length <= 16
+          - holonet_catalog_recommendations_identity.holonet_target_users | unique | list | length == holonet_catalog_recommendations_identity.holonet_target_users | length
+          - holonet_catalog_recommendations_identity.holonet_target_users | select('string') | list | length == holonet_catalog_recommendations_identity.holonet_target_users | length
+          - holonet_catalog_recommendations_identity.holonet_target_users | map('length') | difference([32]) | length == 0
+          - holonet_catalog_recommendations_identity.holonet_target_users | select('match', '^[0-9a-f]{32}$') | list | length == holonet_catalog_recommendations_identity.holonet_target_users | length
+          - holonet_catalog_recommendations_identity.generation is integer
+          - 1 <= holonet_catalog_recommendations_identity.generation <= 1000
+          - holonet_catalog_recommendations_identity.state in ['present', 'absent']
+          - holonet_catalog_recommendations_identity.expires is string
+          - holonet_catalog_recommendations_identity.expires is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
+          - holonet_catalog_recommendations_identity.expires | to_datetime('%Y-%m-%dT%H:%M:%SZ') is not none
+        fail_msg: Writer selection requires an explicit bounded cohort and valid lifecycle; no defaults enroll it.
+        quiet: true
+      when: holonet_catalog_recommendations_enabled | bool
+
+    - name: Select only the separate HoloNet recommendation identity and full scope tuple
+      ansible.builtin.set_fact:
+        authentik_machine_identities: "{{ authentik_machine_identities + [holonet_catalog_recommendations_identity] }}"
+        authentik_machine_services: "{{ authentik_machine_services | combine({'holonet': authentik_machine_services.holonet | combine({'scope': 'holonet.read holonet.curate holonet.home'})}) }}"
+      when: holonet_catalog_recommendations_enabled | bool
 
     # Literal values: a declaration that drops or changes the existing homelab
     # reader, widens or moves the laptop identity, adds another account,
@@ -92,11 +120,14 @@
             | items2dict) == {'state': 'present', 'slug': 'chaldea-holonet',
             'name': 'Chaldea HoloNet catalog access', 'group': 'chaldea-holonet-machine-identities',
             'client_id': 'chaldea-holonet-machine', 'resource': 'https://media.mcp.ryzhkov.dev/mcp',
-            'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29', 'scope': 'holonet.read', 'token_seconds': 300}
+            'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29',
+            'scope': ('holonet.read holonet.curate holonet.home' if holonet_catalog_recommendations_enabled | bool else 'holonet.read'),
+            'token_seconds': 300}
           - >-
             authentik_machine_identities | map(attribute='profile') | list ==
             (['holonet-movies-catalog', 'holonet-movies-catalog-claude'] +
-            (['holonet-interactive'] if holonet_catalog_interactive_enabled | bool else []))
+            (['holonet-interactive'] if holonet_catalog_interactive_enabled | bool else []) +
+            (['holonet-recommendations'] if holonet_catalog_recommendations_enabled | bool else []))
           - >-
             authentik_machine_identities | first ==
             {'host': 'homelab', 'profile': 'holonet-movies-catalog', 'service': 'holonet',
@@ -124,11 +155,22 @@
              'holonet_catalog_users': ['54b7d36cef804d3c8478474553ed3a82'],
              'holonet_history_users': [], 'holonet_target_users': [], 'holonet_actions': ['catalog.read'],
              'holonet_namespace': 'movies-catalog'}
+          - >-
+            not (holonet_catalog_recommendations_enabled | bool) or
+            (authentik_machine_identities[-1] | dict2items
+            | rejectattr('key', 'in', ['generation', 'expires', 'state']) | items2dict) ==
+            {'host': 'laptop', 'profile': 'holonet-recommendations', 'service': 'holonet',
+             'holonet_server': '3c86e6d7ff6c4a3296522cdf03d22bb0', 'holonet_libraries': ['3'],
+             'holonet_catalog_users': ['54b7d36cef804d3c8478474553ed3a82'],
+             'holonet_history_users': [],
+             'holonet_target_users': holonet_catalog_recommendations_identity.holonet_target_users,
+             'holonet_actions': ['catalog.read', 'playlist.read', 'playlist.manage', 'object.share', 'home.read', 'home.manage', 'object.delete'],
+             'holonet_namespace': 'managed-recommendations'}
         fail_msg: >-
           This entrypoint only adds to the existing owned HoloNet application and keeps
           its homelab identity present and unchanged. Laptop identities are only the
-          limited Claude preset and the explicitly opted-in ordinary catalog reader,
-          each with the same fixed grant and its own credential.
+          limited Claude preset, the ordinary catalog reader and a separately opted-in
+          recommendation writer. Each keeps its exact grant and its own credential.
         quiet: true
 
     - name: Require both destinations bound before any host is touched

@@ -37,6 +37,9 @@ LAPTOP = {"host": "laptop", "profile": "holonet-movies-catalog-claude", "service
           "generation": 1, "expires": "2026-11-20T00:00:00Z", "state": "present"}
 COHORT = [HOMELAB, LAPTOP]
 INTERACTIVE = LAPTOP | {"profile": "holonet-interactive"}
+WRITER = LAPTOP | {"profile": "holonet-recommendations", "holonet_target_users": ["c" * 32],
+                   "holonet_actions": [*mi.HOLONET_WRITER_ACTIONS, "object.delete"],
+                   "holonet_namespace": "managed-recommendations"}
 ANCHOR = {"blueprint_pk": "2514696c-15e3-494e-8df6-eb0c098a9efb",
           "content_sha256": "aef30eb3096776f9edddff5d00cb3eb3aac7d1128b05a730aa138407bc577f58"}
 # scope_expression_sha256 from the 2026-10-22 read-only issuer receipt, which
@@ -85,9 +88,13 @@ class DeclarationTest(unittest.TestCase):
             "authentik_machine_identities_blueprint_name", "authentik_machine_identity_max_days",
             "holonet_catalog_baseline_anchor",
             "authentik_machine_services", "authentik_machine_identities",
-            "holonet_catalog_interactive_enabled", "holonet_catalog_interactive_identity"})
+            "holonet_catalog_interactive_enabled", "holonet_catalog_interactive_identity",
+            "holonet_catalog_recommendations_enabled", "holonet_catalog_recommendations_identity"})
         self.assertIs(values["holonet_catalog_interactive_enabled"], False)
         self.assertEqual(values["holonet_catalog_interactive_identity"], INTERACTIVE)
+        self.assertIs(values["holonet_catalog_recommendations_enabled"], False)
+        self.assertEqual(values["holonet_catalog_recommendations_identity"], WRITER | {
+            "holonet_target_users": [], "expires": ""})
         integrated = yaml.safe_load((ROOT / "playbooks/vars/authentik.yml").read_text())
         self.assertIs(integrated["authentik_machine_identities_enabled"], False)
         play = yaml.safe_load(ENTRYPOINT.read_text())
@@ -309,12 +316,14 @@ class EntrypointTest(unittest.TestCase):
         return target
 
     def play(self, baseline=None, apply=True, check=False, online=False, baseline_read=False, patched=None,
-             **overrides):
+             source_services=False, **overrides):
         x = self.x
         path = self.entrypoint(self.use_patched if patched is None else patched)
         extra = {"authentik_machine_services": {"holonet": self.holonet},
                  "authentik_machine_identity_destinations": self.bindings,
                  "authentik_machine_identity_existing_provider_baseline": baseline or {}} | overrides
+        if source_services:
+            extra.pop("authentik_machine_services", None)
         extra_path = x.base / "entrypoint-extra.yml"
         extra_path.write_text(yaml.safe_dump(extra))
         (x.base / "sops-loaded").unlink(missing_ok=True)
@@ -568,6 +577,84 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual(self.homelab_snapshot(), before)
         self.assertEqual((secret.read_bytes(), secret.stat().st_ino, secret.stat().st_mtime_ns), laptop_bytes)
         self.assertIn("budget", x.state.apps)
+
+    def test_writer_offline_shape_and_refusals_precede_credential_loading(self):
+        full = self.holonet | {"scope": "holonet.read holonet.curate holonet.home"}
+        options = {"holonet_catalog_recommendations_enabled": True,
+                   "holonet_catalog_recommendations_identity": WRITER,
+                   "authentik_machine_services": {"holonet": full}}
+        for interactive in (False, True):
+            self.ok(check=True, **options, holonet_catalog_interactive_enabled=interactive)
+            self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+        for key, value in (("host", "homelab"), ("profile", "other"),
+                           ("holonet_libraries", ["4"]), ("holonet_namespace", "other"),
+                           ("holonet_history_users", GRANT["holonet_catalog_users"]),
+                           ("holonet_actions", list(mi.HOLONET_WRITER_ACTIONS)),
+                           ("holonet_target_users", []), ("holonet_target_users", ["*"]),
+                           ("holonet_target_users", ["c" * 32] * 2),
+                           ("generation", True), ("expires", ""), ("expires", "2026-02-31T00:00:00Z")):
+            with self.subTest(key=key, value=value):
+                chosen = options | {"holonet_catalog_recommendations_identity": WRITER | {key: value}}
+                code, output = self.play(check=True, online=True, **chosen)
+                self.assertNotEqual(code, 0, output)
+                self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+        # Exercise the source-derived scope, without the fixture extra-var override.
+        self.ok(check=True, source_services=True, **options)
+        self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+        code, output = self.play(check=True, baseline_read=True, **options)
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("The baseline read runs alone", output)
+        self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+
+    def test_writer_actual_add_repeat_and_inverse_preserve_every_reader(self):
+        x = self.x
+        self.use_patched = True
+        code, output = x.run(COHORT + [INTERACTIVE], services={"holonet": self.holonet},
+                             extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
+        self.assertEqual(code, 0, output)
+        def readers():
+            result = {}
+            for identity in COHORT + [INTERACTIVE]:
+                username = "chaldea-" + identity["host"] + "-" + identity["profile"]
+                path = self.secret(identity["host"], identity)
+                result[username] = (copy.deepcopy(x.state.users[username]),
+                                    copy.deepcopy(x.state.tokens[username + "-g1"]),
+                                    path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+            return result
+        before = readers()
+        original = self.baseline()
+        full = self.holonet | {"scope": "holonet.read holonet.curate holonet.home"}
+        options = {"holonet_catalog_recommendations_enabled": True,
+                   "holonet_catalog_recommendations_identity": WRITER,
+                   "holonet_catalog_interactive_enabled": True,
+                   "authentik_machine_services": {"holonet": full}}
+        gate = "Require the operator's prior baseline before any private detail"
+        self.refused(gate, **options)
+        self.assertEqual((x.writes(), x.key_reads(), self.private_reads()), ([], [], []))
+        self.assertEqual(readers(), before)
+        self.ok(original, **options)
+        self.assertEqual(readers(), before)
+        username = "chaldea-laptop-holonet-recommendations"
+        path = self.secret("laptop", WRITER)
+        self.assertEqual(path.read_text(), x.state.tokens[username + "-g1"]["key"])
+        self.assertEqual((path.stat().st_mode & 0o777, path.stat().st_nlink), (0o600, 1))
+        self.assertEqual(x.state.users[username]["attributes"]["chaldea_holonet"],
+                         {k: WRITER[k] for k in mi.HOLONET_FIELDS})
+        secret_before = (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+        self.assertEqual(x.changed(self.ok(self.baseline(), **options)), 0)
+        self.assertEqual(readers(), before)
+        self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), secret_before)
+        self.ok(self.baseline(), **(options | {
+            "holonet_catalog_recommendations_identity": WRITER | {"state": "absent"}}))
+        self.assertNotIn(username, x.state.users)
+        self.assertNotIn(username + "-g1", x.state.tokens)
+        self.assertFalse(path.exists())
+        self.assertEqual(readers(), before)
+        mapping = x.state.mappings[HOLONET["name"] + ": holonet.read"]["expression"]
+        for identity in COHORT + [INTERACTIVE]:
+            name = "chaldea-" + identity["host"] + "-" + identity["profile"]
+            self.assertEqual(evaluate(mapping, types.SimpleNamespace(**x.state.users[name]), HOLONET["group"]),
+                             GRANT | {"aud": HOLONET["resource"]})
 
     def test_opted_in_reader_preserves_both_existing_accounts_and_has_scoped_inverse(self):
         x = self.x
