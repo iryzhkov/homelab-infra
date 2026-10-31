@@ -1,4 +1,8 @@
-# OV curator backend exact-directory repair
+# Historical OV curator backend exact-directory repair
+
+This record describes the previous backend binding. The current selection and
+artifact authority are in [OV verified ACK release](ov-verified-ack-release.md).
+All selection, qualification and activation statements below are historical.
 
 This source-only selection binds the exact-directory resource repair. Exact
 canonical directory targets are accepted without broadening control targets or
@@ -34,7 +38,7 @@ entries, 21 bundle members, 938 overlay members and the complete config with
 14 ordered RootFS diff IDs. This patch bundle requires retained base blobs;
 it is not a Docker-save or runtime receipt.
 
-Current artifact authority:
+Historical artifact authority:
  /home/igor/.cache/exact-directory-repair/backend-artifact-02/receipt.md
 and independent-validation.json in that directory. The bundle remains at its
 original returned path recorded there. The guarded exclusive-copy operation was
