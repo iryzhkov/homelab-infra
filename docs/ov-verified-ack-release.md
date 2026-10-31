@@ -31,12 +31,15 @@ prove index completion or a native failure cause. Root owns continuation of any
 such operation and must preserve drain without cancellation and cap 32. No pilot,
 schedule, native acceptance, hold clearance or live-state claim follows here.
 
-The [combined selection](ov-exact-directory-release.md) retains HTTP config
+The [combined selection](ov-exact-directory-release.md) now selects the
+[measured-deadline HTTP binding](ov-http-compose.md#explicit-local-config-identity).
+The earlier HTTP config
 sha256:324b4da5f9aab84f55b517eed9ab4394aca61c92e382583005f4fdd2002126ee,
-source b8e678ae07fba3ec49ee142589ea9b61a22f6853. The existing HTTP validator
-is compatible. Root reports HTTP PR15 merged at 8d4c6ce with tests only;
-it requires no runtime image change. The full-resource envelope, personal
-protocol, native pin and whole-object guards remain unchanged.
+source b8e678ae07fba3ec49ee142589ea9b61a22f6853, is historical. Root's earlier
+HTTP PR15 report described tests only and did not require an image change at
+that point. This later source binding selects a new HTTP image without activating
+it. The full-resource envelope, personal protocol, native pin and whole-object
+guards remain unchanged.
 
 Image staging is a separate parallel lane and remains pending for this binding.
 Root owns custody resolution, reviews, infrastructure CI and staging before the
