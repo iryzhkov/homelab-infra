@@ -1297,5 +1297,660 @@ class EntryTests(unittest.TestCase):
                 self.assertEqual(json.loads(output.getvalue()), {'state': 'synthetic-success'})
 
 
+EMPTY_QUERY = {k: [] for k in ('StudioIds', 'TagIds', 'GenreIds', 'CollectionTypes')}
+
+
+class MultiBackend:
+    """Keyed multi-playlist recording DTO model, not live Emby evidence.
+
+    Synthetic IDs only. A separate recipient is the worst-case transport path.
+    """
+    def __init__(self):
+        self.home = [{'Id': 1, 'Unknown': {'retain': [9]}}]
+        self.items = {}
+        self.visible = ['m%d' % n for n in range(1, 31)]
+        self.serial = 0
+        self.writes = []
+        self.lose = self.fail_before = None
+        self.journal = None
+
+    @staticmethod
+    def envelope(rows):
+        return {'Items': copy.deepcopy(rows), 'TotalRecordCount': len(rows)}
+
+    def respond(self, call):
+        from urllib.parse import urlsplit, parse_qs
+        method, url, headers, body = call
+        u = urlsplit(url)
+        path, q = u.path.removeprefix('/emby'), parse_qs(u.query)
+        if path == '/Users/AuthenticateByName':
+            return auth_response()
+        assert next(v for k, v in headers.items() if k.lower() == 'x-emby-token') == 'synthetic-session-token'
+        if method == 'GET':
+            return self.get(path, q)
+        pending = self.journal.load()['pending']
+        assert pending is not None, 'Intent precedes every POST'
+        op = pending['operation']
+        self.writes.append((op, pending.get('list'), path, copy.deepcopy(body)))
+        if self.fail_before == op:
+            return (500, b'uncertain dispatch')
+        self.post(op, path, q, body, pending['args'])
+        return (500, b'no response body disclosure') if self.lose == op else (204, b'')
+
+    def get(self, path, q):
+        admin = {A: True, R: False}
+        parts = path.split('/')
+        if path == '/Users':
+            return [{'Id': i} for i in admin]
+        if path in ('/Users/' + A, '/Users/' + R):
+            return {'Id': parts[-1], 'ServerId': S,
+                    'Policy': {'IsDisabled': False, 'IsAdministrator': admin[parts[-1]]}}
+        if path == '/Library/VirtualFolders':
+            return [{'ItemId': '7', 'Guid': G, 'CollectionType': 'movies'}]
+        if path == '/Users/' + R + '/Views':
+            return self.envelope([{'Id': '7'}])
+        if path == '/Users/' + R + '/HomeSections':
+            return copy.deepcopy(self.home)
+        if path == '/Users/' + R + '/Items':
+            assert q['ParentId'] == ['7'] and q['IncludeItemTypes'] == ['Movie']
+            return self.envelope([{'Id': i, 'Type': 'Movie'} for i in q['Ids'][0].split(',')
+                                  if i in self.visible])
+        if path == '/Users/' + A + '/Items':
+            assert q['IncludeItemTypes'] == ['Playlist']
+            return self.envelope([{'Id': k, 'Type': 'Playlist', 'Name': v['Name']}
+                                  for k, v in self.items.items()])
+        if path == '/Users/ItemAccess':
+            return self.envelope([{'Id': A, 'ServerId': S, 'UserItemShareLevel': 'ManageDelete'},
+                                  {'Id': R, 'ServerId': S,
+                                   'UserItemShareLevel': self.items[q['ItemId'][0]]['grant']}])
+        if path.startswith('/Users/' + A + '/Items/') and parts[-1] in self.items:
+            return {'Id': parts[-1], 'Type': 'Playlist', 'Name': self.items[parts[-1]]['Name'],
+                    'CanEditItems': True, 'CanManageAccess': True}
+        if len(parts) == 4 and parts[1] == 'Playlists' and parts[3] == 'Items' and parts[2] in self.items:
+            assert q['UserId'] == [A]
+            return self.envelope(self.items[parts[2]]['entries'])
+        raise AssertionError('Unmodeled GET')
+
+    def post(self, op, path, q, body, args):
+        if op == 'create':
+            assert path == '/Playlists' and q['userId'] == [A] and body is None
+            self.serial += 1
+            self.items['p%d' % self.serial] = {'Name': q['Name'][0], 'entries': [], 'grant': 'None'}
+        elif op == 'share':
+            assert path == '/Items/Access' and body['UserIds'] == [R] and body['ItemAccess'] == 'Read'
+            self.items[body['ItemIds'][0]]['grant'] = 'Read'
+        elif op == 'row':
+            assert path == '/Users/' + R + '/HomeSections' and body == args
+            self.serial += 1
+            self.home.append(dict(body, Id='r%d' % self.serial, Name=body['CustomName'],
+                                  Monitor=[], CardSizeOffset=0, Query=EMPTY_QUERY))
+        elif op == 'display-title':
+            assert path == '/Users/' + R + '/HomeSections' and body == args
+            row = next(r for r in self.home if r['Id'] == body['Id'])
+            row.update(CustomName=body['CustomName'], Name=body['CustomName'], Subtitle=body['Subtitle'])
+        elif op == 'add':
+            assert path.endswith('/Items') and body == {
+                'Ids': ','.join(args), 'userId': A, 'SkipDuplicates': False}
+            self.serial += 1
+            self.items[path.split('/')[2]]['entries'] = [
+                {'Id': m, 'Type': 'Movie', 'PlaylistItemId': 'e%d_%d' % (self.serial, n)}
+                for n, m in enumerate(args)]
+        elif op == 'clear':
+            assert path.endswith('/Items/Delete') and body == {'EntryIds': ','.join(args)}
+            self.items[path.split('/')[2]]['entries'] = []
+        elif op == 'unrow':
+            assert path == '/Users/' + R + '/HomeSections/Delete' and body == {'ids': [args]}
+            self.home = [r for r in self.home if r['Id'] != args]
+        elif op == 'delete':
+            assert path == '/Items/Delete' and body is None
+            del self.items[q['Ids'][0]]
+        else:
+            raise AssertionError('Unmodeled mutation')
+
+
+class MultiListTests(unittest.TestCase):
+    """Journal version 2 through the real adapter and loopback recording HTTP."""
+    def setUp(self):
+        home = Path(__file__).resolve().parents[1] / '.cache/holonet-operator-tests/home'
+        self.assertEqual(os.environ['HOME'], str(home))
+        self.assertEqual(os.environ['TMPDIR'], str(home / 'tmp'))
+        self.temp = tempfile.TemporaryDirectory(dir=home / 'tmp')
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.directory.chmod(0o700)
+        self.journal = Journal(self.directory)
+        self.addCleanup(self.journal.close)
+        self.backend = MultiBackend()
+        self.backend.journal = self.journal
+        self.http = RecordingHTTP()
+        self.http.responder = self.backend.respond
+        self.http.__enter__()
+        self.addCleanup(self.http.__exit__, None, None, None)
+        self.fresh_session()
+
+    fresh_session = LifecycleHTTPTests.fresh_session
+
+    def bytes(self):
+        return (self.directory / 'journal.json').read_bytes()
+
+    def stored(self):
+        return json.loads(self.bytes())
+
+    def intent(self, operation, list_id, **args):
+        self.fresh_session()
+        return self.operator.list_preview(operation, list_id, **args)['intent_digest']
+
+    def do(self, operation, key, list_id, **args):
+        # Preview and mutation are separate invocations, as through the entry.
+        intent = self.intent(operation, list_id, **args)
+        return self.resume(operation, key, list_id, intent_digest=intent, **args)
+
+    def resume(self, operation, key, list_id, **args):
+        self.fresh_session()
+        return getattr(self.operator, operation.replace('-', '_'))(key, list_id, **args)
+
+    def v1_apply(self, key, movies):
+        self.fresh_session()
+        preview = self.operator.preview(movies)
+        self.fresh_session()
+        return self.operator.apply(key, movies, preview['baseline_digest'])
+
+    def pid(self, list_id):
+        marker = self.operator.marker_for(list_id)
+        return next(k for k, v in self.backend.items.items() if v['Name'] == marker)
+
+    def row(self, list_id):
+        record = self.stored().get('lists', {}).get(list_id)
+        return record and record['row']
+
+    def sibling(self, list_id):
+        pid = self.pid(list_id)
+        return copy.deepcopy((pid, self.backend.items[pid],
+                              [r for r in self.backend.home if r['Id'] == self.row(list_id)]))
+
+    def others(self, row):
+        return copy.deepcopy([r for r in self.backend.home if r['Id'] != row])
+
+    def test_v1_fixture_migrates_with_identical_show_and_lossless_inverse(self):
+        self.v1_apply('first', ['m2', 'm1'])
+        self.fresh_session()
+        preview = self.operator.display_title_preview('Movies for Igor')
+        self.fresh_session()
+        self.operator.set_display_title('title', 'Movies for Igor', preview['baseline_digest'])
+        self.fresh_session()
+        legacy = self.operator.show()
+        self.assertEqual(legacy['display_title'], 'Movies for Igor')
+        self.assertEqual(legacy['row']['saved']['Subtitle'], '')
+        self.assertIsInstance(legacy['row']['saved_id'], str)
+        self.assertIsInstance(legacy['playlists'][0]['id'], str)
+        before, writes = self.bytes(), copy.deepcopy(self.backend.writes)
+        offset = len(self.http.calls)
+        self.fresh_session()
+        migration = self.operator.migrate_preview()
+        self.assertEqual(migration['lists'], ['igor-movies'])
+        self.assertEqual(migration['revision'], legacy['revision'])
+        self.assertEqual(self.bytes(), before)
+        self.fresh_session()
+        self.assertEqual(self.operator.migrate('migrate', migration['intent_digest']),
+                         {'state': 'migrated', 'writes': 0})
+        # Journal-only: authentication is the only POST; no management write exists.
+        self.assertEqual([c[1] for c in self.http.calls[offset:] if c[0] == 'POST'],
+                         ['/emby/Users/AuthenticateByName'] * 2)
+        self.assertEqual(self.backend.writes, writes)
+        old, new = json.loads(before), self.stored()
+        self.assertEqual(new['version'], 2)
+        self.assertNotIn('recipe', new['scope'])
+        for field in ('baseline', 'current', 'done'):
+            self.assertEqual(new[field], old[field])
+        self.assertEqual(new['lists'], {'igor-movies': {'row': old['row'],
+                                                        'display_title': 'Movies for Igor'}})
+        self.assertEqual(new['migrated_from']['journal_digest'], digest(old))
+        migrated = self.bytes()
+        self.fresh_session()
+        catalog = self.operator.show()
+        self.assertEqual(catalog['revision'], legacy['revision'])
+        [item] = catalog['lists']
+        self.assertEqual((item['list'], item['legacy'], item['marker'], item['display_title']),
+                         ('igor-movies', True, legacy['marker'], 'Movies for Igor'))
+        self.assertEqual(item['playlist'], legacy['playlists'][0])
+        self.assertEqual(item['row'], legacy['row'])
+        self.assertEqual(self.operator.reconcile(), {'state': 'clean'})
+        self.assertEqual(self.operator.show(list='igor-movies')['lists'], [item])
+        self.fresh_session()
+        self.assertEqual(self.operator.migrate('migrate', 'replay'),
+                         {'state': 'already-migrated', 'writes': 0})
+        self.assertEqual(self.bytes(), migrated)
+        self.fresh_session()
+        inverse = self.operator.downgrade_preview()
+        self.fresh_session()
+        self.assertEqual(self.operator.downgrade('downgrade', inverse['intent_digest']),
+                         {'state': 'downgraded', 'writes': 0})
+        self.assertEqual(self.bytes(), before)
+        self.fresh_session()
+        self.assertEqual(self.operator.show(), legacy)
+        self.assertEqual(self.operator.apply('first', ['m2', 'm1']), {'state': 'replayed', 'writes': 0})
+        self.assertEqual(self.backend.writes, writes)
+
+    def test_migration_refuses_unfinished_drift_stale_foreign_and_old_digests(self):
+        self.backend.lose = 'add'
+        with self.assertRaises(Refused):
+            self.v1_apply('first', ['m1'])
+        self.backend.lose = None
+        unfinished = self.bytes()
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Unfinished'):
+            self.operator.migrate_preview()
+        self.assertEqual(self.bytes(), unfinished)
+        self.fresh_session()
+        self.operator.apply('first', ['m1'])
+        self.fresh_session()
+        stale = self.operator.migrate_preview()['intent_digest']
+        self.v1_apply('second', ['m2'])
+        before = self.bytes()
+        self.fresh_session()
+        current = self.operator.preview(['m1'])['baseline_digest']
+        for intent in (stale, current, None, 'x'):
+            with self.subTest(intent=intent), self.assertRaises(Refused):
+                self.operator.migrate('migrate', intent)
+        self.backend.home[0]['Manual'] = True
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'drift'):
+            self.operator.migrate_preview()
+        del self.backend.home[0]['Manual']
+        foreign = Operator(self.api, self.journal, server=S, actor=A, recipient=R,
+                           library='7', recipe='other')
+        with self.assertRaisesRegex(Refused, 'Foreign journal'):
+            foreign.migrate_preview()
+        for call in (lambda: self.operator.list_preview('set-members', 'igor-movies', movies=['m1']),
+                     lambda: self.operator.create_list('k', 'other', 'Other', [], 'x'),
+                     lambda: self.operator.show(list='igor-movies'),
+                     self.operator.downgrade_preview):
+            with self.assertRaisesRegex(Refused, 'migration required|version 2 required'):
+                call()
+        self.assertEqual(self.bytes(), before)
+        self.fresh_session()
+        migration = self.operator.migrate_preview()
+        self.fresh_session()
+        self.operator.migrate('migrate', migration['intent_digest'])
+        writes, migrated = copy.deepcopy(self.backend.writes), self.bytes()
+        # A version 1 digest never authorizes a version 2 alias or other migration.
+        for call in (lambda: self.operator.apply('third', ['m1'], current),
+                     lambda: self.operator.remove('remove', current),
+                     lambda: self.operator.migrate('other-key', migration['intent_digest']),
+                     lambda: self.operator.apply('first', ['m1'])):
+            self.fresh_session()
+            with self.assertRaises(Refused):
+                call()
+        self.assertEqual(self.backend.writes, writes)
+        self.assertEqual(self.bytes(), migrated)
+
+    def test_two_lists_each_operation_preserves_sibling_and_home_order(self):
+        self.backend.home.append({'Id': 'manual', 'Name': 'Same', 'CustomName': 'Same',
+                                  'SectionType': 'playlist', 'ParentId': 'manual-playlist'})
+        baseline = copy.deepcopy(self.backend.home)
+        steps = [('set-members', {'movies': ['m3', 'm2']}), ('set-title', {'title': 'Other'}),
+                 ('set-title', {'title': 'Same'}), ('detach-row', {}),
+                 ('set-members', {'movies': []}), ('attach-row', {'title': 'Same'}),
+                 ('set-members', {'movies': ['m1']}), ('delete-list', {})]
+        self.assertEqual(self.do('create-list', 'a-create', 'a', title='Same',
+                                 movies=['m1', 'm2'])['state'], 'created')
+        for target, sibling in (('b', 'a'), ('a', 'b')):
+            # Same title and same Movie in both lists; titles are not identity.
+            self.do('create-list', 'b-create-' + target, 'b', title='Same', movies=['m2'])
+            for n, (operation, args) in enumerate(steps):
+                with self.subTest(target=target, operation=operation, n=n):
+                    kept, others = self.sibling(sibling), self.others(self.row(target))
+                    count = len(self.backend.writes)
+                    self.do(operation, '%s-%d' % (target, n), target, **args)
+                    self.assertEqual(self.sibling(sibling), kept)
+                    self.assertEqual(self.others(self.row(target)), others)
+                    self.assertTrue(all(w[1] == target for w in self.backend.writes[count:]))
+        self.do('delete-list', 'b-final', 'b')
+        self.assertEqual(self.backend.home, baseline)
+        self.assertEqual(self.backend.items, {})
+
+    def test_delete_in_any_order_restores_external_baseline(self):
+        baseline = copy.deepcopy(self.backend.home)
+        for n, order in enumerate(('abc', 'cab', 'bca')):
+            for list_id in 'abc':
+                self.do('create-list', 'create-%s-%d' % (list_id, n), list_id,
+                        title='List ' + list_id, movies=['m1'])
+            for list_id in order:
+                self.do('delete-list', 'delete-%s-%d' % (list_id, n), list_id)
+                owned = {r['row'] for r in self.stored()['lists'].values()}
+                self.assertEqual([r for r in self.backend.home if r['Id'] not in owned], baseline)
+            stored = self.stored()
+            self.assertEqual((stored['lists'], stored['current']), ({}, stored['baseline']))
+            self.assertEqual(self.backend.home, baseline)
+            self.assertEqual(self.backend.items, {})
+
+    def test_external_home_drift_refuses_every_operation_without_saving(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.do('create-list', 'create-b', 'b', title='B', movies=['m2'])
+        intent = self.intent('set-members', 'a', movies=['m3'])
+        before, writes = self.bytes(), copy.deepcopy(self.backend.writes)
+        home = copy.deepcopy(self.backend.home)
+        for mutate in (lambda: self.backend.home.append({'Id': 'manual'}),
+                       lambda: self.backend.home[0].update(Unknown='manual'),
+                       lambda: self.backend.home.pop(0),
+                       lambda: self.backend.home.reverse(),
+                       lambda: self.backend.home[-1].update(CustomName='manual')):
+            self.backend.home = copy.deepcopy(home)
+            mutate()
+            self.fresh_session()
+            self.assertEqual(self.operator.reconcile(), {'state': 'drift'})
+            for call in (self.operator.show,
+                         lambda: self.operator.list_preview('delete-list', 'b'),
+                         lambda: self.operator.list_preview('create-list', 'c', title='C', movies=[]),
+                         lambda: self.operator.set_members('k', 'a', ['m3'], intent)):
+                with self.assertRaises(Refused):
+                    call()
+            self.assertEqual(self.bytes(), before)
+            self.assertEqual(self.backend.writes, writes)
+        self.backend.home = home
+        self.fresh_session()
+        self.assertEqual(self.operator.set_members('k', 'a', ['m3'], intent)['state'], 'members-set')
+
+    def test_list_limit_titles_and_membership_bounds_refuse_before_writes(self):
+        for list_id, movies in (('a', ['m1']), ('b', ['m1']), ('c', []), ('d', ['m1', 'm2'])):
+            self.do('create-list', 'create-' + list_id, list_id, title='Same', movies=movies)
+        # The same Movie may appear in different lists.
+        self.assertEqual([e['Id'] for e in self.backend.items[self.pid('b')]['entries']], ['m1'])
+        writes, before = copy.deepcopy(self.backend.writes), self.bytes()
+        self.fresh_session()
+        cases = [('create-list', 'e', {'title': 'E', 'movies': []}, 'List limit reached'),
+                 ('create-list', 'a', {'title': 'A', 'movies': []}, 'List already exists'),
+                 ('set-members', 'a', {'movies': ['m1', 'm1']}, 'Duplicate Movie IDs'),
+                 ('set-members', 'a', {'movies': ['m%d' % n for n in range(1, 27)]}, 'Movies'),
+                 ('set-members', 'e', {'movies': []}, 'Unknown list'),
+                 ('set-title', 'a', {'title': self.operator.marker_for('b')}, 'Marker-shaped title'),
+                 ('set-title', 'a', {'title': ''}, 'display title'),
+                 ('detach-row', 'zz/..', {}, 'Invalid opaque ID'),
+                 ('set-members', 'a', {'movies': ['m1'], 'title': 'x'}, 'Invalid list operation')]
+        for operation, list_id, args, message in cases:
+            with self.subTest(operation=operation, list_id=list_id), \
+                 self.assertRaisesRegex(Refused, message):
+                self.operator.list_preview(operation, list_id, **args)
+        self.backend.visible.remove('m3')
+        with self.assertRaisesRegex(Refused, 'Movie'):
+            self.operator.list_preview('set-members', 'a', movies=['m3'])
+        self.assertEqual(self.backend.writes, writes)
+        self.assertEqual(self.bytes(), before)
+
+    def test_intent_digest_binds_operation_list_and_arguments(self):
+        self.do('create-list', 'create-legacy', 'igor-movies', title='Legacy', movies=['m1'])
+        self.do('create-list', 'create-b', 'b', title='B', movies=['m1'])
+        title = self.intent('set-title', 'igor-movies', title='X')
+        self.fresh_session()
+        revision = self.operator.show()['revision']
+        alias = self.operator.preview(['m2'])['baseline_digest']
+        # The legacy alias is exactly the set-title intent for the legacy list.
+        self.assertEqual(self.operator.display_title_preview('X')['baseline_digest'], title)
+        writes, before = copy.deepcopy(self.backend.writes), self.bytes()
+        for call in (lambda: self.operator.set_title('k1', 'b', 'X', title),
+                     lambda: self.operator.set_title('k2', 'igor-movies', 'Y', title),
+                     lambda: self.operator.set_members('k3', 'igor-movies', ['m1'], title),
+                     lambda: self.operator.detach_row('k4', 'igor-movies', title),
+                     lambda: self.operator.delete_list('k5', 'igor-movies', title),
+                     lambda: self.operator.remove('k6', alias),
+                     lambda: self.operator.remove('k7', revision),
+                     lambda: self.operator.apply('k8', ['m2'], revision),
+                     lambda: self.operator.set_members('k9', 'b', ['m2'], alias),
+                     lambda: self.operator.set_members('k10', 'igor-movies', ['m3'], alias)):
+            with self.assertRaisesRegex(Refused, 'Fresh preview digest required'):
+                call()
+        self.assertEqual(self.backend.writes, writes)
+        self.assertEqual(self.bytes(), before)
+        self.assertEqual(self.operator.apply('k11', ['m2'], alias)['state'], 'members-set')
+        self.fresh_session()
+        self.assertEqual(self.operator.set_members('k11', 'igor-movies', ['m2'])['state'], 'replayed')
+        removal = self.intent('delete-list', 'igor-movies')
+        self.fresh_session()
+        self.assertEqual(self.operator.remove('k12', removal)['state'], 'deleted')
+        self.assertEqual([x['list'] for x in self.operator.show()['lists']], ['b'])
+
+    def test_lost_response_each_step_completes_by_exact_readback_once(self):
+        steps = [('create-list', {'title': 'Lost', 'movies': ['m1']}, lost)
+                 for lost in ('create', 'share', 'row', 'display-title', 'add')]
+        steps += [('set-members', {'movies': ['m2']}, 'clear'), ('detach-row', {}, 'unrow'),
+                  ('delete-list', {}, 'delete')]
+        self.do('create-list', 'sibling', 'b', title='B', movies=['m1'])
+        for n, (operation, args, lost) in enumerate(steps):
+            with self.subTest(lost=lost):
+                if operation == 'create-list' and n:
+                    self.do('delete-list', 'cleanup-%d' % n, 'x')
+                kept, count = self.sibling('b'), len(self.backend.writes)
+                self.backend.lose = lost
+                with self.assertRaises(Refused):
+                    self.do(operation, 'lost-%d' % n, 'x', **args)
+                self.backend.lose = None
+                before = self.bytes()
+                self.fresh_session()
+                shown = self.operator.show()
+                self.assertEqual((shown['reconcile'], shown['pending']),
+                                 ({'state': 'observed-applied'}, {'operation': lost, 'list': 'x'}))
+                self.assertEqual(self.operator.reconcile(),
+                                 {'state': 'observed-applied', 'operation': lost, 'list': 'x'})
+                self.assertEqual(self.bytes(), before)
+                self.resume(operation, 'lost-%d' % n, 'x', **args)
+                self.assertEqual([w[0] for w in self.backend.writes[count:]].count(lost), 1)
+                self.assertEqual(self.sibling('b'), kept)
+        self.assertNotIn('x', self.stored()['lists'])
+
+    def test_uncertain_unchanged_step_is_never_redispatched(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.backend.fail_before = 'display-title'
+        with self.assertRaises(Refused):
+            self.do('set-title', 'title', 'a', title='B')
+        self.backend.fail_before = None
+        before = self.bytes()
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'unresolved'})
+        self.assertEqual(self.operator.reconcile()['state'], 'unresolved')
+        for call in (lambda: self.operator.set_title('title', 'a', 'B'),
+                     lambda: self.operator.set_members('other', 'a', ['m2'], 'x')):
+            with self.assertRaises(Refused):
+                call()
+        self.assertEqual(self.bytes(), before)
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 2)
+
+    def test_not_dispatched_clears_only_pending_and_resumes_same_request(self):
+        original = self.http.open
+        def fail(request, *args, **kwargs):
+            d = self.journal.load() if self.journal._locked else None
+            if d and d['pending'] and d['pending']['operation'] == 'display-title':
+                raise OSError('synthetic pre-send GET failure')
+            return original(request, *args, **kwargs)
+        with patch.object(self.http, 'open', side_effect=fail):
+            with self.assertRaises(adapter.NotDispatched):
+                self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        stored = self.stored()
+        self.assertIsNone(stored['pending'])
+        self.assertEqual(stored['run']['key'], 'create-a')
+        self.assertEqual(stored['lists'], {'a': {'row': self.backend.home[-1]['Id'],
+                                                    'display_title': self.operator.marker_for('a')}})
+        self.assertEqual(self.resume('create-list', 'create-a', 'a', title='A',
+                                     movies=['m1'])['writes'], 2)
+        self.assertEqual([w[0] for w in self.backend.writes],
+                         ['create', 'share', 'row', 'display-title', 'add'])
+
+    def test_worst_case_fourth_list_create_fits_unchanged_transport_budget(self):
+        for list_id in 'abc':
+            self.do('create-list', 'create-' + list_id, list_id, title='Same', movies=['m1'])
+        movies = ['m%d' % n for n in range(1, 26)]
+        intent = self.intent('create-list', 'd', title='Fourth', movies=movies)
+        self.fresh_session()
+        self.assertEqual(self.operator.create_list('create-d', 'd', 'Fourth', movies,
+                                                   intent)['writes'], 5)
+        # One recorded invocation including authentication; not runtime evidence.
+        self.assertEqual(adapter.MAX_REQUESTS, 512)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+
+    def test_unrecorded_markers_refuse_or_stay_ignored_without_adoption(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        before = self.bytes()
+        stray_intent = self.intent('create-list', 'unknown', title='Unknown', movies=[])
+        self.backend.items['stray'] = {'Name': self.operator.marker_for('unknown'),
+                                       'entries': [], 'grant': 'None'}
+        self.fresh_session()
+        self.assertEqual([x['list'] for x in self.operator.show()['lists']], ['a'])
+        with self.assertRaisesRegex(Refused, 'Existing playlist requires'):
+            self.operator.list_preview('create-list', 'unknown', title='Unknown', movies=[])
+        self.assertEqual(self.bytes(), before)
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Existing playlist requires'):
+            self.operator.create_list('stray-create', 'unknown', 'Unknown', [], stray_intent)
+        self.assertEqual(self.bytes(), before)
+        for name in (self.operator.marker, self.operator.marker_for('a')):
+            self.backend.items['extra'] = {'Name': name, 'entries': [], 'grant': 'None'}
+            self.fresh_session()
+            with self.assertRaisesRegex(Refused, 'Unexplained|Ambiguous'):
+                self.operator.show()
+            with self.assertRaises(Refused):
+                self.operator.list_preview('set-members', 'a', movies=['m2'])
+        self.assertEqual(self.bytes(), before)
+
+    def test_completed_key_ceiling_refuses_without_eviction(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        with self.journal.locked():
+            d = self.journal.load()
+            # Synthetic completed history fixture filling the unchanged ceiling.
+            d['done'].update({'history-%d' % n: {'operation': 'set-members', 'list': 'a',
+                                                 'movies': ['m1']} for n in range(63)})
+            self.journal.save(d)
+        done = self.stored()['done']
+        intent = self.intent('set-members', 'a', movies=['m2'])
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Journal request limit reached'):
+            self.operator.set_members('new', 'a', ['m2'], intent)
+        self.assertEqual(self.operator.set_members('history-0', 'a', ['m1']),
+                         {'state': 'replayed', 'writes': 0})
+        self.assertEqual(self.operator.create_list('create-a', 'a', 'A', ['m1']),
+                         {'state': 'replayed', 'writes': 0})
+        shown = self.operator.show()
+        self.assertEqual((shown['done_count'], shown['done_limit'], shown['keys_exhausted']),
+                         (64, 64, True))
+        self.assertEqual(self.stored()['done'], done)
+
+    def test_empty_membership_is_retained_and_noops_write_nothing(self):
+        self.assertEqual(self.do('create-list', 'create-e', 'e', title='Empty',
+                                 movies=[])['writes'], 4)
+        pid = self.pid('e')
+        self.assertEqual(self.backend.items[pid]['entries'], [])
+        self.assertEqual(self.do('set-members', 'fill', 'e', movies=['m1', 'm2'])['writes'], 1)
+        self.assertEqual(self.do('set-members', 'same', 'e', movies=['m1', 'm2'])['writes'], 0)
+        self.assertEqual(self.do('set-members', 'empty', 'e', movies=[])['writes'], 1)
+        self.assertEqual(self.do('set-members', 'empty-again', 'e', movies=[])['writes'], 0)
+        self.assertEqual(self.do('set-title', 'same-title', 'e', title='Empty')['writes'], 0)
+        self.assertEqual((self.pid('e'), self.backend.items[pid]['entries']), (pid, []))
+        self.assertEqual([w[0] for w in self.backend.writes],
+                         ['create', 'share', 'row', 'display-title', 'add', 'clear'])
+
+    def test_detached_list_stays_manageable_and_title_needs_row(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.do('detach-row', 'detach', 'a')
+        self.assertEqual(self.stored()['lists']['a'], {'row': None, 'display_title': 'A'})
+        self.fresh_session()
+        for operation, args in (('set-title', {'title': 'B'}), ('detach-row', {})):
+            with self.assertRaises(Refused):
+                self.operator.list_preview(operation, 'a', **args)
+        self.assertEqual(self.do('set-members', 'members', 'a', movies=['m2'])['writes'], 2)
+        self.assertEqual(self.do('attach-row', 'attach', 'a', title='B')['writes'], 2)
+        self.assertEqual(self.backend.home[-1]['CustomName'], 'B')
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'already attached'):
+            self.operator.list_preview('attach-row', 'a', title='C')
+
+    def test_fresh_journal_is_v2_and_downgrade_is_lossless_or_refused(self):
+        self.do('create-list', 'create-other', 'other', title='Other', movies=['m1'])
+        self.assertEqual(self.stored()['version'], 2)
+        self.do('create-list', 'create-legacy', 'igor-movies', title='Legacy', movies=['m2'])
+        self.do('delete-list', 'delete-other', 'other')
+        self.do('detach-row', 'detach-legacy', 'igor-movies')
+        self.do('attach-row', 'attach-legacy', 'igor-movies', title='Legacy')
+        v2 = self.stored()
+        self.fresh_session()
+        inverse = self.operator.downgrade_preview()
+        self.fresh_session()
+        self.assertEqual(self.operator.downgrade('downgrade', inverse['intent_digest'])['state'],
+                         'downgraded')
+        self.assertEqual(self.stored(), dict(
+            version=1, scope=dict(v2['scope'], recipe='igor-movies'), baseline=v2['baseline'],
+            current=v2['current'], row=v2['lists']['igor-movies']['row'], display_title='Legacy',
+            pending=None, run=None, done=v2['done']))
+        self.fresh_session()
+        shown = self.operator.show()
+        self.assertEqual((shown['display_title'], shown['done_count']), ('Legacy', 5))
+        # Version 2 keys stay reserved under version 1; they never replay as v1 work.
+        for key, movies in (('create-other', ['m1']), ('create-legacy', ['m2'])):
+            with self.assertRaisesRegex(Refused, 'Idempotency key reused'):
+                self.operator.apply(key, movies)
+        self.assertEqual(self.v1_apply('v1-update', ['m3'])['state'], 'applied')
+
+    def test_downgrade_refuses_extra_foreign_or_detached_lists(self):
+        self.do('create-list', 'create-other', 'other', title='Other', movies=['m1'])
+        for setup in (lambda: None,
+                      lambda: self.do('create-list', 'create-legacy', 'igor-movies',
+                                      title='Legacy', movies=['m2']),
+                      lambda: (self.do('delete-list', 'delete-other', 'other'),
+                               self.do('detach-row', 'detach-legacy', 'igor-movies'))):
+            setup()
+            before = self.bytes()
+            self.fresh_session()
+            with self.assertRaisesRegex(Refused, 'Downgrade requires'):
+                self.operator.downgrade_preview()
+            self.assertEqual(self.bytes(), before)
+
+
+class ListEntryTests(unittest.TestCase):
+    def test_entry_routes_list_and_migration_requests_with_exact_fields(self):
+        from unittest.mock import MagicMock
+        entry = EntryTests().entry()
+        good = [('list-preview', {'operation': 'set-title', 'list': 'a', 'title': 'T'}),
+                ('list-preview', {'operation': 'detach-row', 'list': 'a'}),
+                ('create-list', {'key': 'k', 'list': 'a', 'title': 'T', 'movies': [],
+                                 'intent_digest': 'd'}),
+                ('set-members', {'key': 'k', 'list': 'a', 'movies': ['m1'], 'intent_digest': 'd'}),
+                ('set-title', {'key': 'k', 'list': 'a', 'title': 'T', 'intent_digest': 'd'}),
+                ('detach-row', {'key': 'k', 'list': 'a', 'intent_digest': 'd'}),
+                ('attach-row', {'key': 'k', 'list': 'a', 'title': 'T', 'intent_digest': 'd'}),
+                ('delete-list', {'key': 'k', 'list': 'a', 'intent_digest': 'd'}),
+                ('show', {'list': 'a'}), ('migrate-preview', {}), ('downgrade-preview', {}),
+                ('migrate', {'key': 'k', 'intent_digest': 'd'}),
+                ('downgrade', {'key': 'k', 'intent_digest': 'd'})]
+        bad = [('list-preview', {'operation': 'set-title', 'list': 'a'}),
+               ('list-preview', {'operation': ['set-title'], 'list': 'a', 'title': 'T'}),
+               ('list-preview', {'operation': 'apply', 'list': 'a', 'movies': ['m1']}),
+               ('create-list', {'key': 'k', 'list': 'a', 'title': 'T', 'movies': [],
+                                'baseline_digest': 'd'}),
+               ('set-members', {'key': 'k', 'list': 'a', 'movies': ['m1']}),
+               ('show', {'list': 'a', 'key': 'k'}),
+               ('migrate', {'key': 'k', 'baseline_digest': 'd'})]
+        for operation, request in good + bad:
+            with self.subTest(operation=operation, request=request):
+                api, operator = MagicMock(), MagicMock()
+                method = getattr(operator, operation.replace('-', '_'))
+                method.return_value = {'state': 'synthetic-success'}
+                with patch.object(entry, 'load_config', return_value=config()), \
+                     patch.object(entry, 'private_read', return_value=json.dumps(request)), \
+                     patch.object(entry, 'load_credentials', return_value={
+                         'username': 'synthetic', 'password': 'synthetic'}) as credentials, \
+                     patch.object(entry, 'Journal', return_value=MagicMock()), \
+                     patch.object(entry, 'OperatorAdapter', return_value=api), \
+                     patch.object(entry, 'Operator', return_value=operator), \
+                     contextlib.redirect_stdout(io.StringIO()), \
+                     contextlib.redirect_stderr(io.StringIO()) as errors:
+                    code = entry.main(['--config', '/synthetic/config', operation,
+                                       '--request-file', '/synthetic/request'])
+                if (operation, request) in good:
+                    self.assertEqual(code, 0)
+                    method.assert_called_once_with(**request)
+                else:
+                    self.assertEqual(code, 2)
+                    self.assertIn('Invalid operator request fields', errors.getvalue())
+                    credentials.assert_not_called()
+                    method.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
