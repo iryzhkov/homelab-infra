@@ -69,6 +69,7 @@ Protected request shapes:
 | apply | `key`, `movies`, `baseline_digest` from a fresh preview |
 | remove | `key`, `baseline_digest` from a fresh preview |
 | reconcile | Empty object, or no request file |
+| show | Empty object, or no request file; configured journal-owned set only |
 
 ## Identity, provenance and managed grant semantics
 
@@ -90,7 +91,18 @@ journal scope before using provenance. No method accepts an arbitrary owned-ID
 adoption instruction. Initially an existing exact marker refuses. Only an already
 durable pending create with an empty playlist precondition may reconcile one
 unique typed exact marker from the verified actor's complete playlist namespace.
-Saved IDs bind subsequent operations, including read-only reconciliation. Renamed,
+Saved IDs bind subsequent operations, including read-only reconciliation and show.
+The optional protected v1 journal field `display_title` is the expected playlist
+Name and row CustomName. Its default is the scope-derived marker for existing
+journals. Reads never insert it, migrate snapshots, save the journal or adopt an
+object. The normalized playlist shape and legacy snapshot digests stay unchanged.
+The marker remains scope-derived and is never inferred from the display title.
+After creation, lookup selects the exact saved ID and checks its expected display
+title in both discovery and exact read. A second exact-marker object still refuses.
+Before creation or during pending create, unique exact-marker discovery remains
+required. This foundation dispatches no title change. Creating a new playlist
+requires the default marker title; a future rename implementation must explicitly
+define title reset on remove/recreate. Manually renamed,
 deleted or substituted objects refuse, except exact disappearance after pending
 delete is a candidate postcondition for the core to compare against full state.
 There is no name-only adoption, including after journal loss.
@@ -103,7 +115,7 @@ to an empty object. Nonempty, missing or additional query fields are preserved
 and remain part of drift checks. Playlist discovery reads the actor Items
 namespace, recursively typed Playlist, StartIndex=0, Limit=129, refusing above 128,
 truncation, duplicate IDs, non-Playlist DTOs and ambiguous markers. Exact item read
-must match saved/discovered ID, Type=Playlist, marker Name and CanEditItems=true.
+must match saved/discovered ID, Type=Playlist, expected display Name and CanEditItems=true.
 For a separate recipient it also requires CanManageAccess=true; for the actor's
 own homepage it instead requires CanDelete=true. These positive booleans prove
 the capabilities actually needed for that lifecycle. They do not
@@ -139,9 +151,9 @@ unconditional false-ready gate remains.
 
 ## Mutation and recovery behavior
 
-The core public interface and lifecycle state machine remain unchanged. The only
-core implementation change is journal custody. Each mutation requires the existing
-durable pending intent, exact operation and arguments, journal scope, fresh admin
+The existing mutation and reconcile lifecycle remains unchanged. Show adds a
+read-only public operation; journal custody is unchanged. Each mutation requires
+the existing durable pending intent, exact operation and arguments, journal scope, fresh admin
 identity and a fresh complete snapshot equal to both pending.before and current.
 Exact saved playlist ID and marker must match. No arbitrary delete/adopt interface
 or raw route CLI exists. No mutation response supplies trusted state; the next
@@ -166,6 +178,21 @@ a blocked read can finish up to one socket timeout later. Partial Content-Length
 nonfinite/duplicate-key JSON, transport errors and unexpected statuses refuse
 without echoing body or credential data.
 
+Show takes no playlist ID or other selector. It returns at most one configured
+journal-owned playlist with exact ID, owner provenance, managed access and ordered
+Movie/occurrence IDs. It includes immutable scope/marker, expected display_title,
+saved row ID and row object, observed rows referencing the playlist, current
+snapshot `revision` digest, `journal_digest`, pending operation, unfinished request
+key, completion count and reconcile state. Output is detached and stays in
+operator custody. Bounds remain one playlist, 25 occurrences, 100 Home rows and
+the existing bounded transport. Truncation refuses rather than returning partial
+success. With no journal and no owned objects, show returns an empty set without
+creating a journal. Unexplained marker objects refuse. Manual state drift refuses;
+pending state is returned only when the observed snapshot equals the complete
+saved precondition or exact postcondition. It never retries, saves or adopts.
+Reconcile retains its existing clean/drift/observed-applied/unresolved behavior.
+Authentication still sends its required POST; show itself performs GETs only.
+
 Preview validates current identity, Movies and snapshot, returning its digest.
 Apply requires that digest for a new key; replay of a completed identical key makes
 zero writes. A changed request under the same key refuses. At most 64 completion
@@ -179,6 +206,10 @@ attempt, it raises NotDispatched. The core durably clears only that pending step
 and keeps the same unfinished request. A fresh invocation can resume after full
 identity, visibility and snapshot revalidation. Once the mutation transport is
 attempted, all failures remain uncertain, even if the response suggests no change.
+
+Operator requests still reject duplicate Movie IDs. Intentional repeats are not
+delivered through this operator; default-off CLI source does not change that.
+Sharing and independent Home lifecycle changes remain outside this batch.
 
 Updates clear exact current occurrences and add the validated desired sequence;
 the Home row stays stable. Removal deletes only the saved row and playlist and
@@ -207,10 +238,11 @@ not a test result for this batch. Global key remains unsupported.
 
 Parent imports the adapter, entry, core replacement and new adapter tests under
 scripts/, and this replacement document under docs/, using guarded Huyang edits.
-Keep the original 13 core tests unchanged; an identical reference copy is supplied.
+Preserve the existing core tests and import the added show regressions with them.
 Keep the parent's existing CI delta and read-only ownership tests. Bind one Journal
-instance to both adapter and Operator exactly as the entry does. No other core
-contract, fake method signature, CI or MCP change is required.
+instance to both adapter and Operator exactly as the entry does. The normalized
+core snapshot and fake method signatures stay unchanged. No CI or MCP change is
+included.
 
 Parent runs the final coherent batch through Chaldea, never locally. In the job set
 HOME exactly to `$PWD/.cache/holonet-operator-tests/home`, TMPDIR to `$HOME/tmp`,

@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 
 from functools import wraps
-from emby_operator_recommendations import NotDispatched, Refused, require, movie_ids, opaque, row_id, digest
+from emby_operator_recommendations import NotDispatched, Refused, require, movie_ids, opaque, row_id, digest, display_title
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_BODY = 16 * 1024
@@ -330,6 +330,7 @@ class OperatorAdapter:
         if d is not None:
             require(type(d) is dict and d.get('version') == 1 and d.get('scope') == scope,
                     'Foreign journal provenance')
+        display_title(d, expected_marker)
         return d, expected_marker
 
     def snapshot(self, recipient, marker):
@@ -349,6 +350,7 @@ class OperatorAdapter:
         require(len(seen) == len(set(seen)), 'Duplicate discovered ID')
         matches = [r for r in rows if r['Name'] == marker]
         require(len(matches) <= 1, 'Ambiguous marker discovery')
+        title = display_title(d, marker)
         pending = d.get('pending') if d else None
         known = d['current']['playlists'] if d else []
         require(len(known) <= 1, 'Ambiguous saved ID')
@@ -361,9 +363,14 @@ class OperatorAdapter:
                 require(pending and pending['operation'] == 'delete' and not matches,
                         'Saved playlist disappeared')
                 return {'home': home, 'playlists': []}
-            require(len(matches) == 1 and matches[0]['Id'] == saved['id'],
+            require(exact[0]['Name'] == title and
+                    all(r['Id'] == saved['id'] for r in matches),
                     'Saved playlist renamed or substituted')
+            # Once created, protected provenance and the exact ID own discovery.
+            # A display title never establishes ownership.
+            matches = exact
         elif matches:
+            require(title == marker, 'Pending create display title changed')
             require(pending and pending['operation'] == 'create' and
                     pending['before']['playlists'] == [] and d.get('run'),
                     'Unexplained existing marker playlist')
@@ -375,7 +382,7 @@ class OperatorAdapter:
         self._routes.update({('GET', path), ('GET', members_path)})
         item = self._http('GET', path, {'Fields': 'ShareLevel', 'EnableUserData': 'false'})
         require(type(item) is dict and item.get('Id') == pid and
-                item.get('Type') == 'Playlist' and item.get('Name') == marker and
+                item.get('Type') == 'Playlist' and item.get('Name') == title and
                 item.get('CanEditItems') is True and
                 (item.get('CanDelete') is True if c['actor'] == recipient else
                  item.get('CanManageAccess') is True),
@@ -431,7 +438,9 @@ class OperatorAdapter:
     def create_playlist(self, actor, marker):
         require(actor == self._config['actor'], 'Foreign creator')
         current, expected = self._intent('create', None)
-        require(marker == expected and not current['playlists'], 'Existing or foreign playlist')
+        d, _ = self._state()
+        require(marker == expected and display_title(d, expected) == expected and
+                not current['playlists'], 'Existing or foreign playlist/title')
         self._post('/Playlists', query={'Name': marker, 'userId': actor})
 
     @mutation_dispatch
@@ -449,8 +458,11 @@ class OperatorAdapter:
                 'Foreign row request')
         current, marker = self._owned('row', body, body.get('ParentId'))
         # Core owns the exact template; intent and complete baseline bind every field.
-        require(body.get('SectionType') == 'playlist' and body.get('CustomName') == marker and
-                not any(r.get('CustomName') == marker for r in current['home']), 'Foreign row marker')
+        d, _ = self._state()
+        title = display_title(d, marker)
+        require(body.get('SectionType') == 'playlist' and body.get('CustomName') == title and
+                not any(r.get('CustomName') in (marker, title)
+                        for r in current['home']), 'Foreign row marker')
         self._post('/Users/' + recipient + '/HomeSections', body=body)
 
     @mutation_dispatch
@@ -478,7 +490,7 @@ class OperatorAdapter:
         d, _ = self._state()
         matches = [r for r in current['home'] if row_id(r['Id']) == row_id(row)]
         require(d['row'] == row and len(matches) == 1 and len(current['playlists']) == 1 and
-                matches[0].get('CustomName') == marker and
+                matches[0].get('CustomName') == display_title(d, marker) and
                 matches[0].get('SectionType') == 'playlist' and
                 matches[0].get('ParentId') == current['playlists'][0]['id'], 'Foreign saved row')
         self._post('/Users/' + recipient + '/HomeSections/Delete', body={'ids': [row]})
@@ -489,6 +501,7 @@ class OperatorAdapter:
         current, expected = self._owned('delete', None, playlist)
         d, _ = self._state()
         require(marker == expected and d['row'] is None and
-                not any(r.get('ParentId') == playlist or r.get('CustomName') == marker
+                not any(r.get('ParentId') == playlist or
+                        r.get('CustomName') in (marker, display_title(d, marker))
                         for r in current['home']), 'Playlist still referenced')
         self._post('/Items/Delete', query={'Ids': playlist})

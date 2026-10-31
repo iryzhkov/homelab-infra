@@ -472,6 +472,152 @@ class LifecycleHTTPTests(unittest.TestCase):
         p = self.operator.preview(movies)
         return self.operator.apply(key, movies, p['baseline_digest'])
 
+    def test_show_retained_v1_real_adapter_held_lock_final_readback(self):
+        self.apply(movies=['m2', 'm1'])
+        before = (self.directory / 'journal.json').read_bytes()
+        self.assertNotIn('display_title', json.loads(before))
+        self.fresh_session()
+        offset = len(self.http.calls)
+        result = self.operator.show()
+        self.assertEqual([e['movie'] for e in result['playlists'][0]['entries']], ['m2', 'm1'])
+        self.assertEqual(result['playlists'][0]['id'], 'p1')
+        self.assertEqual(result['row']['saved_id'], self.backend.home[-1]['Id'])
+        self.assertEqual(result['row']['saved']['ParentId'], 'p1')
+        self.assertEqual(result['display_title'], self.operator.marker)
+        self.assertEqual(result['reconcile'], {'state': 'clean'})
+        with self.journal.locked():
+            final = self.api.snapshot(R, self.operator.marker)
+        self.assertEqual(result['revision'], digest(final))
+        self.assertEqual(result['playlists'], final['playlists'])
+        self.assertTrue(all(c[0] == 'GET' for c in self.http.calls[offset:]))
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        with self.assertRaisesRegex(Refused, 'Held core journal lock required'):
+            self.api.snapshot(R, self.operator.marker)
+
+    def test_show_entry_uses_real_adapter_and_same_journal(self):
+        self.apply()
+        before = (self.directory / 'journal.json').read_bytes()
+        entry = EntryTests().entry()
+        made = []
+        def make_api(c, journal):
+            self.assertIs(journal, self.journal)
+            api = adapter.OperatorAdapter(c, journal)
+            api._opener = self.http
+            made.append(api)
+            return api
+        offset = len(self.http.calls)
+        with patch.object(entry, 'load_config', return_value=config()), \
+             patch.object(entry, 'load_credentials', return_value={'username': 'synthetic', 'password': 'synthetic'}), \
+             patch.object(entry, 'Journal', return_value=self.journal), \
+             patch.object(entry, 'OperatorAdapter', side_effect=make_api), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(entry.main(['--config', '/synthetic/config', 'show']), 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['playlists'][0]['id'], 'p1')
+        # Authentication POST is required; the show itself sends GETs only.
+        self.assertEqual([c[1] for c in self.http.calls[offset:] if c[0] == 'POST'],
+                         ['/emby/Users/AuthenticateByName'])
+        self.assertIsNone(made[0]._token)
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+
+    def test_saved_id_lookup_separates_protected_title_from_marker(self):
+        self.apply()
+        title = 'Igor Movies'
+        # Explicit protected fixture representing a future completed rename.
+        # There is no rename API or adoption/migration write in this batch.
+        with self.journal.locked():
+            d = self.journal.load()
+            d['display_title'] = title
+            d['current']['home'][-1]['CustomName'] = title
+            self.journal.save(d)
+        self.backend.playlists[0]['Name'] = title
+        self.backend.home[-1]['CustomName'] = title
+        before = (self.directory / 'journal.json').read_bytes()
+        self.fresh_session()
+        result = self.operator.show()
+        self.assertEqual(result['display_title'], title)
+        self.assertEqual(result['marker'], self.operator.marker)
+        self.assertEqual(result['playlists'][0]['marker'], self.operator.marker)
+        self.assertEqual(self.operator.reconcile(), {'state': 'clean'})
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.fresh_session()
+        self.assertEqual(self.apply('update-title-fixture', ['m2'])['writes'], 2)
+        preview = self.operator.preview(['m1'])
+        self.assertEqual(self.operator.remove('remove-title-fixture', preview['baseline_digest'])['writes'], 2)
+        self.assertEqual(self.backend.playlists, [])
+        self.assertEqual(self.backend.home, [{'Id': 1, 'Unknown': {'retain': [9]}}])
+
+    def test_show_refuses_name_saved_id_row_membership_and_foreign_marker_drift(self):
+        self.apply()
+        original = copy.deepcopy((self.backend.playlists, self.backend.home, self.backend.entries))
+        before = (self.directory / 'journal.json').read_bytes()
+        for mutate in (lambda: self.backend.playlists[0].update(Name='manual'),
+                       lambda: self.backend.playlists[0].update(Id='foreign'),
+                       lambda: self.backend.playlists.clear(),
+                       lambda: self.backend.home[-1].update(CustomName='manual'),
+                       lambda: self.backend.home[-1].update(ParentId='foreign'),
+                       lambda: self.backend.entries[0].update(PlaylistItemId='manual'),
+                       lambda: self.backend.playlists.append(dict(Id='foreign', Type='Playlist', Name=self.operator.marker))):
+            self.backend.playlists, self.backend.home, self.backend.entries = copy.deepcopy(original)
+            mutate()
+            self.fresh_session()
+            with self.assertRaises(Refused):
+                self.operator.show()
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.assertEqual(len(self.backend.writes), 4)
+
+    def test_show_bounds_exact_dtos_capabilities_and_complete_results(self):
+        self.apply()
+        before = (self.directory / 'journal.json').read_bytes()
+        for bad in ({'Id': 'foreign'}, {'Type': 'Movie'}, {'Name': 'manual'},
+                    {'CanEditItems': False}, {'CanManageAccess': False}):
+            self.backend.bad_item = bad
+            self.fresh_session()
+            with self.assertRaises(Refused):
+                self.operator.show()
+        self.backend.bad_item = {}
+        self.backend.discovery_extra = 1
+        self.fresh_session()
+        with self.assertRaises(Refused):
+            self.operator.show()
+        self.backend.discovery_extra = 0
+        entries = copy.deepcopy(self.backend.entries)
+        self.backend.entries = [dict(Id='m1', Type='Movie', PlaylistItemId='e' + str(i))
+                                for i in range(26)]
+        self.fresh_session()
+        with self.assertRaises(Refused):
+            self.operator.show()
+        self.backend.entries = entries
+        self.backend.home = [dict(Id=i) for i in range(101)]
+        self.fresh_session()
+        with self.assertRaises(Refused):
+            self.operator.show()
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.assertEqual(len(self.backend.writes), 4)
+
+    def test_show_pending_create_and_delete_preserve_v1_journal(self):
+        self.backend.lose = 'create'
+        with self.assertRaises(Refused):
+            self.apply()
+        before = (self.directory / 'journal.json').read_bytes()
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'observed-applied'})
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.backend.lose = None
+        self.operator.apply('first', ['m1'])
+        self.backend.lose = 'delete'
+        self.fresh_session()
+        preview = self.operator.preview(['m1'])
+        with self.assertRaises(Refused):
+            self.operator.remove('remove', preview['baseline_digest'])
+        before = (self.directory / 'journal.json').read_bytes()
+        self.fresh_session()
+        result = self.operator.show()
+        self.assertEqual(result['playlists'], [])
+        self.assertEqual(result['pending'], {'operation': 'delete'})
+        self.assertEqual(result['reconcile'], {'state': 'observed-applied'})
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+
     def test_full_lifecycle_routes_grant_and_exact_inverse(self):
         before = copy.deepcopy(self.backend.home)
         self.assertEqual(self.apply()['writes'], 4)
@@ -702,7 +848,7 @@ class EntryTests(unittest.TestCase):
         from unittest.mock import MagicMock
         cases = [('preview', {'movies': ['m1']}),
                  ('apply', {'key': 'one', 'movies': ['m1'], 'baseline_digest': 'digest'}),
-                 ('remove', {'key': 'two', 'baseline_digest': 'digest'}), ('reconcile', {})]
+                 ('remove', {'key': 'two', 'baseline_digest': 'digest'}), ('reconcile', {}), ('show', {})]
         for operation, request in cases:
             with self.subTest(operation=operation):
                 entry = self.entry()

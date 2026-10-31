@@ -53,6 +53,15 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def display_title(journal, marker):
+    """Optional v1 field. Reading legacy journals never migrates their bytes."""
+    title = journal.get("display_title", marker) if journal is not None else marker
+    require(isinstance(title, str) and 1 <= len(title) <= 256 and
+            all(ord(c) >= 32 and ord(c) != 127 for c in title),
+            "Invalid journal display title")
+    return title
+
+
 class ProtectedAPI(Protocol):
     """All methods use one pinned authenticated admin session; never a global key.
 
@@ -238,10 +247,12 @@ class Operator:
             return dict(version=1, scope=self.scope, baseline=snapshot, current=snapshot,
                         row=None, pending=None, run=None, done={})
         require(d.get("version") == 1 and d.get("scope") == self.scope, "Foreign journal")
+        display_title(d, self.marker)
         return d
 
     def _row_body(self, playlist):
-        return dict(SectionType="playlist", CustomName=self.marker,
+        return dict(SectionType="playlist",
+                    CustomName=display_title(self.journal.load(), self.marker),
                     Subtitle="operator-provisioned", ViewType="cards",
                     DisplayMode="mobile,desktop,tv", ScrollDirection="Horizontal",
                     ImageType="Primary", ParentId=playlist, SortBy=None,
@@ -307,6 +318,37 @@ class Operator:
                     p["before"], s, p["operation"], p["args"]) else "unresolved",
                         "operation": p["operation"]}
             return {"state": "clean" if s == d["current"] else "drift"}
+
+    def show(self):
+        """Read the configured journal-owned set only; never adopt or save."""
+        with self.journal.locked():
+            s = self._read()
+            d = self._load(s)
+            p = d["pending"]
+            if p:
+                applied = self._after(p["before"], s, p["operation"], p["args"])
+                require(applied or s == p["before"] == d["current"], "Manual drift")
+                state = "observed-applied" if applied else "unresolved"
+            else:
+                require(s == d["current"], "Manual drift")
+                state = "clean"
+            require(isinstance(d["done"], dict) and len(d["done"]) <= 64,
+                    "Journal request limit reached")
+            # A pending row create/delete may have been observed but not saved.
+            saved_row = next((r for r in d["current"]["home"]
+                              if d["row"] is not None and
+                              row_id(r["Id"]) == row_id(d["row"])), None)
+            return dict(scope=copy.deepcopy(self.scope), marker=self.marker,
+                        display_title=display_title(d, self.marker),
+                        playlists=copy.deepcopy(s["playlists"]),
+                        row=dict(saved_id=d["row"], saved=copy.deepcopy(saved_row),
+                                 observed=[copy.deepcopy(r) for r in s["home"]
+                                           if s["playlists"] and
+                                           r.get("ParentId") == s["playlists"][0]["id"]]),
+                        revision=digest(s), journal_digest=digest(d),
+                        pending={"operation": p["operation"]} if p else None,
+                        run={"key": d["run"]["key"]} if d["run"] else None,
+                        done_count=len(d["done"]), reconcile={"state": state})
 
     def apply(self, key, movies, baseline_digest=None):
         return self._execute(key, movie_ids(movies), baseline_digest)

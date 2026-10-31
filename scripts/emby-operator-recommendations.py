@@ -12,7 +12,7 @@ from emby_operator_recommendations import Journal, Operator, Refused, require
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, help='Protected root-owned configuration path')
-    parser.add_argument('operation', choices=('preview', 'apply', 'remove', 'reconcile'))
+    parser.add_argument('operation', choices=('preview', 'apply', 'remove', 'reconcile', 'show'))
     parser.add_argument('--request-file', help='Protected JSON request, never credentials in argv')
     args = parser.parse_args(argv)
     api = None
@@ -23,7 +23,7 @@ def main(argv=None):
         request = strict_json(private_read(args.request_file)) if args.request_file else {}
         require(type(request) is dict, 'Invalid operator request')
         fields = {'preview': {'movies'}, 'apply': {'key', 'movies', 'baseline_digest'},
-                  'remove': {'key', 'baseline_digest'}, 'reconcile': set()}
+                  'remove': {'key', 'baseline_digest'}, 'reconcile': set(), 'show': set()}
         require(set(request) == fields[args.operation], 'Invalid operator request fields')
         journal = Journal(config['journal_directory'], root_safe=True)
         api = OperatorAdapter(config, journal)

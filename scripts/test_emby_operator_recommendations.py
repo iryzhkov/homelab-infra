@@ -122,6 +122,74 @@ class OperatorTests(unittest.TestCase):
         self.assertEqual([op for op, _ in self.api.writes],
                          ["create", "share", "row", "add", "clear", "add", "unrow", "delete"])
 
+    def test_show_empty_is_bounded_and_does_not_create_journal(self):
+        result = self.operator.show()
+        self.assertEqual(result['playlists'], [])
+        self.assertEqual(result['row'], dict(saved_id=None, saved=None, observed=[]))
+        self.assertEqual(result['reconcile'], {'state': 'clean'})
+        self.assertFalse((self.directory / 'journal.json').exists())
+        self.assertEqual(self.api.writes, [])
+
+    def test_show_retained_v1_digests_relation_and_detached_occurrences(self):
+        self.apply(movies=['102', '101'])
+        before = (self.directory / 'journal.json').read_bytes()
+        stored = json.loads(before)
+        self.assertNotIn('display_title', stored)
+        writes = copy.deepcopy(self.api.writes)
+        result = self.operator.show()
+        self.assertEqual(result['display_title'], self.operator.marker)
+        self.assertEqual(result['marker'], self.operator.marker)
+        self.assertEqual(result['scope'], SCOPE)
+        self.assertEqual(result['playlists'], stored['current']['playlists'])
+        self.assertEqual(result['row']['saved_id'], 2)
+        self.assertEqual(result['row']['saved']['ParentId'], '900')
+        self.assertEqual(result['row']['observed'], [stored['current']['home'][-1]])
+        self.assertEqual(result['revision'], digest(stored['current']))
+        self.assertEqual(result['journal_digest'], digest(stored))
+        self.assertIsNone(result['pending'])
+        self.assertIsNone(result['run'])
+        self.assertEqual(result['done_count'], 1)
+        result['playlists'][0]['entries'].clear()
+        self.assertEqual(len(self.api.playlists[0]['entries']), 2)
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.assertEqual(self.api.writes, writes)
+
+    def test_show_pending_create_before_after_without_adoption_or_journal_write(self):
+        self.api.fail_before = 'create'
+        with self.assertRaises(TimeoutError):
+            self.apply()
+        before = (self.directory / 'journal.json').read_bytes()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'unresolved'})
+        self.api.fail_before = None
+        # Model the previously uncertain create taking effect, never dispatch it again.
+        self.api.playlists = [dict(id='900', marker=self.operator.marker,
+                                  owner=ACTOR, access=[], entries=[])]
+        result = self.operator.show()
+        self.assertEqual(result['reconcile'], {'state': 'observed-applied'})
+        self.assertEqual(result['pending'], {'operation': 'create'})
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.assertEqual(len(self.api.writes), 1)
+        self.api.home[0]['manual'] = True
+        with self.assertRaises(Refused):
+            self.operator.show()
+
+    def test_show_refuses_manual_state_and_foreign_identity(self):
+        self.apply()
+        before = (self.directory / 'journal.json').read_bytes()
+        current = copy.deepcopy((self.api.home, self.api.playlists))
+        for mutate in (lambda: self.api.playlists[0].update(id='foreign'),
+                       lambda: self.api.playlists[0].update(marker='foreign'),
+                       lambda: self.api.playlists[0].update(owner=IGOR),
+                       lambda: self.api.home[-1].update(CustomName='manual'),
+                       lambda: self.api.playlists[0]['entries'][0].update(entry='manual'),
+                       lambda: self.api.playlists.append(copy.deepcopy(self.api.playlists[0]))):
+            self.api.home, self.api.playlists = copy.deepcopy(current)
+            mutate()
+            with self.assertRaises(Refused):
+                self.operator.show()
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.assertEqual(len(self.api.writes), 4)
+
     def test_identity_refusals_before_writes(self):
         for field, value in [("is_admin", False), ("verified", False), ("actor", "d" * 32),
                              ("server", "d" * 32), ("recipient", "d" * 32),
