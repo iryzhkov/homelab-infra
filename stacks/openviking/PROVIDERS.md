@@ -30,9 +30,10 @@ openviking_local_release:
 
 These provenance fields identify the existing Chaldea assembly job, returned
 candidate-patch.tar and custody.json, as independently checked in
-user-session-followup-20261030/backend-personal-assembly-evidence. They are closed receipt bindings,
+/home/igor/.cache/ov-curator-20261030/backend-artifact-01 and
+backend-image-stage-01. They are closed receipt bindings,
 not a new URL, registry publication or credential flow. The measured distribution
-manifest b51752ce50eb60bcef38fe7ebf6aeb9579a8ba6bc6c9a7362d04d882527aec0b
+manifest 728ad26f5a5db34619943a3cb0fadb63dc5e10fa165dc8bbfb66f47d23f61a6b
 has no established registry location and is not used as one.
 
 Before any stack-directory, secret, pin-label or preparation write, the existing
