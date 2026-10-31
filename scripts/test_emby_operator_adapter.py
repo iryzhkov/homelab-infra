@@ -975,12 +975,16 @@ class LifecycleHTTPTests(unittest.TestCase):
 
     def test_display_title_remove_recreate_resets_expectations(self):
         self.apply()
+        self.fresh_session()
         self.title()
+        self.fresh_session()
         self.assertEqual(self.apply('update', ['m2'])['writes'], 2)
         self.assertEqual(self.operator.show()['display_title'], 'Movies for Igor')
+        self.fresh_session()
         p = self.operator.preview(['m1'])
         self.operator.remove('remove', p['baseline_digest'])
         self.assertEqual(self.operator.show()['display_title'], self.operator.marker)
+        self.fresh_session()
         self.assertEqual(self.apply('recreate')['writes'], 4)
         result = self.operator.show()
         self.assertEqual(result['playlist_name'], self.operator.marker)
