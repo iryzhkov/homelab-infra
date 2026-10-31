@@ -376,18 +376,24 @@ class OperatorAdapter:
         item = self._http('GET', path, {'Fields': 'ShareLevel', 'EnableUserData': 'false'})
         require(type(item) is dict and item.get('Id') == pid and
                 item.get('Type') == 'Playlist' and item.get('Name') == marker and
-                item.get('CanManageAccess') is True and item.get('CanEditItems') is True,
+                item.get('CanEditItems') is True and
+                (item.get('CanDelete') is True if c['actor'] == recipient else
+                 item.get('CanManageAccess') is True),
                 'Playlist identity or edit capability drift')
-        # This is only the managed recipient grant, not the complete effective ACL.
-        access = complete(self._http('GET', '/Users/ItemAccess', {'ItemId': pid}), 100)
-        ids = [r.get('Id') for r in access]
-        require(all(isinstance(i, str) and re.fullmatch('[0-9a-f]{32}', i) for i in ids)
-                and len(ids) == len(set(ids)) and
-                all(r.get('ServerId') == c['server'] for r in access), 'Invalid access candidates')
-        grants = [r for r in access if r['Id'] == recipient]
-        allowed_grants = ('ManageDelete',) if c['actor'] == recipient else ('None', 'Read')
-        require(len(grants) == 1 and grants[0].get('UserItemShareLevel') in allowed_grants,
-                'Missing or unexpected managed recipient grant')
+        # Self access is proven by explicit edit/delete capabilities plus the
+        # protected creation provenance above. Access candidates may omit self.
+        managed_access = [recipient]
+        if c['actor'] != recipient:
+            # Only this managed recipient grant, not a complete effective ACL.
+            access = complete(self._http('GET', '/Users/ItemAccess', {'ItemId': pid}), 100)
+            ids = [r.get('Id') for r in access]
+            require(all(isinstance(i, str) and re.fullmatch('[0-9a-f]{32}', i) for i in ids)
+                    and len(ids) == len(set(ids)) and
+                    all(r.get('ServerId') == c['server'] for r in access), 'Invalid access candidates')
+            grants = [r for r in access if r['Id'] == recipient]
+            require(len(grants) == 1 and grants[0].get('UserItemShareLevel') in ('None', 'Read'),
+                    'Missing or unexpected managed recipient grant')
+            managed_access = [recipient] if grants[0]['UserItemShareLevel'] == 'Read' else []
         entries = complete(self._http('GET', members_path, {
             'UserId': c['actor'], 'StartIndex': 0, 'Limit': 26,
             'EnableUserData': 'false'}), 25)
@@ -399,7 +405,7 @@ class OperatorAdapter:
             normalized.append({'movie': opaque(e.get('Id')), 'entry': occurrence})
         require(len(occurrence_ids) == len(set(occurrence_ids)), 'Duplicate occurrence ID')
         return {'home': home, 'playlists': [{'id': pid, 'marker': marker,
-            'owner': c['actor'], 'access': [recipient] if c['actor'] == recipient or grants[0]['UserItemShareLevel'] == 'Read' else [],
+            'owner': c['actor'], 'access': managed_access,
             'entries': normalized}]}
 
     def _intent(self, operation, args):

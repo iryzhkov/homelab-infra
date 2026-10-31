@@ -45,7 +45,7 @@ Config has exactly these fields:
 | --- | --- |
 | enabled | Explicit boolean enable flag. False refuses before authentication. |
 | origin | Pinned existing HTTPS origin, no path/query/fragment/userinfo, default HTTPS port only. Fixed API prefix `/emby`. |
-| server, actor, recipient | Lowercase 32-hex exact IDs. Actor is the administrative creator. It may equal Igor for an operator managing its own homepage. In that case the adapter requires the intrinsic ManageDelete rank and skips sharing entirely, preserving management rights; a separate recipient still requires the explicit None/Read grant. |
+| server, actor, recipient | Lowercase 32-hex exact IDs. Actor is the administrative creator. It may equal Igor for an operator managing its own homepage. In that case the adapter requires explicit CanEditItems=true and CanDelete=true plus journal creation provenance and skips sharing entirely, preserving management rights; a separate recipient still requires the explicit None/Read grant. |
 | library | Actual Movies item ID, bounded opaque string. |
 | library_guid | Independently pinned virtual-folder GUID, exact lowercase 32-hex returned representation. A different representation refuses locally for qualification. |
 | recipe | Immutable bounded opaque recipe ID. |
@@ -103,8 +103,10 @@ to an empty object. Nonempty, missing or additional query fields are preserved
 and remain part of drift checks. Playlist discovery reads the actor Items
 namespace, recursively typed Playlist, StartIndex=0, Limit=129, refusing above 128,
 truncation, duplicate IDs, non-Playlist DTOs and ambiguous markers. Exact item read
-must match saved/discovered ID, Type=Playlist, marker Name, CanManageAccess=true
-and CanEditItems=true. These booleans prove current actor capability. They do not
+must match saved/discovered ID, Type=Playlist, marker Name and CanEditItems=true.
+For a separate recipient it also requires CanManageAccess=true; for the actor's
+own homepage it instead requires CanDelete=true. These positive booleans prove
+the capabilities actually needed for that lifecycle. They do not
 prove exclusive ownership. Opaque IDs are URL-safe bounded ASCII strings.
 
 Normalized playlist shape is unchanged:
@@ -118,7 +120,11 @@ Normalized playlist shape is unchanged:
 Here `owner` means operation provenance from the protected creation journal and
 its actor binding. It is not a backend assertion that ManageDelete is exclusive
 ownership. `access` means only the managed Igor grant, not the complete effective
-ACL. GET `/Users/ItemAccess?ItemId=...` must return complete Items/TotalRecordCount,
+ACL. For the same actor and recipient, positive edit/delete capabilities plus
+creation provenance normalize availability to `[Igor]`; the sharing-candidate API
+can omit self and is not queried. No exclusive ownership or missing-field
+permission is inferred. For a separate recipient, GET
+`/Users/ItemAccess?ItemId=...` must return complete Items/TotalRecordCount,
 unique exact user IDs and pinned ServerId. Igor must appear exactly once with
 UserItemShareLevel string `None` or `Read`. Missing Igor, malformed or other Igor
 ranks refuse. `Read` normalizes to `[Igor]`, `None` to `[]`. Other candidates/grants

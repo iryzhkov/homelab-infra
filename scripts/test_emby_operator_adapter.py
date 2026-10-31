@@ -389,7 +389,8 @@ class SyntheticBackend:
             if path == '/Users/' + A + '/Items/p1':
                 if not self.playlists:
                     return (404, {})
-                return dict(self.playlists[0], CanManageAccess=True, CanEditItems=True) | self.bad_item
+                capabilities = dict(CanEditItems=True, CanDelete=True) if A == R else dict(CanManageAccess=True, CanEditItems=True)
+                return dict(self.playlists[0], **capabilities) | self.bad_item
             if path == '/Users/ItemAccess':
                 assert q == {'ItemId': ['p1']}
                 return self.envelope([{'Id': A, 'ServerId': S, 'UserItemShareLevel': 'ManageDelete'},
@@ -496,26 +497,23 @@ class LifecycleHTTPTests(unittest.TestCase):
             self.assertEqual(self.apply()['writes'], 3)
             self.assertNotIn('share', [w[0] for w in self.backend.writes])
             self.assertEqual(self.backend.grant, 'None')
+            self.assertFalse(any('/Users/ItemAccess?' in call[1] for call in self.http.calls))
             p = self.operator.preview(['m1'])
             self.assertEqual(self.operator.remove('self-remove', p['baseline_digest'])['writes'], 2)
             self.assertEqual(self.backend.playlists, [])
             self.assertEqual(self.backend.home, [{'Id': 1, 'Unknown': {'retain': [9]}}])
 
-    def test_admin_own_home_requires_intrinsic_manage_delete(self):
+    def test_admin_own_home_requires_explicit_edit_delete_capabilities(self):
         with patch(__name__ + '.R', A):
             self.fresh_session()
             self.apply()
-            original = self.backend.respond
-            def lowered(call):
-                result = original(call)
-                if '/Users/ItemAccess?' in call[1]:
-                    result['Items'][0]['UserItemShareLevel'] = 'Read'
-                return result
-            self.http.responder = lowered
             before = len(self.backend.writes)
-            with self.assertRaises(Refused):
-                self.operator.preview(['m1'])
-            self.assertEqual(len(self.backend.writes), before)
+            for key in ('CanDelete', 'CanEditItems'):
+                for value in (False, None, 1, 'true'):
+                    self.backend.bad_item = {key: value}
+                    with self.assertRaises(Refused):
+                        self.operator.preview(['m1'])
+                    self.assertEqual(len(self.backend.writes), before)
 
     def test_read_grant_normalization_is_not_an_acl_privacy_claim(self):
         self.apply()
