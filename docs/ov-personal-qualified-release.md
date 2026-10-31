@@ -1,5 +1,9 @@
 # OV personal qualified release
 
+The resource-snapshot repair supersedes this backend image selection; see
+[the current backend binding](ov-curator-backend-qualified-release.md).
+The qualified personal protocol and HTTP owner/profile configuration are retained.
+
 Historical source-binding record. The HTTP image selection below is superseded
 by the current [exact local binding](ov-http-compose.md#explicit-local-config-identity).
 Its source-only status and planned procedure do not record a live activation.
