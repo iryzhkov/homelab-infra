@@ -384,10 +384,10 @@ OV_FULL_CONFIG = {
 # One measured HTTP release. This is a Docker config ID, not a registry manifest.
 OV_LOCAL_RELEASE = {
     "kind": "local-config",
-    "reference": "sha256:d0becf6bb837b168fd4fbd47458865b1226df918aa848deae6cf7da59b535605",
-    "source_revision": "cc308e890ff1bba98aaf7954557969d109f5755d",
+    "reference": "sha256:ce94410e1002fbaaa6fd9f06dd0e3bf90ed7db6e98cb8515f01b189e5c80a696",
+    "source_revision": "7d833b8d51b2d8074be1ef376140cd08a9190a9d",
     "contract_revision": OV_FULL_CONTRACT,
-    "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/41195885426",
+    "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/41204069205",
 }
 
 
