@@ -54,15 +54,15 @@ That release qualified resource snapshots containing a relations sidecar.
 
 ## Preserved personal contract and runtime gates
 
-The HTTP selection remains config ID
-sha256:95cdf45c81564bb231c0c92088ab2d78272f59cb9aa648c60c0bf258d53e36d6,
-source d171897f64a839772686c9f6a3b07cfa9900cbf2, as documented by the
+The HTTP selection is config ID
+sha256:324b4da5f9aab84f55b517eed9ab4394aca61c92e382583005f4fdd2002126ee,
+source b8e678ae07fba3ec49ee142589ea9b61a22f6853, as documented by the
 [current HTTP binding](ov-http-compose.md#explicit-local-config-identity).
 The configured personal protocol pin remains
-7f3faf6982f81116d6626bc7091f87f786a309c7. The selected backend retains those
-personal files byte-for-byte. The HTTP exact-directory and typed-stat release
-is being prepared separately for the same combined infrastructure PR.
-No unbuilt HTTP identity is selected here.
+7f3faf6982f81116d6626bc7091f87f786a309c7. It is a protocol pin, not the
+deployed backend identity. The selected backend retains those personal files
+byte-for-byte. Both artifact bindings belong to the
+[combined release](ov-exact-directory-release.md).
 
 Root must verify artifact custody and image-only target loading, review the
 owning backend CHECK, then perform authorized ordinary Swarm convergence and an
