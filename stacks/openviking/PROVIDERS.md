@@ -6,7 +6,7 @@ OV 0.5.2 linux/amd64 image,
 The 2026-10-29 transition inventory predates the completed custom-backend
 cutover. Homelab now selects the closed local release below; the upstream image
 remains the default for unselected hosts. The successor release and its activation
-hold are documented in docs/ov-curator-backend-qualified-release.md. This directory
+hold are documented in docs/ov-verified-ack-release.md. This directory
 contains no server or tenant keys.
 
 ## Closed local backend release
@@ -19,24 +19,25 @@ variable does not persist the choice for future routine convergence.
 ```yaml
 openviking_local_release:
   kind: local-config
-  reference: sha256:1e3b1d3f2f56df027754ab9f090eb6b74c760c0978e95d0c9e313a09a2b0e963
-  source_revision: 625cdec406678fcb176060fc5c331e0f07726108
+  reference: sha256:48b046b5c2b43814fb091a1fa2cf60920af07f443679960a60e4e826b0a68576
+  source_revision: e60c92e22ac924a864a5a3c7699538ff8955fb36
   native_sha256: 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
   provenance:
-    assembly_job: 617351b9-b830-4457-aee3-5cbb94ba9eb7
-    archive_sha256: 46bdfc39ddce4d337c43f57e5668adcc96d0204869abf484c0324645ff86fafa
-    custody_sha256: e214e006bef6530409ce71d6ceb7e6bfd0d203196db3ba342a7552d66da1bfce
+    assembly_job: 69566baa-db8e-4428-8c3f-6dd399753057
+    archive_sha256: 00f8e32e85f3b89438192c334254b33de26440b98d68523c0facde73f2a40dad
+    custody_sha256: ee8b7af5889eff9c809101f7acc8e07d0292e1b0257ec6da87e2c78c9dc44e13
 ```
 
 These provenance fields identify the Chaldea assembly job, returned
 candidate-patch.tar and custody.json independently validated in
-/home/igor/.cache/exact-directory-repair/backend-artifact-02/receipt.md
-and independent-validation.json. That receipt retains the original bundle path,
-the guarded copy-size refusal and custody-pending limitation. Image staging is
-a separate lane; the historical backend-artifact-01 and backend-image-stage-01
+/home/igor/.cache/exact-directory-repair/ack-backend-artifact-04/receipt.md
+and returned-artifact-verification.json. That receipt retains the original patch
+bundle path and custody-pending limitation, including the known 4 MiB transfer
+limit. The 19,179,520-byte patch archive requires base blobs; it is not a Docker save.
+Image staging is a separate lane; the historical backend-artifact-01 and backend-image-stage-01
 records do not qualify this artifact. These are closed receipt bindings,
 not a new URL, registry publication or credential flow. The measured distribution
-manifest bc5d0f1750224137f09625e14e2d5daad1d8457c3049e4a1587e25db7250985a
+manifest 9924e37b61992a9e5741b229b8c34a1359fab85c4a47716845892ec8f2fb9431
 has no established registry location and is not used as one.
 
 Before any stack-directory, secret, pin-label or preparation write, the existing
@@ -57,7 +58,7 @@ to manufacture whole-object equality. The earlier API1.55 Config/RootFS and
 one-task local-ID delivery proof is historical, not runtime evidence for this
 artifact. This role checks immutable identity and closed source/platform
 constraints before effects. Current artifact and runtime boundaries are recorded
-in docs/ov-curator-backend-qualified-release.md.
+in docs/ov-verified-ack-release.md.
 
 Every Docker command in this stack path selects the fixed local daemon in this
 mode, including render, ownership reads, preparation and deploy. The deployment
