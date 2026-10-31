@@ -119,20 +119,23 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:c7030fad1a8a47c8976739aacfdae5e50ffaa93600e1dadf6924f56b54067859
-source_revision: 6b30cf13a6193fc61385d08e0d255da58741116f
+reference: sha256:437580b5a2fa582497967c6ac0051214062de763e11a6d8e683f71e51bdb9817
+source_revision: cd2ad3bf4637d20ffaadb7c7c22105163152b82a
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41139046693
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41155827874
 ```
 
 All five fields must match together. The contract revision still names the
-existing full-resource interface. Accepted source
-4b21a6a4d6772d5a54b0013add629ad75ae33242 and publication
-6b30cf13a6193fc61385d08e0d255da58741116f share tree
-889fa634346a079041914962fe391a9385df5c32. This release adds read-only
-document-write preflight diagnostics, including a non-GET dispatch guard and
-in-flight authority recheck. The closed object and image label use the
-publication revision. Neither revision enters the distribution-source allowlist.
+existing full-resource interface. Accepted publication source
+cd2ad3bf4637d20ffaadb7c7c22105163152b82a identifies tree
+c681ca5766d0d7a51ae656761ab18a0b2f18c42b, equivalent to reviewed source
+5c62ca394ef97019f79ce2e3984eab61c9f77c0b. The closed object and image label
+use the publication revision; neither revision enters the distribution-source
+allowlist. This release preserves private document metadata during resource
+writes and refuses unknown dotfiles and directories in the document inventory.
+Reader behavior, public control-target refusal and global authorization are
+unchanged. Existing preflight diagnostics, non-GET dispatch guard and in-flight
+authority recheck are retained.
 The [earlier personal binding record](ov-personal-qualified-release.md)
 retains the prior source selection and planned operator procedure, not an
 activation receipt or the current accepted HTTP image.
@@ -141,11 +144,14 @@ refuse. The full config and resource/action/namespace restrictions above are unc
 
 The reference is the Docker image config ID. It commits to the immutable config
 and ordered RootFS diff_ids; it is not a registry distribution manifest.
-The retained Docker save is 176902656 bytes, SHA256
-136d85d2d973f19dbd358e5c73c096eee7fefbcfdc82ff57f493c9186534ade7.
-No registry distribution manifest is claimed. Hosted custody and the independent
-operator artifact check verified all eleven source inputs, the saved config
-and all ten uncompressed diffIDs. Compressed registry bytes are absent.
+The retained linux/amd64 Docker save is 176904192 bytes, SHA256
+7325db9e906bb6e3dd1060842a085c3d215bbf6e82715439fb80cc9ab43c7336.
+The publication ZIP is 176942459 bytes, SHA256
+c94503f002b7bff285ff2a43acab24bfd505dec5bc21a7424f1efc211405b311.
+Hosted custody and the independent operator artifact check verified all eleven
+source inputs, nine embedded runtime source files, the full saved config and
+all ten uncompressed diffIDs. No registry distribution manifest or signature
+attestation is claimed. Compressed registry bytes are absent.
 Artifact qualification does not establish target loading or runtime acceptance.
 
 Before protected credential inspection, managed writes, check-config or activation,
@@ -159,9 +165,13 @@ The image must already exist. This mode never pulls, tags, imports, installs or
 logs into a registry. Offline check-config also uses --pull=never.
 The regular activation retains pull:never and recreate:auto.
 
-This diagnostic release preserves the qualified personal and resource profiles.
+This metadata-preservation release retains the qualified personal and resource
+profiles, including personal protocol pin 7f3faf6982f81116d6626bc7091f87f786a309c7.
+The separately qualified backend config ID remains
+sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32.
 Source tests render and validate the exact image binding; target staging,
 activation and native dry-run acceptance remain separate operator checks.
+No live refusal cause or successful native acceptance is established here.
 It changes no issuer, subjects, grants, credentials, stdio registrations or
 backend configuration. A successful dry run is not a successful curator pilot.
 Historical canary and earlier backend delivery limitations are retained in the
