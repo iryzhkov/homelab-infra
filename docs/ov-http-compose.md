@@ -170,8 +170,11 @@ The regular activation retains pull:never and recreate:auto.
 
 This bounded-write release retains the qualified personal and resource
 profiles, including personal protocol pin 7f3faf6982f81116d6626bc7091f87f786a309c7.
-The separately qualified backend config ID remains
-sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32.
+The current source-only backend selection is recorded in
+[the backend exact-artifact binding](ov-curator-backend-qualified-release.md).
+The earlier backend config ID
+sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32
+is historical and does not identify the new backend artifact.
 Source tests render and validate the exact image binding; target staging,
 activation and native dry-run acceptance remain separate operator checks.
 No live refusal cause or successful native acceptance is established here.

@@ -19,21 +19,24 @@ variable does not persist the choice for future routine convergence.
 ```yaml
 openviking_local_release:
   kind: local-config
-  reference: sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32
-  source_revision: 6b058cf62f580946066b1518ba9898b2ee3a6f7e
+  reference: sha256:1e3b1d3f2f56df027754ab9f090eb6b74c760c0978e95d0c9e313a09a2b0e963
+  source_revision: 625cdec406678fcb176060fc5c331e0f07726108
   native_sha256: 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
   provenance:
-    assembly_job: 9e650b65-ea2e-4d81-ab4d-a45dce865596
-    archive_sha256: 6e00a2a71b20500adf7c6b4eafe7c434a44575f33c5a1b54dfa74f694dbc4546
-    custody_sha256: 92373caa64219cbab3867b8c1d314ba90c7aaedbda4043b0e410cf7e09594884
+    assembly_job: 617351b9-b830-4457-aee3-5cbb94ba9eb7
+    archive_sha256: 46bdfc39ddce4d337c43f57e5668adcc96d0204869abf484c0324645ff86fafa
+    custody_sha256: e214e006bef6530409ce71d6ceb7e6bfd0d203196db3ba342a7552d66da1bfce
 ```
 
-These provenance fields identify the existing Chaldea assembly job, returned
-candidate-patch.tar and custody.json, as independently checked in
-/home/igor/.cache/ov-curator-20261030/backend-artifact-01 and
-backend-image-stage-01. They are closed receipt bindings,
+These provenance fields identify the Chaldea assembly job, returned
+candidate-patch.tar and custody.json independently validated in
+/home/igor/.cache/exact-directory-repair/backend-artifact-02/receipt.md
+and independent-validation.json. That receipt retains the original bundle path,
+the guarded copy-size refusal and custody-pending limitation. Image staging is
+a separate lane; the historical backend-artifact-01 and backend-image-stage-01
+records do not qualify this artifact. These are closed receipt bindings,
 not a new URL, registry publication or credential flow. The measured distribution
-manifest 728ad26f5a5db34619943a3cb0fadb63dc5e10fa165dc8bbfb66f47d23f61a6b
+manifest bc5d0f1750224137f09625e14e2d5daad1d8457c3049e4a1587e25db7250985a
 has no established registry location and is not used as one.
 
 Before any stack-directory, secret, pin-label or preparation write, the existing
@@ -46,14 +49,15 @@ pin.openviking label and ready/active homelab node. The local image must have th
 exact configID, linux/amd64 platform, product/native labels and original
 openviking-entrypoint, workdir and unset User/Cmd.
 
-The config ID is SHA256 of the retained11996-byte raw config object; that config
+The config ID is SHA256 of the artifact's raw config object; that config
 commits to the complete config and ordered RootFS diff IDs. This reuses Docker's
 immutable local identity, without a second expected-manifest store or values
 learned from observed metadata. No API1.45 added fields are dropped or normalized
-to manufacture whole-object equality. Actual API1.55 full Config/RootFS equality
-and the one-task local-ID delivery were established by the owning retained proof;
-this role checks the sufficient immutable identity and closed source/platform
-constraints before effects.
+to manufacture whole-object equality. The earlier API1.55 Config/RootFS and
+one-task local-ID delivery proof is historical, not runtime evidence for this
+artifact. This role checks immutable identity and closed source/platform
+constraints before effects. Current artifact and runtime boundaries are recorded
+in docs/ov-curator-backend-qualified-release.md.
 
 Every Docker command in this stack path selects the fixed local daemon in this
 mode, including render, ownership reads, preparation and deploy. The deployment
