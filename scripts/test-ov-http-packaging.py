@@ -59,10 +59,10 @@ def local_fixture():
     value = full_fixture()
     value["image"] = {
         "kind": "local-config",
-        "reference": "sha256:437580b5a2fa582497967c6ac0051214062de763e11a6d8e683f71e51bdb9817",
-        "source_revision": "cd2ad3bf4637d20ffaadb7c7c22105163152b82a",
+        "reference": "sha256:95cdf45c81564bb231c0c92088ab2d78272f59cb9aa648c60c0bf258d53e36d6",
+        "source_revision": "d171897f64a839772686c9f6a3b07cfa9900cbf2",
         "contract_revision": "1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319",
-        "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/41155827874"}
+        "provenance": "https://github.com/iryzhkov/ov-mcp/actions/runs/41162764846"}
     return value
 
 
