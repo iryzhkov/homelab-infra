@@ -32,9 +32,10 @@ bundle requiring retained base blobs, not a Docker-save or runtime receipt.
 
 ## Preserved personal contract and runtime gates
 
-The HTTP image remains c7030fad1a8a47c8976739aacfdae5e50ffaa93600e1dadf6924f56b54067859,
-source 6b30cf13a6193fc61385d08e0d255da58741116f. Its configured personal contract
-revision remains 7f3faf6982f81116d6626bc7091f87f786a309c7. That pin identifies the
+At this backend qualification, the HTTP image was c7030fad1a8a47c8976739aacfdae5e50ffaa93600e1dadf6924f56b54067859,
+source 6b30cf13a6193fc61385d08e0d255da58741116f. This earlier HTTP record is
+superseded by the [current exact binding](ov-http-compose.md#explicit-local-config-identity).
+Its configured personal contract revision remains 7f3faf6982f81116d6626bc7091f87f786a309c7. That pin identifies the
 qualified personal protocol, not deployed runtime identity; the selected backend
 retains those personal files byte-for-byte. Actual backend source/image identity
 is bound separately by the closed release above. No HTTP rebuild, owner input,
