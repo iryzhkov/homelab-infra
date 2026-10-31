@@ -6,7 +6,7 @@ OV 0.5.2 linux/amd64 image,
 The 2026-10-29 transition inventory predates the completed custom-backend
 cutover. Homelab now selects the closed local release below; the upstream image
 remains the default for unselected hosts. The successor release and its activation
-hold are documented in docs/ov-personal-qualified-release.md. This directory
+hold are documented in docs/ov-curator-backend-qualified-release.md. This directory
 contains no server or tenant keys.
 
 ## Closed local backend release
@@ -19,20 +19,21 @@ variable does not persist the choice for future routine convergence.
 ```yaml
 openviking_local_release:
   kind: local-config
-  reference: sha256:33ce088da598bbc1915ba488e63330f0f40d8417e5f2783d384df6eb0f8dd98b
-  source_revision: 7f3faf6982f81116d6626bc7091f87f786a309c7
+  reference: sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32
+  source_revision: 6b058cf62f580946066b1518ba9898b2ee3a6f7e
   native_sha256: 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
   provenance:
-    assembly_job: 332a11ac-2d59-4d07-a360-7beca5c019c2
-    archive_sha256: 94b1187f0938465c9d70e2c2e174200d97d647e5c888c29b5d5e02af3add1ab1
-    custody_sha256: ee0ceab462c8fec0b966a3024343bf0d514ed121dfe41cf55fed35fce71cf648
+    assembly_job: 9e650b65-ea2e-4d81-ab4d-a45dce865596
+    archive_sha256: 6e00a2a71b20500adf7c6b4eafe7c434a44575f33c5a1b54dfa74f694dbc4546
+    custody_sha256: 92373caa64219cbab3867b8c1d314ba90c7aaedbda4043b0e410cf7e09594884
 ```
 
 These provenance fields identify the existing Chaldea assembly job, returned
 candidate-patch.tar and custody.json, as independently checked in
-user-session-followup-20261030/backend-personal-assembly-evidence. They are closed receipt bindings,
+/home/igor/.cache/ov-curator-20261030/backend-artifact-01 and
+backend-image-stage-01. They are closed receipt bindings,
 not a new URL, registry publication or credential flow. The measured distribution
-manifest b51752ce50eb60bcef38fe7ebf6aeb9579a8ba6bc6c9a7362d04d882527aec0b
+manifest 728ad26f5a5db34619943a3cb0fadb63dc5e10fa165dc8bbfb66f47d23f61a6b
 has no established registry location and is not used as one.
 
 Before any stack-directory, secret, pin-label or preparation write, the existing

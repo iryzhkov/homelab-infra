@@ -68,7 +68,9 @@ Placeholders are documentation only. Subjects are exact approved OAuth subject
 strings, not account names or requested scopes. The validator bounds the list
 to 1..16 unique nonempty strings of at most 256 characters with no whitespace
 below ASCII 33. Owner values are exactly default/default. Revision input must
-be 40 lowercase hex characters and match the qualified backend revision below.
+be 40 lowercase hex characters and match the qualified personal protocol revision below.
+It does not attest deployed runtime identity; the exact backend image/source binding
+is recorded separately in [the current backend release](ov-curator-backend-qualified-release.md).
 
 `ov_personal_config` validates the protected shape. `ov_http_contract` permits
 personal enablement only with the exact new local HTTP binding and backend
