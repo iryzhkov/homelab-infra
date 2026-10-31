@@ -119,16 +119,16 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:d0becf6bb837b168fd4fbd47458865b1226df918aa848deae6cf7da59b535605
-source_revision: cc308e890ff1bba98aaf7954557969d109f5755d
+reference: sha256:ce94410e1002fbaaa6fd9f06dd0e3bf90ed7db6e98cb8515f01b189e5c80a696
+source_revision: 7d833b8d51b2d8074be1ef376140cd08a9190a9d
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41195885426
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41204069205
 ```
 
 All five fields must match together. The contract revision remains the existing
-full-resource envelope pin. Publication source cc308e890ff1bba98aaf7954557969d109f5755d
-identifies reviewed tree 5b72b6059ed24ccdd0fb7e3d136c26c7a925f8e6,
-equivalent to reviewed source 100f152c45de1d3ee47c3085616fad292d459d10.
+full-resource envelope pin. Publication source 7d833b8d51b2d8074be1ef376140cd08a9190a9d
+identifies reviewed tree 0b75cef82d3703d675e1a74f5bf7774dc988e7e0,
+equivalent to reviewed source dbcacc9272a12e57cd2344646a3c0d755c406fb8.
 The closed object and image label use the publication revision. The distribution
 source allowlist, roles, templates, namespace ceiling and grants stay unchanged.
 
@@ -136,7 +136,7 @@ This artifact supports exact-directory-v2, preserving the original target URI by
 through directory writes rather than reconstructing the target URI. Optional
 typed stat/get checks distinguish directory and document nodes.
 `resources-document-write` version 2 is a checked runtime capability, not a new grant
-or a replacement envelope pin. The measured-deadline release gives document POSTs
+or a replacement envelope pin. The lifetime-admission release retains document POSTs with
 a 120-second HTTP timeout, with connect, pool and write limits of 5 seconds.
 Real document writes have a 130-second operation cap bounded by remaining JWT
 lifetime. The shared request gate is 135 seconds. Other per-tool caps remain
@@ -145,19 +145,43 @@ mutations. Metadata preservation, control-target refusals and authority checks
 remain in place. These finite bounds do not guarantee completion or establish
 runtime timeout resolution, native acceptance or a live refusal cause.
 
+For POSTs with mutations enabled, verified principals with write, remove or
+maintain authority and total signed lifetime of at least 160 seconds receive
+the existing invalid-token 401 when less than 145 seconds remain. This happens
+before body consumption or application/backend execution. Write-capable
+principals' read, initialize and tools/list POSTs are also subject to this gate.
+Read-only and personal-only principals, GETs, disabled mutations and signed
+lifetimes below 160 seconds are exempt. Non-refreshing clients can fail those
+POSTs up to 145 seconds earlier. The challenge is unchanged; the gate logs only
+the fixed line `ov-http admission lifetime-refused`.
+
+Real document writes require at least 135 seconds of remaining signed lifetime
+before any backend request. Insufficient lifetime returns
+`outcome=not_started`, `dispatched=false`, `retry_safe=false`.
+Immediately before the document POST, remaining lifetime must cover the remaining
+monotonic operation budget plus five seconds. Preflight consumes both budgets.
+
+Installed native client/helper equivalence to the inspected refresh-on-401,
+changed-bearer, single-resend sources remains UNPROVEN. Source fixtures cannot
+qualify it. Parent-owned native proof must first show refresh with zero effects,
+then one authorized scratch write with a valid ACK and exactly one document POST.
+No 401 is introduced after application admission, dispatch, commit or UNKNOWN;
+no backend mutation is retried. This binding establishes neither the incident
+cause nor runtime, native or pilot acceptance, schedule changes or hold clearance.
+
 The reference is the Docker config ID, committing to the complete immutable
 config and ordered RootFS diff IDs, not a registry distribution manifest.
-The retained linux/amd64 Docker save is 176908288 bytes, SHA256
-28c028df4978c91b22ec9010757763339e13b53509017cb6e52cfb813fcab555.
-The publication ZIP is 176946730 bytes, SHA256
-9be3be979c09e0606a662764ab4c16dc1ceb220e5d6bb81f4c940c7b40a76bfd.
+The retained linux/amd64 Docker save is 176909824 bytes, SHA256
+9a8d1c5b6c0a57dde8be18921f92ad2440730e16fe18d92e3476cbbda0450d94.
+The publication ZIP is 176948266 bytes, SHA256
+098769f4bc8c957c25279d6a42b9004179f1d36c91ee8fc1f8a4eb66eca7e0b9.
 Independent artifact custody checked 12 source inputs, 10 embedded runtime
 modules, the full saved config and all 10 uncompressed layers. Dockerfile and
 lock custody use runner records matched to independently read source bytes.
 No registry publication digest or signature attestation is claimed. Compressed
 base registry blobs are absent; their pull verification is not an independent
 compressed-blob check. Artifact authority is
-/home/igor/.cache/exact-directory-repair/measured-deadline-http-artifact-01/receipt.json.
+/home/igor/.cache/exact-directory-repair/lifetime-http-artifact-01/receipt.json.
 Custody does not establish target loading or runtime acceptance.
 Other kinds, extra fields and arbitrary release triples still refuse.
 
@@ -186,6 +210,18 @@ It changes no issuer, subjects, grants, credentials, stdio registrations or
 backend configuration. A successful dry run is not a successful curator pilot.
 Historical canary and earlier backend delivery limitations are retained in the
 prior receipts; they are not evidence about this release's live state.
+
+### Historical measured-deadline binding
+
+The superseded HTTP selection used config ID
+sha256:d0becf6bb837b168fd4fbd47458865b1226df918aa848deae6cf7da59b535605,
+publication source cc308e890ff1bba98aaf7954557969d109f5755d, tree
+5b72b6059ed24ccdd0fb7e3d136c26c7a925f8e6 and reviewed source
+100f152c45de1d3ee47c3085616fad292d459d10.
+Its build receipt is https://github.com/iryzhkov/ov-mcp/actions/runs/41195885426.
+Its retained custody authority is
+/home/igor/.cache/exact-directory-repair/measured-deadline-http-artifact-01/receipt.json.
+Those historical records do not select the current image or establish activation.
 
 ### Historical bounded-write binding
 

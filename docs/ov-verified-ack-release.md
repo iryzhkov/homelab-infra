@@ -32,7 +32,7 @@ such operation and must preserve drain without cancellation and cap 32. No pilot
 schedule, native acceptance, hold clearance or live-state claim follows here.
 
 The [combined selection](ov-exact-directory-release.md) now selects the
-[measured-deadline HTTP binding](ov-http-compose.md#explicit-local-config-identity).
+[lifetime-admission HTTP binding](ov-http-compose.md#explicit-local-config-identity).
 The earlier HTTP config
 sha256:324b4da5f9aab84f55b517eed9ab4394aca61c92e382583005f4fdd2002126ee,
 source b8e678ae07fba3ec49ee142589ea9b61a22f6853, is historical. Root's earlier
