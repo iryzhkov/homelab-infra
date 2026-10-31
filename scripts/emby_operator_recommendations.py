@@ -62,6 +62,34 @@ def display_title(journal, marker):
     return title
 
 
+# Fixed existing-row write contract. Unknown stable fields remain readable but
+# cannot be silently dropped or forwarded by a title write.
+ROW_TITLE_FIELDS = frozenset("UserId Name CustomName Id SectionType Subtitle ViewType "
+    "ImageType DisplayMode Monitor ItemTypes ExcludedFolders CardSizeOffset "
+    "ScrollDirection ParentId SortBy SortOrder IncludeNextUpInResume Query".split())
+
+
+def checked_title(title):
+    return display_title({"display_title": title}, "")
+
+
+def title_row(d, snapshot, marker):
+    require(len(snapshot["playlists"]) == 1 and d["row"] is not None,
+            "Display title requires retained playlist and row")
+    rows = [r for r in snapshot["home"] if row_id(r["Id"]) == row_id(d["row"])]
+    require(len(rows) == 1, "Missing saved row")
+    r = rows[0]
+    require(set(r) <= ROW_TITLE_FIELDS and
+            {"Id", "Name", "CustomName", "SectionType", "ParentId"} <= set(r),
+            "Unsupported fixed row fields")
+    require(r["SectionType"] == "playlist" and
+            r["ParentId"] == snapshot["playlists"][0]["id"] and
+            r["CustomName"] == display_title(d, marker) and
+            r.get("UserId", d["scope"]["recipient"]) == d["scope"]["recipient"],
+            "Foreign row or display title drift")
+    return copy.deepcopy(r)
+
+
 class ProtectedAPI(Protocol):
     """All methods use one pinned authenticated admin session; never a global key.
 
@@ -77,6 +105,7 @@ class ProtectedAPI(Protocol):
     def create_playlist(self, actor: str, marker: str): ...
     def share_read(self, playlist: str, recipient: str): ...
     def create_row(self, recipient: str, body: dict): ...
+    def set_row_display_title(self, recipient: str, body: dict): ...
     def delete_entries(self, playlist: str, actor: str, entries: list): ...
     def add_movies(self, playlist: str, actor: str, movies: list): ...
     def delete_row(self, recipient: str, row): ...
@@ -279,6 +308,11 @@ class Operator:
             if row_id(row["Id"]) in [row_id(r["Id"]) for r in before["home"]]:
                 return False
             expected["home"].append(row)
+        elif operation == "display-title":
+            rows = [r for r in expected["home"] if row_id(r["Id"]) == row_id(args["Id"])]
+            if len(rows) != 1 or rows[0].get("ParentId") != args["ParentId"]:
+                return False
+            rows[0].update(CustomName=args["CustomName"], Name=args["CustomName"])
         elif operation == "share":
             expected["playlists"][0]["access"] = [self.scope["recipient"]]
         elif operation == "clear":
@@ -306,6 +340,23 @@ class Operator:
             require(s == d["current"], "Manual drift")
             return dict(scope=copy.deepcopy(self.scope), movies=movies,
                         baseline_digest=digest(s), marker=self.marker)
+
+    def display_title_preview(self, title):
+        title = checked_title(title)
+        with self.journal.locked():
+            s = self._read()
+            d = self._load(s)
+            require(d["pending"] is None and d["run"] is None, "Unfinished operation")
+            require(s == d["current"], "Manual drift")
+            title_row(d, s, self.marker)
+            return dict(title=title, baseline_digest=self._title_digest(s, title))
+
+    def _title_digest(self, snapshot, title):
+        return digest(dict(scope=self.scope, operation="set-display-title",
+                           snapshot=snapshot, title=title))
+
+    def set_display_title(self, key, title, baseline_digest=None):
+        return self._execute(key, [], baseline_digest, title=checked_title(title))
 
     def reconcile(self):
         """Reads only, including no journal updates. Never retries a mutation."""
@@ -340,6 +391,8 @@ class Operator:
                               row_id(r["Id"]) == row_id(d["row"])), None)
             return dict(scope=copy.deepcopy(self.scope), marker=self.marker,
                         display_title=display_title(d, self.marker),
+                        playlist_name=self.marker if s["playlists"] else None,
+                        playlist_expected_name=self.marker,
                         playlists=copy.deepcopy(s["playlists"]),
                         row=dict(saved_id=d["row"], saved=copy.deepcopy(saved_row),
                                  observed=[copy.deepcopy(r) for r in s["home"]
@@ -356,9 +409,10 @@ class Operator:
     def remove(self, key, baseline_digest=None):
         return self._execute(key, [], baseline_digest)
 
-    def _execute(self, key, movies, baseline_digest):
+    def _execute(self, key, movies, baseline_digest, *, title=None):
         opaque(key)
-        request = dict(movies=movies, remove=not movies)
+        request = (dict(operation="set-display-title", title=title) if title is not None
+                   else dict(movies=movies, remove=not movies))
         with self.journal.locked():
             s = self._read()
             d = self._load(s)
@@ -368,13 +422,16 @@ class Operator:
                 return {"state": "replayed", "writes": 0}
             if d["run"] is None:
                 require(d["pending"] is None and s == d["current"], "Manual drift")
-                require(baseline_digest == digest(s), "Fresh preview digest required")
+                require(baseline_digest == (self._title_digest(s, title) if title is not None
+                        else digest(s)), "Fresh preview digest required")
+                if title is not None:
+                    title_row(d, s, self.marker)
                 require(len(d["done"]) < 64, "Journal request limit reached")
                 self._visible(movies)
                 d["run"] = dict(key=key, request=request)
                 self.journal.save(d)
             require(d["run"] == dict(key=key, request=request), "Another request is unfinished")
-            # At most seven mutations: create, share, row, clear, add, unrow, delete.
+            # Membership/removal use at most seven steps; display title uses one.
             writes = 0
             for _ in range(9):
                 s = self._read()
@@ -386,12 +443,19 @@ class Operator:
                         d["row"] = s["home"][-1]["Id"]
                     if p["operation"] == "unrow":
                         d["row"] = None
+                    if p["operation"] == "display-title":
+                        d["display_title"] = p["args"]["CustomName"]
                     d["current"], d["pending"] = s, None
                     self.journal.save(d)
                 require(s == d["current"], "Manual Home/playlist drift")
                 playlist = s["playlists"][0] if s["playlists"] else None
                 operation, args = None, None
-                if movies:
+                if title is not None:
+                    row = title_row(d, s, self.marker)
+                    if row["CustomName"] != title or row["Name"] != title:
+                        row["CustomName"] = title
+                        operation, args = "display-title", row
+                elif movies:
                     self._visible(movies)
                     if playlist is None:
                         operation = "create"
@@ -406,10 +470,13 @@ class Operator:
                 elif playlist is not None:
                     operation = "delete"
                 if operation is None:
-                    require(bool(movies) or s == d["baseline"], "Removal did not restore baseline")
+                    require(title is not None or bool(movies) or s == d["baseline"], "Removal did not restore baseline")
+                    if title is None and not movies:
+                        d.pop("display_title", None)
                     d["done"][key], d["run"] = request, None
                     self.journal.save(d)
-                    return {"state": "applied" if movies else "removed", "writes": writes}
+                    return {"state": "display-title-set" if title is not None else
+                            "applied" if movies else "removed", "writes": writes}
                 # Recheck the entire Home and exact owned playlist immediately before dispatch.
                 require(self._read() == s, "Concurrent drift before mutation")
                 d["pending"] = dict(operation=operation, args=copy.deepcopy(args), before=s)
@@ -431,6 +498,8 @@ class Operator:
             self.api.share_read(playlist["id"], u)
         elif operation == "row":
             self.api.create_row(u, copy.deepcopy(args))
+        elif operation == "display-title":
+            self.api.set_row_display_title(u, copy.deepcopy(args))
         elif operation == "clear":
             self.api.delete_entries(playlist["id"], a, list(args))
         elif operation == "add":

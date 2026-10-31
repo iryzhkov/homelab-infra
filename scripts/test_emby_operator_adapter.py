@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import tempfile
@@ -85,6 +86,9 @@ class RecordingHTTP:
 
     def open(self, request, timeout):
         # Test-only HTTPS-to-loopback seam, no production origin override exists.
+        assert not (request.get_method() == 'POST' and re.search(
+            r'/emby/Items/(?!Access(?:[?]|$)|Delete(?:[?]|$))[^/?]+(?:[?]|$)',
+            request.full_url)), 'Item metadata POST is forbidden'
         original = request.full_url
         suffix = original.removeprefix('https://synthetic.invalid')
         local = urllib.request.Request('http://127.0.0.1:%s%s' % (
@@ -415,8 +419,17 @@ class SyntheticBackend:
             self.grant = 'Read'
         elif op == 'row':
             assert path == '/Users/' + R + '/HomeSections' and body == pending['args']
-            self.home.append(dict(body, Id='2', ServerDefault={'keep': True},
+            self.home.append(dict(body, Id='2', Name=body['CustomName'],
+                                  Monitor=[], CardSizeOffset=0,
                                   Query={k: [] for k in ('StudioIds', 'TagIds', 'GenreIds', 'CollectionTypes')}))
+        elif op == 'display-title':
+            assert path == '/Users/' + R + '/HomeSections' and body == pending['args']
+            rows = [r for r in self.home if r['Id'] == body['Id']]
+            assert len(rows) == 1 and rows[0]['ParentId'] == body['ParentId'] == 'p1'
+            before = adapter.normalize_home([rows[0]])[0]
+            expected = dict(before, CustomName=body['CustomName'])
+            assert body == expected, 'Only CustomName may change in the request'
+            rows[0].update(CustomName=body['CustomName'], Name=body['CustomName'])
         elif op == 'add':
             assert path == '/Playlists/p1/Items' and body == {
                 'Ids': ','.join(pending['args']), 'userId': A, 'SkipDuplicates': False}
@@ -433,6 +446,7 @@ class SyntheticBackend:
             assert path == '/Items/Delete' and q == {'Ids': ['p1']} and body is None
             self.playlists = []
             self.entries = []
+            self.grant = 'None'  # A newly created resource starts without a grant.
         else:
             raise AssertionError('Unmodeled mutation')
         if self.lose == op:
@@ -523,15 +537,13 @@ class LifecycleHTTPTests(unittest.TestCase):
     def test_saved_id_lookup_separates_protected_title_from_marker(self):
         self.apply()
         title = 'Igor Movies'
-        # Explicit protected fixture representing a future completed rename.
-        # There is no rename API or adoption/migration write in this batch.
+        # Protected fixture for a completed row-only title update.
         with self.journal.locked():
             d = self.journal.load()
             d['display_title'] = title
-            d['current']['home'][-1]['CustomName'] = title
+            d['current']['home'][-1].update(CustomName=title, Name=title)
             self.journal.save(d)
-        self.backend.playlists[0]['Name'] = title
-        self.backend.home[-1]['CustomName'] = title
+        self.backend.home[-1].update(CustomName=title, Name=title)
         before = (self.directory / 'journal.json').read_bytes()
         self.fresh_session()
         result = self.operator.show()
@@ -794,6 +806,234 @@ class LifecycleHTTPTests(unittest.TestCase):
             self.apply('second', ['m2'])
         self.assertEqual(len(self.backend.writes), 4)
 
+    def title(self, key='title', title='Movies for Igor'):
+        preview = self.operator.display_title_preview(title)
+        return self.operator.set_display_title(key, title, preview['baseline_digest'])
+
+    def test_display_title_requires_retained_owned_row(self):
+        with self.assertRaises(Refused):
+            self.operator.display_title_preview('Movies for Igor')
+        self.assertFalse((self.directory / 'journal.json').exists())
+        self.assertEqual(self.backend.writes, [])
+
+    def test_display_title_one_write_exact_footprint_and_zero_write_replay(self):
+        self.apply(movies=['m2', 'm1'])
+        before = copy.deepcopy((self.backend.home, self.backend.playlists, self.backend.entries))
+        self.backend.bad_item = {'RunTimeTicks': 0, 'Overview': 'preserved',
+                                 'ProviderIds': {'Synthetic': 'retained'}, 'LockData': True}
+        metadata = copy.deepcopy(self.backend.bad_item)
+        self.assertEqual(self.title(), {'state': 'display-title-set', 'writes': 1})
+        after_home = copy.deepcopy(before[0])
+        after_home[-1].update(CustomName='Movies for Igor', Name='Movies for Igor')
+        self.assertEqual(self.backend.home, after_home)
+        self.assertEqual((self.backend.playlists, self.backend.entries), before[1:])
+        self.assertEqual(self.backend.bad_item, metadata)
+        op, path, query, body = self.backend.writes[-1]
+        self.assertEqual((op, path, query), ('display-title', '/Users/' + R + '/HomeSections', {}))
+        self.assertEqual(body, dict(adapter.normalize_home(before[0])[-1], CustomName='Movies for Igor'))
+        offset = len(self.http.calls)
+        self.fresh_session()
+        self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor'),
+                         {'state': 'replayed', 'writes': 0})
+        self.assertEqual([c[1] for c in self.http.calls[offset:] if c[0] == 'POST'],
+                         ['/emby/Users/AuthenticateByName'])
+        result = self.operator.show()
+        self.assertEqual(result['marker'], self.operator.marker)
+        self.assertEqual(result['playlist_name'], self.operator.marker)
+        self.assertEqual(result['playlist_expected_name'], self.operator.marker)
+        self.assertEqual(result['display_title'], 'Movies for Igor')
+        self.assertEqual(result['row']['observed'][0]['CustomName'], 'Movies for Igor')
+        with self.assertRaises(Refused):
+            self.operator.set_display_title('title', 'Changed')
+
+    def test_display_title_preview_binds_intent_and_is_readonly(self):
+        self.apply()
+        before = (self.directory / 'journal.json').read_bytes()
+        one = self.operator.display_title_preview('One')
+        two = self.operator.display_title_preview('Two')
+        self.assertNotEqual(one['baseline_digest'], two['baseline_digest'])
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        with self.assertRaises(Refused):
+            self.operator.set_display_title('title', 'Two', one['baseline_digest'])
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        for bad in ('', 'x' * 257, 'bad\n', None, 9):
+            with self.subTest(title=bad), self.assertRaises(Refused):
+                self.operator.display_title_preview(bad)
+
+    def test_display_title_pending_before_readonly_no_retry_and_key_guard(self):
+        self.apply()
+        self.backend.fail_before = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        before = (self.directory / 'journal.json').read_bytes()
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'unresolved'})
+        self.assertEqual(self.operator.reconcile(), {'state': 'unresolved', 'operation': 'display-title'})
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.backend.fail_before = None
+        for key, title in [('other', 'Movies for Igor'), ('title', 'Different')]:
+            with self.assertRaises(Refused):
+                self.operator.set_display_title(key, title)
+        with self.assertRaises(Refused):
+            self.operator.remove('remove')
+        with self.assertRaises(Refused):
+            self.operator.set_display_title('title', 'Movies for Igor')
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+
+    def test_display_title_lost_response_after_readonly_then_completion(self):
+        self.apply()
+        self.backend.lose = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        before = (self.directory / 'journal.json').read_bytes()
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'observed-applied'})
+        self.assertEqual(self.operator.reconcile(), {'state': 'observed-applied', 'operation': 'display-title'})
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.backend.lose = None
+        self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor')['writes'], 0)
+        self.assertEqual(self.operator.show()['display_title'], 'Movies for Igor')
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+
+    def test_display_title_pending_accepts_only_exact_before_or_after(self):
+        self.apply()
+        self.backend.lose = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        saved = copy.deepcopy((self.backend.home, self.backend.entries))
+        for mutate in (lambda: self.backend.home[-1].update(Name='wrong'),
+                       lambda: self.backend.home[-1].update(CustomName='wrong'),
+                       lambda: self.backend.home[-1].update(ParentId='foreign'),
+                       lambda: self.backend.home[-1].update(Id='foreign'),
+                       lambda: self.backend.home.reverse(),
+                       lambda: self.backend.entries[0].update(PlaylistItemId='other')):
+            self.backend.home, self.backend.entries = copy.deepcopy(saved)
+            mutate()
+            with self.assertRaises(Refused):
+                self.operator.show()
+            with self.assertRaises(Refused):
+                self.operator.set_display_title('title', 'Movies for Igor')
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+
+    def test_display_title_presend_failure_retains_run_then_resume(self):
+        self.apply()
+        original = self.http.open
+        def fail(request, *args, **kwargs):
+            d = self.journal.load()
+            if d and d['pending'] and d['pending']['operation'] == 'display-title':
+                raise OSError('pre-send GET failure')
+            return original(request, *args, **kwargs)
+        with patch.object(self.http, 'open', side_effect=fail):
+            with self.assertRaises(adapter.NotDispatched):
+                self.title()
+        with self.journal.locked():
+            d = self.journal.load()
+            self.assertIsNone(d['pending'])
+            self.assertEqual(d['run']['key'], 'title')
+        self.assertNotIn('display-title', [w[0] for w in self.backend.writes])
+        self.fresh_session()
+        self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor')['writes'], 1)
+
+    def test_display_title_manual_drift_and_unknown_fixed_fields_refuse(self):
+        self.apply()
+        p = self.operator.display_title_preview('Movies for Igor')
+        saved = copy.deepcopy((self.backend.home, self.backend.playlists, self.backend.entries))
+        for mutate in (lambda: self.backend.home[-1].update(CustomName='manual'),
+                       lambda: self.backend.home[-1].update(ParentId='foreign'),
+                       lambda: self.backend.home[-1].update(Id='foreign'),
+                       lambda: self.backend.playlists[0].update(Name='manual'),
+                       lambda: self.backend.entries[0].update(PlaylistItemId='foreign')):
+            self.backend.home, self.backend.playlists, self.backend.entries = copy.deepcopy(saved)
+            mutate()
+            with self.assertRaises(Refused):
+                self.operator.set_display_title('title', 'Movies for Igor', p['baseline_digest'])
+        self.backend.home, self.backend.playlists, self.backend.entries = copy.deepcopy(saved)
+        # Even a retained unknown stable field refuses rather than being dropped.
+        self.backend.home[-1]['UnknownFutureField'] = {'preserve': True}
+        with self.journal.locked():
+            d = self.journal.load()
+            d['current']['home'] = adapter.normalize_home(self.backend.home)
+            self.journal.save(d)
+        with self.assertRaisesRegex(Refused, 'Unsupported fixed row fields'):
+            self.operator.display_title_preview('Movies for Igor')
+        self.assertNotIn('display-title', [w[0] for w in self.backend.writes])
+
+    def test_display_title_foreign_recipient_and_body_refused_presend(self):
+        self.apply()
+        self.backend.fail_before = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        with self.journal.locked():
+            body = self.journal.load()['pending']['args']
+            for recipient, change in [(A, {}), (R, {'Id': 'foreign'}),
+                                      (R, {'ParentId': 'foreign'}), (R, {'Name': 'wrong'}),
+                                      (R, {'Unknown': 1})]:
+                with self.assertRaises(adapter.NotDispatched):
+                    self.api.set_row_display_title(recipient, dict(body, **change))
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+
+    def test_display_title_remove_recreate_resets_expectations(self):
+        self.apply()
+        self.title()
+        self.assertEqual(self.apply('update', ['m2'])['writes'], 2)
+        self.assertEqual(self.operator.show()['display_title'], 'Movies for Igor')
+        p = self.operator.preview(['m1'])
+        self.operator.remove('remove', p['baseline_digest'])
+        self.assertEqual(self.operator.show()['display_title'], self.operator.marker)
+        self.assertEqual(self.apply('recreate')['writes'], 4)
+        result = self.operator.show()
+        self.assertEqual(result['playlist_name'], self.operator.marker)
+        self.assertEqual(result['row']['saved']['CustomName'], self.operator.marker)
+
+    def test_display_title_admin_own_home_no_new_share(self):
+        with patch(__name__ + '.R', A):
+            self.fresh_session()
+            self.apply()
+            self.assertEqual(self.title()['writes'], 1)
+            self.assertNotIn('share', [w[0] for w in self.backend.writes])
+
+    def test_display_title_complete_entry_holds_same_lock_through_final_snapshot(self):
+        self.apply()
+        preview = self.operator.display_title_preview('Movies for Igor')
+        request = dict(key='title', title='Movies for Igor', baseline_digest=preview['baseline_digest'])
+        entry = EntryTests().entry()
+        original = adapter.OperatorAdapter.snapshot
+        seen = []
+        def snapshot(api, recipient, marker):
+            self.assertIs(api._journal, self.journal)
+            self.assertTrue(self.journal._locked)
+            result = original(api, recipient, marker)
+            seen.append(copy.deepcopy(result))
+            return result
+        def make_api(c, journal):
+            self.assertIs(journal, self.journal)
+            api = adapter.OperatorAdapter(c, journal)
+            api._opener = self.http
+            return api
+        # Entry closes the actual adapter; keep the shared journal for assertions.
+        with patch.object(entry, 'load_config', return_value=config()), \
+             patch.object(entry, 'private_read', return_value=json.dumps(request)), \
+             patch.object(entry, 'load_credentials', return_value={'username': 'synthetic', 'password': 'synthetic'}), \
+             patch.object(entry, 'Journal', return_value=self.journal), \
+             patch.object(entry, 'OperatorAdapter', side_effect=make_api), \
+             patch.object(self.journal, 'close'), \
+             patch.object(adapter.OperatorAdapter, 'snapshot', snapshot), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(entry.main(['--config', '/synthetic/config', 'set-display-title',
+                                        '--request-file', '/synthetic/request']), 0)
+        self.assertEqual(json.loads(output.getvalue()), {'state': 'display-title-set', 'writes': 1})
+        self.assertEqual(seen[-1]['home'][-1]['CustomName'], 'Movies for Igor')
+        with self.journal.locked():
+            self.assertEqual(self.journal.load()['current'], seen[-1])
+
+    def test_item_metadata_post_is_outside_management_transport(self):
+        # Recorder refuses the metadata route even if a future caller tries it.
+        request = urllib.request.Request('https://synthetic.invalid/emby/Items/p1',
+                                         data=b'{}', method='POST')
+        with self.assertRaisesRegex(AssertionError, 'metadata POST'):
+            self.http.open(request, timeout=1)
+
 
 class JournalCustodyTests(unittest.TestCase):
     setUp = CustodyTests.setUp
@@ -848,13 +1088,16 @@ class EntryTests(unittest.TestCase):
         from unittest.mock import MagicMock
         cases = [('preview', {'movies': ['m1']}),
                  ('apply', {'key': 'one', 'movies': ['m1'], 'baseline_digest': 'digest'}),
-                 ('remove', {'key': 'two', 'baseline_digest': 'digest'}), ('reconcile', {}), ('show', {})]
+                 ('remove', {'key': 'two', 'baseline_digest': 'digest'}), ('reconcile', {}), ('show', {}),
+                 ('display-title-preview', {'title': 'Movies for Igor'}),
+                 ('set-display-title', {'key': 'title', 'title': 'Movies for Igor',
+                                        'baseline_digest': 'digest'})]
         for operation, request in cases:
             with self.subTest(operation=operation):
                 entry = self.entry()
                 credentials = {'username': 'synthetic', 'password': 'synthetic'}
                 journal, api, operator = MagicMock(), MagicMock(), MagicMock()
-                getattr(operator, operation).return_value = {'state': 'synthetic-success'}
+                getattr(operator, operation.replace('-', '_')).return_value = {'state': 'synthetic-success'}
                 with patch.object(entry, 'load_config', return_value=config()), \
                      patch.object(entry, 'private_read', return_value=json.dumps(request)), \
                      patch.object(entry, 'load_credentials', return_value=credentials), \
@@ -869,7 +1112,7 @@ class EntryTests(unittest.TestCase):
                 self.assertIs(make_operator.call_args.args[1], journal)
                 api.authenticate.assert_called_once()
                 self.assertEqual(credentials, {})
-                getattr(operator, operation).assert_called_once_with(**request)
+                getattr(operator, operation.replace('-', '_')).assert_called_once_with(**request)
                 api.close.assert_called_once()
                 journal.close.assert_called_once()
                 self.assertEqual(json.loads(output.getvalue()), {'state': 'synthetic-success'})

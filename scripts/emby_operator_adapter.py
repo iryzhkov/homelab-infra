@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 
 from functools import wraps
-from emby_operator_recommendations import NotDispatched, Refused, require, movie_ids, opaque, row_id, digest, display_title
+from emby_operator_recommendations import NotDispatched, Refused, require, movie_ids, opaque, row_id, digest, display_title, title_row
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_BODY = 16 * 1024
@@ -350,7 +350,7 @@ class OperatorAdapter:
         require(len(seen) == len(set(seen)), 'Duplicate discovered ID')
         matches = [r for r in rows if r['Name'] == marker]
         require(len(matches) <= 1, 'Ambiguous marker discovery')
-        title = display_title(d, marker)
+        title = marker  # Immutable playlist item Name, independent of the Home title.
         pending = d.get('pending') if d else None
         known = d['current']['playlists'] if d else []
         require(len(known) <= 1, 'Ambiguous saved ID')
@@ -370,7 +370,7 @@ class OperatorAdapter:
             # A display title never establishes ownership.
             matches = exact
         elif matches:
-            require(title == marker, 'Pending create display title changed')
+            require(display_title(d, marker) == marker, 'Pending create display title changed')
             require(pending and pending['operation'] == 'create' and
                     pending['before']['playlists'] == [] and d.get('run'),
                     'Unexplained existing marker playlist')
@@ -463,6 +463,17 @@ class OperatorAdapter:
         require(body.get('SectionType') == 'playlist' and body.get('CustomName') == title and
                 not any(r.get('CustomName') in (marker, title)
                         for r in current['home']), 'Foreign row marker')
+        self._post('/Users/' + recipient + '/HomeSections', body=body)
+
+    @mutation_dispatch
+    def set_row_display_title(self, recipient, body):
+        require(recipient == self._config['recipient'] and type(body) is dict,
+                'Foreign display title recipient')
+        current, marker = self._intent('display-title', body)
+        d, _ = self._state()
+        expected = title_row(d, current, marker)
+        expected['CustomName'] = display_title({'display_title': body.get('CustomName')}, marker)
+        require(body == expected, 'Display title must preserve exact saved row')
         self._post('/Users/' + recipient + '/HomeSections', body=body)
 
     @mutation_dispatch

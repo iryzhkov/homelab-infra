@@ -1,10 +1,21 @@
 # Operator-applied Igor Movie recommendations
 
-This source batch provides the core, a bounded authenticated-admin transport and
-an explicit local operator entry. WebMCP stays read-only. Igor accepted managed
-playlist UX without strict playlist privacy. The operator must separately validate
-real Igor item restrictions. This batch does not stage credentials or qualify a
-production deployment. Its tests are source for the parent's Chaldea run.
+The delivered operator base provides one owned Movie playlist, its native Home
+row, membership updates, removal and read-only reconciliation through a bounded
+authenticated-admin adapter. This batch also adds bounded read-only show. WebMCP stays read-only. Igor accepted
+managed playlist UX without strict playlist privacy. Real Igor item restrictions
+and credential staging still require operator qualification.
+
+`display-title-preview` and `set-display-title` manage the Home row display title
+only. Source tests, release reviews and actual runtime qualification are separate
+evidence; a passing recording test does not prove production behavior.
+
+Native playlist item Name rename is unsupported under the Emby 4.10.1.0 metadata
+preservation contract. The generic item save can change stored runtime 0 to NULL;
+the Series-only setter does not remedy Playlist hydration. A populated fixture
+whose baseline was already NULL does not prove preservation for all playlists.
+There is no item metadata POST, runtime normalization, payload workaround or
+metadata editor in this operator. The playlist Name remains the immutable marker.
 
 ## Scope and custody
 
@@ -70,6 +81,8 @@ Protected request shapes:
 | remove | `key`, `baseline_digest` from a fresh preview |
 | reconcile | Empty object, or no request file |
 | show | Empty object, or no request file; configured journal-owned set only |
+| display-title-preview | `title`: 1..256 characters, no control characters |
+| set-display-title | `key`, `title`, `baseline_digest` from the preview for that exact title |
 
 ## Identity, provenance and managed grant semantics
 
@@ -92,19 +105,18 @@ adoption instruction. Initially an existing exact marker refuses. Only an alread
 durable pending create with an empty playlist precondition may reconcile one
 unique typed exact marker from the verified actor's complete playlist namespace.
 Saved IDs bind subsequent operations, including read-only reconciliation and show.
-The optional protected v1 journal field `display_title` is the expected playlist
-Name and row CustomName. Its default is the scope-derived marker for existing
-journals. Reads never insert it, migrate snapshots, save the journal or adopt an
-object. The normalized playlist shape and legacy snapshot digests stay unchanged.
-The marker remains scope-derived and is never inferred from the display title.
-After creation, lookup selects the exact saved ID and checks its expected display
-title in both discovery and exact read. A second exact-marker object still refuses.
-Before creation or during pending create, unique exact-marker discovery remains
-required. This foundation dispatches no title change. Creating a new playlist
-requires the default marker title; a future rename implementation must explicitly
-define title reset on remove/recreate. Manually renamed,
-deleted or substituted objects refuse, except exact disappearance after pending
-delete is a candidate postcondition for the core to compare against full state.
+The optional protected v1 journal field `display_title` is the expected Home row
+CustomName. Playlist Name has a separate immutable expectation, the scope-derived
+marker. The title defaults to the marker for legacy journals. Reads never insert
+it, migrate snapshots, save the journal or adopt an object. The normalized playlist
+shape and retained v1 snapshot digests stay unchanged. Lookup selects the saved
+playlist ID and checks Name equals the marker in discovery and exact read. A
+second exact-marker object refuses. Before creation and during pending create,
+unique exact-marker discovery remains required. Only successful explicit removal
+completion clears the row title expectation; subsequent creation uses the marker
+for both playlist Name and row CustomName. Manually renamed, deleted or
+substituted objects refuse, except exact disappearance after pending delete is a
+candidate postcondition for the core to compare against full state.
 There is no name-only adoption, including after journal loss.
 
 `snapshot(recipient, marker)` returns only `home` and `playlists`. Home preserves
@@ -115,7 +127,7 @@ to an empty object. Nonempty, missing or additional query fields are preserved
 and remain part of drift checks. Playlist discovery reads the actor Items
 namespace, recursively typed Playlist, StartIndex=0, Limit=129, refusing above 128,
 truncation, duplicate IDs, non-Playlist DTOs and ambiguous markers. Exact item read
-must match saved/discovered ID, Type=Playlist, expected display Name and CanEditItems=true.
+must match saved/discovered ID, Type=Playlist, immutable marker Name and CanEditItems=true.
 For a separate recipient it also requires CanManageAccess=true; for the actor's
 own homepage it instead requires CanDelete=true. These positive booleans prove
 the capabilities actually needed for that lifecycle. They do not
@@ -151,8 +163,8 @@ unconditional false-ready gate remains.
 
 ## Mutation and recovery behavior
 
-The existing mutation and reconcile lifecycle remains unchanged. Show adds a
-read-only public operation; journal custody is unchanged. Each mutation requires
+All management operations use the same core, Journal, run, pending and done state.
+Show and reconcile are read-only; journal custody is unchanged. Each mutation requires
 the existing durable pending intent, exact operation and arguments, journal scope, fresh admin
 identity and a fresh complete snapshot equal to both pending.before and current.
 Exact saved playlist ID and marker must match. No arbitrary delete/adopt interface
@@ -164,6 +176,7 @@ snapshot must satisfy the core's exact postcondition.
 | create_playlist | POST /Playlists?Name=marker&userId=actor, empty playlist |
 | share_read | POST /Items/Access, UserIds=[Igor], ItemIds=[saved ID], ItemAccess="Read" |
 | create_row | POST /Users/{Igor}/HomeSections, exact journaled core template with no Id |
+| set_row_display_title | POST /Users/{Igor}/HomeSections, full fixed saved row including Id, changing only CustomName |
 | delete_entries | POST /Playlists/{saved ID}/Items/Delete, EntryIds=comma-separated current occurrences |
 | add_movies | POST /Playlists/{saved ID}/Items, Ids=validated Movies, userId=actor, SkipDuplicates=false |
 | delete_row | POST /Users/{Igor}/HomeSections/Delete, ids=[exact saved row], preserving type |
@@ -180,7 +193,8 @@ without echoing body or credential data.
 
 Show takes no playlist ID or other selector. It returns at most one configured
 journal-owned playlist with exact ID, owner provenance, managed access and ordered
-Movie/occurrence IDs. It includes immutable scope/marker, expected display_title,
+Movie/occurrence IDs. It includes immutable scope/marker, verified actual `playlist_name`, separate
+`playlist_expected_name`, expected row `display_title`,
 saved row ID and row object, observed rows referencing the playlist, current
 snapshot `revision` digest, `journal_digest`, pending operation, unfinished request
 key, completion count and reconcile state. Output is detached and stays in
@@ -192,6 +206,38 @@ pending state is returned only when the observed snapshot equals the complete
 saved precondition or exact postcondition. It never retries, saves or adopts.
 Reconcile retains its existing clean/drift/observed-applied/unresolved behavior.
 Authentication still sends its required POST; show itself performs GETs only.
+
+`display-title-preview` validates the same retained playlist and exact saved row,
+then hashes scope, operation, fresh snapshot and intended title together. A title
+preview cannot authorize another title or a membership operation. `set-display-title`
+accepts no playlist ID, row ID, recipient selector or raw body. The saved row must
+have its exact typed Id, SectionType=playlist and ParentId bound to the retained
+playlist. An optional row UserId must equal the configured recipient. The existing
+admin actor/recipient binding remains fixed, including an already configured
+separate recipient. This operation introduces no other-user selection.
+
+The write copies the complete normalized fetched row with Id and changes only
+CustomName. The fixed field whitelist is UserId, Name, CustomName, Id, SectionType,
+Subtitle, ViewType, ImageType, DisplayMode, Monitor, ItemTypes, ExcludedFolders,
+CardSizeOffset, ScrollDirection, ParentId, SortBy, SortOrder,
+IncludeNextUpInResume and Query. Missing required identity/name fields or unknown
+stable fields refuse. Existing ParentItem/UserData enrichment omission and exact
+empty Query normalization remain unchanged. Unknown fields stay in reads and drift
+comparisons; they cannot be dropped or forwarded by this write.
+
+The exact accepted readback changes only the same row's CustomName and server-set
+Name to the intended title. All other row fields, typed IDs, ParentId, row order,
+playlist identity, marker, grant and ordered membership must match. Playlist Name
+remains the marker; playlist metadata is never sent. The row update is at most one
+mutation dispatch, with no retry after uncertainty. Identical completed-key replay
+performs zero management writes. Pre-send NotDispatched clears pending while
+retaining run for the same key/request. An uncertain unchanged snapshot cannot
+resume by dispatching again; only exact after-state readback permits completion.
+Show accepts pending snapshots only at the exact before or after footprint.
+Reconcile reports unresolved or observed-applied without changing journal bytes.
+A successful completion records the row title in the existing journal. The lock
+covers intent, dispatch, final snapshot and completion. A fresh invocation may
+complete a lost-response write by readback with zero additional writes.
 
 Preview validates current identity, Movies and snapshot, returning its digest.
 Apply requires that digest for a new key; replay of a completed identical key makes
@@ -209,7 +255,9 @@ attempted, all failures remain uncertain, even if the response suggests no chang
 
 Operator requests still reject duplicate Movie IDs. Intentional repeats are not
 delivered through this operator; default-off CLI source does not change that.
-Sharing and independent Home lifecycle changes remain outside this batch.
+Independent sharing, Home create/move/delete lifecycle, arbitrary object selection
+and intentional repeats remain unsupported. Existing apply/remove continue their
+bounded owned-resource lifecycle.
 
 Updates clear exact current occurrences and add the validated desired sequence;
 the Home row stays stable. Removal deletes only the saved row and playlist and
@@ -224,32 +272,18 @@ qualified conditional-write token. An external actor can race the final read and
 dispatch. Protected single-operator use is required; there is no linearizability
 claim.
 
-## Evidence and parent integration
+## Qualification boundaries
 
-Huyang reads covered infra workspace ws_9e18f1bbcea7d6aaaa45eca7a86ef900 at wsrev_158,
-base 9205c73, imported core, original 13-test module and companion doc. Typed source
-read in catalog-target-source/mcp-holonet workspace ws_db6fed9670dc229fbbc7a817b4c6c142
-at wsrev_1 covered recommendation_backend.go discovery, exact capability and
-occurrence DTOs. Supplied corrected probe and receipt support admin recipient
-Home/Items routing and singleton lifecycle in synthetic Emby 4.10.1.0, job
-bf1506f0-b220-40a7-bf85-feb84cede4ea. Raw response/ledger artifacts were lost; those
-limits remain. Prior parent core13 plus existing21 pass jobfceca8f8 is prior evidence,
-not a test result for this batch. Global key remains unsupported.
+The base source is bcc1d6b5f9c9ac994b6f69373b35ac2a078546a6. Existing
+lifecycle and show evidence belongs to that base, not this new title source.
+The row-write design follows qualified same-row save proof
+`1c877946348798136b8050be378dce9a@2`. The supplied regular fixture receipt and
+before/after evidence establish the fixed row update and server Name/CustomName
+behavior. They do not establish a safe generic playlist metadata rename. Diagnosis
+`c9c8e1f02d2ab09512842018f692171d@1` records that unsupported preservation path.
 
-Parent imports the adapter, entry, core replacement and new adapter tests under
-scripts/, and this replacement document under docs/, using guarded Huyang edits.
-Preserve the existing core tests and import the added show regressions with them.
-Keep the parent's existing CI delta and read-only ownership tests. Bind one Journal
-instance to both adapter and Operator exactly as the entry does. The normalized
-core snapshot and fake method signatures stay unchanged. No CI or MCP change is
-included.
-
-Parent runs the final coherent batch through Chaldea, never locally. In the job set
-HOME exactly to `$PWD/.cache/holonet-operator-tests/home`, TMPDIR to `$HOME/tmp`,
-assert those paths before creating them, and set PYTHONDONTWRITEBYTECODE=1. Run
-`python3 scripts/test_emby_operator_recommendations.py` and
-`python3 scripts/test_emby_operator_adapter.py`, plus the parent's existing checks.
-The recording HTTP suite models synthetic DTOs and exact request bodies; it is not
-an Emby qualification run. Parent owns final review, tests, import and activation.
-No repository writes, tests, jobs, production, real credentials, children, commits
-or PRs were performed by this artifact author.
+The recording transport checks use synthetic DTOs. They reject item metadata POSTs
+and model the same-row write and uncertain-response behavior. Chaldea verification,
+independent review, CI and runtime qualification remain separate requirements.
+Protected credentials and real recipient restrictions require deployment evidence.
+This document grants no new access.
