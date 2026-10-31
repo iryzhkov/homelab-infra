@@ -13,7 +13,10 @@ access to the credential. Nothing in `site.yml` selects it.
 The playbook acts only on host `homelab` and only on the retained Igor operator
 root `/var/lib/holonet-operator/igor-pr116-retain-20261031-next`. Every value is
 a literal in `scripts/emby-operator-credential.py`; no argument or variable
-selects a host, path, identity, interpreter or command.
+selects a host, path, identity, interpreter or command. The playbook inlines the
+fixed command and apply/check-mode gates. Injecting the former helper, argv or
+applying variables, or a preloaded secret, is refused before command execution
+or decryption; the public apply flag must be a Boolean.
 
 The root must already hold, directly inside it:
 

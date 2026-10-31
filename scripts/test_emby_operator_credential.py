@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -554,10 +555,9 @@ class PlaybookContractTests(unittest.TestCase):
                          {'file': '{{ playbook_dir }}/../secrets/emby-operator.sops.yaml',
                           'name': 'emby_operator_secret'})
         self.assertIs(loader['no_log'], True)
-        self.assertIn('emby_operator_credential_applying | bool', loader['when'])
+        self.assertIn('emby_operator_credential_apply | default(false) | bool and not ansible_check_mode', loader['when'])
         self.assertIn("in ['provision', 'rotate']", ' '.join(loader['when']))
-        self.assertIn('not ansible_check_mode', self.play['vars']['emby_operator_credential_applying'])
-        self.assertIn("default(false) | bool", self.play['vars']['emby_operator_credential_applying'])
+        self.assertNotIn('vars', self.play)
 
     def test_secret_bearing_tasks_are_no_log_and_secret_only_on_stdin(self):
         for task in self.tasks:
@@ -567,12 +567,66 @@ class PlaybookContractTests(unittest.TestCase):
         self.assertIs(apply['diff'], False)
         self.assertNotIn('emby_operator_secret', apply['ansible.builtin.command']['argv'])
         self.assertIn("+ ['--apply']", apply['ansible.builtin.command']['argv'])
-        argv = self.play['vars']['emby_operator_credential_argv']
+        argv = apply['ansible.builtin.command']['argv']
         self.assertIn("'/usr/bin/python3', '-I', '-c'", argv)
+        self.assertIn("lookup('file', playbook_dir ~ '/../scripts/emby-operator-credential.py')", argv)
         self.assertNotIn('emby_operator_secret', argv)
         report = self.tasks[-1]
         self.assertNotIn('emby_operator_secret', json.dumps(report))
         self.assertNotIn('invocation', json.dumps(report))
+
+
+    def test_derived_overrides_refuse_before_command_or_decryption(self):
+        home = Path(os.environ['HOME'])
+        temporary = Path(os.environ['TMPDIR'])
+        self.assertEqual(home, SCRIPTS.parent / '.cache/holonet-operator-tests/home')
+        self.assertEqual(temporary, home / 'tmp')
+        with tempfile.TemporaryDirectory(dir=temporary) as directory:
+            root = Path(directory)
+            plugins = root / 'collections/ansible_collections/community/sops/plugins'
+            (plugins / 'modules').mkdir(parents=True)
+            (plugins / 'action').mkdir()
+            (plugins / 'modules/load_vars.py').write_text('')
+            sentinel = root / 'decryption-attempted'
+            (plugins / 'action/load_vars.py').write_text(
+                'from ansible.plugins.action import ActionBase\n'
+                'from pathlib import Path\n'
+                'class ActionModule(ActionBase):\n'
+                ' def run(self, tmp=None, task_vars=None):\n'
+                f'  Path({str(sentinel)!r}).write_text("unexpected")\n'
+                '  return {"failed": True, "msg": "Unexpected decryption"}\n')
+            inventory = root / 'inventory'
+            inventory.write_text('homelab ansible_connection=local\n')
+            environment = dict(os.environ, ANSIBLE_COLLECTIONS_PATH=str(root / 'collections'),
+                               ANSIBLE_LOCAL_TEMP=str(root / 'ansible-tmp'),
+                               ANSIBLE_NOCOLOR='1')
+            cases = [
+                ({'emby_operator_credential_helper': 'raise SystemExit(0)'}, False),
+                ({'emby_operator_credential_argv': ['/bin/true']}, False),
+                ({'emby_operator_credential_applying': True,
+                  'emby_operator_credential_action': 'provision'}, False),
+                ({'emby_operator_credential_applying': True,
+                  'emby_operator_credential_action': 'provision',
+                  'emby_operator_credential_apply': True}, True),
+                ({'emby_operator_secret': {'username': 'igor', 'password': SECRET}}, False),
+            ]
+            for extra, check in cases:
+                with self.subTest(extra=list(extra), check=check):
+                    command = ['ansible-playbook', '-i', str(inventory),
+                               str(SCRIPTS.parent / 'playbooks/emby-operator-credential.yml'),
+                               '--extra-vars', json.dumps(extra)]
+                    if check:
+                        command.append('--check')
+                    result = subprocess.run(command, env=environment, text=True,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                            timeout=45)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('Require the pinned host and one explicit bounded action',
+                                  result.stdout)
+                    self.assertNotIn('TASK [Check the pinned operator root', result.stdout)
+                    self.assertNotIn('TASK [Load only the dedicated operator credential',
+                                     result.stdout)
+                    self.assertFalse(sentinel.exists())
 
     def test_helper_has_no_path_identity_or_command_inputs(self):
         source = (SCRIPTS / 'emby-operator-credential.py').read_text()
