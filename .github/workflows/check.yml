@@ -29,6 +29,13 @@ jobs:
           printf 'ANSIBLE_COLLECTIONS_PATH=%s\n' "$HOME/.ansible/collections" >>"$GITHUB_ENV"
       - name: Install ShellCheck in the disposable CI container
         run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck git
+      - name: Test the pure service-access planner
+        run: |
+          export HOME="$PWD/.cache/service-access-tests/home"
+          export SERVICE_ACCESS_TEST_HOME="$HOME" TMPDIR="$HOME/tmp" PYTHONDONTWRITEBYTECODE=1
+          test "$HOME" = "$PWD/.cache/service-access-tests/home"
+          mkdir -p "$TMPDIR"
+          python3 -B scripts/test-service-access.py
       - run: python3 scripts/test-upkeeper-drift.py
       - run: python3 scripts/test-authentik-drift.py
       - run: python3 scripts/test-helper-backups.py
