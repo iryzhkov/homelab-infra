@@ -119,16 +119,16 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:324b4da5f9aab84f55b517eed9ab4394aca61c92e382583005f4fdd2002126ee
-source_revision: b8e678ae07fba3ec49ee142589ea9b61a22f6853
+reference: sha256:d0becf6bb837b168fd4fbd47458865b1226df918aa848deae6cf7da59b535605
+source_revision: cc308e890ff1bba98aaf7954557969d109f5755d
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41180284102
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41195885426
 ```
 
 All five fields must match together. The contract revision remains the existing
-full-resource envelope pin. Publication source b8e678ae07fba3ec49ee142589ea9b61a22f6853
-identifies reviewed tree e5314657084b48f3eefa9fffe86d005099017cf9,
-equivalent to reviewed source 7a48af35c2151cfa87fca96b16738a7c421af6c6.
+full-resource envelope pin. Publication source cc308e890ff1bba98aaf7954557969d109f5755d
+identifies reviewed tree 5b72b6059ed24ccdd0fb7e3d136c26c7a925f8e6,
+equivalent to reviewed source 100f152c45de1d3ee47c3085616fad292d459d10.
 The closed object and image label use the publication revision. The distribution
 source allowlist, roles, templates, namespace ceiling and grants stay unchanged.
 
@@ -136,23 +136,28 @@ This artifact supports exact-directory-v2, preserving the original target URI by
 through directory writes rather than reconstructing the target URI. Optional
 typed stat/get checks distinguish directory and document nodes.
 `resources-document-write` version 2 is a checked runtime capability, not a new grant
-or a replacement envelope pin. The existing bounded-write deadlines, metadata
-preservation, control-target refusals and authority checks remain in place.
-No timeout fix, native acceptance or live refusal resolution is claimed.
+or a replacement envelope pin. The measured-deadline release gives document POSTs
+a 120-second HTTP timeout, with connect, pool and write limits of 5 seconds.
+Real document writes have a 130-second operation cap bounded by remaining JWT
+lifetime. The shared request gate is 135 seconds. Other per-tool caps remain
+unchanged, including 70 seconds for move/reindex and 20 seconds for other
+mutations. Metadata preservation, control-target refusals and authority checks
+remain in place. These finite bounds do not guarantee completion or establish
+runtime timeout resolution, native acceptance or a live refusal cause.
 
 The reference is the Docker config ID, committing to the complete immutable
 config and ordered RootFS diff IDs, not a registry distribution manifest.
-The retained linux/amd64 Docker save is 176907776 bytes, SHA256
-6ec920d4fce6568b598b6253a49814ea4c78535640b1df821e75e367907f2c10.
-The publication ZIP is 176946218 bytes, SHA256
-2ca17ccbda4168a67601e8be51498ac52420410c06e0f03b07bcd2e2f5d65365.
+The retained linux/amd64 Docker save is 176908288 bytes, SHA256
+28c028df4978c91b22ec9010757763339e13b53509017cb6e52cfb813fcab555.
+The publication ZIP is 176946730 bytes, SHA256
+9be3be979c09e0606a662764ab4c16dc1ceb220e5d6bb81f4c940c7b40a76bfd.
 Independent artifact custody checked 12 source inputs, 10 embedded runtime
 modules, the full saved config and all 10 uncompressed layers. Dockerfile and
 lock custody use runner records matched to independently read source bytes.
 No registry publication digest or signature attestation is claimed. Compressed
 base registry blobs are absent; their pull verification is not an independent
 compressed-blob check. Artifact authority is
-/home/igor/.cache/exact-directory-repair/http-artifact-02/receipt.json.
+/home/igor/.cache/exact-directory-repair/measured-deadline-http-artifact-01/receipt.json.
 Custody does not establish target loading or runtime acceptance.
 Other kinds, extra fields and arbitrary release triples still refuse.
 
@@ -170,7 +175,7 @@ The regular activation retains pull:never and recreate:auto.
 This exact-directory release retains the qualified personal and resource
 profiles, including personal protocol pin 7f3faf6982f81116d6626bc7091f87f786a309c7.
 The current source-only backend selection is recorded in
-[the backend exact-artifact binding](ov-curator-backend-qualified-release.md).
+[the verified-ACK backend binding](ov-verified-ack-release.md).
 The earlier backend config ID
 sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32
 is historical and does not identify the new backend artifact.

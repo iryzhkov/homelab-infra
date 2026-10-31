@@ -58,10 +58,10 @@ That release qualified resource snapshots containing a relations sidecar.
 
 ## Preserved personal contract and runtime gates
 
-The HTTP selection is config ID
+The historical HTTP selection was config ID
 sha256:324b4da5f9aab84f55b517eed9ab4394aca61c92e382583005f4fdd2002126ee,
-source b8e678ae07fba3ec49ee142589ea9b61a22f6853, as documented by the
-[current HTTP binding](ov-http-compose.md#explicit-local-config-identity).
+source b8e678ae07fba3ec49ee142589ea9b61a22f6853. It is superseded by the
+[current measured-deadline HTTP binding](ov-http-compose.md#explicit-local-config-identity).
 The configured personal protocol pin remains
 7f3faf6982f81116d6626bc7091f87f786a309c7. It is a protocol pin, not the
 deployed backend identity. The selected backend retains those personal files
