@@ -179,7 +179,6 @@ class Operator:
                     "Expected exact server/user ID")
         opaque(library)
         opaque(recipe)
-        require(actor != recipient, "Actor must be distinct from recipient")
         self.api, self.journal = api, journal
         self.scope = dict(server=server, actor=actor, recipient=recipient,
                           library=library, recipe=recipe)
@@ -257,7 +256,9 @@ class Operator:
                 return False
             p = after["playlists"][0]
             expected["playlists"] = [dict(id=p["id"], marker=self.marker,
-                                         owner=self.scope["actor"], access=[], entries=[])]
+                                         owner=self.scope["actor"],
+                                         access=[self.scope["recipient"]] if self.scope["actor"] == self.scope["recipient"] else [],
+                                         entries=[])]
         elif operation == "row":
             if len(after["home"]) != len(before["home"]) + 1:
                 return False
@@ -352,7 +353,7 @@ class Operator:
                     self._visible(movies)
                     if playlist is None:
                         operation = "create"
-                    elif playlist["access"] == []:
+                    elif playlist["access"] == [] and self.scope["actor"] != self.scope["recipient"]:
                         operation = "share"
                     elif d["row"] is None:
                         operation, args = "row", self._row_body(playlist["id"])

@@ -368,7 +368,7 @@ class SyntheticBackend:
         assert next(v for k, v in headers.items() if k.lower() == 'x-emby-token') == 'synthetic-session-token'
         if method == 'GET':
             if path == '/Users':
-                return [{'Id': A}, {'Id': R}]
+                return [{'Id': i} for i in dict.fromkeys((A, R))]
             if path in ('/Users/' + A, '/Users/' + R):
                 return {'Id': path.split('/')[-1], 'ServerId': S,
                         'Policy': {'IsDisabled': False, 'IsAdministrator': self.admin if path.endswith(A) else False}}
@@ -378,7 +378,7 @@ class SyntheticBackend:
                 return self.envelope([{'Id': '7'}])
             if path == '/Users/' + R + '/HomeSections':
                 return copy.deepcopy(self.home)
-            if path == '/Users/' + R + '/Items':
+            if path == '/Users/' + R + '/Items' and q.get('IncludeItemTypes') == ['Movie']:
                 assert q['ParentId'] == ['7'] and q['IncludeItemTypes'] == ['Movie']
                 return self.envelope([{'Id': i, 'Type': 'Movie'} for i in q['Ids'][0].split(',') if i in self.visible])
             if path == '/Users/' + A + '/Items':
@@ -393,7 +393,7 @@ class SyntheticBackend:
             if path == '/Users/ItemAccess':
                 assert q == {'ItemId': ['p1']}
                 return self.envelope([{'Id': A, 'ServerId': S, 'UserItemShareLevel': 'ManageDelete'},
-                    {'Id': R, 'ServerId': S, 'UserItemShareLevel': self.grant},
+                    *([] if A == R else [{'Id': R, 'ServerId': S, 'UserItemShareLevel': self.grant}]),
                     {'Id': 'e' * 32, 'ServerId': S, 'UserItemShareLevel': self.other_grant}])
             if path == '/Playlists/p1/Items':
                 assert q['UserId'] == [A]
@@ -489,6 +489,33 @@ class LifecycleHTTPTests(unittest.TestCase):
         self.assertEqual([w[0] for w in self.backend.writes],
                          ['create', 'share', 'row', 'add', 'clear', 'add', 'unrow', 'delete'])
         self.assertEqual(self.operator.reconcile(), {'state': 'clean'})
+
+    def test_admin_own_home_preserves_manage_delete_without_share(self):
+        with patch(__name__ + '.R', A):
+            self.fresh_session()
+            self.assertEqual(self.apply()['writes'], 3)
+            self.assertNotIn('share', [w[0] for w in self.backend.writes])
+            self.assertEqual(self.backend.grant, 'None')
+            p = self.operator.preview(['m1'])
+            self.assertEqual(self.operator.remove('self-remove', p['baseline_digest'])['writes'], 2)
+            self.assertEqual(self.backend.playlists, [])
+            self.assertEqual(self.backend.home, [{'Id': 1, 'Unknown': {'retain': [9]}}])
+
+    def test_admin_own_home_requires_intrinsic_manage_delete(self):
+        with patch(__name__ + '.R', A):
+            self.fresh_session()
+            self.apply()
+            original = self.backend.respond
+            def lowered(call):
+                result = original(call)
+                if '/Users/ItemAccess?' in call[1]:
+                    result['Items'][0]['UserItemShareLevel'] = 'Read'
+                return result
+            self.http.responder = lowered
+            before = len(self.backend.writes)
+            with self.assertRaises(Refused):
+                self.operator.preview(['m1'])
+            self.assertEqual(len(self.backend.writes), before)
 
     def test_read_grant_normalization_is_not_an_acl_privacy_claim(self):
         self.apply()

@@ -45,7 +45,7 @@ Config has exactly these fields:
 | --- | --- |
 | enabled | Explicit boolean enable flag. False refuses before authentication. |
 | origin | Pinned existing HTTPS origin, no path/query/fragment/userinfo, default HTTPS port only. Fixed API prefix `/emby`. |
-| server, actor, recipient | Lowercase 32-hex exact IDs. Actor is the administrative creator and differs from Igor. |
+| server, actor, recipient | Lowercase 32-hex exact IDs. Actor is the administrative creator. It may equal Igor for an operator managing its own homepage. In that case the adapter requires the intrinsic ManageDelete rank and skips sharing entirely, preserving management rights; a separate recipient still requires the explicit None/Read grant. |
 | library | Actual Movies item ID, bounded opaque string. |
 | library_guid | Independently pinned virtual-folder GUID, exact lowercase 32-hex returned representation. A different representation refuses locally for qualification. |
 | recipe | Immutable bounded opaque recipe ID. |

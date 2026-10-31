@@ -86,7 +86,6 @@ def validate_config(c):
     for k in ('server', 'actor', 'recipient', 'library_guid'):
         require(isinstance(c[k], str) and re.fullmatch('[0-9a-f]{32}', c[k]),
                 "Invalid configured identity")
-    require(c['actor'] != c['recipient'], "Actor must differ from recipient")
     for k in ('library', 'recipe'):
         opaque(c[k])
     # Origin only, no path/query/userinfo. API prefix is fixed below.
@@ -386,7 +385,8 @@ class OperatorAdapter:
                 and len(ids) == len(set(ids)) and
                 all(r.get('ServerId') == c['server'] for r in access), 'Invalid access candidates')
         grants = [r for r in access if r['Id'] == recipient]
-        require(len(grants) == 1 and grants[0].get('UserItemShareLevel') in ('None', 'Read'),
+        allowed_grants = ('ManageDelete',) if c['actor'] == recipient else ('None', 'Read')
+        require(len(grants) == 1 and grants[0].get('UserItemShareLevel') in allowed_grants,
                 'Missing or unexpected managed recipient grant')
         entries = complete(self._http('GET', members_path, {
             'UserId': c['actor'], 'StartIndex': 0, 'Limit': 26,
@@ -399,7 +399,7 @@ class OperatorAdapter:
             normalized.append({'movie': opaque(e.get('Id')), 'entry': occurrence})
         require(len(occurrence_ids) == len(set(occurrence_ids)), 'Duplicate occurrence ID')
         return {'home': home, 'playlists': [{'id': pid, 'marker': marker,
-            'owner': c['actor'], 'access': [recipient] if grants[0]['UserItemShareLevel'] == 'Read' else [],
+            'owner': c['actor'], 'access': [recipient] if c['actor'] == recipient or grants[0]['UserItemShareLevel'] == 'Read' else [],
             'entries': normalized}]}
 
     def _intent(self, operation, args):
@@ -430,7 +430,8 @@ class OperatorAdapter:
 
     @mutation_dispatch
     def share_read(self, playlist, recipient):
-        require(recipient == self._config['recipient'], 'Foreign share recipient')
+        require(recipient == self._config['recipient'] and recipient != self._config['actor'],
+                'Foreign or unnecessary self-share recipient')
         current, _ = self._owned('share', None, playlist)
         require(current['playlists'][0]['access'] == [], 'Managed grant changed')
         self._post('/Items/Access', body={'UserIds': [recipient], 'ItemIds': [playlist],
