@@ -428,8 +428,12 @@ class SyntheticBackend:
             assert len(rows) == 1 and rows[0]['ParentId'] == body['ParentId'] == 'p1'
             before = adapter.normalize_home([rows[0]])[0]
             expected = dict(before, CustomName=body['CustomName'])
-            assert body == expected, 'Only CustomName may change in the request'
+            if before.get('Subtitle') == 'operator-provisioned' and body.get('Subtitle') == '':
+                expected['Subtitle'] = ''
+            assert body == expected, 'Only the title and exact old subtitle may change'
             rows[0].update(CustomName=body['CustomName'], Name=body['CustomName'])
+            if 'Subtitle' in expected:
+                rows[0]['Subtitle'] = expected['Subtitle']
         elif op == 'add':
             assert path == '/Playlists/p1/Items' and body == {
                 'Ids': ','.join(pending['args']), 'userId': A, 'SkipDuplicates': False}
@@ -846,6 +850,157 @@ class LifecycleHTTPTests(unittest.TestCase):
         with self.assertRaises(Refused):
             self.operator.set_display_title('title', 'Changed')
 
+    def retain_subtitle(self, subtitle, title='Movies for Igor'):
+        # Model a retained, journal-owned row, not manual unjournaled drift.
+        self.apply(movies=['m2', 'm1'])
+        self.backend.home[-1].update(Subtitle=subtitle, CustomName=title, Name=title)
+        with self.journal.locked():
+            d = self.journal.load()
+            d['display_title'] = title
+            d['current']['home'] = adapter.normalize_home(self.backend.home)
+            self.journal.save(d)
+
+    def test_display_title_same_title_legacy_subtitle_cleanup_and_replay(self):
+        self.retain_subtitle('operator-provisioned')
+        before = copy.deepcopy((self.backend.home, self.backend.playlists, self.backend.entries))
+        self.assertEqual(self.title(), {'state': 'display-title-set', 'writes': 1})
+        expected = copy.deepcopy(before[0])
+        expected[-1]['Subtitle'] = ''
+        self.assertEqual(self.backend.home, expected)
+        self.assertEqual((self.backend.playlists, self.backend.entries), before[1:])
+        self.assertEqual(self.backend.writes[-1][3],
+                         dict(adapter.normalize_home(before[0])[-1], Subtitle=''))
+        offset = len(self.http.calls)
+        self.fresh_session()
+        self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor'),
+                         {'state': 'replayed', 'writes': 0})
+        self.assertEqual([c[1] for c in self.http.calls[offset:] if c[0] == 'POST'],
+                         ['/emby/Users/AuthenticateByName'])
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+
+    def test_new_row_blank_subtitle_and_custom_subtitle_preserved(self):
+        self.retain_subtitle('My own subtitle')
+        row_create = next(w[3] for w in self.backend.writes if w[0] == 'row')
+        self.assertEqual(row_create['Subtitle'], '')
+        before = copy.deepcopy(self.backend.home)
+        self.assertEqual(self.title(title='Weekend movies')['writes'], 1)
+        before[-1].update(CustomName='Weekend movies', Name='Weekend movies')
+        self.assertEqual(self.backend.home, before)
+        self.assertEqual(self.backend.writes[-1][3]['Subtitle'], 'My own subtitle')
+        self.fresh_session()
+        self.assertEqual(self.title(key='same-custom', title='Weekend movies')['writes'], 0)
+
+    def test_subtitle_cleanup_uncertain_before_never_retries(self):
+        self.retain_subtitle('operator-provisioned')
+        self.backend.fail_before = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        before = (self.directory / 'journal.json').read_bytes()
+        self.backend.fail_before = None
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'unresolved'})
+        self.assertEqual(self.operator.reconcile()['state'], 'unresolved')
+        with self.assertRaises(Refused):
+            self.operator.set_display_title('title', 'Movies for Igor')
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+
+    def test_subtitle_cleanup_lost_response_exact_readback_and_drift_refusal(self):
+        self.retain_subtitle('operator-provisioned')
+        self.backend.lose = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        before = (self.directory / 'journal.json').read_bytes()
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'observed-applied'})
+        self.assertEqual(self.operator.reconcile()['state'], 'observed-applied')
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        # The exact before state remains unresolved; no third subtitle is accepted.
+        for subtitle in ('manual drift', None, 'Operator-provisioned', 'operator-provisioned '):
+            self.backend.home[-1]['Subtitle'] = subtitle
+            with self.subTest(subtitle=subtitle):
+                with self.assertRaises(Refused):
+                    self.operator.show()
+                self.assertEqual(self.operator.reconcile()['state'], 'unresolved')
+                with self.assertRaises(Refused):
+                    self.operator.set_display_title('title', 'Movies for Igor')
+                self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.backend.home[-1]['Subtitle'] = ''
+        self.backend.lose = None
+        self.fresh_session()
+        self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor')['writes'], 0)
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+
+    def test_display_title_subtitle_drift_before_dispatch_refuses(self):
+        self.retain_subtitle('operator-provisioned')
+        preview = self.operator.display_title_preview('Movies for Igor')
+        before = (self.directory / 'journal.json').read_bytes()
+        self.backend.home[-1]['Subtitle'] = 'manual drift'
+        with self.assertRaises(Refused):
+            self.operator.set_display_title('title', 'Movies for Igor', preview['baseline_digest'])
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.assertNotIn('display-title', [w[0] for w in self.backend.writes])
+
+    def test_display_title_adapter_refuses_arbitrary_subtitle_change(self):
+        self.retain_subtitle('My own subtitle')
+        self.backend.fail_before = 'display-title'
+        with self.assertRaises(Refused):
+            self.title(title='Weekend movies')
+        with self.journal.locked():
+            d = self.journal.load()
+            d['pending']['args']['Subtitle'] = ''
+            self.journal.save(d)
+            with self.assertRaises(adapter.NotDispatched):
+                self.api.set_row_display_title(R, d['pending']['args'])
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+
+    def test_historical_pending_subtitle_retained_exactly_without_second_dispatch(self):
+        self.retain_subtitle('operator-provisioned', title=self.operator.marker)
+        # Preserve a v1 journal without the optional title expectation.
+        with self.journal.locked():
+            d = self.journal.load()
+            del d['display_title']
+            self.journal.save(d)
+        self.backend.fail_before = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        with self.journal.locked():
+            d = self.journal.load()
+            d['pending']['args']['Subtitle'] = 'operator-provisioned'
+            self.journal.save(d)
+        before = (self.directory / 'journal.json').read_bytes()
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'unresolved'})
+        with self.assertRaises(Refused):
+            self.operator.set_display_title('title', 'Movies for Igor')
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        # Model the old pending body having reached the server with a lost response.
+        self.backend.home[-1].update(CustomName='Movies for Igor', Name='Movies for Igor')
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'observed-applied'})
+        self.assertEqual(self.operator.reconcile()['state'], 'observed-applied')
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.backend.home[-1]['Subtitle'] = ''
+        with self.assertRaises(Refused):
+            self.operator.show()
+        with self.assertRaises(Refused):
+            self.operator.set_display_title('title', 'Movies for Igor')
+        self.assertEqual((self.directory / 'journal.json').read_bytes(), before)
+        self.backend.home[-1]['Subtitle'] = 'operator-provisioned'
+        self.backend.fail_before = None
+        with patch.object(self.journal, 'save', wraps=self.journal.save) as save:
+            self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor')['writes'], 0)
+        # No durable gap between clearing pending and completing the request.
+        self.assertEqual(save.call_count, 1)
+        self.assertIsNone(save.call_args.args[0]['pending'])
+        self.assertIsNone(save.call_args.args[0]['run'])
+        self.assertIn('title', save.call_args.args[0]['done'])
+        self.assertEqual(self.backend.home[-1]['Subtitle'], 'operator-provisioned')
+        self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
+        self.fresh_session()
+        self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor')['writes'], 0)
+        self.assertEqual(self.title(key='cleanup')['writes'], 1)
+        self.assertEqual(self.backend.home[-1]['Subtitle'], '')
+
     def test_display_title_preview_binds_intent_and_is_readonly(self):
         self.apply()
         before = (self.directory / 'journal.json').read_bytes()
@@ -917,7 +1072,7 @@ class LifecycleHTTPTests(unittest.TestCase):
         self.assertEqual([w[0] for w in self.backend.writes].count('display-title'), 1)
 
     def test_display_title_presend_failure_retains_run_then_resume(self):
-        self.apply()
+        self.retain_subtitle('operator-provisioned')
         original = self.http.open
         def fail(request, *args, **kwargs):
             d = self.journal.load()

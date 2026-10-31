@@ -7,7 +7,9 @@ managed playlist UX without strict playlist privacy. Real Igor item restrictions
 and credential staging still require operator qualification.
 
 `display-title-preview` and `set-display-title` manage the Home row display title
-only. Source tests, release reviews and actual runtime qualification are separate
+and remove the exact legacy `operator-provisioned` subtitle, even when the title
+is unchanged. New rows have a blank subtitle; other custom subtitles are preserved.
+Source tests, release reviews and actual runtime qualification are separate
 evidence; a passing recording test does not prove production behavior.
 
 Native playlist item Name rename is unsupported under the Emby 4.10.1.0 metadata
@@ -176,7 +178,7 @@ snapshot must satisfy the core's exact postcondition.
 | create_playlist | POST /Playlists?Name=marker&userId=actor, empty playlist |
 | share_read | POST /Items/Access, UserIds=[Igor], ItemIds=[saved ID], ItemAccess="Read" |
 | create_row | POST /Users/{Igor}/HomeSections, exact journaled core template with no Id |
-| set_row_display_title | POST /Users/{Igor}/HomeSections, full fixed saved row including Id, changing only CustomName |
+| set_row_display_title | POST /Users/{Igor}/HomeSections, full fixed saved row including Id, changing CustomName and clearing only the exact legacy subtitle |
 | delete_entries | POST /Playlists/{saved ID}/Items/Delete, EntryIds=comma-separated current occurrences |
 | add_movies | POST /Playlists/{saved ID}/Items, Ids=validated Movies, userId=actor, SkipDuplicates=false |
 | delete_row | POST /Users/{Igor}/HomeSections/Delete, ids=[exact saved row], preserving type |
@@ -217,7 +219,8 @@ admin actor/recipient binding remains fixed, including an already configured
 separate recipient. This operation introduces no other-user selection.
 
 The write copies the complete normalized fetched row with Id and changes only
-CustomName. The fixed field whitelist is UserId, Name, CustomName, Id, SectionType,
+CustomName, plus Subtitle from exactly `operator-provisioned` to an empty string.
+Other subtitles remain unchanged. The fixed field whitelist is UserId, Name, CustomName, Id, SectionType,
 Subtitle, ViewType, ImageType, DisplayMode, Monitor, ItemTypes, ExcludedFolders,
 CardSizeOffset, ScrollDirection, ParentId, SortBy, SortOrder,
 IncludeNextUpInResume and Query. Missing required identity/name fields or unknown
@@ -226,7 +229,11 @@ empty Query normalization remain unchanged. Unknown fields stay in reads and dri
 comparisons; they cannot be dropped or forwarded by this write.
 
 The exact accepted readback changes only the same row's CustomName and server-set
-Name to the intended title. All other row fields, typed IDs, ParentId, row order,
+Name to the intended title, plus the exact old-label-to-blank transition only when
+requested in the pending body. Historical pending bodies that retain the old label
+must retain it in readback. Completing them does not dispatch a cleanup write;
+use a fresh preview and key to remove the label afterward. Reads never rewrite
+legacy journal bytes. All other row fields, typed IDs, ParentId, row order,
 playlist identity, marker, grant and ordered membership must match. Playlist Name
 remains the marker; playlist metadata is never sent. The row update is at most one
 mutation dispatch, with no retry after uncertainty. Identical completed-key replay
