@@ -12,7 +12,8 @@ from emby_operator_recommendations import Journal, Operator, Refused, require
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, help='Protected root-owned configuration path')
-    parser.add_argument('operation', choices=('preview', 'apply', 'remove', 'reconcile'))
+    parser.add_argument('operation', choices=('preview', 'apply', 'remove', 'reconcile', 'show',
+                                                'display-title-preview', 'set-display-title'))
     parser.add_argument('--request-file', help='Protected JSON request, never credentials in argv')
     args = parser.parse_args(argv)
     api = None
@@ -23,7 +24,9 @@ def main(argv=None):
         request = strict_json(private_read(args.request_file)) if args.request_file else {}
         require(type(request) is dict, 'Invalid operator request')
         fields = {'preview': {'movies'}, 'apply': {'key', 'movies', 'baseline_digest'},
-                  'remove': {'key', 'baseline_digest'}, 'reconcile': set()}
+                  'display-title-preview': {'title'},
+                  'set-display-title': {'key', 'title', 'baseline_digest'},
+                  'remove': {'key', 'baseline_digest'}, 'reconcile': set(), 'show': set()}
         require(set(request) == fields[args.operation], 'Invalid operator request fields')
         journal = Journal(config['journal_directory'], root_safe=True)
         api = OperatorAdapter(config, journal)
@@ -35,7 +38,7 @@ def main(argv=None):
         operator = Operator(api, journal, **{
             k: config[k] for k in ('server', 'actor', 'recipient', 'library', 'recipe')})
         # Output contains private scope/Movie IDs; operator stdout is not a public receipt.
-        result = getattr(operator, args.operation)(**request)
+        result = getattr(operator, args.operation.replace('-', '_'))(**request)
         print(json.dumps(result, allow_nan=False))
         return 0
     except Refused as error:
