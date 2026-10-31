@@ -473,6 +473,8 @@ class OperatorAdapter:
         d, _ = self._state()
         expected = title_row(d, current, marker)
         expected['CustomName'] = display_title({'display_title': body.get('CustomName')}, marker)
+        if expected.get('Subtitle') == 'operator-provisioned' and body.get('Subtitle') == '':
+            expected['Subtitle'] = ''
         require(body == expected, 'Display title must preserve exact saved row')
         self._post('/Users/' + recipient + '/HomeSections', body=body)
 

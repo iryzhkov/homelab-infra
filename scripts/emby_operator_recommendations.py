@@ -282,7 +282,7 @@ class Operator:
     def _row_body(self, playlist):
         return dict(SectionType="playlist",
                     CustomName=display_title(self.journal.load(), self.marker),
-                    Subtitle="operator-provisioned", ViewType="cards",
+                    Subtitle="", ViewType="cards",
                     DisplayMode="mobile,desktop,tv", ScrollDirection="Horizontal",
                     ImageType="Primary", ParentId=playlist, SortBy=None,
                     SortOrder="Ascending", ItemTypes=[], IncludeNextUpInResume=True,
@@ -312,6 +312,10 @@ class Operator:
             rows = [r for r in expected["home"] if row_id(r["Id"]) == row_id(args["Id"])]
             if len(rows) != 1 or rows[0].get("ParentId") != args["ParentId"]:
                 return False
+            # Pending bodies from older versions retain the label. Only an
+            # explicitly journaled exact old-label-to-blank change may remove it.
+            if rows[0].get("Subtitle") == "operator-provisioned" and args.get("Subtitle") == "":
+                rows[0]["Subtitle"] = ""
             rows[0].update(CustomName=args["CustomName"], Name=args["CustomName"])
         elif operation == "share":
             expected["playlists"][0]["access"] = [self.scope["recipient"]]
@@ -433,6 +437,7 @@ class Operator:
             require(d["run"] == dict(key=key, request=request), "Another request is unfinished")
             # Membership/removal use at most seven steps; display title uses one.
             writes = 0
+            title_applied = False
             for _ in range(9):
                 s = self._read()
                 if d["pending"]:
@@ -445,15 +450,25 @@ class Operator:
                         d["row"] = None
                     if p["operation"] == "display-title":
                         d["display_title"] = p["args"]["CustomName"]
+                        # Completing a historical pending write must not dispatch
+                        # a second write to clean up its retained old subtitle.
+                        title_applied = True
                     d["current"], d["pending"] = s, None
-                    self.journal.save(d)
+                    # Title completion and done must share one journal save. A
+                    # crash between them could otherwise dispatch a second write
+                    # when recovering a historical body that retained the label.
+                    if p["operation"] != "display-title":
+                        self.journal.save(d)
                 require(s == d["current"], "Manual Home/playlist drift")
                 playlist = s["playlists"][0] if s["playlists"] else None
                 operation, args = None, None
                 if title is not None:
                     row = title_row(d, s, self.marker)
-                    if row["CustomName"] != title or row["Name"] != title:
+                    if not title_applied and (row["CustomName"] != title or row["Name"] != title or
+                                              row.get("Subtitle") == "operator-provisioned"):
                         row["CustomName"] = title
+                        if row.get("Subtitle") == "operator-provisioned":
+                            row["Subtitle"] = ""
                         operation, args = "display-title", row
                 elif movies:
                     self._visible(movies)
