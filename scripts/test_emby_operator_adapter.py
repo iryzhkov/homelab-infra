@@ -990,6 +990,26 @@ class LifecycleHTTPTests(unittest.TestCase):
         self.assertEqual(result['playlist_name'], self.operator.marker)
         self.assertEqual(result['row']['saved']['CustomName'], self.operator.marker)
 
+    def test_display_title_collision_does_not_strand_owned_removal(self):
+        self.backend.home.append({'Id': 'manual', 'Name': 'Movies for Igor',
+                                  'CustomName': 'Movies for Igor',
+                                  'SectionType': 'playlist', 'ParentId': 'manual-playlist'})
+        baseline = copy.deepcopy(self.backend.home)
+        self.apply()
+        self.fresh_session()
+        self.assertEqual(self.title()['writes'], 1)
+        self.fresh_session()
+        p = self.operator.preview(['m1'])
+        self.assertEqual(self.operator.remove('remove-collision', p['baseline_digest'])['writes'], 2)
+        self.assertEqual(self.backend.home, baseline)
+        self.assertEqual(self.backend.playlists, [])
+        self.assertEqual([w[0] for w in self.backend.writes][-2:], ['unrow', 'delete'])
+        with self.journal.locked():
+            d = self.journal.load()
+            self.assertIsNone(d['pending'])
+            self.assertIsNone(d['run'])
+            self.assertEqual(d['current'], d['baseline'])
+
     def test_display_title_admin_own_home_no_new_share(self):
         with patch(__name__ + '.R', A):
             self.fresh_session()

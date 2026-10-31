@@ -512,7 +512,6 @@ class OperatorAdapter:
         current, expected = self._owned('delete', None, playlist)
         d, _ = self._state()
         require(marker == expected and d['row'] is None and
-                not any(r.get('ParentId') == playlist or
-                        r.get('CustomName') in (marker, display_title(d, marker))
+                not any(r.get('ParentId') == playlist or r.get('CustomName') == marker
                         for r in current['home']), 'Playlist still referenced')
         self._post('/Items/Delete', query={'Ids': playlist})
