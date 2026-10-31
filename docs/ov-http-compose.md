@@ -132,7 +132,7 @@ equivalent to reviewed source 7a48af35c2151cfa87fca96b16738a7c421af6c6.
 The closed object and image label use the publication revision. The distribution
 source allowlist, roles, templates, namespace ceiling and grants stay unchanged.
 
-This artifact supports exact-directory-v2, preserving the original target URI bytes bytes
+This artifact supports exact-directory-v2, preserving the original target URI bytes
 through directory writes rather than reconstructing the target URI. Optional
 typed stat/get checks distinguish directory and document nodes.
 `resources-document-write` version 2 is a checked runtime capability, not a new grant
