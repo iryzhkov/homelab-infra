@@ -1,7 +1,11 @@
-"""One operator-owned Movie playlist and native Home row. No transport or secrets.
+"""Operator-owned Movie playlists and native Home rows. No transport or secrets.
 
 The adapter is a security boundary, not a convenience HTTP wrapper. See the
 companion contract before implementing it. Public operations lock the journal.
+Journal version 1 holds the configured legacy list. Version 2 holds up to
+MAX_LISTS lists for the same recipient and library under the same lock, run,
+pending step and shared Home baseline. Only explicit migrate and downgrade
+convert between them; reads never rewrite either version.
 """
 import copy
 import fcntl
@@ -13,6 +17,29 @@ import re
 import stat
 from contextlib import contextmanager
 from typing import Protocol
+
+# Derived from the unchanged 512-request adapter budget at the worst create path.
+MAX_LISTS = 4
+# Completed keys are never evicted. Reaching the ceiling refuses new requests.
+DONE_LIMIT = 64
+LEGACY_SUBTITLE = "operator-provisioned"
+MARKER = re.compile(r"holonet-recommendations-[0-9a-f]{32}")
+# Arguments bound into each list-scoped request and its intent digest.
+LIST_OPERATIONS = {"create-list": ("title", "movies"), "set-members": ("movies",),
+                   "set-title": ("title",), "detach-row": (), "attach-row": ("title",),
+                   "delete-list": ()}
+# Ordered mutation phases. apply, remove and set-display-title keep their
+# version 1 request shapes. Rows are always created with the marker title.
+PHASES = {"apply": ("create", "share", "row", "members"), "remove": ("unrow", "delete"),
+          "set-display-title": ("title",),
+          "create-list": ("create", "share", "row", "title", "members"),
+          "set-members": ("members",), "set-title": ("title",), "detach-row": ("unrow",),
+          "attach-row": ("row", "title"), "delete-list": ("unrow", "delete")}
+RESULT = {"apply": "applied", "remove": "removed", "set-display-title": "display-title-set",
+          "create-list": "created", "set-members": "members-set", "set-title": "title-set",
+          "detach-row": "detached", "attach-row": "attached", "delete-list": "deleted"}
+V1_FIELDS = frozenset("version scope baseline current row pending run done display_title".split())
+V2_FIELDS = frozenset("version scope baseline current lists pending run done".split())
 
 
 class Refused(RuntimeError):
@@ -41,9 +68,9 @@ def row_id(value):
     return (type(value).__name__, value)
 
 
-def movie_ids(values):
-    require(isinstance(values, (list, tuple)) and 1 <= len(values) <= 25,
-            "Expected 1..25 Movies")
+def movie_ids(values, minimum=1):
+    require(isinstance(values, (list, tuple)) and minimum <= len(values) <= 25,
+            "Expected %d..25 Movies" % minimum)
     result = [opaque(v) for v in values]
     require(len(set(result)) == len(result), "Duplicate Movie IDs")
     return result
@@ -51,6 +78,16 @@ def movie_ids(values):
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def list_marker(scope, list_id):
+    """Unchanged marker formula; the legacy list keeps its exact playlist Name."""
+    return "holonet-recommendations-" + digest(dict(scope, recipe=opaque(list_id)))[:32]
+
+
+def list_record(journal, list_id):
+    """Version 1 keeps its single list record inline in the journal."""
+    return journal if journal["version"] == 1 else journal["lists"].get(list_id)
 
 
 def display_title(journal, marker):
@@ -73,19 +110,32 @@ def checked_title(title):
     return display_title({"display_title": title}, "")
 
 
-def title_row(d, snapshot, marker):
-    require(len(snapshot["playlists"]) == 1 and d["row"] is not None,
+def list_request(operation, list_id, args):
+    """Canonical list-scoped request; the digest binds operation, list and args."""
+    require(isinstance(operation, str) and operation in LIST_OPERATIONS and
+            set(args) == set(LIST_OPERATIONS[operation]), "Invalid list operation")
+    request = dict(operation=operation, list=opaque(list_id))
+    if "title" in args:
+        request["title"] = checked_title(args["title"])
+    if "movies" in args:
+        request["movies"] = movie_ids(args["movies"], 0)
+    return request
+
+
+def title_row(record, playlist, home, recipient, marker):
+    """The saved row of one list. Same-title sibling or manual rows are irrelevant."""
+    require(playlist is not None and record is not None and record["row"] is not None,
             "Display title requires retained playlist and row")
-    rows = [r for r in snapshot["home"] if row_id(r["Id"]) == row_id(d["row"])]
+    rows = [r for r in home if row_id(r["Id"]) == row_id(record["row"])]
     require(len(rows) == 1, "Missing saved row")
     r = rows[0]
     require(set(r) <= ROW_TITLE_FIELDS and
             {"Id", "Name", "CustomName", "SectionType", "ParentId"} <= set(r),
             "Unsupported fixed row fields")
     require(r["SectionType"] == "playlist" and
-            r["ParentId"] == snapshot["playlists"][0]["id"] and
-            r["CustomName"] == display_title(d, marker) and
-            r.get("UserId", d["scope"]["recipient"]) == d["scope"]["recipient"],
+            r["ParentId"] == playlist["id"] and
+            r["CustomName"] == display_title(record, marker) and
+            r.get("UserId", recipient) == recipient,
             "Foreign row or display title drift")
     return copy.deepcopy(r)
 
@@ -96,6 +146,7 @@ class ProtectedAPI(Protocol):
     Reads are complete, bounded, detached snapshots. They fail on truncation.
     Mutation methods dispatch exactly once with redirects and retries disabled.
     Identity evidence and complete read semantics are specified in the contract.
+    snapshot derives every owned marker from the held journal, never the caller.
     """
     session_binding: str
 
@@ -220,22 +271,33 @@ class Operator:
         self.api, self.journal = api, journal
         self.scope = dict(server=server, actor=actor, recipient=recipient,
                           library=library, recipe=recipe)
-        self.marker = "holonet-recommendations-" + digest(self.scope)[:32]
+        # Version 2 is recipient-scoped; recipe names the legacy list.
+        self.base = {k: v for k, v in self.scope.items() if k != "recipe"}
+        self.marker = list_marker(self.base, recipe)
+
+    def marker_for(self, list_id):
+        return self.marker if list_id is None else list_marker(self.base, list_id)
 
     def _identity(self):
         identity = self.api.verified_identity()
         require(isinstance(identity, dict) and identity.get("verified") is True and
                 identity.get("is_admin") is True, "Unverified/nonadmin identity")
-        expected = dict(self.scope)
-        expected.pop("recipe")
-        require(identity == dict(expected, verified=True, is_admin=True,
+        require(identity == dict(self.base, verified=True, is_admin=True,
                                  auth_mode="authenticated-admin-session",
                                  session_binding=self.api.session_binding),
                 "Verified admin session/actor/server/recipient/library required")
         require(isinstance(self.api.session_binding, str) and bool(self.api.session_binding),
                 "Missing session binding")
 
-    def _read(self):
+    def _markers(self, d):
+        if d is None or d["version"] == 1:
+            return {self.marker}, 1
+        ids = set(d["lists"])
+        if d["pending"] and d["pending"]["operation"] == "create":
+            ids.add(d["pending"]["list"])
+        return {self.marker_for(i) for i in ids}, MAX_LISTS
+
+    def _read(self, d):
         self._identity()
         s = copy.deepcopy(self.api.snapshot(self.scope["recipient"], self.marker))
         require(isinstance(s, dict) and set(s) == {"home", "playlists"}, "Invalid snapshot")
@@ -243,13 +305,14 @@ class Operator:
                 all(isinstance(r, dict) for r in s["home"]), "Unbounded/invalid Home")
         rows = [row_id(r.get("Id")) for r in s["home"]]
         require(len(rows) == len(set(rows)), "Duplicate Home row IDs")
-        require(isinstance(s["playlists"], list) and len(s["playlists"]) <= 1,
+        markers, limit = self._markers(d)
+        require(isinstance(s["playlists"], list) and len(s["playlists"]) <= limit,
                 "Ambiguous owned marker")
         for p in s["playlists"]:
             require(set(p) == {"id", "marker", "owner", "access", "entries"}, "Invalid playlist")
             opaque(p["id"])
-            require(p["marker"] == self.marker and p["owner"] == self.scope["actor"],
-                    "Foreign playlist")
+            require(isinstance(p["marker"], str) and p["marker"] in markers and
+                    p["owner"] == self.scope["actor"], "Foreign playlist")
             require(p["access"] in ([], [self.scope["recipient"]]), "Unexpected playlist access")
             require(isinstance(p["entries"], list) and len(p["entries"]) <= 25, "Too many occurrences")
             entries = []
@@ -258,6 +321,9 @@ class Operator:
                 opaque(entry["movie"])
                 entries.append(opaque(entry["entry"]))
             require(len(set(entries)) == len(entries), "Duplicate occurrence IDs")
+        found = [p["marker"] for p in s["playlists"]]
+        require(found == sorted(set(found)) and
+                len({p["id"] for p in s["playlists"]}) == len(found), "Ambiguous owned marker")
         return s
 
     def _visible(self, movies):
@@ -267,38 +333,79 @@ class Operator:
         require(result == [{"Id": m, "Type": "Movie", "LibraryId": self.scope["library"]}
                            for m in movies], "Recipient Movie visibility/order mismatch")
 
-    def _load(self, snapshot):
+    def _journal(self):
+        """Validate custody before any snapshot. Never migrates or saves."""
         d = self.journal.load()
         if d is None:
-            require(not snapshot["playlists"], "Existing playlist requires explicit operator recovery")
-            require(not any(r.get("CustomName") == self.marker for r in snapshot["home"]),
-                    "Existing managed row requires explicit operator recovery")
-            return dict(version=1, scope=self.scope, baseline=snapshot, current=snapshot,
-                        row=None, pending=None, run=None, done={})
-        require(d.get("version") == 1 and d.get("scope") == self.scope, "Foreign journal")
-        display_title(d, self.marker)
+            return None
+        require(type(d) is dict, "Foreign journal")
+        if d.get("version") != 2:
+            require(d.get("version") == 1 and d.get("scope") == self.scope, "Foreign journal")
+            display_title(d, self.marker)
+            return d
+        require(set(d) - {"migrated_from"} == V2_FIELDS and d["scope"] == self.base and
+                type(d["lists"]) is dict and len(d["lists"]) <= MAX_LISTS and
+                type(d["done"]) is dict, "Foreign journal")
+        for list_id, record in d["lists"].items():
+            require(type(record) is dict and "row" in record and
+                    set(record) <= {"row", "display_title"}, "Invalid list record")
+            display_title(record, self.marker_for(list_id))
+        require(sorted(p["marker"] for p in d["current"]["playlists"]) ==
+                sorted(self.marker_for(i) for i in d["lists"]),
+                "Journal list records disagree with saved playlists")
         return d
 
-    def _row_body(self, playlist):
+    def _fresh(self, snapshot, d, version):
+        if d is not None:
+            return d
+        require(not snapshot["playlists"], "Existing playlist requires explicit operator recovery")
+        require(not any(r.get("CustomName") == self.marker for r in snapshot["home"]),
+                "Existing managed row requires explicit operator recovery")
+        if version == 1:
+            return dict(version=1, scope=self.scope, baseline=snapshot, current=snapshot,
+                        row=None, pending=None, run=None, done={})
+        return dict(version=2, scope=self.base, baseline=snapshot, current=snapshot,
+                    lists={}, pending=None, run=None, done={})
+
+    @staticmethod
+    def _request(d, legacy, scoped):
+        request = legacy if d["version"] == 1 else scoped
+        require(request is not None, "Journal migration required")
+        return request
+
+    @staticmethod
+    def _name(request):
+        return request.get("operation") or ("remove" if request["remove"] else "apply")
+
+    def _target(self, d, snapshot, list_id):
+        marker = self.marker_for(list_id)
+        found = [p for p in snapshot["playlists"] if p["marker"] == marker]
+        return list_record(d, list_id), marker, (found[0] if found else None)
+
+    def _row_body(self, playlist, record, marker):
         return dict(SectionType="playlist",
-                    CustomName=display_title(self.journal.load(), self.marker),
+                    CustomName=display_title(record, marker),
                     Subtitle="", ViewType="cards",
                     DisplayMode="mobile,desktop,tv", ScrollDirection="Horizontal",
                     ImageType="Primary", ParentId=playlist, SortBy=None,
                     SortOrder="Ascending", ItemTypes=[], IncludeNextUpInResume=True,
                     ExcludedFolders=[], Query={})
 
-    def _after(self, before, after, operation, args):
+    def _after(self, before, after, operation, args, marker):
         """Accept only the exact mutation footprint, including new server IDs."""
         expected = copy.deepcopy(before)
+        owned = [p for p in expected["playlists"] if p["marker"] == marker]
+        target = owned[0] if owned else None
+        new = [p for p in after["playlists"] if p["marker"] == marker]
+        if operation in ("share", "clear", "add", "delete") and target is None:
+            return False
         if operation == "create":
-            if len(after["playlists"]) != 1:
+            if target is not None or len(new) != 1:
                 return False
-            p = after["playlists"][0]
-            expected["playlists"] = [dict(id=p["id"], marker=self.marker,
-                                         owner=self.scope["actor"],
-                                         access=[self.scope["recipient"]] if self.scope["actor"] == self.scope["recipient"] else [],
-                                         entries=[])]
+            expected["playlists"] = sorted(expected["playlists"] + [dict(
+                id=new[0]["id"], marker=marker, owner=self.scope["actor"],
+                access=[self.scope["recipient"]] if self.scope["actor"] == self.scope["recipient"] else [],
+                entries=[])], key=lambda p: p["marker"])
         elif operation == "row":
             if len(after["home"]) != len(before["home"]) + 1:
                 return False
@@ -314,201 +421,396 @@ class Operator:
                 return False
             # Pending bodies from older versions retain the label. Only an
             # explicitly journaled exact old-label-to-blank change may remove it.
-            if rows[0].get("Subtitle") == "operator-provisioned" and args.get("Subtitle") == "":
+            if rows[0].get("Subtitle") == LEGACY_SUBTITLE and args.get("Subtitle") == "":
                 rows[0]["Subtitle"] = ""
             rows[0].update(CustomName=args["CustomName"], Name=args["CustomName"])
         elif operation == "share":
-            expected["playlists"][0]["access"] = [self.scope["recipient"]]
+            target["access"] = [self.scope["recipient"]]
         elif operation == "clear":
-            expected["playlists"][0]["entries"] = []
+            target["entries"] = []
         elif operation == "add":
-            if len(after["playlists"]) != 1:
+            if len(new) != 1 or [e["movie"] for e in new[0]["entries"]] != args:
                 return False
-            entries = after["playlists"][0]["entries"]
-            if [e["movie"] for e in entries] != args:
-                return False
-            expected["playlists"][0]["entries"] = entries
+            target["entries"] = new[0]["entries"]
         elif operation == "unrow":
             expected["home"] = [r for r in before["home"] if row_id(r["Id"]) != row_id(args)]
         elif operation == "delete":
-            expected["playlists"] = []
+            expected["playlists"].remove(target)
         return expected == after
 
-    def preview(self, movies):
-        movies = movie_ids(movies)
-        with self.journal.locked():
-            s = self._read()
-            self._visible(movies)
-            d = self._load(s)
-            require(d["pending"] is None and d["run"] is None, "Unfinished operation")
-            require(s == d["current"], "Manual drift")
-            return dict(scope=copy.deepcopy(self.scope), movies=movies,
-                        baseline_digest=digest(s), marker=self.marker)
-
-    def display_title_preview(self, title):
-        title = checked_title(title)
-        with self.journal.locked():
-            s = self._read()
-            d = self._load(s)
-            require(d["pending"] is None and d["run"] is None, "Unfinished operation")
-            require(s == d["current"], "Manual drift")
-            title_row(d, s, self.marker)
-            return dict(title=title, baseline_digest=self._title_digest(s, title))
+    def _intent(self, d, snapshot, request):
+        """Version 2 binds operation, list and arguments, never only a snapshot."""
+        if d["version"] == 2:
+            return digest(dict(version=2, scope=self.base, request=request, snapshot=snapshot))
+        if request.get("operation") == "set-display-title":
+            return self._title_digest(snapshot, request["title"])
+        return digest(snapshot)
 
     def _title_digest(self, snapshot, title):
         return digest(dict(scope=self.scope, operation="set-display-title",
                            snapshot=snapshot, title=title))
 
+    def _check(self, d, snapshot, request):
+        """Preconditions shared by preview and a new request, before any write."""
+        name = self._name(request)
+        record, marker, playlist = self._target(d, snapshot, request.get("list"))
+        if name in ("set-display-title", "set-title") and record is not None:
+            title_row(record, playlist, snapshot["home"], self.scope["recipient"], marker)
+        if d["version"] == 1:
+            return
+        title = request.get("title")
+        require(title is None or title == marker or not MARKER.fullmatch(title),
+                "Marker-shaped title")
+        if name == "create-list":
+            require(record is None, "List already exists")
+            require(len(d["lists"]) < MAX_LISTS, "List limit reached")
+            self.api.check_create_absent(request["list"])
+            return
+        require(record is not None, "Unknown list")
+        require(name != "detach-row" or record["row"] is not None, "List already detached")
+        require(name != "attach-row" or record["row"] is None, "List already attached")
+
+    def _preview(self, legacy, scoped):
+        with self.journal.locked():
+            d = self._journal()
+            s = self._read(d)
+            d = self._fresh(s, d, 1 if legacy is not None else 2)
+            request = self._request(d, legacy, scoped)
+            require(d["pending"] is None and d["run"] is None, "Unfinished operation")
+            require(s == d["current"], "Manual drift")
+            self._check(d, s, request)
+            self._visible(request.get("movies") or [])
+            return self._intent(d, s, request)
+
+    def _legacy(self, operation, **args):
+        return list_request(operation, self.scope["recipe"], args)
+
+    def preview(self, movies):
+        movies = movie_ids(movies)
+        intent = self._preview(dict(movies=movies, remove=False),
+                               self._legacy("set-members", movies=movies))
+        return dict(scope=copy.deepcopy(self.scope), movies=movies,
+                    baseline_digest=intent, marker=self.marker)
+
+    def display_title_preview(self, title):
+        title = checked_title(title)
+        intent = self._preview(dict(operation="set-display-title", title=title),
+                               self._legacy("set-title", title=title))
+        return dict(title=title, baseline_digest=intent)
+
+    def list_preview(self, operation, list, **args):
+        request = list_request(operation, list, args)
+        return dict(request=request, intent_digest=self._preview(None, request))
+
     def set_display_title(self, key, title, baseline_digest=None):
-        return self._execute(key, [], baseline_digest, title=checked_title(title))
+        title = checked_title(title)
+        return self._execute(key, baseline_digest, dict(operation="set-display-title", title=title),
+                             self._legacy("set-title", title=title))
+
+    def apply(self, key, movies, baseline_digest=None):
+        movies = movie_ids(movies)
+        return self._execute(key, baseline_digest, dict(movies=movies, remove=False),
+                             self._legacy("set-members", movies=movies))
+
+    def remove(self, key, baseline_digest=None):
+        # On version 2 this needs a delete-list digest, never a membership one.
+        return self._execute(key, baseline_digest, dict(movies=[], remove=True),
+                             self._legacy("delete-list"))
+
+    def create_list(self, key, list, title, movies, intent_digest=None):
+        return self._scoped(key, intent_digest, "create-list", list, title=title, movies=movies)
+
+    def set_members(self, key, list, movies, intent_digest=None):
+        return self._scoped(key, intent_digest, "set-members", list, movies=movies)
+
+    def set_title(self, key, list, title, intent_digest=None):
+        return self._scoped(key, intent_digest, "set-title", list, title=title)
+
+    def detach_row(self, key, list, intent_digest=None):
+        return self._scoped(key, intent_digest, "detach-row", list)
+
+    def attach_row(self, key, list, title, intent_digest=None):
+        return self._scoped(key, intent_digest, "attach-row", list, title=title)
+
+    def delete_list(self, key, list, intent_digest=None):
+        return self._scoped(key, intent_digest, "delete-list", list)
+
+    def _scoped(self, key, intent, operation, list_id, **args):
+        return self._execute(key, intent, None, list_request(operation, list_id, args))
 
     def reconcile(self):
         """Reads only, including no journal updates. Never retries a mutation."""
         with self.journal.locked():
-            s = self._read()
-            d = self._load(s)
+            d = self._journal()
+            s = self._read(d)
+            d = self._fresh(s, d, 1)
             p = d["pending"]
             if p:
-                return {"state": "observed-applied" if self._after(
-                    p["before"], s, p["operation"], p["args"]) else "unresolved",
-                        "operation": p["operation"]}
+                result = {"state": "observed-applied" if self._after(
+                    p["before"], s, p["operation"], p["args"], self.marker_for(p.get("list")))
+                    else "unresolved", "operation": p["operation"]}
+                if "list" in p:
+                    result["list"] = p["list"]
+                return result
             return {"state": "clean" if s == d["current"] else "drift"}
 
-    def show(self):
-        """Read the configured journal-owned set only; never adopt or save."""
+    def _row_view(self, d, snapshot, record, playlist):
+        # A pending row create/delete may have been observed but not saved.
+        saved = next((r for r in d["current"]["home"]
+                      if record is not None and record["row"] is not None and
+                      row_id(r["Id"]) == row_id(record["row"])), None)
+        return dict(saved_id=record["row"] if record is not None else None,
+                    saved=copy.deepcopy(saved),
+                    observed=[copy.deepcopy(r) for r in snapshot["home"]
+                              if playlist is not None and r.get("ParentId") == playlist["id"]])
+
+    def show(self, list=None):
+        """Read journal-owned lists only; never adopt, migrate or save."""
         with self.journal.locked():
-            s = self._read()
-            d = self._load(s)
+            d = self._journal()
+            s = self._read(d)
+            d = self._fresh(s, d, 1)
             p = d["pending"]
             if p:
-                applied = self._after(p["before"], s, p["operation"], p["args"])
+                applied = self._after(p["before"], s, p["operation"], p["args"],
+                                      self.marker_for(p.get("list")))
                 require(applied or s == p["before"] == d["current"], "Manual drift")
                 state = "observed-applied" if applied else "unresolved"
             else:
                 require(s == d["current"], "Manual drift")
                 state = "clean"
-            require(isinstance(d["done"], dict) and len(d["done"]) <= 64,
+            require(isinstance(d["done"], dict) and len(d["done"]) <= DONE_LIMIT,
                     "Journal request limit reached")
-            # A pending row create/delete may have been observed but not saved.
-            saved_row = next((r for r in d["current"]["home"]
-                              if d["row"] is not None and
-                              row_id(r["Id"]) == row_id(d["row"])), None)
-            return dict(scope=copy.deepcopy(self.scope), marker=self.marker,
-                        display_title=display_title(d, self.marker),
-                        playlist_name=self.marker if s["playlists"] else None,
-                        playlist_expected_name=self.marker,
-                        playlists=copy.deepcopy(s["playlists"]),
-                        row=dict(saved_id=d["row"], saved=copy.deepcopy(saved_row),
-                                 observed=[copy.deepcopy(r) for r in s["home"]
-                                           if s["playlists"] and
-                                           r.get("ParentId") == s["playlists"][0]["id"]]),
-                        revision=digest(s), journal_digest=digest(d),
-                        pending={"operation": p["operation"]} if p else None,
-                        run={"key": d["run"]["key"]} if d["run"] else None,
-                        done_count=len(d["done"]), reconcile={"state": state})
+            status = dict(revision=digest(s), journal_digest=digest(d),
+                          pending={k: p[k] for k in ("operation", "list") if k in p} if p else None,
+                          run={"key": d["run"]["key"]} if d["run"] else None,
+                          done_count=len(d["done"]), done_limit=DONE_LIMIT,
+                          keys_exhausted=len(d["done"]) >= DONE_LIMIT,
+                          reconcile={"state": state})
+            if d["version"] == 1:
+                require(list is None, "Journal migration required")
+                record, marker, playlist = self._target(d, s, None)
+                return dict(status, scope=copy.deepcopy(self.scope), marker=marker,
+                            display_title=display_title(d, marker),
+                            playlist_name=marker if s["playlists"] else None,
+                            playlist_expected_name=marker,
+                            playlists=copy.deepcopy(s["playlists"]),
+                            row=self._row_view(d, s, record, playlist))
+            lists = []
+            for list_id in sorted(d["lists"]):
+                record, marker, playlist = self._target(d, s, list_id)
+                if list is None or list == list_id:
+                    lists.append(dict(list=list_id, marker=marker,
+                                      legacy=list_id == self.scope["recipe"],
+                                      display_title=display_title(record, marker),
+                                      playlist=copy.deepcopy(playlist),
+                                      row=self._row_view(d, s, record, playlist)))
+            require(list is None or len(lists) == 1, "Unknown list")
+            return dict(status, version=2, scope=copy.deepcopy(self.base),
+                        legacy_list=self.scope["recipe"], lists=lists,
+                        list_count=len(d["lists"]), list_limit=MAX_LISTS,
+                        migrated_from=copy.deepcopy(d.get("migrated_from")))
 
-    def apply(self, key, movies, baseline_digest=None):
-        return self._execute(key, movie_ids(movies), baseline_digest)
+    def migrate_preview(self):
+        return self._convert("migrate", None, None)
 
-    def remove(self, key, baseline_digest=None):
-        return self._execute(key, [], baseline_digest)
+    def migrate(self, key, intent_digest=None):
+        return self._convert("migrate", opaque(key), intent_digest)
 
-    def _execute(self, key, movies, baseline_digest, *, title=None):
-        opaque(key)
-        request = (dict(operation="set-display-title", title=title) if title is not None
-                   else dict(movies=movies, remove=not movies))
+    def downgrade_preview(self):
+        return self._convert("downgrade", None, None)
+
+    def downgrade(self, key, intent_digest=None):
+        return self._convert("downgrade", opaque(key), intent_digest)
+
+    def _convert(self, direction, key, intent):
+        """Explicit journal-only conversion in one save; zero Emby writes."""
         with self.journal.locked():
-            s = self._read()
-            d = self._load(s)
+            d = self._journal()
+            require(d is not None, "No journal to convert")
+            s = self._read(d)
+            if (direction == "migrate" and key is not None and d["version"] == 2 and
+                    (d.get("migrated_from") or {}).get("key") == key):
+                require(s == d["current"], "Manual drift")
+                return {"state": "already-migrated", "writes": 0}
+            source = 1 if direction == "migrate" else 2
+            require(d["version"] == source, "Journal version %d required" % source)
+            require(d["pending"] is None and d["run"] is None, "Unfinished operation")
+            require(s == d["current"], "Manual drift")
+            require(isinstance(d["done"], dict) and len(d["done"]) <= DONE_LIMIT,
+                    "Journal request limit reached")
+            converted = self._migrated(d, key) if direction == "migrate" else self._downgraded(d)
+            expected = digest(dict(operation=direction, scope=self.scope,
+                                   journal=digest(d), snapshot=s))
+            if key is None:
+                lists = (converted if direction == "migrate" else d)["lists"]
+                return dict(operation=direction, intent_digest=expected, lists=sorted(lists),
+                            journal_digest=digest(d), revision=digest(s))
+            require(intent == expected, "Fresh preview digest required")
+            self.journal.save(converted)
+            return {"state": "migrated" if direction == "migrate" else "downgraded", "writes": 0}
+
+    def _migrated(self, d, key):
+        """Keep the legacy marker, saved IDs, title, snapshot, baseline and done."""
+        require(set(d) <= V1_FIELDS, "Unknown journal field; refusing lossy migration")
+        owned = bool(d["current"]["playlists"])
+        require(owned == (d["row"] is not None) and (owned or "display_title" not in d),
+                "Journal is not cleanly migratable")
+        lists = {}
+        if owned:
+            lists[self.scope["recipe"]] = {k: d[k] for k in ("row", "display_title") if k in d}
+        return dict(version=2, scope=self.base, baseline=d["baseline"], current=d["current"],
+                    lists=lists, pending=None, run=None, done=d["done"],
+                    migrated_from=dict(version=1, recipe=self.scope["recipe"],
+                                       journal_digest=digest(d), key=key))
+
+    def _downgraded(self, d):
+        """Lossless only for the configured attached list or no list at all."""
+        lists = d["lists"]
+        require(set(lists) <= {self.scope["recipe"]} and
+                all(r["row"] is not None for r in lists.values()),
+                "Downgrade requires only the attached configured list")
+        record = lists.get(self.scope["recipe"], {"row": None})
+        require(record["row"] is not None or d["current"] == d["baseline"],
+                "Journal is not cleanly downgradable")
+        result = dict(version=1, scope=self.scope, baseline=d["baseline"], current=d["current"],
+                      row=record["row"], pending=None, run=None, done=d["done"])
+        if "display_title" in record:
+            result["display_title"] = record["display_title"]
+        return result
+
+    def _execute(self, key, intent, legacy, scoped):
+        opaque(key)
+        with self.journal.locked():
+            d = self._journal()
+            s = self._read(d)
+            d = self._fresh(s, d, 1 if legacy is not None else 2)
+            request = self._request(d, legacy, scoped)
             if key in d["done"]:
                 require(d["done"][key] == request, "Idempotency key reused")
                 require(s == d["current"], "Manual drift")
                 return {"state": "replayed", "writes": 0}
             if d["run"] is None:
                 require(d["pending"] is None and s == d["current"], "Manual drift")
-                require(baseline_digest == (self._title_digest(s, title) if title is not None
-                        else digest(s)), "Fresh preview digest required")
-                if title is not None:
-                    title_row(d, s, self.marker)
-                require(len(d["done"]) < 64, "Journal request limit reached")
-                self._visible(movies)
+                require(intent == self._intent(d, s, request), "Fresh preview digest required")
+                self._check(d, s, request)
+                require(len(d["done"]) < DONE_LIMIT, "Journal request limit reached")
+                self._visible(request.get("movies") or [])
                 d["run"] = dict(key=key, request=request)
                 self.journal.save(d)
             require(d["run"] == dict(key=key, request=request), "Another request is unfinished")
-            # Membership/removal use at most seven steps; display title uses one.
-            writes = 0
-            title_applied = False
-            for _ in range(9):
-                s = self._read()
-                if d["pending"]:
-                    p = d["pending"]
-                    require(self._after(p["before"], s, p["operation"], p["args"]),
-                            "Uncertain mutation; exact readback required, no retry")
-                    if p["operation"] == "row":
-                        d["row"] = s["home"][-1]["Id"]
-                    if p["operation"] == "unrow":
-                        d["row"] = None
-                    if p["operation"] == "display-title":
-                        d["display_title"] = p["args"]["CustomName"]
-                        # Completing a historical pending write must not dispatch
-                        # a second write to clean up its retained old subtitle.
-                        title_applied = True
-                    d["current"], d["pending"] = s, None
-                    # Title completion and done must share one journal save. A
-                    # crash between them could otherwise dispatch a second write
-                    # when recovering a historical body that retained the label.
-                    if p["operation"] != "display-title":
-                        self.journal.save(d)
-                require(s == d["current"], "Manual Home/playlist drift")
-                playlist = s["playlists"][0] if s["playlists"] else None
-                operation, args = None, None
-                if title is not None:
-                    row = title_row(d, s, self.marker)
-                    if not title_applied and (row["CustomName"] != title or row["Name"] != title or
-                                              row.get("Subtitle") == "operator-provisioned"):
-                        row["CustomName"] = title
-                        if row.get("Subtitle") == "operator-provisioned":
-                            row["Subtitle"] = ""
-                        operation, args = "display-title", row
-                elif movies:
-                    self._visible(movies)
-                    if playlist is None:
-                        operation = "create"
-                    elif playlist["access"] == [] and self.scope["actor"] != self.scope["recipient"]:
-                        operation = "share"
-                    elif d["row"] is None:
-                        operation, args = "row", self._row_body(playlist["id"])
-                    elif [e["movie"] for e in playlist["entries"]] != movies:
-                        operation, args = ("clear", [e["entry"] for e in playlist["entries"]]) if playlist["entries"] else ("add", movies)
-                elif d["row"] is not None:
-                    operation, args = "unrow", d["row"]
-                elif playlist is not None:
-                    operation = "delete"
-                if operation is None:
-                    require(title is not None or bool(movies) or s == d["baseline"], "Removal did not restore baseline")
-                    if title is None and not movies:
-                        d.pop("display_title", None)
-                    d["done"][key], d["run"] = request, None
-                    self.journal.save(d)
-                    return {"state": "display-title-set" if title is not None else
-                            "applied" if movies else "removed", "writes": writes}
-                # Recheck the entire Home and exact owned playlist immediately before dispatch.
-                require(self._read() == s, "Concurrent drift before mutation")
-                d["pending"] = dict(operation=operation, args=copy.deepcopy(args), before=s)
-                self.journal.save(d)
-                try:
-                    self._dispatch(operation, args, playlist)
-                except NotDispatched:
-                    d["pending"] = None
-                    self.journal.save(d)
-                    raise
-                writes += 1
-            raise Refused("Mutation budget exhausted")
+            return self._steps(d, key, request)
 
-    def _dispatch(self, operation, args, playlist):
+    def _complete(self, d, pending, snapshot):
+        """Record an exactly observed step. Returns whether it set a row title."""
+        operation, list_id = pending["operation"], pending.get("list")
+        if d["version"] == 2 and operation == "create":
+            d["lists"][list_id] = {"row": None}
+        if d["version"] == 2 and operation == "delete":
+            del d["lists"][list_id]
+        record = list_record(d, list_id)
+        if operation == "row":
+            record["row"] = snapshot["home"][-1]["Id"]
+            if d["version"] == 2:
+                record["display_title"] = self.marker_for(list_id)
+        if operation == "unrow":
+            record["row"] = None
+        if operation == "display-title":
+            record["display_title"] = pending["args"]["CustomName"]
+        return operation == "display-title"
+
+    def _next(self, d, snapshot, request, titled):
+        record, marker, p = self._target(d, snapshot, request.get("list"))
+        title, movies = request.get("title"), request.get("movies")
+        actor, recipient = self.scope["actor"], self.scope["recipient"]
+        for phase in PHASES[self._name(request)]:
+            step = None
+            if phase == "create" and p is None:
+                step = ("create", None)
+            elif phase == "share" and p["access"] == [] and actor != recipient:
+                step = ("share", None)
+            elif phase == "row" and record["row"] is None:
+                # Known qualified path: marker title first, then a same-row title save.
+                template = dict(record, display_title=marker) if d["version"] == 2 else record
+                step = ("row", self._row_body(p["id"], template, marker))
+            elif phase == "title":
+                row = title_row(record, p, snapshot["home"], recipient, marker)
+                if not titled and (row["CustomName"] != title or row["Name"] != title or
+                                   row.get("Subtitle") == LEGACY_SUBTITLE):
+                    row["CustomName"] = title
+                    if row.get("Subtitle") == LEGACY_SUBTITLE:
+                        row["Subtitle"] = ""
+                    step = ("display-title", row)
+            elif phase == "members" and [e["movie"] for e in p["entries"]] != movies:
+                step = (("clear", [e["entry"] for e in p["entries"]]) if p["entries"]
+                        else ("add", movies))
+            elif phase == "unrow" and record is not None and record["row"] is not None:
+                step = ("unrow", record["row"])
+            elif phase == "delete" and p is not None:
+                step = ("delete", None)
+            if step:
+                return step + (p, marker)
+        return None, None, p, marker
+
+    def _finish(self, d, snapshot, name):
+        if d["version"] == 1:
+            require(name != "remove" or snapshot == d["baseline"], "Removal did not restore baseline")
+            if name == "remove":
+                d.pop("display_title", None)
+        elif name == "delete-list":
+            owned = {row_id(r["row"]) for r in d["lists"].values() if r["row"] is not None}
+            require([r for r in snapshot["home"] if row_id(r["Id"]) not in owned] ==
+                    d["baseline"]["home"], "Removal did not restore baseline")
+
+    def _steps(self, d, key, request):
+        name, movies = self._name(request), request.get("movies")
+        # Every request uses at most six steps; this bound is unchanged.
+        writes = 0
+        titled = False
+        for _ in range(9):
+            s = self._read(d)
+            if d["pending"]:
+                p = d["pending"]
+                require(self._after(p["before"], s, p["operation"], p["args"],
+                                    self.marker_for(p.get("list"))),
+                        "Uncertain mutation; exact readback required, no retry")
+                # Completing a historical pending title write must not dispatch
+                # a second write to clean up its retained old subtitle.
+                titled = self._complete(d, p, s) or titled
+                d["current"], d["pending"] = s, None
+                # Title completion and done must share one journal save. A
+                # crash between them could otherwise dispatch a second write
+                # when recovering a historical body that retained the label.
+                if p["operation"] != "display-title":
+                    self.journal.save(d)
+            require(s == d["current"], "Manual Home/playlist drift")
+            if movies:
+                self._visible(movies)
+            operation, args, playlist, marker = self._next(d, s, request, titled)
+            if operation is None:
+                self._finish(d, s, name)
+                d["done"][key], d["run"] = request, None
+                self.journal.save(d)
+                return {"state": RESULT[name], "writes": writes}
+            # Recheck the entire Home and exact owned playlists immediately before dispatch.
+            require(self._read(d) == s, "Concurrent drift before mutation")
+            d["pending"] = dict(operation=operation, args=copy.deepcopy(args), before=s)
+            if "list" in request:
+                d["pending"]["list"] = request["list"]
+            self.journal.save(d)
+            try:
+                self._dispatch(operation, args, playlist, marker)
+            except NotDispatched:
+                d["pending"] = None
+                self.journal.save(d)
+                raise
+            writes += 1
+        raise Refused("Mutation budget exhausted")
+
+    def _dispatch(self, operation, args, playlist, marker):
         a, u = self.scope["actor"], self.scope["recipient"]
         if operation == "create":
-            self.api.create_playlist(a, self.marker)
+            self.api.create_playlist(a, marker)
         elif operation == "share":
             self.api.share_read(playlist["id"], u)
         elif operation == "row":
@@ -522,7 +824,6 @@ class Operator:
         elif operation == "unrow":
             self.api.delete_row(u, args)
         elif operation == "delete":
-            self.api.delete_owned_playlist(playlist["id"], self.marker, a)
+            self.api.delete_owned_playlist(playlist["id"], marker, a)
         else:
             raise Refused("Unknown internal mutation")
-

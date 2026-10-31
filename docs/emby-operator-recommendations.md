@@ -12,6 +12,10 @@ is unchanged. New rows have a blank subtitle; other custom subtitles are preserv
 Source tests, release reviews and actual runtime qualification are separate
 evidence; a passing recording test does not prove production behavior.
 
+Journal version 2 manages up to four owned lists for the same recipient and
+library. Version 1 behavior is unchanged until an explicit, preview-bound,
+journal-only migration. See "Multiple lists (journal version 2)" below.
+
 Native playlist item Name rename is unsupported under the Emby 4.10.1.0 metadata
 preservation contract. The generic item save can change stored runtime 0 to NULL;
 the Series-only setter does not remedy Playlist hydration. A populated fixture
@@ -22,9 +26,11 @@ metadata editor in this operator. The playlist Name remains the immutable marker
 ## Scope and custody
 
 Use one persistent journal for the exact server, administrative creator, recipient
-Igor ID, Movies library and recipe. Keep it through restarts and uncertain writes.
-Never reset it to bypass refusal. It stores private IDs, Home snapshots, provenance,
-intent and completion keys. No second store or reconciler exists.
+Igor ID and Movies library. A version 1 journal is also bound to the configured
+recipe; a version 2 journal is recipient-scoped and holds one record per owned
+list. Keep it through restarts and uncertain writes. Never reset it to bypass
+refusal. It stores private IDs, Home snapshots, provenance, intent and completion
+keys. No second store or reconciler exists.
 
 The entry requires real and effective UID 0 and an explicitly staged root-owned
 config and username/password credential file. Files must be single-link regular
@@ -61,7 +67,7 @@ Config has exactly these fields:
 | server, actor, recipient | Lowercase 32-hex exact IDs. Actor is the administrative creator. It may equal Igor for an operator managing its own homepage. In that case the adapter requires explicit CanEditItems=true and CanDelete=true plus journal creation provenance and skips sharing entirely, preserving management rights; a separate recipient still requires the explicit None/Read grant. |
 | library | Actual Movies item ID, bounded opaque string. |
 | library_guid | Independently pinned virtual-folder GUID, exact lowercase 32-hex returned representation. A different representation refuses locally for qualification. |
-| recipe | Immutable bounded opaque recipe ID. |
+| recipe | Immutable bounded opaque recipe ID. In version 2 it names the legacy list, whose marker is unchanged. |
 | credential_file | Explicit absolute root-protected staging file. |
 | journal_directory | Existing persistent protected directory. |
 
@@ -82,9 +88,21 @@ Protected request shapes:
 | apply | `key`, `movies`, `baseline_digest` from a fresh preview |
 | remove | `key`, `baseline_digest` from a fresh preview |
 | reconcile | Empty object, or no request file |
-| show | Empty object, or no request file; configured journal-owned set only |
+| show | Empty object, or no request file; optional `list` on version 2 only |
 | display-title-preview | `title`: 1..256 characters, no control characters |
 | set-display-title | `key`, `title`, `baseline_digest` from the preview for that exact title |
+| migrate-preview, downgrade-preview | Empty object, or no request file |
+| migrate, downgrade | `key`, `intent_digest` from the matching preview |
+| list-preview | `operation`, `list` and exactly that operation's argument fields |
+| create-list | `key`, `list`, `title`, `movies` (0..25), `intent_digest` |
+| set-members | `key`, `list`, `movies` (0..25), `intent_digest` |
+| set-title | `key`, `list`, `title`, `intent_digest` |
+| detach-row, delete-list | `key`, `list`, `intent_digest` |
+| attach-row | `key`, `list`, `title`, `intent_digest` |
+
+The first seven operations keep their request shapes. Their version 2 meaning
+is described under "Legacy aliases". List-scoped operations refuse on a version
+1 journal with "Journal migration required".
 
 ## Identity, provenance and managed grant semantics
 
@@ -101,8 +119,14 @@ never a visibility fallback. Normalized LibraryId is an assertion backed by this
 scoped query, not an invented DTO field.
 
 The adapter receives the SAME Journal object as the core and reads it only while
-the core holds its lock. It derives the marker from the exact scope and validates
-journal scope before using provenance. No method accepts an arbitrary owned-ID
+the core holds its lock. It derives each marker from the exact scope and list ID
+and validates journal scope before using provenance. The marker formula is
+unchanged: `holonet-recommendations-` plus the first 32 hex digits of the digest
+of server, actor, recipient, library and recipe, where recipe is the list ID. In
+version 2 the adapter discovers the markers of journal list records, the list of
+a durable pending create, and the legacy marker, all from the held journal.
+Create preview and fresh execution independently verify the proposed derived marker
+is absent before journaling a run, so a preexisting object cannot strand creation. Marker playlists of unknown list IDs are ignored. No method accepts an arbitrary owned-ID
 adoption instruction. Initially an existing exact marker refuses. Only an already
 durable pending create with an empty playlist precondition may reconcile one
 unique typed exact marker from the verified actor's complete playlist namespace.
@@ -177,7 +201,7 @@ snapshot must satisfy the core's exact postcondition.
 | --- | --- |
 | create_playlist | POST /Playlists?Name=marker&userId=actor, empty playlist |
 | share_read | POST /Items/Access, UserIds=[Igor], ItemIds=[saved ID], ItemAccess="Read" |
-| create_row | POST /Users/{Igor}/HomeSections, exact journaled core template with no Id |
+| create_row | POST /Users/{Igor}/HomeSections, exact journaled core template with no Id and CustomName equal to the list marker |
 | set_row_display_title | POST /Users/{Igor}/HomeSections, full fixed saved row including Id, changing CustomName and clearing only the exact legacy subtitle |
 | delete_entries | POST /Playlists/{saved ID}/Items/Delete, EntryIds=comma-separated current occurrences |
 | add_movies | POST /Playlists/{saved ID}/Items, Ids=validated Movies, userId=actor, SkipDuplicates=false |
@@ -193,8 +217,10 @@ a blocked read can finish up to one socket timeout later. Partial Content-Length
 nonfinite/duplicate-key JSON, transport errors and unexpected statuses refuse
 without echoing body or credential data.
 
-Show takes no playlist ID or other selector. It returns at most one configured
-journal-owned playlist with exact ID, owner provenance, managed access and ordered
+On a version 1 journal, or with no journal, show behaves as below and refuses a
+`list` selector. On version 2 it returns the catalog described in the version 2
+section. Version 1 show takes no playlist ID or other selector. It returns at
+most one configured journal-owned playlist with exact ID, owner provenance, managed access and ordered
 Movie/occurrence IDs. It includes immutable scope/marker, verified actual `playlist_name`, separate
 `playlist_expected_name`, expected row `display_title`,
 saved row ID and row object, observed rows referencing the playlist, current
@@ -249,7 +275,10 @@ complete a lost-response write by readback with zero additional writes.
 Preview validates current identity, Movies and snapshot, returning its digest.
 Apply requires that digest for a new key; replay of a completed identical key makes
 zero writes. A changed request under the same key refuses. At most 64 completion
-keys fit the journal. Reconcile reads only, including no journal JSON changes; it
+keys fit the journal. Completed keys are never evicted: a key's record is the
+only proof it was used, and record age does not prove nondispatch. When 64 keys
+exist, every new request refuses before any write, replays still work, and show
+reports `keys_exhausted`. No pruning or refresh protocol exists. Reconcile reads only, including no journal JSON changes; it
 reports clean/drift or observed-applied/unresolved pending intent. It never retries.
 Resume only the same unfinished key/request in a fresh authenticated invocation.
 Only exact postcondition readback lets the core continue remaining approved steps.
@@ -260,10 +289,12 @@ and keeps the same unfinished request. A fresh invocation can resume after full
 identity, visibility and snapshot revalidation. Once the mutation transport is
 attempted, all failures remain uncertain, even if the response suggests no change.
 
-Operator requests still reject duplicate Movie IDs. Intentional repeats are not
-delivered through this operator; default-off CLI source does not change that.
-Independent sharing, Home create/move/delete lifecycle, arbitrary object selection
-and intentional repeats remain unsupported. Existing apply/remove continue their
+Operator requests still reject duplicate Movie IDs within one list. Intentional
+repeats are not delivered through this operator; default-off CLI source does not
+change that. Independent sharing, Home row placement or move, arbitrary object
+selection, native incremental membership and intentional repeats remain
+unsupported. Version 2 detach-row and attach-row only delete an owned row or
+append a new one at the end of Home. Existing apply/remove continue their
 bounded owned-resource lifecycle.
 
 Updates clear exact current occurrences and add the validated desired sequence;
@@ -279,10 +310,121 @@ qualified conditional-write token. An external actor can race the final read and
 dispatch. Protected single-operator use is required; there is no linearizability
 claim.
 
+## Multiple lists (journal version 2)
+
+Version 2 keeps one journal, one lock, one unfinished `run`, one `pending` step,
+one shared Home `baseline` and one `current` snapshot for every owned list of
+the configured recipient and library. Lists therefore serialize under the
+existing lock, and each completed step updates `current` for all lists in one
+atomic save, so a sibling list never looks like drift. The journal holds:
+
+```python
+{"version": 2, "scope": {server, actor, recipient, library},
+ "baseline": snapshot, "current": snapshot,
+ "lists": {list_id: {"row": row_id_or_null, "display_title"?: str}},
+ "pending": None or {"list", "operation", "args", "before"},
+ "run": None or {"key", "request"}, "done": {key: request},
+ "migrated_from"?: {"version": 1, "recipe", "journal_digest", "key"}}
+```
+
+The snapshot shape is unchanged; playlists are sorted by marker. With only the
+legacy list the snapshot, and so show's `revision`, is identical to version 1.
+A list record exists exactly while its playlist is in `current`. At most four
+lists fit. That bound comes from the unchanged 512-request transport budget:
+creating a fourth list for a separate recipient with a title and 25 Movies is
+the costliest single invocation, recorded at 430 requests by the loopback test.
+Raising the bound needs scoped reads or a transport review, not a larger budget.
+
+Identity is the saved playlist ID, saved row ID, the journal creation provenance
+and the immutable marker. Titles need not be unique across lists or against
+manual rows, and a matching title never blocks management or proves ownership.
+A title shaped like another list's marker refuses.
+
+`list-preview` returns `intent_digest`, the digest of the version, scope, the
+canonical request (operation, list and arguments) and the fresh snapshot. A
+digest for one list, operation, title or Movie sequence cannot authorize any
+other. Operations:
+
+| Operation | Steps, each journaled before dispatch |
+| --- | --- |
+| create-list | create marker playlist, share Read if the recipient differs, create row titled with the marker, set the row title if it differs, add Movies if any |
+| set-members | clear current occurrences if they differ, then add the full new sequence if nonempty |
+| set-title | one same-row title save on an attached list; refuses when detached |
+| detach-row | delete the owned row; playlist, membership and saved display title remain |
+| attach-row | create a marker-titled row at the end of Home, then set its title |
+| delete-list | delete the row if attached, then the playlist; the record is removed |
+
+Friendly row titles at creation use the qualified two-step path, so the marker
+is briefly visible as the row title. Direct creation with a friendly title is
+not qualified and not used. Membership is replacement only. Add, remove and
+reorder are expressed as a new complete sequence of 0..25 unique Movies; the same
+Movie may appear in different lists. An empty sequence clears membership and
+keeps the playlist; it never deletes the list. No native incremental endpoint,
+append, subset delete or entry move is claimed. A mid-update empty playlist can
+still be briefly visible.
+
+Every step uses the exact footprint check of version 1, indexed by the list's
+marker: the operated playlist or row changes as specified and every sibling
+playlist, entry, grant, row object, field and Home position is byte-identical.
+Any other Home change, including a manual reorder, still refuses as drift.
+After delete-list, the Home rows not owned by a remaining list must equal the
+shared baseline exactly. Lost responses and NotDispatched recovery are the same
+as version 1 for every step type: only exact after-state readback completes a
+step, an unchanged state after an attempted POST stays unresolved, and
+NotDispatched clears only the pending step while keeping the run. Show and
+reconcile remain read-only; pending state names its list.
+
+The version 2 show catalog contains `version`, recipient `scope`, `legacy_list`,
+`lists` (each with list ID, marker, legacy flag, expected display title, observed
+playlist and the saved and observed row), `list_count`, `list_limit`, `revision`,
+`journal_digest`, `pending`, `run`, `done_count`, `done_limit`, `keys_exhausted`,
+`migrated_from` and reconcile state. `{"list": id}` narrows `lists` to one list
+and refuses an unknown ID.
+
+### Legacy aliases
+
+On a version 2 journal the old operations act only on the list whose ID is the
+configured recipe, and each is exactly one list-scoped operation with its own
+digest. `preview` returns the set-members digest and `apply` is set-members; it
+does not create a missing list or row. `display-title-preview` and
+`set-display-title` are set-title. `remove` is delete-list and needs a
+`list-preview` delete-list digest; a membership preview digest refuses. Version 1
+digests never authorize version 2 requests. Completed version 1 keys keep their
+original requests, so reusing one on version 2 refuses as a reused key.
+
+### Migration and inverse
+
+Reads never migrate. `migrate-preview` returns `intent_digest` over the
+operation, configured scope including recipe, the version 1 journal digest and
+the fresh snapshot. `migrate` requires that digest, version 1, no pending step,
+no run, no drift, at most 64 done keys, known fields only, and either both a
+playlist and saved row or neither. It writes version 2 in one save and makes no
+Emby write. The legacy record keeps the exact saved row ID and optional display
+title; baseline, current and every completed key are copied unchanged, and
+`migrated_from` records the version 1 digest and migration key. Replaying the
+same key returns `already-migrated` with no save. With no journal, the first
+create-list starts a version 2 journal directly; old operations still start
+version 1.
+
+`downgrade-preview` and `downgrade` are the inverse. They require version 2, a
+clean state, and either no lists or only the configured recipe's list while it
+is attached. They rebuild the version 1 fields from the same baseline, current,
+row, display title and every completed key; only `migrated_from` metadata is
+dropped. Migrating and then downgrading reproduces the original version 1 bytes.
+Extra or detached lists refuse; delete or attach them first. Version 2 keys stay
+in place and refuse as reused keys under version 1.
+
+Code at or before 7180f726c368d9e5aae7a9209a42825127e4c1a9 refuses a version 2
+journal as foreign and touches no Emby object. Downgrade first, then redeploy the
+old code.
+
 ## Qualification boundaries
 
 The base source is bcc1d6b5f9c9ac994b6f69373b35ac2a078546a6. Existing
 lifecycle and show evidence belongs to that base, not this new title source.
+The version 2 source is based on 7180f726c368d9e5aae7a9209a42825127e4c1a9. Its
+recording tests use synthetic IDs and are not runtime evidence; real request
+counts and latency at two or more lists remain unmeasured.
 The row-write design follows qualified same-row save proof
 `1c877946348798136b8050be378dce9a@2`. The supplied regular fixture receipt and
 before/after evidence establish the fixed row update and server Name/CustomName

@@ -12,7 +12,8 @@ import urllib.parse
 import urllib.request
 
 from functools import wraps
-from emby_operator_recommendations import NotDispatched, Refused, require, movie_ids, opaque, row_id, digest, display_title, title_row
+from emby_operator_recommendations import (MAX_LISTS, NotDispatched, Refused, require, movie_ids,
+                                           opaque, row_id, display_title, title_row, list_marker)
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_BODY = 16 * 1024
@@ -175,6 +176,8 @@ class OperatorAdapter:
     def __init__(self, config, journal=None):
         self._config = validate_config(config)
         self._journal = journal
+        self._base = {k: self._config[k] for k in ('server', 'actor', 'recipient', 'library')}
+        self._legacy = list_marker(self._base, self._config['recipe'])
         self._routes = set()
         require(self._config['enabled'], "Operator disabled")
         self._token = None
@@ -319,24 +322,51 @@ class OperatorAdapter:
                 "Recipient Movie set incomplete or unauthorized")
         return [{'Id': x, 'Type': 'Movie', 'LibraryId': library} for x in ids]
 
+    def _marker(self, list_id):
+        return self._legacy if list_id is None else list_marker(self._base, list_id)
+
+    def _records(self, d):
+        """Owned list records by marker, from protected journal custody only."""
+        if d is None:
+            return {}
+        if d['version'] == 1:
+            return {self._legacy: d}
+        return {self._marker(k): r for k, r in d['lists'].items()}
+
     def _state(self, marker=None):
         require(self._journal is not None and self._journal._locked,
                 'Held core journal lock required')
         c = self._config
-        scope = {k: c[k] for k in ('server', 'actor', 'recipient', 'library', 'recipe')}
-        expected_marker = 'holonet-recommendations-' + digest(scope)[:32]
-        require(marker is None or marker == expected_marker, 'Foreign marker')
+        require(marker is None or marker == self._legacy, 'Foreign marker')
         d = self._journal.load()
         if d is not None:
-            require(type(d) is dict and d.get('version') == 1 and d.get('scope') == scope,
-                    'Foreign journal provenance')
-        display_title(d, expected_marker)
-        return d, expected_marker
+            require(type(d) is dict and (
+                (d.get('version') == 1 and d.get('scope') == dict(self._base, recipe=c['recipe'])) or
+                (d.get('version') == 2 and d.get('scope') == self._base and
+                 type(d.get('lists')) is dict and len(d['lists']) <= MAX_LISTS)),
+                'Foreign journal provenance')
+        for m, record in self._records(d).items():
+            display_title(record, m)
+        return d, self._legacy
+
+    def check_create_absent(self, list_id):
+        d, _ = self._state()
+        require(d is None or (d['version'] == 2 and list_id not in d['lists']),
+                'List already exists')
+        marker = self._marker(opaque(list_id))
+        self.verified_identity()
+        rows = complete(self._http('GET', '/Users/' + self._config['actor'] + '/Items', {
+            'Recursive': 'true', 'IncludeItemTypes': 'Playlist', 'EnableUserData': 'false',
+            'StartIndex': 0, 'Limit': 129}), 128)
+        require(all(r.get('Type') == 'Playlist' and isinstance(r.get('Name'), str)
+                    for r in rows), 'Invalid playlist discovery DTO')
+        require(not any(r['Name'] == marker for r in rows),
+                'Existing playlist requires explicit operator recovery')
 
     def snapshot(self, recipient, marker):
         c = self._config
         require(recipient == c['recipient'], 'Foreign recipient')
-        d, marker = self._state(marker)
+        d, legacy = self._state(marker)
         self.verified_identity()
         home = normalize_home(self._http('GET', '/Users/' + recipient + '/HomeSections'))
         rows = complete(self._http('GET', '/Users/' + c['actor'] + '/Items', {
@@ -348,41 +378,63 @@ class OperatorAdapter:
             require(r.get('Type') == 'Playlist' and isinstance(r.get('Name'), str),
                     'Invalid playlist discovery DTO')
         require(len(seen) == len(set(seen)), 'Duplicate discovered ID')
+        pending = d.get('pending') if d else None
+        records = self._records(d)
+        known = d['current']['playlists'] if d else []
+        require(len(known) <= (MAX_LISTS if d and d['version'] == 2 else 1), 'Ambiguous saved ID')
+        saved = {}
+        for p in known:
+            require(p['marker'] in records and p['marker'] not in saved and
+                    p['owner'] == c['actor'], 'Foreign saved provenance')
+            saved[p['marker']] = p
+        # Journal-owned markers plus the legacy marker, which still refuses when
+        # unexplained. Marker playlists of unknown list IDs are never adopted.
+        candidates = {legacy} | set(saved)
+        if pending and pending['operation'] == 'create':
+            candidates.add(self._marker(pending.get('list')))
+        playlists = []
+        for m in sorted(candidates):
+            pid = self._discover(rows, m, saved.get(m), d, records)
+            if pid is not None:
+                playlists.append(self._playlist(pid, m))
+        return {'home': home, 'playlists': playlists}
+
+    def _discover(self, rows, marker, saved, d, records):
+        pending = d.get('pending') if d else None
+        pending_marker = self._marker(pending.get('list')) if pending else None
         matches = [r for r in rows if r['Name'] == marker]
         require(len(matches) <= 1, 'Ambiguous marker discovery')
-        title = marker  # Immutable playlist item Name, independent of the Home title.
-        pending = d.get('pending') if d else None
-        known = d['current']['playlists'] if d else []
-        require(len(known) <= 1, 'Ambiguous saved ID')
-        if known:
-            saved = known[0]
-            require(saved['marker'] == marker and saved['owner'] == c['actor'],
-                    'Foreign saved provenance')
+        if saved is not None:
             exact = [r for r in rows if r['Id'] == saved['id']]
             if not exact:
-                require(pending and pending['operation'] == 'delete' and not matches,
-                        'Saved playlist disappeared')
-                return {'home': home, 'playlists': []}
-            require(exact[0]['Name'] == title and
+                require(pending and pending['operation'] == 'delete' and
+                        pending_marker == marker and not matches, 'Saved playlist disappeared')
+                return None
+            # Immutable playlist item Name, independent of any Home title.
+            require(exact[0]['Name'] == marker and
                     all(r['Id'] == saved['id'] for r in matches),
                     'Saved playlist renamed or substituted')
             # Once created, protected provenance and the exact ID own discovery.
             # A display title never establishes ownership.
-            matches = exact
-        elif matches:
-            require(display_title(d, marker) == marker, 'Pending create display title changed')
-            require(pending and pending['operation'] == 'create' and
-                    pending['before']['playlists'] == [] and d.get('run'),
-                    'Unexplained existing marker playlist')
+            return opaque(exact[0]['Id'])
         if not matches:
-            return {'home': home, 'playlists': []}
-        pid = opaque(matches[0]['Id'])
+            return None
+        require(display_title(records.get(marker), marker) == marker,
+                'Pending create display title changed')
+        require(pending and pending['operation'] == 'create' and pending_marker == marker and
+                all(p['marker'] != marker for p in pending['before']['playlists']) and
+                d.get('run'), 'Unexplained existing marker playlist')
+        return opaque(matches[0]['Id'])
+
+    def _playlist(self, pid, marker):
+        c = self._config
+        recipient = c['recipient']
         path = '/Users/' + c['actor'] + '/Items/' + pid
         members_path = '/Playlists/' + pid + '/Items'
         self._routes.update({('GET', path), ('GET', members_path)})
         item = self._http('GET', path, {'Fields': 'ShareLevel', 'EnableUserData': 'false'})
         require(type(item) is dict and item.get('Id') == pid and
-                item.get('Type') == 'Playlist' and item.get('Name') == title and
+                item.get('Type') == 'Playlist' and item.get('Name') == marker and
                 item.get('CanEditItems') is True and
                 (item.get('CanDelete') is True if c['actor'] == recipient else
                  item.get('CanManageAccess') is True),
@@ -411,44 +463,48 @@ class OperatorAdapter:
             occurrence_ids.append(occurrence)
             normalized.append({'movie': opaque(e.get('Id')), 'entry': occurrence})
         require(len(occurrence_ids) == len(set(occurrence_ids)), 'Duplicate occurrence ID')
-        return {'home': home, 'playlists': [{'id': pid, 'marker': marker,
-            'owner': c['actor'], 'access': managed_access,
-            'entries': normalized}]}
+        return {'id': pid, 'marker': marker, 'owner': c['actor'], 'access': managed_access,
+                'entries': normalized}
 
     def _intent(self, operation, args):
-        d, marker = self._state()
+        """Durable intent for exactly one list: (journal, snapshot, marker, playlist, record)."""
+        d, legacy = self._state()
         require(d is not None and d.get('run') and d.get('pending'), 'No durable operation intent')
         p = d['pending']
         require(p['operation'] == operation and p['args'] == args, 'Foreign mutation intent')
-        current = self.snapshot(self._config['recipient'], marker)
+        current = self.snapshot(self._config['recipient'], legacy)
         require(current == p['before'] == d['current'], 'Drift before typed dispatch')
-        return current, marker
+        marker = self._marker(p.get('list'))
+        target = [x for x in current['playlists'] if x['marker'] == marker]
+        record = d if d['version'] == 1 else d['lists'].get(p.get('list'))
+        return d, current, marker, (target[0] if target else None), record
 
     def _post(self, path, *, query=None, body=None):
         self._routes.add(('POST', path))
         self._http('POST', path, query, body)
 
     def _owned(self, operation, args, playlist):
-        current, marker = self._intent(operation, args)
-        require(len(current['playlists']) == 1 and
-                current['playlists'][0]['id'] == opaque(playlist), 'Foreign playlist mutation')
-        return current, marker
+        intent = self._intent(operation, args)
+        require(intent[3] is not None and intent[3]['id'] == opaque(playlist),
+                'Foreign playlist mutation')
+        return intent
 
     @mutation_dispatch
     def create_playlist(self, actor, marker):
         require(actor == self._config['actor'], 'Foreign creator')
-        current, expected = self._intent('create', None)
-        d, _ = self._state()
-        require(marker == expected and display_title(d, expected) == expected and
-                not current['playlists'], 'Existing or foreign playlist/title')
+        d, current, expected, target, record = self._intent('create', None)
+        require(marker == expected and target is None and
+                display_title(record, expected) == expected and
+                (d['version'] == 1 or (record is None and len(d['lists']) < MAX_LISTS)),
+                'Existing or foreign playlist/title')
         self._post('/Playlists', query={'Name': marker, 'userId': actor})
 
     @mutation_dispatch
     def share_read(self, playlist, recipient):
         require(recipient == self._config['recipient'] and recipient != self._config['actor'],
                 'Foreign or unnecessary self-share recipient')
-        current, _ = self._owned('share', None, playlist)
-        require(current['playlists'][0]['access'] == [], 'Managed grant changed')
+        target = self._owned('share', None, playlist)[3]
+        require(target['access'] == [], 'Managed grant changed')
         self._post('/Items/Access', body={'UserIds': [recipient], 'ItemIds': [playlist],
                                          'ItemAccess': 'Read'})
 
@@ -456,22 +512,23 @@ class OperatorAdapter:
     def create_row(self, recipient, body):
         require(recipient == self._config['recipient'] and type(body) is dict and 'Id' not in body,
                 'Foreign row request')
-        current, marker = self._owned('row', body, body.get('ParentId'))
+        _, current, marker, _, record = self._owned('row', body, body.get('ParentId'))
         # Core owns the exact template; intent and complete baseline bind every field.
-        d, _ = self._state()
-        title = display_title(d, marker)
-        require(body.get('SectionType') == 'playlist' and body.get('CustomName') == title and
-                not any(r.get('CustomName') in (marker, title)
-                        for r in current['home']), 'Foreign row marker')
+        # Rows are created only with the immutable marker title (qualified path);
+        # same-title manual or sibling rows neither block nor prove ownership.
+        require(record is not None and record['row'] is None and
+                body.get('SectionType') == 'playlist' and
+                body.get('CustomName') == display_title(record, marker) == marker and
+                not any(r.get('CustomName') == marker for r in current['home']),
+                'Foreign row marker')
         self._post('/Users/' + recipient + '/HomeSections', body=body)
 
     @mutation_dispatch
     def set_row_display_title(self, recipient, body):
         require(recipient == self._config['recipient'] and type(body) is dict,
                 'Foreign display title recipient')
-        current, marker = self._intent('display-title', body)
-        d, _ = self._state()
-        expected = title_row(d, current, marker)
+        _, current, marker, target, record = self._intent('display-title', body)
+        expected = title_row(record, target, current['home'], recipient, marker)
         expected['CustomName'] = display_title({'display_title': body.get('CustomName')}, marker)
         if expected.get('Subtitle') == 'operator-provisioned' and body.get('Subtitle') == '':
             expected['Subtitle'] = ''
@@ -481,8 +538,8 @@ class OperatorAdapter:
     @mutation_dispatch
     def delete_entries(self, playlist, actor, entries):
         require(actor == self._config['actor'] and type(entries) is list, 'Foreign occurrence actor')
-        current, _ = self._owned('clear', entries, playlist)
-        require(entries and entries == [e['entry'] for e in current['playlists'][0]['entries']],
+        target = self._owned('clear', entries, playlist)[3]
+        require(entries and entries == [e['entry'] for e in target['entries']],
                 'Stale occurrences')
         self._post('/Playlists/' + playlist + '/Items/Delete', body={'EntryIds': ','.join(entries)})
 
@@ -490,8 +547,8 @@ class OperatorAdapter:
     def add_movies(self, playlist, actor, movies):
         require(actor == self._config['actor'], 'Foreign membership actor')
         movies = movie_ids(movies)
-        current, _ = self._owned('add', movies, playlist)
-        require(not current['playlists'][0]['entries'], 'Membership no longer empty')
+        target = self._owned('add', movies, playlist)[3]
+        require(not target['entries'], 'Membership no longer empty')
         self.query_movies(self._config['recipient'], self._config['library'], movies)
         self._post('/Playlists/' + playlist + '/Items', body={
             'Ids': ','.join(movies), 'userId': actor, 'SkipDuplicates': False})
@@ -499,21 +556,20 @@ class OperatorAdapter:
     @mutation_dispatch
     def delete_row(self, recipient, row):
         require(recipient == self._config['recipient'], 'Foreign row recipient')
-        current, marker = self._intent('unrow', row)
-        d, _ = self._state()
+        _, current, marker, target, record = self._intent('unrow', row)
         matches = [r for r in current['home'] if row_id(r['Id']) == row_id(row)]
-        require(d['row'] == row and len(matches) == 1 and len(current['playlists']) == 1 and
-                matches[0].get('CustomName') == display_title(d, marker) and
+        require(record is not None and record['row'] == row and len(matches) == 1 and
+                target is not None and
+                matches[0].get('CustomName') == display_title(record, marker) and
                 matches[0].get('SectionType') == 'playlist' and
-                matches[0].get('ParentId') == current['playlists'][0]['id'], 'Foreign saved row')
+                matches[0].get('ParentId') == target['id'], 'Foreign saved row')
         self._post('/Users/' + recipient + '/HomeSections/Delete', body={'ids': [row]})
 
     @mutation_dispatch
     def delete_owned_playlist(self, playlist, marker, actor):
         require(actor == self._config['actor'], 'Foreign delete actor')
-        current, expected = self._owned('delete', None, playlist)
-        d, _ = self._state()
-        require(marker == expected and d['row'] is None and
+        _, current, expected, _, record = self._owned('delete', None, playlist)
+        require(marker == expected and record is not None and record['row'] is None and
                 not any(r.get('ParentId') == playlist or r.get('CustomName') == marker
                         for r in current['home']), 'Playlist still referenced')
         self._post('/Items/Delete', query={'Ids': playlist})

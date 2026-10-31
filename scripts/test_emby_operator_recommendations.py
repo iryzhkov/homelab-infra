@@ -316,6 +316,61 @@ class OperatorTests(unittest.TestCase):
         with self.assertRaises(Refused):
             other.reconcile()
 
+    def test_v1_reads_and_list_operations_never_migrate_or_write(self):
+        self.apply()
+        before, writes = (self.directory / "journal.json").read_bytes(), copy.deepcopy(self.api.writes)
+        for call in (lambda: self.operator.list_preview("set-members", "igor-movies", movies=["101"]),
+                     lambda: self.operator.create_list("new", "second", "Second", [], "digest"),
+                     lambda: self.operator.set_members("new", "igor-movies", [], "digest"),
+                     lambda: self.operator.show(list="igor-movies"),
+                     self.operator.downgrade_preview):
+            with self.assertRaises(Refused):
+                call()
+        self.assertEqual(self.operator.show()["reconcile"], {"state": "clean"})
+        self.assertEqual(self.operator.reconcile(), {"state": "clean"})
+        self.assertEqual(len(self.operator.migrate_preview()["intent_digest"]), 64)
+        self.assertEqual((self.directory / "journal.json").read_bytes(), before)
+        self.assertEqual(self.api.writes, writes)
+
+    def test_migration_round_trip_is_lossless_and_old_digests_stay_bound(self):
+        self.apply()
+        old = self.operator.preview(["101"])["baseline_digest"]
+        before, shown = (self.directory / "journal.json").read_bytes(), self.operator.show()
+        migration = self.operator.migrate_preview()
+        self.assertEqual(self.operator.migrate("migrate", migration["intent_digest"]),
+                         {"state": "migrated", "writes": 0})
+        stored = json.loads((self.directory / "journal.json").read_text())
+        self.assertEqual(stored["lists"], {"igor-movies": {"row": 2}})
+        self.assertEqual(stored["done"], json.loads(before)["done"])
+        self.assertEqual(self.operator.show()["revision"], shown["revision"])
+        for call in (lambda: self.operator.apply("next", ["102"], old),
+                     lambda: self.operator.remove("gone", old),
+                     lambda: self.operator.apply("first", ["101"])):
+            with self.assertRaises(Refused):
+                call()
+        inverse = self.operator.downgrade_preview()
+        self.assertEqual(self.operator.downgrade("downgrade", inverse["intent_digest"]),
+                         {"state": "downgraded", "writes": 0})
+        self.assertEqual((self.directory / "journal.json").read_bytes(), before)
+        self.assertEqual(self.operator.show(), shown)
+        self.assertEqual(self.operator.apply("first", ["101"]), {"state": "replayed", "writes": 0})
+        self.assertEqual(len(self.api.writes), 4)
+
+    def test_version_two_alias_remove_needs_delete_digest_and_restores_baseline(self):
+        before = copy.deepcopy(self.api.home)
+        self.apply()
+        self.operator.migrate("migrate", self.operator.migrate_preview()["intent_digest"])
+        membership = self.operator.preview(["101"])["baseline_digest"]
+        with self.assertRaises(Refused):
+            self.operator.remove("remove", membership)
+        removal = self.operator.list_preview("delete-list", "igor-movies")["intent_digest"]
+        self.assertEqual(self.operator.remove("remove", removal), {"state": "deleted", "writes": 2})
+        self.assertEqual((self.api.home, self.api.playlists), (before, []))
+        stored = json.loads((self.directory / "journal.json").read_text())
+        self.assertEqual((stored["version"], stored["lists"]), (2, {}))
+        self.assertEqual(stored["current"], stored["baseline"])
+        self.assertEqual(len(stored["done"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
