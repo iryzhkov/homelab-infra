@@ -331,8 +331,9 @@ The snapshot shape is unchanged; playlists are sorted by marker. With only the
 legacy list the snapshot, and so show's `revision`, is identical to version 1.
 A list record exists exactly while its playlist is in `current`. At most four
 lists fit. That bound comes from the unchanged 512-request transport budget:
-creating a fourth list for a separate recipient with a title and 25 Movies is
-the costliest single invocation, recorded at 430 requests by the loopback test.
+the recording transport test asserts that creating a fourth list for a separate
+recipient with a title and 25 Movies stays below that fixed budget. Actual
+multi-list runtime request counts remain a release qualification gate.
 Raising the bound needs scoped reads or a transport review, not a larger budget.
 
 Identity is the saved playlist ID, saved row ID, the journal creation provenance

@@ -518,7 +518,7 @@ class OperatorAdapter:
         # same-title manual or sibling rows neither block nor prove ownership.
         require(record is not None and record['row'] is None and
                 body.get('SectionType') == 'playlist' and
-                body.get('CustomName') == display_title(record, marker) == marker and
+                body.get('CustomName') == marker and
                 not any(r.get('CustomName') == marker for r in current['home']),
                 'Foreign row marker')
         self._post('/Users/' + recipient + '/HomeSections', body=body)

@@ -1767,7 +1767,8 @@ class MultiListTests(unittest.TestCase):
         stored = self.stored()
         self.assertIsNone(stored['pending'])
         self.assertEqual(stored['run']['key'], 'create-a')
-        self.assertEqual(stored['lists'], {'a': {'row': self.backend.home[-1]['Id']}})
+        self.assertEqual(stored['lists'], {'a': {'row': self.backend.home[-1]['Id'],
+                                                    'display_title': self.operator.marker_for('a')}})
         self.assertEqual(self.resume('create-list', 'create-a', 'a', title='A',
                                      movies=['m1'])['writes'], 2)
         self.assertEqual([w[0] for w in self.backend.writes],
@@ -1848,7 +1849,7 @@ class MultiListTests(unittest.TestCase):
     def test_detached_list_stays_manageable_and_title_needs_row(self):
         self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
         self.do('detach-row', 'detach', 'a')
-        self.assertEqual(self.stored()['lists']['a'], {'row': None})
+        self.assertEqual(self.stored()['lists']['a'], {'row': None, 'display_title': 'A'})
         self.fresh_session()
         for operation, args in (('set-title', {'title': 'B'}), ('detach-row', {})):
             with self.assertRaises(Refused):
