@@ -13,6 +13,8 @@ import os
 from pathlib import Path, PurePosixPath
 import stat
 import subprocess
+import re
+import shlex
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -627,6 +629,23 @@ class PlaybookContractTests(unittest.TestCase):
                     self.assertNotIn('TASK [Load only the dedicated operator credential',
                                      result.stdout)
                     self.assertFalse(sentinel.exists())
+
+            # Execute the runbook's provision command with --check: its JSON
+            # Boolean must pass input validation and reach the secret-free root
+            # check, which safely refuses the absent production root in this job.
+            doc = (SCRIPTS.parent / 'docs/emby-operator-credential-provisioning.md').read_text()
+            examples = re.findall(r'```sh\n(.*?)\n```', doc, re.S)
+            provision = next(x for x in examples if 'credential_action=provision' in x)
+            command = shlex.split(provision.replace('\\\n', ' '))
+            command[1] = str(SCRIPTS.parent / command[1])
+            command += ['-i', str(inventory), '--check']
+            self.assertFalse(Path(PRODUCTION_ROOT).exists())
+            result = subprocess.run(command, env=environment, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('TASK [Check the pinned operator root', result.stdout)
+            self.assertNotIn('TASK [Load only the dedicated operator credential', result.stdout)
+            self.assertFalse(sentinel.exists())
 
     def test_helper_has_no_path_identity_or_command_inputs(self):
         source = (SCRIPTS / 'emby-operator-credential.py').read_text()

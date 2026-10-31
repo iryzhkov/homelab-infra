@@ -12,11 +12,14 @@ access to the credential. Nothing in `site.yml` selects it.
 
 The playbook acts only on host `homelab` and only on the retained Igor operator
 root `/var/lib/holonet-operator/igor-pr116-retain-20261031-next`. Every value is
-a literal in `scripts/emby-operator-credential.py`; no argument or variable
-selects a host, path, identity, interpreter or command. The playbook inlines the
+a literal in `scripts/emby-operator-credential.py`; the helper exposes no path,
+identity, interpreter or command selector. Ansible itself remains a trusted
+operator surface: connection variables and templated extra vars must not come
+from an agent or untrusted request. The playbook inlines the
 fixed command and apply/check-mode gates. Injecting the former helper, argv or
 applying variables, or a preloaded secret, is refused before command execution
-or decryption; the public apply flag must be a Boolean.
+or decryption; the public apply flag must be a JSON Boolean. The key=value
+form `-e emby_operator_credential_apply=true` supplies a string and is refused.
 
 The root must already hold, directly inside it:
 
@@ -95,7 +98,7 @@ the metadata above, and refusals carry no paths or credential data.
 
 ```sh
 ansible-playbook playbooks/emby-operator-credential.yml \
-  -e emby_operator_credential_action=provision -e emby_operator_credential_apply=true
+  -e emby_operator_credential_action=provision -e '{"emby_operator_credential_apply": true}'
 ```
 
 This requires `enabled: false` and an absent credential. The helper writes a new
@@ -118,7 +121,7 @@ Change the password in Emby, update the SOPS file, run `check`, review it, then:
 ansible-playbook playbooks/emby-operator-credential.yml \
   -e emby_operator_credential_action=rotate \
   -e emby_operator_credential_expect=<credential_id from check> \
-  -e emby_operator_credential_apply=true
+  -e '{"emby_operator_credential_apply": true}'
 ```
 
 Rotation requires the installed credential to still have the reviewed id. It
@@ -133,7 +136,7 @@ fails authentication and refuses, which is the safe direction.
 ansible-playbook playbooks/emby-operator-credential.yml \
   -e emby_operator_credential_action=retire \
   -e emby_operator_credential_expect=<credential_id from check, or absent> \
-  -e emby_operator_credential_apply=true
+  -e '{"emby_operator_credential_apply": true}'
 ```
 
 Retirement first sets `enabled` to `false`, then unlinks `credential.json`
