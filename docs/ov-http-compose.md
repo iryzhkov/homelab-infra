@@ -119,23 +119,26 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:437580b5a2fa582497967c6ac0051214062de763e11a6d8e683f71e51bdb9817
-source_revision: cd2ad3bf4637d20ffaadb7c7c22105163152b82a
+reference: sha256:95cdf45c81564bb231c0c92088ab2d78272f59cb9aa648c60c0bf258d53e36d6
+source_revision: d171897f64a839772686c9f6a3b07cfa9900cbf2
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41155827874
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41162764846
 ```
 
 All five fields must match together. The contract revision still names the
 existing full-resource interface. Accepted publication source
-cd2ad3bf4637d20ffaadb7c7c22105163152b82a identifies tree
-c681ca5766d0d7a51ae656761ab18a0b2f18c42b, equivalent to reviewed source
-5c62ca394ef97019f79ce2e3984eab61c9f77c0b. The closed object and image label
+d171897f64a839772686c9f6a3b07cfa9900cbf2 identifies tree
+788ef69cb1b82a0a9d6437de157cd53a8c573b4f, equivalent to reviewed source
+fe0cc7677b02ef00761d35244c2148dd1d601b5d. The closed object and image label
 use the publication revision; neither revision enters the distribution-source
-allowlist. This release preserves private document metadata during resource
-writes and refuses unknown dotfiles and directories in the document inventory.
-Reader behavior, public control-target refusal and global authorization are
-unchanged. Existing preflight diagnostics, non-GET dispatch guard and in-flight
-authority recheck are retained.
+allowlist. This release gives default document writes bounded 60-second backend
+I/O and a 70-second operation deadline, still capped by JWT expiry. Completion
+is not guaranteed. Dry-run, deferred-write and reader behavior are unchanged.
+Private metadata preservation, refusal of unknown dotfiles and directories,
+public control-target refusal and global authorization are retained, as are
+preflight diagnostics, the non-GET dispatch guard and in-flight authority recheck.
+Source PR13 merged as d171897f64a839772686c9f6a3b07cfa9900cbf2 after
+495 passing tests and full source CI. These are source checks, not native proof.
 The [earlier personal binding record](ov-personal-qualified-release.md)
 retains the prior source selection and planned operator procedure, not an
 activation receipt or the current accepted HTTP image.
@@ -144,10 +147,10 @@ refuse. The full config and resource/action/namespace restrictions above are unc
 
 The reference is the Docker image config ID. It commits to the immutable config
 and ordered RootFS diff_ids; it is not a registry distribution manifest.
-The retained linux/amd64 Docker save is 176904192 bytes, SHA256
-7325db9e906bb6e3dd1060842a085c3d215bbf6e82715439fb80cc9ab43c7336.
-The publication ZIP is 176942459 bytes, SHA256
-c94503f002b7bff285ff2a43acab24bfd505dec5bc21a7424f1efc211405b311.
+The retained linux/amd64 Docker save is 176904704 bytes, SHA256
+72b8cd9c8710f7a781c266215360b26f5366ecbaf80c5e757ff57504fd32fb4b.
+The publication ZIP is 176942971 bytes, SHA256
+33d29f2585f048381d292ceb61ef652b8ea0f5eac9509d82e42a65ffdb7a894b.
 Hosted custody and the independent operator artifact check verified all eleven
 source inputs, nine embedded runtime source files, the full saved config and
 all ten uncompressed diffIDs. No registry distribution manifest or signature
@@ -165,7 +168,7 @@ The image must already exist. This mode never pulls, tags, imports, installs or
 logs into a registry. Offline check-config also uses --pull=never.
 The regular activation retains pull:never and recreate:auto.
 
-This metadata-preservation release retains the qualified personal and resource
+This bounded-write release retains the qualified personal and resource
 profiles, including personal protocol pin 7f3faf6982f81116d6626bc7091f87f786a309c7.
 The separately qualified backend config ID remains
 sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32.
@@ -176,6 +179,20 @@ It changes no issuer, subjects, grants, credentials, stdio registrations or
 backend configuration. A successful dry run is not a successful curator pilot.
 Historical canary and earlier backend delivery limitations are retained in the
 prior receipts; they are not evidence about this release's live state.
+
+### Historical metadata-preservation binding
+
+The superseded HTTP selection used config ID
+sha256:437580b5a2fa582497967c6ac0051214062de763e11a6d8e683f71e51bdb9817,
+publication source cd2ad3bf4637d20ffaadb7c7c22105163152b82a, tree
+c681ca5766d0d7a51ae656761ab18a0b2f18c42b and reviewed source
+5c62ca394ef97019f79ce2e3984eab61c9f77c0b.
+Its build receipt is https://github.com/iryzhkov/ov-mcp/actions/runs/41155827874.
+Its Docker save was 176904192 bytes, SHA256
+7325db9e906bb6e3dd1060842a085c3d215bbf6e82715439fb80cc9ab43c7336,
+and its publication ZIP was 176942459 bytes, SHA256
+c94503f002b7bff285ff2a43acab24bfd505dec5bc21a7424f1efc211405b311.
+This historical custody record does not select that image or record activation.
 
 ## Stage, validate, activate and roll back
 
