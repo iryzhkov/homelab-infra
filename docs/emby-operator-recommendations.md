@@ -39,6 +39,9 @@ O_DIRECTORY and O_NOFOLLOW from `/` and must be root-owned without group/world
 write. No environment, native cache, database, global key or broad helper loader
 exists. Paths through a user-owned home directory are unsuitable for real staging.
 No CLI accepts a credential, token, raw route or arbitrary deletion ID.
+For the retained Igor root, `playbooks/emby-operator-credential.yml` is the
+explicit opt-in producer of this credential file and the enable flag; see
+`docs/emby-operator-credential-provisioning.md`.
 
 `Journal(directory, root_safe=True)` applies the ancestor contract to the journal
 and holds its directory FD until close. Lock, load, save, rename, unlink and fsync

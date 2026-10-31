@@ -59,6 +59,7 @@ jobs:
           mkdir -p "$TMPDIR"
           python3 scripts/test_emby_operator_recommendations.py
           python3 scripts/test_emby_operator_adapter.py
+          python3 scripts/test_emby_operator_credential.py
       - name: Test opt-in Jocasta MCP stack configuration
         run: |
           export HOME="$PWD/.cache/jocasta-mcp-tests/home"
@@ -328,6 +329,7 @@ jobs:
           # This job only needs SOPS for the heartbeat provisioning syntax check.
           ansible-galaxy collection install community.sops
           ansible-playbook playbooks/chaldea-publisher-heartbeat.yml --syntax-check
+          ansible-playbook playbooks/emby-operator-credential.yml --syntax-check
           ansible-playbook playbooks/akasha-heartbeat.yml --syntax-check
           ansible-playbook playbooks/akasha-backup.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --syntax-check
