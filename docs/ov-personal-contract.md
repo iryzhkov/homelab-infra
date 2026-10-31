@@ -11,10 +11,10 @@ a2dd0cb0f9d8ca9f57ca49b24e4346526a1de350089f780c3924d7e94a762d51.
 Root must qualify and activate the HTTP personal artifact, its protected owner
 and approved subjects, and its backend binding before enabling issuer personal
 grants. Verify that live HTTP deployment before selecting
-`ov_http_identities_personal=true`. The currently accepted resources-only
-HTTP artifact cannot accept personal claims; enabling issuance first would
-deny existing resources access for those tokens. The replacement source binding
-is now closed to [the qualified release](ov-personal-qualified-release.md);
+`ov_http_identities_personal=true`. A deployed resources-only HTTP artifact cannot accept personal claims;
+enabling issuance before HTTP personal activation would deny resources access
+for those tokens. The replacement source binding
+is now closed to [the current HTTP binding](ov-http-compose.md#explicit-local-config-identity);
 live activation remains root-owned.
 
 ## Issuer installer inputs
@@ -73,15 +73,15 @@ It does not attest deployed runtime identity; the exact backend image/source bin
 is recorded separately in [the current backend release](ov-curator-backend-qualified-release.md).
 
 `ov_personal_config` validates the protected shape. `ov_http_contract` permits
-personal enablement only with the exact new local HTTP binding and backend
-revision 7f3faf6982f81116d6626bc7091f87f786a309c7. Legacy and distribution
+personal enablement only with the exact current local HTTP binding and personal
+protocol revision 7f3faf6982f81116d6626bc7091f87f786a309c7. Legacy and distribution
 bindings cannot enable it. The maintained
 sorted TOML template needs no alternate rendering path; the role already stages
 it mode0600 with no_log and diff disabled.
 
-HTTP accepted source e094cb32a085e9ad3fc9976aba7824db830c8999 implements
-shared-owner-v1 with qualified append. Its measured publication binding and
-backend artifact are recorded in the qualified release. The resource interface
+Historical source e094cb32a085e9ad3fc9976aba7824db830c8999 implemented
+shared-owner-v1 with qualified append. Current artifact identities are recorded
+in the [combined release](ov-exact-directory-release.md). The resource interface
 contract remains 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319.
 
 ## Fleet helper owner

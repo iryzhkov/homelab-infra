@@ -119,43 +119,42 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:95cdf45c81564bb231c0c92088ab2d78272f59cb9aa648c60c0bf258d53e36d6
-source_revision: d171897f64a839772686c9f6a3b07cfa9900cbf2
+reference: sha256:324b4da5f9aab84f55b517eed9ab4394aca61c92e382583005f4fdd2002126ee
+source_revision: b8e678ae07fba3ec49ee142589ea9b61a22f6853
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41162764846
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41180284102
 ```
 
-All five fields must match together. The contract revision still names the
-existing full-resource interface. Accepted publication source
-d171897f64a839772686c9f6a3b07cfa9900cbf2 identifies tree
-788ef69cb1b82a0a9d6437de157cd53a8c573b4f, equivalent to reviewed source
-fe0cc7677b02ef00761d35244c2148dd1d601b5d. The closed object and image label
-use the publication revision; neither revision enters the distribution-source
-allowlist. This release gives default document writes bounded 60-second backend
-I/O and a 70-second operation deadline, still capped by JWT expiry. Completion
-is not guaranteed. Dry-run, deferred-write and reader behavior are unchanged.
-Private metadata preservation, refusal of unknown dotfiles and directories,
-public control-target refusal and global authorization are retained, as are
-preflight diagnostics, the non-GET dispatch guard and in-flight authority recheck.
-Source PR13 merged as d171897f64a839772686c9f6a3b07cfa9900cbf2 after
-495 passing tests and full source CI. These are source checks, not native proof.
-The [earlier personal binding record](ov-personal-qualified-release.md)
-retains the prior source selection and planned operator procedure, not an
-activation receipt or the current accepted HTTP image.
-Other kinds, extra fields, canary/reader contracts and arbitrary release triples
-refuse. The full config and resource/action/namespace restrictions above are unchanged.
+All five fields must match together. The contract revision remains the existing
+full-resource envelope pin. Publication source b8e678ae07fba3ec49ee142589ea9b61a22f6853
+identifies reviewed tree e5314657084b48f3eefa9fffe86d005099017cf9,
+equivalent to reviewed source 7a48af35c2151cfa87fca96b16738a7c421af6c6.
+The closed object and image label use the publication revision. The distribution
+source allowlist, roles, templates, namespace ceiling and grants stay unchanged.
 
-The reference is the Docker image config ID. It commits to the immutable config
-and ordered RootFS diff_ids; it is not a registry distribution manifest.
-The retained linux/amd64 Docker save is 176904704 bytes, SHA256
-72b8cd9c8710f7a781c266215360b26f5366ecbaf80c5e757ff57504fd32fb4b.
-The publication ZIP is 176942971 bytes, SHA256
-33d29f2585f048381d292ceb61ef652b8ea0f5eac9509d82e42a65ffdb7a894b.
-Hosted custody and the independent operator artifact check verified all eleven
-source inputs, nine embedded runtime source files, the full saved config and
-all ten uncompressed diffIDs. No registry distribution manifest or signature
-attestation is claimed. Compressed registry bytes are absent.
-Artifact qualification does not establish target loading or runtime acceptance.
+This artifact supports exact-directory-v2, preserving the original target URI bytes
+through directory writes rather than reconstructing the target URI. Optional
+typed stat/get checks distinguish directory and document nodes.
+`resources-document-write` version 2 is a checked runtime capability, not a new grant
+or a replacement envelope pin. The existing bounded-write deadlines, metadata
+preservation, control-target refusals and authority checks remain in place.
+No timeout fix, native acceptance or live refusal resolution is claimed.
+
+The reference is the Docker config ID, committing to the complete immutable
+config and ordered RootFS diff IDs, not a registry distribution manifest.
+The retained linux/amd64 Docker save is 176907776 bytes, SHA256
+6ec920d4fce6568b598b6253a49814ea4c78535640b1df821e75e367907f2c10.
+The publication ZIP is 176946218 bytes, SHA256
+2ca17ccbda4168a67601e8be51498ac52420410c06e0f03b07bcd2e2f5d65365.
+Independent artifact custody checked 12 source inputs, 10 embedded runtime
+modules, the full saved config and all 10 uncompressed layers. Dockerfile and
+lock custody use runner records matched to independently read source bytes.
+No registry publication digest or signature attestation is claimed. Compressed
+base registry blobs are absent; their pull verification is not an independent
+compressed-blob check. Artifact authority is
+/home/igor/.cache/exact-directory-repair/http-artifact-02/receipt.json.
+Custody does not establish target loading or runtime acceptance.
+Other kinds, extra fields and arbitrary release triples still refuse.
 
 Before protected credential inspection, managed writes, check-config or activation,
 the role uses docker_image_info on the fixed local socket and exact config ID.
@@ -168,10 +167,13 @@ The image must already exist. This mode never pulls, tags, imports, installs or
 logs into a registry. Offline check-config also uses --pull=never.
 The regular activation retains pull:never and recreate:auto.
 
-This bounded-write release retains the qualified personal and resource
+This exact-directory release retains the qualified personal and resource
 profiles, including personal protocol pin 7f3faf6982f81116d6626bc7091f87f786a309c7.
-The separately qualified backend config ID remains
-sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32.
+The current source-only backend selection is recorded in
+[the backend exact-artifact binding](ov-curator-backend-qualified-release.md).
+The earlier backend config ID
+sha256:91833db853e6dd1949b2810a2a4fdee6f56751354511a7b2e0b76bb7fa065f32
+is historical and does not identify the new backend artifact.
 Source tests render and validate the exact image binding; target staging,
 activation and native dry-run acceptance remain separate operator checks.
 No live refusal cause or successful native acceptance is established here.
@@ -179,6 +181,14 @@ It changes no issuer, subjects, grants, credentials, stdio registrations or
 backend configuration. A successful dry run is not a successful curator pilot.
 Historical canary and earlier backend delivery limitations are retained in the
 prior receipts; they are not evidence about this release's live state.
+
+### Historical bounded-write binding
+
+The superseded selection used config ID
+sha256:95cdf45c81564bb231c0c92088ab2d78272f59cb9aa648c60c0bf258d53e36d6,
+source d171897f64a839772686c9f6a3b07cfa9900cbf2 and build run
+https://github.com/iryzhkov/ov-mcp/actions/runs/41162764846.
+Those records are historical and do not select the current image.
 
 ### Historical metadata-preservation binding
 

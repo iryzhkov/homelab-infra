@@ -1,13 +1,13 @@
 # OV personal qualified release
 
-The resource-snapshot repair supersedes this backend image selection; see
+The exact-directory repair supersedes this historical backend image selection; see
 [the current backend binding](ov-curator-backend-qualified-release.md).
 The qualified personal protocol and HTTP owner/profile configuration are retained.
 
 Historical source-binding record. The HTTP image selection below is superseded
 by the current [exact local binding](ov-http-compose.md#explicit-local-config-identity).
 Its source-only status and planned procedure do not record a live activation.
-The backend binding is unchanged by the later HTTP diagnostic release.
+The personal protocol pin remains distinct from the current backend image identity.
 
 Source binding only. No personal inventory enablement, grants, subjects, secrets
 or live changes belong to this batch. Current resource-only runtime continues.
@@ -15,7 +15,7 @@ Root owns final review, source CI, activation and native acceptance.
 
 ## Exact bindings
 
-Backend selected product 7f3faf6982f81116d6626bc7091f87f786a309c7, tree
+Historical backend product 7f3faf6982f81116d6626bc7091f87f786a309c7, tree
 58f9919d1c8a4fd04762c3d9adab4c7b01573029. Closed local config ID
 sha256:33ce088da598bbc1915ba488e63330f0f40d8417e5f2783d384df6eb0f8dd98b.
 Native SHA256 8be7869a9f326ccd6cb67e093216f74296d1e98e93a73290918e6f33744ea1ad
