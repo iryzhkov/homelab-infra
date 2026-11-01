@@ -26,7 +26,7 @@ import emby_operator_adapter as adapter
 import emby_operator_entry as lifecycle
 import emby_operator_socket as worker
 import test_emby_operator_adapter as base
-from emby_operator_recommendations import DONE_LIMIT, Journal, Refused
+from emby_operator_recommendations import DONE_LIMIT, LIST_OPERATIONS, Journal, Refused
 
 SCRIPTS = Path(__file__).resolve().parent
 HOME = SCRIPTS.parent / '.cache/holonet-operator-tests/home'
@@ -35,6 +35,16 @@ CONFIG_PATH = '/synthetic/recipient/config.json'
 PASSWORD = 'synthetic-password'
 DIGEST = '0' * 64
 MEMBERS = {'operation': 'set-members', 'list': 'a', 'movies': ['m2']}
+# One valid request for every list operation on the seeded list 'a' or a new list 'n'.
+LIST_REQUESTS = {
+    'create-list': {'operation': 'create-list', 'list': 'n', 'title': 'Canary', 'movies': ['m5']},
+    'set-members': MEMBERS,
+    'set-title': {'operation': 'set-title', 'list': 'a', 'title': 'Movies for tonight'},
+    'attach-row': {'operation': 'attach-row', 'list': 'n', 'title': 'Canary'},
+    'detach-row': {'operation': 'detach-row', 'list': 'n'},
+    'move-row': {'operation': 'move-row', 'list': 'n', 'position': 0},
+    'delete-list': {'operation': 'delete-list', 'list': 'n'},
+}
 
 
 def isolated(case):
@@ -109,13 +119,13 @@ class WorkerCase(unittest.TestCase):
             patcher = patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        # Slice one cannot create lists; the protected shared entry seeds list 'a'.
+        # The protected shared entry seeds list 'a' without the worker.
         self.direct('create-list', 'seed-a', 'a', title='A', movies=['m1'])
         self.reset()
 
     def reset(self):
         self.offset, self.write_offset = len(self.http.calls), len(self.backend.writes)
-        self.config_reads, self.credential_reads, self.guards = [], 0, []
+        self.config_reads, self.credential_reads, self.guards, self.apis = [], 0, [], []
 
     def load_config(self, path):
         self.config_reads.append(path)
@@ -140,6 +150,7 @@ class WorkerCase(unittest.TestCase):
         api = adapter.OperatorAdapter(config, journal, **kwargs)
         api._opener = self.http
         self.guards.append(kwargs.get('request_guard'))
+        self.apis.append(api)
         return api
 
     def direct(self, operation, key, list_id, **args):
@@ -232,6 +243,12 @@ class WorkerCase(unittest.TestCase):
         self.assertEqual(self.backend_calls(), [])
         self.assertEqual((self.config_reads, self.credential_reads), ([], 0))
 
+    def previewed(self, request, logical):
+        """Preview through the worker; returns the identical request to apply."""
+        preview = self.ok('preview', request)
+        self.assertEqual(preview['request'], request)
+        return dict(preview['request'], key=logical, intent_digest=preview['intent_digest'])
+
     def unfinished_by_cancel(self, logical='logical-1'):
         """Cancel inside the mutation method, before its POST; returns the request."""
         preview = self.ok('preview', MEMBERS)
@@ -306,6 +323,34 @@ class WireFixtureTests(WorkerCase):
         self.assertEqual((FIXTURES['framing']['max_request_bytes_including_newline'],
                           FIXTURES['framing']['max_response_bytes_including_newline']),
                          (worker.MAX_REQUEST, worker.MAX_RESPONSE))
+
+    def test_list_operation_table_matches_core_and_worker(self):
+        table = FIXTURES['list_operations']
+        self.assertEqual(set(table), set(LIST_OPERATIONS))
+        self.assertEqual(set(worker.LIST_ACTIONS), set(LIST_OPERATIONS))
+        self.assertEqual(set(LIST_REQUESTS), set(LIST_OPERATIONS))
+        for name, entry in table.items():
+            with self.subTest(operation=name):
+                self.assertEqual(tuple(entry['arguments']), LIST_OPERATIONS[name])
+                self.assertEqual(entry['actions'], sorted(worker.LIST_ACTIONS[name]))
+                self.assertFalse(worker.LIST_ACTIONS[name] & worker.BASE_ACTIONS)
+                self.assertLessEqual(worker.LIST_ACTIONS[name], set(FIXTURES['caller']['actions']))
+        self.assertEqual(set(FIXTURES['required_actions']['every_call']), worker.BASE_ACTIONS)
+        for name in ('set-members', 'set-title'):
+            self.assertEqual({FIXTURES['required_actions'][name]}, worker.LIST_ACTIONS[name])
+        self.assertEqual(worker.LIST_ACTIONS['create-list'] - worker.LIST_ACTIONS['set-members'],
+                         {'home.manage', 'object.share'})
+        self.assertIn('object.delete', worker.LIST_ACTIONS['delete-list'])
+
+    def test_position_is_a_strict_integer_below_one_hundred(self):
+        for position in (0, 1, 99):
+            request = dict(LIST_REQUESTS['move-row'], position=position)
+            self.assertEqual(worker.typed_request('preview', request), request)
+        for position in (True, False, -1, 100, 1.0, '0', None, [0]):
+            with self.subTest(position=position), self.assertRaises(worker.WireError) as caught:
+                worker.typed_request('preview', dict(LIST_REQUESTS['move-row'], position=position))
+            self.assertEqual((caught.exception.code, caught.exception.message),
+                             ('refused', 'Invalid row position'))
 
     def test_deadline_is_min_of_expiry_caller_and_ceiling(self):
         now_ms = 1793491140000
@@ -417,6 +462,18 @@ class SocketBoundaryTests(WorkerCase):
         self.error(frame('show'), 'unavailable', 'Recipient configuration unavailable')
         self.assertEqual(self.config_reads, ['/synthetic/other/config.json'])
 
+    def test_each_missing_list_action_refuses_before_any_backend_or_file(self):
+        for target, request in LIST_REQUESTS.items():
+            for action in sorted(worker.LIST_ACTIONS[target]):
+                actions = [a for a in FIXTURES['caller']['actions'] if a != action]
+                for operation, body in (('preview', request),
+                                        ('apply', dict(request, key='k', intent_digest=DIGEST))):
+                    with self.subTest(target=target, missing=action, operation=operation):
+                        self.reset()
+                        self.error(frame(operation, body, caller={'actions': actions}),
+                                   'refused', 'Missing required action')
+                        self.assert_untouched()
+
     def test_expired_token_or_past_deadline_stop_before_any_backend(self):
         now = int(time.time())
         for value in (frame('show', caller={'expires_at': now - 1}),
@@ -466,6 +523,128 @@ class LifecycleTests(WorkerCase):
         shown = json.loads(raw)['result']
         self.assertEqual(shown['lists'][0]['display_title'], 'Movies for tonight')
         self.assertEqual(shown['done_count'], 3)
+
+    def test_full_lifecycle_exercises_every_new_operation_and_exact_inverse(self):
+        """Canary order create, detach, attach, move, delete on a temporary list."""
+        before = self.ok('show')
+        home, items = copy.deepcopy(self.backend.home), copy.deepcopy(self.backend.items)
+        steps = (('create-list', 'created', ['create', 'share', 'row', 'display-title', 'add']),
+                 ('detach-row', 'detached', ['unrow']),
+                 ('attach-row', 'attached', ['row', 'display-title']),
+                 ('move-row', 'moved', ['move']),
+                 ('delete-list', 'deleted', ['unrow', 'delete']))
+        for n, (target, state, writes) in enumerate(steps):
+            with self.subTest(operation=target):
+                logical = 'lifecycle-%d' % n
+                request = self.previewed(LIST_REQUESTS[target], logical)
+                self.reset()
+                self.assertEqual(self.ok('apply', request), {'state': state, 'writes': len(writes)})
+                self.assertEqual(self.writes(), writes)
+                self.assertEqual(self.stored()['done'][expected_key(logical)], LIST_REQUESTS[target])
+                self.reset()
+                self.assertEqual(self.ok('apply', request), {'state': 'replayed', 'writes': 0})
+                self.assertEqual(self.mutation_posts(), [])
+                shown = {x['list']: x for x in self.ok('show')['lists']}
+                if target == 'move-row':
+                    self.assertEqual(shown['n']['position'], 0)
+                if target == 'delete-list':
+                    self.assertNotIn('n', shown)
+        after = self.ok('show')
+        self.assertEqual([x['list'] for x in after['lists']], ['a'])
+        self.assertEqual((after['run'], after['pending'], after['done_count']),
+                         (None, None, before['done_count'] + len(steps)))
+        self.assertEqual((self.backend.home, self.backend.items), (home, items))
+        self.assertEqual(self.ok('reconcile'), {'state': 'clean'})
+
+    def test_lost_create_response_resumes_only_with_identical_key_and_request(self):
+        request = dict(LIST_REQUESTS['create-list'], movies=['m5', 'm6'])
+        applied = self.previewed(request, 'create-n')
+        self.backend.lose = 'share'
+        self.reset()
+        error = self.error(frame('apply', applied), 'refused', 'Operator HTTP failed; no retry')
+        self.assertEqual(set(error), {'code', 'message'})
+        self.backend.lose = None
+        self.assertEqual(self.writes(), ['create', 'share'])
+        stored = self.stored()
+        self.assertEqual(stored['run'], {'key': expected_key('create-n'), 'request': request})
+        self.assertEqual((stored['pending']['operation'], stored['pending']['list']), ('share', 'n'))
+        raw, _ = self.call(encode(frame('show')))
+        for secret in (expected_key('create-n'), 'create-n', 'synthetic-session-token', PASSWORD):
+            self.assertNotIn(secret.encode(), raw)
+        shown = json.loads(raw)['result']
+        self.assertEqual(shown['run'], {'operation': 'create-list', 'list': 'n',
+                                        'args': {'title': 'Canary', 'movies': ['m5', 'm6']}})
+        self.assertEqual((shown['pending'], shown['reconcile']),
+                         ({'operation': 'share', 'list': 'n'}, {'state': 'observed-applied'}))
+        self.assertEqual(self.ok('reconcile'), {'state': 'observed-applied', 'operation': 'share',
+                                                'list': 'n'})
+        # Neither another key, changed arguments nor a fresh preview takes over the run.
+        self.reset()
+        for value in (frame('apply', dict(applied, key='create-other')),
+                      frame('apply', dict(applied, movies=['m5'])),
+                      frame('preview', request)):
+            with self.subTest(value=value['request']):
+                raw, _ = self.call(encode(value))
+                self.assertEqual(json.loads(raw)['error'], {
+                    'code': 'unfinished', 'message': 'Another request is unfinished',
+                    'operation': 'create-list', 'list': 'n'})
+                self.assertNotIn(expected_key('create-n').encode(), raw)
+        self.assertEqual(self.mutation_posts(), [])
+        # The identical key, request and digest complete it from exact readback.
+        self.assertEqual(self.ok('apply', applied), {'state': 'created', 'writes': 3})
+        self.assertEqual(self.writes(), ['row', 'display-title', 'add'])
+        self.assertEqual(self.ok('apply', applied), {'state': 'replayed', 'writes': 0})
+        self.assertEqual(self.stored()['done'][expected_key('create-n')], request)
+
+    def test_guard_stop_before_playlist_delete_send_resumes_the_same_request(self):
+        request = {'operation': 'delete-list', 'list': 'a'}
+        applied = self.previewed(request, 'delete-a')
+        original, fired = self.backend.respond, []
+
+        def respond(call):
+            journal = self.backend.journal
+            if (not fired and call[0] == 'GET' and journal._locked and
+                    (journal.load()['pending'] or {}).get('operation') == 'delete'):
+                fired.append(call[1])
+                self.guards[-1].deadline = time.monotonic() - 1
+            return original(call)
+        self.http.responder = respond
+        self.reset()
+        try:
+            self.error(frame('apply', applied), 'deadline', worker.STOPPED['deadline'])
+        finally:
+            self.http.responder = original
+        self.assertTrue(fired)
+        self.assertEqual(self.guards[-1].tripped, 'deadline')
+        self.assertEqual(self.writes(), ['unrow'])
+        stored = self.stored()
+        self.assertIsNone(stored['pending'])
+        self.assertEqual(stored['run'], {'key': expected_key('delete-a'), 'request': request})
+        self.assertEqual(stored['lists'], {'a': {'row': None, 'display_title': 'A'}})
+        shown = self.ok('show')
+        self.assertEqual(shown['run'], {'operation': 'delete-list', 'list': 'a', 'args': {}})
+        self.reset()
+        self.assertEqual(self.ok('apply', applied), {'state': 'deleted', 'writes': 1})
+        self.assertEqual(self.writes(), ['delete'])
+        self.assertEqual((self.stored()['lists'], self.backend.items), ({}, {}))
+        self.assertEqual(self.ok('apply', applied), {'state': 'replayed', 'writes': 0})
+
+    def test_worst_case_fourth_list_create_through_worker_fits_unchanged_budget(self):
+        for list_id in 'bc':
+            self.direct('create-list', 'seed-' + list_id, list_id, title='Same', movies=['m1'])
+        movies = ['m%d' % n for n in range(1, 26)]
+        request = {'operation': 'create-list', 'list': 'd', 'title': 'Fourth', 'movies': movies}
+        applied = self.previewed(request, 'create-d')
+        self.reset()
+        self.assertEqual(self.ok('apply', applied), {'state': 'created', 'writes': 5})
+        self.assertEqual(self.writes(), ['create', 'share', 'row', 'display-title', 'add'])
+        # One worker invocation, distinct recipient, fourth list, 25 Movies: a
+        # recorded synthetic count against the unchanged limits, not runtime evidence.
+        self.assertEqual((adapter.MAX_REQUESTS, adapter.MAX_SECONDS, worker.MAX_SECONDS), (512, 120, 120))
+        self.assertNotEqual(base.A, base.R)
+        self.assertEqual(len(self.apis), 1)
+        self.assertEqual(self.apis[0]._requests, len(self.backend_calls()))
+        self.assertLess(self.apis[0]._requests, adapter.MAX_REQUESTS)
 
     def test_cancel_before_mutation_send_clears_only_pending_then_same_request_resumes(self):
         request = self.unfinished_by_cancel()

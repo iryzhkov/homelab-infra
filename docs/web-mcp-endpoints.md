@@ -170,6 +170,17 @@ binaries reject the unknown key. Existing exact catalog and writer pairs stay
 accepted without the key and refuse it even when null. The build's SHA256 stays an operator input, as for
 every other artifact.
 
+That pair is the first-slice build (set-members and set-title). The worker
+modules pinned in `OPERATOR_MODULES` now carry all seven list operations
+(docs/emby-operator-mcp.md). Roll out in two reviewed changes: first the
+worker pins with the first-slice pair unchanged, which that build uses exactly
+as before; then, in a separate change after the worker is installed, the
+reviewed full-lifecycle source and interface commits replace the pair. The
+second change never ships ahead of the first, because a first-slice worker
+refuses the new operations and a first-slice client would report a completed
+new operation as an unknown outcome. Reverting the second change restores the
+first-slice build against the new worker.
+
 When the key is non-null the role, after the existing guards and before any
 write, runs a metadata-only `playlist-operator` guard. It refuses symlinks,
 wrong owners or modes, group or world writable ancestors, an unmarked existing

@@ -1,28 +1,44 @@
 # MCP playlist management through the protected operator
 
 `scripts/emby_operator_socket.py` is a socket-activated root worker that lets
-the HoloNet MCP service manage existing journal-owned Movie playlists through
-the same protected operator the CLI uses. The `web_mcp_endpoint` role installs
+the HoloNet MCP service manage journal-owned Movie playlists and their Home
+rows through the same protected operator the CLI uses. The `web_mcp_endpoint` role installs
 it only when the HoloNet endpoint config carries a non-null
 `playlist_operator`, and starts its socket only with the existing explicit
 activation flag; see "Opt-in HoloNet playlist operator management" in
 `docs/web-mcp-endpoints.md`. The adopted contract is
 `jocasta:8047884faa50daa3df712477b1196fcd@2`.
 
-## What the first slice covers
+## Operations and required actions
 
-| Worker operation | Core method | Actions required on every call |
-| --- | --- | --- |
-| `show` | `show` | `catalog.read`, `playlist.read`, `home.read` |
-| `reconcile` | `reconcile` | same |
-| `preview` of `set-members` or `set-title` | `list_preview` | same, plus `playlist.manage` (members) or `home.manage` (title) |
-| `apply` of `set-members` or `set-title` | `set_members` or `set_title` | same as its preview |
+Every call needs `catalog.read`, `playlist.read` and `home.read`. `show` and
+`reconcile` need nothing more. `preview` and `apply` of a list operation need
+the extra actions below; the preview and the apply of one operation need the
+same set. The table is `LIST_ACTIONS` in the worker, and the arguments are the
+core `LIST_OPERATIONS` table that the shared entry also uses.
 
-Create, delete, row attach/detach/move, init, migrate and downgrade stay on the
-protected CLI. No request selects a config, journal, credential, path, URL,
-backend user, playlist ID or row ID, and no `object.delete` or `object.share`
-operation exists in this slice. Membership replacement can take two writes
-(clear, then add).
+| List operation | Exact arguments besides `operation` and `list` | Extra actions | Core phases (possible writes) | Apply state |
+| --- | --- | --- | --- | --- |
+| `create-list` | `title`, `movies` | `playlist.manage`, `home.manage`, `object.share` | create, share, row, title, members | `created` |
+| `set-members` | `movies` | `playlist.manage` | members (clear, add) | `members-set` |
+| `set-title` | `title` | `home.manage` | title | `title-set` |
+| `attach-row` | `title` | `home.manage` | row, title | `attached` |
+| `detach-row` | none | `home.manage` | unrow | `detached` |
+| `move-row` | `position` | `home.manage` | move | `moved` |
+| `delete-list` | none | `playlist.manage`, `home.manage`, `object.delete` | unrow, delete | `deleted` |
+
+`create-list` needs `object.share` because its share phase grants the
+recipient read access to the new playlist (`POST /Items/Access`, `Read`). The
+core skips that write when the recipient is the actor, but the action is still
+required, so the ceiling does not depend on who the recipient is. No other
+recipient and no other access level is ever granted. `delete-list` needs
+`object.delete` for the owned-playlist delete (`POST /Items/Delete`), after
+the core has removed the list's Home row. `list` for `create-list` is the new
+list's ID; for every other operation it names an existing journal-owned list.
+
+Init, migrate and downgrade stay on the protected CLI. No request selects a
+config, journal, credential, path, URL, backend user, playlist ID or row ID.
+`move-row` takes the final normal-view index, never a row ID or a native index.
 
 ## Shape of the path
 
@@ -38,8 +54,8 @@ The MCP service is the trusted JWT authenticator. The worker does not verify
 tokens. It authenticates the service by `SO_PEERCRED` UID and GID and then
 intersects the caller fields the service supplies with its own root-owned
 ceiling: exact issuer, single subject, namespace, server, library and catalog
-user, the fixed recipient-to-config map, and the slice-one operations and
-actions in source. A compromised MCP service can act only inside that ceiling;
+user, the fixed recipient-to-config map, and the list operations and actions
+in source. A compromised MCP service can act only inside that ceiling;
 it cannot read the admin credential or reach other Emby routes.
 
 The worker adds no listener beyond the socket unit, no spool, subprocess,
@@ -90,12 +106,21 @@ against the table above.
 ```text
 show       {}  or  {"list": LIST}
 reconcile  {}
-preview    {"operation": "set-members", "list": LIST, "movies": [MOVIE, ...]}   0..25 unique
-           {"operation": "set-title",   "list": LIST, "title": TITLE}           1..256 printable
+preview    {"operation": "create-list", "list": LIST, "title": TITLE, "movies": [MOVIE, ...]}
+           {"operation": "set-members", "list": LIST, "movies": [MOVIE, ...]}
+           {"operation": "set-title",   "list": LIST, "title": TITLE}
+           {"operation": "attach-row",  "list": LIST, "title": TITLE}
+           {"operation": "detach-row",  "list": LIST}
+           {"operation": "move-row",    "list": LIST, "position": POSITION}
+           {"operation": "delete-list", "list": LIST}
 apply      the preview fields plus "key": LOGICAL_KEY and "intent_digest": HEX64
 ```
 
-`LIST`, `MOVIE` and `LOGICAL_KEY` match `[A-Za-z0-9_-]{1,128}`.
+`LIST`, `MOVIE` and `LOGICAL_KEY` match `[A-Za-z0-9_-]{1,128}`. `movies` holds
+0..25 unique Movie IDs in order, `TITLE` 1..256 printable characters, and
+`POSITION` a JSON integer 0..99 (never a boolean, string or float). A missing,
+extra or wrongly typed field, or an unknown list operation, is `refused` before
+any policy file, config, credential or backend access.
 
 Responses:
 
@@ -113,7 +138,8 @@ Responses:
 | `unavailable` | Worker disabled, policy or recipient config unavailable or inconsistent, or an internal failure. |
 
 Results: `preview` returns `{"request": {...}, "intent_digest": HEX64}`;
-`apply` returns `{"state": "members-set" | "title-set" | "replayed", "writes": N}`;
+`apply` returns `{"state": STATE, "writes": N}` with the apply state from the
+table above, or `replayed` for a completed key;
 `reconcile` returns the core reconcile object. `show` is described below.
 
 ## Deadline and cancellation
@@ -158,6 +184,11 @@ Protected manual recovery of an MCP run uses the CLI with the derived internal
 key and the original request from private audit evidence. That is an
 exceptional root path, not an MCP operation.
 
+A completed key replays as `replayed` with zero writes for every operation.
+Resuming an unfinished run binds the key and the exact request; the
+`intent_digest` is checked when the run is first recorded, so a resubmission
+carries the original digest unchanged.
+
 ## Show
 
 `show` returns the core version 2 show result, with two changes that do not
@@ -179,6 +210,50 @@ delete every owned list through its exact inverse. Confirm a clean run and
 pending state and the restored baseline, disable management, and archive the
 whole journal unchanged. A replacement journal is a separately reviewed
 provisioning epoch, never a reset of the live one.
+
+## Examples
+
+MCP tool arguments, as the HoloNet client sends them (`playlists_preview`
+returns the `intent_digest` for the identical `playlists_apply`):
+
+```json
+{"recipient": "<recipient>", "operation": "create-list", "list": "canary-20261101", "title": "Canary", "movies": ["<movie>"]}
+{"recipient": "<recipient>", "operation": "move-row", "list": "canary-20261101", "position": 0,
+ "key": "canary-move", "intent_digest": "<digest from preview>"}
+{"recipient": "<recipient>", "operation": "delete-list", "list": "canary-20261101",
+ "key": "canary-delete", "intent_digest": "<digest from preview>"}
+```
+
+A temporary list exercises every new operation and leaves the recipient's
+Home and playlists as they were: `create-list`, `detach-row`, `attach-row`,
+`move-row`, then `delete-list`. Each step is a fresh preview and an apply with
+its own logical key, so it consumes five completed keys.
+
+## Rollout compatibility
+
+Wire version 1 is unchanged; the new operations, arguments and apply states
+are additive and the fixture keeps every earlier valid case.
+
+- New worker with the first-slice MCP build: compatible. That build sends only
+  `set-members` and `set-title` with the same shapes and refuses every other
+  operation before the socket.
+- First-slice worker with a full-lifecycle MCP build: the old worker refuses
+  the new operations with `Unsupported list operation` before any backend
+  access. Nothing is written, but the call fails.
+- Deploy the worker modules first, then the MCP build. Never run a worker that
+  can complete a new operation behind a client that cannot read its apply
+  state: such a client reports an unknown outcome for a completed write.
+
+## Remaining limits
+
+`done_limit` stays 64 per recipient with no eviction, `MAX_LISTS` stays 4, a
+call stays bounded by 120 seconds and 512 backend requests, and the Home
+snapshot by 100 rows. A worst-case `create-list` (fourth list, separate
+recipient, 25 Movies) fits one call in the recorded synthetic model; a slow
+backend can still stop it at the deadline, and the identical request then
+resumes it. Recommendation history, scheduling, global sharing, episodes and
+duplicate Movies stay out of scope. This contract makes no claim about Emby
+access control beyond the one managed recipient grant.
 
 ## Deployed layout
 
@@ -288,6 +363,11 @@ python3 scripts/test_emby_operator_socket.py
 
 The tests connect over a real abstract-namespace AF_UNIX socket and check the
 real `SO_PEERCRED` of the test process, real framing and every frozen fixture.
+They run the full create, detach, attach, move and delete lifecycle with replay,
+a lost create response resumed only by the identical request, a stop before a
+playlist delete resumed by the same request, every missing list action refused
+before any backend, and the worst-case fourth-list create within the unchanged
+request budget.
 They drive the real shared entry, core and adapter against the loopback
 recording model from `test_emby_operator_adapter.py`, with synthetic IDs only.
 The test user stands in for root, and the policy and config loaders are

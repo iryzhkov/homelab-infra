@@ -25,7 +25,10 @@ HOLONET_WRITER_CONTRACT = "c0c429ed04aa06f46c5e0c639a4dcc000dde4431"
 HOLONET_SOURCE_REVISIONS = HOLONET_CATALOG_SOURCE_REVISIONS | {HOLONET_WRITER_SOURCE}
 
 # Exact candidate build and interface pins for playlist_operator. Source review,
-# hosted CI and deployment acceptance are required before activation.
+# hosted CI and deployment acceptance are required before activation. This pair
+# is the first-slice build (set-members and set-title). It stays accepted while
+# the full-lifecycle worker modules below roll out first; the reviewed
+# full-lifecycle build replaces it in a separate change after the worker.
 HOLONET_OPERATOR_SOURCE = "72c1e2fd2642d87832cd23fdb7f2e7a7ff261d9a"
 HOLONET_OPERATOR_CONTRACT = "df3ea666b2bd672818933034b2780b80b0ece245"
 
@@ -36,7 +39,7 @@ OPERATOR_MODULES = {
     "emby_operator_adapter.py": "face84c9a28a84431b211ed806dd2956a5897c79ccfd93dd7ed138249cc2e03f",
     "emby_operator_entry.py": "c37acc5c3b430d4874c1bae13b895c1ab78ef2f59ea7e76de830ea342f68007a",
     "emby_operator_recommendations.py": "a71d0d3c40c02690a6bee83a14a29f21d47e61e9a568a389c4b3d0e8440cdccf",
-    "emby_operator_socket.py": "181a325a158a0174da3fa4220afaf89b7a21fd859966d18aac1dfacafb640849",
+    "emby_operator_socket.py": "fe7f3c3fc01b7337cbf157f0dd74061a101b2348fe26dd4adb490c72f6d7cfcf",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
