@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Akasha local readiness and one rolling SQLite snapshot. Never log records."""
 import argparse
+from contextlib import closing
+import errno
 import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import stat
@@ -16,6 +19,31 @@ GIB = 1024 ** 3
 DB_LIMIT = 4 * GIB
 WAL_LIMIT = 64 * 1024 ** 2
 STATE_LIMIT = 10 * GIB
+RESERVE = 128 * 1024 ** 2
+# One bound for the copy and for health's rotation grace.
+COPY_SECONDS = 300
+
+
+class Failure(RuntimeError):
+    """A fixed reason with no record, path or credential; safe to log."""
+
+
+def reason(error):
+    # Enumerated only: never a raw exception message, path or record.
+    if isinstance(error, Failure):
+        return str(error)
+    if isinstance(error, sqlite3.Error):
+        name = getattr(error, "sqlite_errorname", "")
+        return "sqlite " + (name if re.fullmatch(r"SQLITE_[A-Z_]+", name) else "error")
+    if isinstance(getattr(error, "reason", None), OSError):
+        error = error.reason  # urllib wraps the socket error
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, OSError):
+        return errno.errorcode.get(error.errno, "os error")
+    if isinstance(error, ValueError):
+        return "invalid data"
+    return "unclassified"
 
 
 def sizes(root):
@@ -28,15 +56,15 @@ def check_storage(root):
     db = root / "events.db"
     wal = root / "events.db-wal"
     if not db.is_file() or db.is_symlink():
-        raise RuntimeError("database absent or unsafe")
+        raise Failure("database absent or unsafe")
     if db.stat().st_size > DB_LIMIT:
-        raise RuntimeError("main database exceeds 4 GiB")
+        raise Failure("main database exceeds 4 GiB")
     if wal.exists() and wal.stat().st_size > WAL_LIMIT:
-        raise RuntimeError("WAL exceeds 64 MiB")
+        raise Failure("WAL exceeds 64 MiB")
     if sizes(root) > STATE_LIMIT:
-        raise RuntimeError("state exceeds 10 GiB")
-    if shutil.disk_usage(root).free < 128 * 1024 ** 2:
-        raise RuntimeError("disk reserve exhausted")
+        raise Failure("state exceeds 10 GiB")
+    if shutil.disk_usage(root).free < RESERVE:
+        raise Failure("disk reserve exhausted")
     return db
 
 
@@ -70,30 +98,52 @@ def _snapshot(root):
     destination = directory / "events.db"
     staging = directory / "events.db.partial"
     directory.mkdir(mode=0o700, exist_ok=True)
-    # The old off-host packaged generation is the fallback while this local
-    # generation is replaced. Retaining two 4 GiB snapshots exceeds budget.
-    reclaim = sum(p.stat().st_size for p in (destination, staging) if p.exists())
-    if shutil.disk_usage(root).free + reclaim < DB_LIMIT + 128 * 1024 ** 2:
-        raise RuntimeError("insufficient snapshot reserve")
-    if sizes(root) - reclaim + DB_LIMIT > STATE_LIMIT:
-        raise RuntimeError("insufficient state budget for snapshot")
-    for path in (destination, staging):
-        path.unlink(missing_ok=True)
-    deadline = time.monotonic() + 300
+    previous = destination.stat().st_size if destination.exists() else 0
+    partial = staging.stat().st_size if staging.exists() else 0
+    free = shutil.disk_usage(root).free + partial
+    used = sizes(root) - partial
+    # Keep the published snapshot until its replacement is complete whenever
+    # a full 4 GiB copy fits beside it: a failed copy then leaves health and
+    # off-host packaging a consistent local generation.
+    retain = free >= DB_LIMIT + RESERVE and used + DB_LIMIT <= STATE_LIMIT
+    if not retain:
+        # Deliberate fallback near the limits, where old + new + live would
+        # exceed the budgets: free the old generation first and rely on the
+        # last off-host packaged copy until the new one is published.
+        if free + previous < DB_LIMIT + RESERVE:
+            raise Failure("insufficient snapshot reserve")
+        if used - previous + DB_LIMIT > STATE_LIMIT:
+            raise Failure("insufficient state budget for snapshot")
+    staging.unlink(missing_ok=True)
+    if not retain:
+        destination.unlink(missing_ok=True)
+    deadline = time.monotonic() + COPY_SECONDS
 
     def progress(status, remaining, total):
-        if total * page_size > DB_LIMIT or time.monotonic() > deadline:
-            raise RuntimeError("snapshot size or time bound exceeded")
+        if total * page_size > DB_LIMIT:
+            raise Failure("snapshot size bound exceeded")
+        if time.monotonic() > deadline:
+            raise Failure("snapshot time bound exceeded")
 
     try:
-        with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=5) as source:
+        with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=5)) as source, \
+                closing(sqlite3.connect(staging, timeout=5)) as target:
             page_size = source.execute("PRAGMA page_size").fetchone()[0]
-            with sqlite3.connect(staging, timeout=5) as target:
-                target.execute("PRAGMA journal_mode=OFF")
-                target.execute("PRAGMA max_page_count=%d" % (DB_LIMIT // page_size))
-                source.backup(target, pages=256, progress=progress, sleep=0.1)
-                if target.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-                    raise RuntimeError("snapshot integrity check failed")
+            target.execute("PRAGMA journal_mode=OFF")
+            target.execute("PRAGMA max_page_count=%d" % (DB_LIMIT // page_size))
+            # Pin one WAL read snapshot for the whole copy. Otherwise each
+            # 256-page step opens a new read transaction, and any commit
+            # since the previous step restarts the copy from page 1, so a
+            # busy database never finishes within the deadline. The pinned
+            # reader never blocks writers, but WAL checkpoints cannot reset
+            # past it until the copy ends.
+            source.execute("BEGIN")
+            source.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            source.backup(target, pages=256, progress=progress, sleep=0.1)
+            # Release the live reader before the slow integrity check.
+            source.rollback()
+            if target.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise Failure("snapshot integrity check failed")
         os.chmod(staging, 0o600)
         with staging.open("rb") as handle:
             os.fsync(handle.fileno())
@@ -121,7 +171,7 @@ def check_snapshot_once(root):
     try:
         fd = os.open(root / "backup.lock", os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
-        raise RuntimeError("consistent snapshot absent: backup lock missing") from None
+        raise Failure("consistent snapshot absent: backup lock missing") from None
     with os.fdopen(fd, "rb") as lock:
         rotating = False
         try:
@@ -131,22 +181,22 @@ def check_snapshot_once(root):
         try:
             info = (root / "backup/events.db").stat()
             if not stat.S_ISREG(info.st_mode):
-                raise RuntimeError("consistent snapshot is not a regular file")
+                raise Failure("consistent snapshot is not a regular file")
             snapshot_time = info.st_mtime
         except FileNotFoundError:
             if not rotating:
-                raise RuntimeError("consistent snapshot absent")
+                raise Failure("consistent snapshot absent")
             evidence = json.loads(lock.read(4097))
             if (not isinstance(evidence, dict) or
                     any(type(evidence.get(key)) not in (int, float)
                         for key in ("started", "snapshot_time"))):
                 raise ValueError("invalid snapshot rotation evidence")
             now = time.time()
-            if not 0 <= now - evidence.get("started", 0) <= 300:
-                raise RuntimeError("snapshot rotation exceeds time bound")
+            if not 0 <= now - evidence.get("started", 0) <= COPY_SECONDS:
+                raise Failure("snapshot rotation exceeds time bound")
             snapshot_time = evidence.get("snapshot_time", 0)
         if not 0 <= time.time() - snapshot_time <= 24 * 3600:
-            raise RuntimeError("consistent snapshot absent or older than proposed 24h RPO")
+            raise Failure("consistent snapshot absent or older than proposed 24h RPO")
 
 
 def health(root, url):
@@ -156,7 +206,7 @@ def health(root, url):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(url, timeout=5) as response:
         if response.status != 200 or json.loads(response.read(4097)) != {"ok": True}:
-            raise RuntimeError("health endpoint not ready")
+            raise Failure("health endpoint not ready")
 
 
 def main():
@@ -168,9 +218,10 @@ def main():
     os.umask(0o077)
     try:
         snapshot(args.root.resolve()) if args.action == "backup" else health(args.root.resolve(), args.url)
-    except (OSError, RuntimeError, sqlite3.Error, ValueError):
+    except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
         # No database contents, URLs, request data or credential paths in logs.
-        print("akasha " + args.action + ": FAILED; inspect readiness/capacity/backup status", file=sys.stderr)
+        print("akasha " + args.action + ": FAILED reason=" + reason(error) +
+              "; inspect readiness/capacity/backup status", file=sys.stderr)
         return 1
     print("akasha " + args.action + ": ok")
     return 0

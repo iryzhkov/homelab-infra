@@ -288,10 +288,30 @@ checks integrity and fsyncs a single 0600 snapshot at
 projections, receipts, cursors and outbox in the same database. It never
 copies a live DB/WAL pair. It has 5min/4 GiB bounds and local disk reserve.
 
-At the 4 GiB limit, retaining old + staging + live DB would exceed 10 GiB.
-The helper therefore removes the prior local generation before making the
-next. A failed/interrupted snapshot can leave no local snapshot: health
-fails and the last off-host packaged generation is the fallback. Do not
+The copy holds one read transaction on the live database from its first
+256-page step to its last, so it captures a single consistent point while
+Akasha keeps writing. Without that pin every step opened a new read
+transaction and any commit in between restarted the copy from page 1; on
+2026-11-01 a 1.6 GB database under steady writes ran into the 5-minute bound
+that way. The pinned reader never blocks Akasha's writers, but checkpoints
+cannot reset the WAL past it until the copy ends, so the WAL grows by
+whatever Akasha writes during the copy, and Akasha's own
+`wal_checkpoint(TRUNCATE)` calls report busy for that period. The reader is
+released before the integrity check.
+
+The previous local snapshot stays in place until its replacement is complete
+whenever a full 4 GiB copy fits beside it: at least 4 GiB + 128 MiB free and
+the whole state directory still within 10 GiB counting a new 4 GiB copy. A
+failed copy then leaves the previous generation for health and off-host
+packaging, and the failure surfaces through the backup unit's alert. Near the
+limits, where old + new + live DB would exceed those budgets, the helper
+deliberately falls back to removing the prior local generation first. A
+failed/interrupted copy in that mode leaves no local snapshot: health fails
+and the last off-host packaged generation is the fallback. If even the
+replacement cannot fit, the run fails closed and keeps the previous snapshot.
+Failures log only a fixed reason such as `reason=snapshot time bound
+exceeded`, `reason=sqlite SQLITE_BUSY` or `reason=timeout`, never a raw
+error, path or record. Do not
 enable this schedule without that verified fallback and backup-failure
 alerts. Snapshot work is serialized by its systemd oneshot unit. First
 snapshot is due within 10 minutes of activation; initial missing-backup

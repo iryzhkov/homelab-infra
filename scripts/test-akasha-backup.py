@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Disposable Akasha packaging/restore, locking, reporting and template checks."""
 import contextlib
+import errno
 import fcntl
 import importlib.machinery
 import importlib.util
@@ -14,8 +15,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
+import urllib.error
 
 import jinja2
 import yaml
@@ -154,7 +157,11 @@ class PackagingTest(unittest.TestCase):
                 maintenance.health(self.state, "http://127.0.0.1/healthz")
                 observed.append(True)
             return original_connect(*args, **kwargs)
-        with mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener):
+        # Only the delete-first fallback leaves a gap: one byte short of the
+        # disk reserve for retention, while reclaiming the old copy fits.
+        delete_first = mock.patch.object(maintenance.shutil, "disk_usage", return_value=types.SimpleNamespace(
+            free=maintenance.DB_LIMIT + maintenance.RESERVE - 1))
+        with delete_first, mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener):
             with mock.patch.object(maintenance.sqlite3, "connect", side_effect=connect_during_gap):
                 maintenance.snapshot(self.state)
             self.assertTrue(observed)
@@ -164,6 +171,130 @@ class PackagingTest(unittest.TestCase):
                     maintenance.snapshot(self.state)
             with self.assertRaises((RuntimeError, OSError)):
                 maintenance.health(self.state, "http://127.0.0.1/healthz")
+
+    def healthy(self):
+        opener = mock.MagicMock()
+        opener.open.return_value.__enter__.return_value.status = 200
+        opener.open.return_value.__enter__.return_value.read.return_value = b'{"ok":true}'
+        with mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener):
+            maintenance.health(self.state, "http://127.0.0.1/healthz")
+
+    def test_failed_copy_keeps_previous_generation_for_health_and_offsite(self):
+        source = offsite.SOURCE
+        lock = self.state / "backup.lock"
+        before, info, lock_inode = source.read_bytes(), source.stat(), lock.stat().st_ino
+        # A later commit that the failed copy must not publish.
+        with contextlib.closing(sqlite3.connect(self.state / "events.db")) as db:
+            db.execute("INSERT INTO cursors VALUES (43)")
+            db.commit()
+        visible = []
+        original_connect = maintenance.sqlite3.connect
+        def connect(*args, **kwargs):
+            visible.append(source.exists())
+            return original_connect(*args, **kwargs)
+        # The copy starts and then exceeds its time bound mid-backup.
+        with mock.patch.object(maintenance, "COPY_SECONDS", -1), \
+                mock.patch.object(maintenance.sqlite3, "connect", side_effect=connect):
+            with self.assertRaisesRegex(RuntimeError, "time bound"):
+                maintenance.snapshot(self.state)
+        self.assertTrue(visible)
+        self.assertTrue(all(visible), "published generation vanished during the copy")
+        self.assertEqual(source.read_bytes(), before)
+        self.assertEqual((source.stat().st_ino, source.stat().st_mtime), (info.st_ino, info.st_mtime))
+        self.assertFalse((self.state / "backup/events.db.partial").exists())
+        self.assertEqual((lock.stat().st_ino, lock.read_bytes()), (lock_inode, b""))
+        self.healthy()
+        manifest, _ = offsite.package(self.work)
+        self.assertEqual(manifest["snapshot_time"], info.st_mtime)
+        with contextlib.closing(sqlite3.connect(self.work / "restored.db")) as db:
+            self.assertEqual(db.execute("SELECT * FROM cursors").fetchall(), [(42,)])
+
+    def rotate(self, free=None, state_limit=None):
+        """One snapshot; whether the old generation was visible at copy start, and any error."""
+        visible = []
+        original_connect = maintenance.sqlite3.connect
+        def connect(*args, **kwargs):
+            if not visible:
+                visible.append(offsite.SOURCE.exists())
+            return original_connect(*args, **kwargs)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(maintenance.sqlite3, "connect", side_effect=connect))
+            if free is not None:
+                stack.enter_context(mock.patch.object(
+                    maintenance.shutil, "disk_usage", return_value=types.SimpleNamespace(free=free)))
+            if state_limit is not None:
+                stack.enter_context(mock.patch.object(maintenance, "STATE_LIMIT", state_limit))
+            try:
+                maintenance.snapshot(self.state)
+            except RuntimeError as error:
+                return visible, str(error)
+        return visible, None
+
+    def test_capacity_gates_retain_previous_or_delete_first_or_fail_closed(self):
+        need = maintenance.DB_LIMIT + maintenance.RESERVE
+        staging = self.state / "backup/events.db.partial"
+        lock = self.state / "backup.lock"
+        lock_inode = lock.stat().st_ino
+        for case in ("retain at exact reserve", "retain reclaiming stale partial",
+                     "delete first when only reclaim fits disk",
+                     "delete first when only reclaim fits state budget",
+                     "fail closed below reclaimable disk", "fail closed over state budget"):
+            with self.subTest(case=case):
+                maintenance.snapshot(self.state)
+                previous = offsite.SOURCE.read_bytes()
+                size, used = len(previous), maintenance.sizes(self.state)
+                partial = 8192 if "partial" in case else 0
+                if partial:
+                    staging.write_bytes(b"\0" * partial)
+                arguments = {
+                    "retain at exact reserve": {"free": need},
+                    "retain reclaiming stale partial": {"free": need - partial},
+                    "delete first when only reclaim fits disk": {"free": need - 1},
+                    # Margins absorb the rotation evidence written into the lock.
+                    "delete first when only reclaim fits state budget":
+                        {"state_limit": maintenance.DB_LIMIT + used - size // 2},
+                    "fail closed below reclaimable disk": {"free": need - size - 1},
+                    "fail closed over state budget":
+                        {"state_limit": maintenance.DB_LIMIT + used - size - 4096},
+                }[case]
+                visible, error = self.rotate(**arguments)
+                if case.startswith("fail closed"):
+                    self.assertRegex(error or "", "insufficient")
+                    self.assertEqual(visible, [], "no copy may start")
+                    self.assertEqual(offsite.SOURCE.read_bytes(), previous)
+                else:
+                    self.assertIsNone(error)
+                    self.assertEqual(visible, [case.startswith("retain")])
+                self.assertFalse(staging.exists())
+                self.assertEqual((lock.stat().st_ino, lock.read_bytes()), (lock_inode, b""))
+                self.healthy()
+
+    def test_main_logs_only_enumerated_failure_reasons(self):
+        marker = "record-or-secret-marker"
+        timeout = urllib.error.URLError(TimeoutError(marker))
+        refused = ConnectionRefusedError(errno.ECONNREFUSED, marker)
+        def failing(error):
+            opener = mock.MagicMock()
+            opener.open.side_effect = error
+            return mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener)
+        cases = [
+            ("backup", mock.patch.object(maintenance, "COPY_SECONDS", -1), "snapshot time bound exceeded"),
+            ("backup", mock.patch.object(maintenance.sqlite3, "connect",
+                                         side_effect=sqlite3.OperationalError(marker)), "sqlite error"),
+            ("backup", mock.patch.object(maintenance.sqlite3, "connect",
+                                         side_effect=RuntimeError(marker)), "unclassified"),
+            ("health", failing(timeout), "timeout"),
+            ("health", failing(refused), "ECONNREFUSED"),
+        ]
+        for action, patch, reason in cases:
+            with self.subTest(action=action, reason=reason):
+                with patch, mock.patch.object(sys, "argv", ["akasha-maintenance", action, "--root", str(self.state)]), \
+                        contextlib.redirect_stderr(io.StringIO()) as logs:
+                    self.assertEqual(maintenance.main(), 1)
+                self.assertEqual(logs.getvalue(), "akasha " + action + ": FAILED reason=" + reason +
+                                 "; inspect readiness/capacity/backup status\n")
+                self.assertNotIn(marker, logs.getvalue())
+                self.assertNotIn(str(self.state), logs.getvalue())
 
     def test_health_reconciles_rotation_finishing_after_missing_snapshot_stat(self):
         source = offsite.SOURCE
@@ -294,6 +425,107 @@ class PackagingTest(unittest.TestCase):
                 else:
                     with self.assertRaises(ValueError):
                         offsite.require_encryption()
+
+
+# A separate process committing small transactions as fast as Akasha can.
+WRITER = r"""
+import os, sqlite3, sys, time
+path, ready, stop = sys.argv[1:4]
+db = sqlite3.connect(path, timeout=5, isolation_level=None)
+db.execute("PRAGMA synchronous=NORMAL")
+end = time.monotonic() + 120
+while not os.path.exists(stop) and time.monotonic() < end:
+    db.execute("BEGIN IMMEDIATE")
+    db.execute("INSERT INTO churn (payload) VALUES (randomblob(512))")
+    db.execute("UPDATE counter SET n = n + 1")
+    db.execute("COMMIT")
+    if not os.path.exists(ready):
+        open(ready, "w").close()
+    time.sleep(0.002)
+"""
+
+
+class RecordingConnection(sqlite3.Connection):
+    """Records the pages left after each backup step; a rise means a restart."""
+    remaining = []
+
+    def backup(self, target, *, progress=None, **kwargs):
+        def record(status, remaining, total):
+            RecordingConnection.remaining.append(remaining)
+            if progress:
+                progress(status, remaining, total)
+        return super().backup(target, progress=record, **kwargs)
+
+
+class ConcurrentSnapshotTest(unittest.TestCase):
+    def setUp(self):
+        scratch = Path(os.environ["TMPDIR"]).resolve()
+        self.assertTrue(Path.home().resolve().is_relative_to(scratch))
+        temp = tempfile.TemporaryDirectory(dir=scratch)
+        self.addCleanup(temp.cleanup)
+        self.scratch = Path(temp.name)
+        self.state = self.scratch / "akasha"
+        self.state.mkdir(mode=0o700)
+        self.db = self.state / "events.db"
+        with contextlib.closing(sqlite3.connect(self.db, isolation_level=None)) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript("""
+                CREATE TABLE bulk (payload BLOB);
+                CREATE TABLE churn (id INTEGER PRIMARY KEY, payload BLOB);
+                CREATE TABLE counter (n INTEGER);
+                INSERT INTO counter VALUES (0);
+                -- About 16384 pages: 64 backup steps of 256 pages each.
+                WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < 16384)
+                INSERT INTO bulk SELECT randomblob(3000) FROM r;
+                PRAGMA wal_checkpoint(TRUNCATE);
+            """)
+
+    def counter(self, path=None):
+        with contextlib.closing(sqlite3.connect(path or self.db)) as db:
+            return db.execute("SELECT n FROM counter").fetchone()[0]
+
+    def test_snapshot_completes_consistently_under_concurrent_wal_commits(self):
+        ready, stop = self.scratch / "writer-ready", self.scratch / "writer-stop"
+        writer = subprocess.Popen([sys.executable, "-c", WRITER, str(self.db), str(ready), str(stop)])
+        def stop_writer():
+            stop.touch()
+            try:
+                writer.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                writer.kill()
+                writer.wait()
+        self.addCleanup(stop_writer)
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            self.assertIsNone(writer.poll())
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        before = self.counter()
+        RecordingConnection.remaining = []
+        original_connect = maintenance.sqlite3.connect
+        def connect(*args, **kwargs):
+            return original_connect(*args, factory=RecordingConnection, **kwargs)
+        # A short bound keeps the failure fast: a copy restarted by every
+        # commit rarely finishes, however long the deadline.
+        with mock.patch.object(maintenance, "COPY_SECONDS", 20), \
+                mock.patch.object(maintenance.sqlite3, "connect", side_effect=connect):
+            maintenance.snapshot(self.state)
+        during = self.counter() - before
+        stop_writer()
+        self.assertEqual(writer.returncode, 0)
+        self.assertGreater(during, 1, "the writer must commit while the snapshot runs")
+        steps = RecordingConnection.remaining
+        restarts = sum(later > earlier for earlier, later in zip(steps, steps[1:]))
+        self.assertGreater(len(steps), 32, "the copy must take many bounded steps")
+        self.assertEqual(restarts, 0, "concurrent commits restarted the copy")
+        copy = self.state / "backup/events.db"
+        with contextlib.closing(sqlite3.connect(copy.as_uri() + "?mode=ro", uri=True)) as db:
+            self.assertEqual(db.execute("PRAGMA quick_check").fetchall(), [("ok",)])
+            n = db.execute("SELECT n FROM counter").fetchone()[0]
+            # One transaction-consistent point: every counted commit is present.
+            self.assertEqual(db.execute("SELECT count(*) FROM churn").fetchone()[0], n)
+            self.assertGreaterEqual(n, before)
+            self.assertEqual(db.execute("SELECT count(*) FROM bulk").fetchone()[0], 16384)
 
 
 class HeartbeatTest(unittest.TestCase):
