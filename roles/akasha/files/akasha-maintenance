@@ -16,6 +16,9 @@ GIB = 1024 ** 3
 DB_LIMIT = 4 * GIB
 WAL_LIMIT = 64 * 1024 ** 2
 STATE_LIMIT = 10 * GIB
+RESERVE = 128 * 1024 ** 2
+# One bound for the copy and for health's rotation grace.
+COPY_SECONDS = 300
 
 
 def sizes(root):
@@ -35,7 +38,7 @@ def check_storage(root):
         raise RuntimeError("WAL exceeds 64 MiB")
     if sizes(root) > STATE_LIMIT:
         raise RuntimeError("state exceeds 10 GiB")
-    if shutil.disk_usage(root).free < 128 * 1024 ** 2:
+    if shutil.disk_usage(root).free < RESERVE:
         raise RuntimeError("disk reserve exhausted")
     return db
 
@@ -73,13 +76,13 @@ def _snapshot(root):
     # The old off-host packaged generation is the fallback while this local
     # generation is replaced. Retaining two 4 GiB snapshots exceeds budget.
     reclaim = sum(p.stat().st_size for p in (destination, staging) if p.exists())
-    if shutil.disk_usage(root).free + reclaim < DB_LIMIT + 128 * 1024 ** 2:
+    if shutil.disk_usage(root).free + reclaim < DB_LIMIT + RESERVE:
         raise RuntimeError("insufficient snapshot reserve")
     if sizes(root) - reclaim + DB_LIMIT > STATE_LIMIT:
         raise RuntimeError("insufficient state budget for snapshot")
     for path in (destination, staging):
         path.unlink(missing_ok=True)
-    deadline = time.monotonic() + 300
+    deadline = time.monotonic() + COPY_SECONDS
 
     def progress(status, remaining, total):
         if total * page_size > DB_LIMIT or time.monotonic() > deadline:
@@ -142,7 +145,7 @@ def check_snapshot_once(root):
                         for key in ("started", "snapshot_time"))):
                 raise ValueError("invalid snapshot rotation evidence")
             now = time.time()
-            if not 0 <= now - evidence.get("started", 0) <= 300:
+            if not 0 <= now - evidence.get("started", 0) <= COPY_SECONDS:
                 raise RuntimeError("snapshot rotation exceeds time bound")
             snapshot_time = evidence.get("snapshot_time", 0)
         if not 0 <= time.time() - snapshot_time <= 24 * 3600:
