@@ -521,8 +521,9 @@ create-list for such an ID refuses. The saved journal has the fresh snapshot as
 both baseline and current, no lists, no pending step or run, and the init key
 as its only completed request. There is no Emby write.
 
-Replaying the same key on a clean journal returns `already-initialized` with no
-save. Any other existing journal refuses with "Journal already exists": version
+Replaying the same recorded init key on a version 2 journal with no pending
+operation or run and a fresh snapshot matching current returns
+`already-initialized` without saving. Managed lists may exist. Any other existing journal refuses with "Journal already exists": version
 1, version 2 started by create-list or migrate, the retained Igor journal, or a
 different init key. An existing journal is never reset or replaced. The init key
 stays reserved, so reusing it for a list operation refuses as a reused key.

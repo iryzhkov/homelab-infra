@@ -89,6 +89,16 @@ List management then uses the existing list-scoped operations. A separate
 recipient gets the managed playlist through the existing explicit None/Read
 grant.
 
+## Withdrawal
+
+While the recipient config is enabled, remove its owned lists through the
+existing typed list operations. Verify that no managed rows or playlists
+remain, the recipient Home matches its saved baseline, and no operation or run
+is pending. Then use the helper's `disable` action for that recipient. Resolve
+any drift or uncertain write through the existing recovery rules first.
+Retain the empty journal and all completed idempotency keys; never delete or
+reset the journal or shared credential as part of recipient withdrawal.
+
 ## Qualification boundaries
 
 `scripts/test_emby_operator_viewers.py` runs the helper's real filesystem
