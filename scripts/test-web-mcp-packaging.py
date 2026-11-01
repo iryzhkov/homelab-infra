@@ -1103,6 +1103,41 @@ class PackagingTest(unittest.TestCase):
                 value["artifact"]["contract_revision"] = interface
                 self.rejected(value)
 
+    def test_playlist_operator_contract_through_ansible_extra_vars(self):
+        # Real extra vars are tagged by Ansible 2.19, unlike plain fixture dicts.
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            value = operator_fixture()
+            value["artifact"].update(source_revision=contract.HOLONET_OPERATOR_SOURCE,
+                                     contract_revision=contract.HOLONET_OPERATOR_CONTRACT)
+            play = base / "validate.yml"
+            play.write_text(yaml.safe_dump([{
+                "hosts": "localhost", "connection": "local", "gather_facts": False,
+                "tasks": [
+                    {"ansible.builtin.set_fact": {
+                        "validated": "{{ web_mcp_endpoint | web_mcp_endpoint_contract }}"}},
+                    {"ansible.builtin.assert": {"that":
+                        ["(validated | web_mcp_playlist_operator).selected"]}},
+                ],
+            }]))
+            variables = base / "vars.json"
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                       ANSIBLE_FILTER_PLUGINS=str(ROOT / "filter_plugins"),
+                       ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"),
+                       ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+            for version in (1, True, False, 1.0, "1", 2):
+                with self.subTest(version=version):
+                    value["config"]["playlist_operator"]["wire_version"] = version
+                    variables.write_text(json.dumps({"web_mcp_endpoint": value}))
+                    result = subprocess.run(
+                        ["ansible-playbook", "-i", "localhost,", str(play),
+                         "--check", "--extra-vars", "@" + str(variables)],
+                        env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    if type(version) is int and version == 1:
+                        self.assertEqual(result.returncode, 0, result.stdout)
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def test_playlist_operator_ceiling_fixed_cohort_and_plan(self):
         self.assertEqual(contract.OPERATOR_RECIPIENTS, OPERATOR_COHORT)
         ids = sorted(OPERATOR_COHORT)
