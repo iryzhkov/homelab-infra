@@ -287,8 +287,10 @@ class Journal:
                     result[k] = v
                 return result
             try:
-                return json.load(stream, object_pairs_hook=pairs,
-                                 parse_constant=lambda _: require(False, "Nonfinite journal"))
+                loaded = json.load(stream, object_pairs_hook=pairs,
+                                   parse_constant=lambda _: require(False, "Nonfinite journal"))
+                require(type(loaded) is dict, "Malformed journal")
+                return loaded
             except (ValueError, RecursionError):
                 raise Refused("Malformed journal") from None
 

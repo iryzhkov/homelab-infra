@@ -261,6 +261,9 @@ class InitTests(unittest.TestCase):
         path = self.directory / 'journal.json'
         for raw, preview_message, init_message in (
                 (b'{', 'Malformed journal', 'Malformed journal'),
+                (b'null', 'Malformed journal', 'Malformed journal'),
+                (b'[]', 'Malformed journal', 'Malformed journal'),
+                (b'false', 'Malformed journal', 'Malformed journal'),
                 (json.dumps(foreign).encode(), 'Foreign journal', 'Foreign journal'),
                 (json.dumps(dict(foreign, version=3)).encode(), 'Foreign journal', 'Foreign journal'),
                 (json.dumps(unfinished).encode(), 'Journal already exists', 'Unfinished operation')):
