@@ -5,7 +5,8 @@ companion contract before implementing it. Public operations lock the journal.
 Journal version 1 holds the configured legacy list. Version 2 holds up to
 MAX_LISTS lists for the same recipient and library under the same lock, run,
 pending step and shared Home baseline. Only explicit migrate and downgrade
-convert between them; reads never rewrite either version.
+convert between them, and only explicit init creates an empty version 2
+journal; reads never rewrite either version.
 """
 import copy
 import fcntl
@@ -44,6 +45,8 @@ RESULT = {"apply": "applied", "remove": "removed", "set-display-title": "display
 MAX_HOME = 100
 V1_FIELDS = frozenset("version scope baseline current row pending run done display_title".split())
 V2_FIELDS = frozenset("version scope baseline current lists pending run done".split())
+# Completed request recorded under an init key. It is never a list request.
+INIT_REQUEST = {"operation": "init"}
 
 
 class Refused(RuntimeError):
@@ -284,8 +287,10 @@ class Journal:
                     result[k] = v
                 return result
             try:
-                return json.load(stream, object_pairs_hook=pairs,
-                                 parse_constant=lambda _: require(False, "Nonfinite journal"))
+                loaded = json.load(stream, object_pairs_hook=pairs,
+                                   parse_constant=lambda _: require(False, "Nonfinite journal"))
+                require(type(loaded) is dict, "Malformed journal")
+                return loaded
             except (ValueError, RecursionError):
                 raise Refused("Malformed journal") from None
 
@@ -728,6 +733,44 @@ class Operator:
             require(intent == expected, "Fresh preview digest required")
             self.journal.save(converted)
             return {"state": "migrated" if direction == "migrate" else "downgraded", "writes": 0}
+
+    def init_preview(self):
+        return self._init(None, None)
+
+    def init(self, key, intent_digest=None):
+        return self._init(opaque(key), intent_digest)
+
+    def _init(self, key, intent):
+        """Explicit empty version 2 journal from a fresh baseline; zero Emby writes.
+
+        Only an absent journal initializes, and nothing is adopted: the legacy
+        marker playlist or any marker-shaped Home row refuses. The init key is
+        kept as a completed request, so replaying it on a clean journal is a
+        no-op and any other reuse refuses. Every other existing journal refuses.
+        """
+        with self.journal.locked():
+            d = self._journal()
+            s = self._read(d)
+            if d is not None:
+                require(key is not None and d["version"] == 2 and
+                        d["done"].get(key) == INIT_REQUEST, "Journal already exists")
+                require(d["pending"] is None and d["run"] is None, "Unfinished operation")
+                require(s == d["current"], "Manual drift")
+                return {"state": "already-initialized", "writes": 0}
+            require(not any(isinstance(r.get(k), str) and MARKER.fullmatch(r[k])
+                            for r in s["home"] for k in ("Name", "CustomName")),
+                    "Existing managed row requires explicit operator recovery")
+            fresh = self._fresh(s, None, 2)
+            expected = digest(dict(operation="init", scope=self.base, journal=None, snapshot=s))
+            if key is None:
+                return dict(operation="init", intent_digest=expected, lists=[],
+                            revision=digest(s))
+            require(intent == expected, "Fresh preview digest required")
+            # Save replaces unconditionally, so recheck absence under the held lock.
+            require(self.journal.load() is None, "Journal appeared during initialization")
+            fresh["done"][key] = dict(INIT_REQUEST)
+            self.journal.save(fresh)
+            return {"state": "initialized", "writes": 0}
 
     def _migrated(self, d, key):
         """Keep the legacy marker, saved IDs, title, snapshot, baseline and done."""

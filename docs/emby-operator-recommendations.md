@@ -41,7 +41,10 @@ exists. Paths through a user-owned home directory are unsuitable for real stagin
 No CLI accepts a credential, token, raw route or arbitrary deletion ID.
 For the retained Igor root, `playbooks/emby-operator-credential.yml` is the
 explicit opt-in producer of this credential file and the enable flag; see
-`docs/emby-operator-credential-provisioning.md`.
+`docs/emby-operator-credential-provisioning.md`. For the six pinned additional
+viewer recipients, `playbooks/emby-operator-viewers.yml` creates one protected
+config and empty journal directory per recipient that point at the same
+credential file; see `docs/emby-operator-viewers.md`.
 
 `Journal(directory, root_safe=True)` applies the ancestor contract to the journal
 and holds its directory FD until close. Lock, load, save, rename, unlink and fsync
@@ -96,6 +99,8 @@ Protected request shapes:
 | set-display-title | `key`, `title`, `baseline_digest` from the preview for that exact title |
 | migrate-preview, downgrade-preview | Empty object, or no request file |
 | migrate, downgrade | `key`, `intent_digest` from the matching preview |
+| init-preview | Empty object, or no request file |
+| init | `key`, `intent_digest` from a fresh init-preview |
 | list-preview | `operation`, `list` and exactly that operation's argument fields |
 | create-list | `key`, `list`, `title`, `movies` (0..25), `intent_digest` |
 | set-members | `key`, `list`, `movies` (0..25), `intent_digest` |
@@ -496,7 +501,33 @@ title; baseline, current and every completed key are copied unchanged, and
 `migrated_from` records the version 1 digest and migration key. Replaying the
 same key returns `already-migrated` with no save. With no journal, the first
 create-list starts a version 2 journal directly; old operations still start
-version 1.
+version 1. `init` starts an empty version 2 journal without any Emby write.
+
+### Initialization
+
+`init-preview` and `init` create an empty version 2 journal for a recipient
+that has none, so the Home baseline is captured before any list exists and
+`show` reports version 2. Both hold the journal lock, verify the admin session
+and recipient identity, and read the full Home and owned-playlist snapshot
+through the same admin recipient-context GETs as every other operation.
+`init-preview` returns `intent_digest` over the operation, recipient scope, an
+absent journal and the fresh snapshot, plus that snapshot's `revision`.
+
+`init` requires that digest and an absent journal, which it rechecks just
+before its single save. It refuses when the configured legacy marker playlist
+exists or any Home row has a marker-shaped Name or CustomName; nothing is
+adopted. Marker playlists of unknown list IDs stay unowned, and a later
+create-list for such an ID refuses. The saved journal has the fresh snapshot as
+both baseline and current, no lists, no pending step or run, and the init key
+as its only completed request. There is no Emby write.
+
+Replaying the same recorded init key on a version 2 journal with no pending
+operation or run and a fresh snapshot matching current returns
+`already-initialized` without saving. Managed lists may exist. Any other existing journal refuses with "Journal already exists": version
+1, version 2 started by create-list or migrate, the retained Igor journal, or a
+different init key. An existing journal is never reset or replaced. The init key
+stays reserved, so reusing it for a list operation refuses as a reused key.
+Code without init reads an initialized journal as an ordinary version 2 journal.
 
 `downgrade-preview` and `downgrade` are the inverse. They require version 2, a
 clean state, and either no lists or only the configured recipe's list while it
