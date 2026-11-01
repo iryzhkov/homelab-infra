@@ -27,8 +27,8 @@ import time
 
 from emby_operator_adapter import load_config, private_read, strict_json
 from emby_operator_entry import invoke, operator_session
-from emby_operator_recommendations import (DONE_LIMIT, Refused, checked_title, digest,
-                                           movie_ids, opaque)
+from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, Refused, checked_title,
+                                           digest, movie_ids, opaque, row_position)
 
 VERSION = 1
 # Fixed root-owned policy. No argument, environment or request selects a path.
@@ -46,9 +46,22 @@ MAX_EPOCH_MS = 10 ** 14
 # Warn while enough completed-key capacity remains to plan root retirement.
 CAPACITY_WARNING_FREE = 16
 BASE_ACTIONS = frozenset({'catalog.read', 'playlist.read', 'home.read'})
-# Slice one: the only list operations, their argument and their extra action.
-LIST_ARGUMENT = {'set-members': 'movies', 'set-title': 'title'}
-LIST_ACTION = {'set-members': 'playlist.manage', 'set-title': 'home.manage'}
+# Every core list operation and the actions it needs beyond BASE_ACTIONS. Its
+# exact arguments are the core LIST_OPERATIONS table the shared entry uses.
+# create-list may grant the recipient read access to the new playlist
+# (POST /Items/Access), so it needs object.share even when the recipient is the
+# actor and no grant is sent. delete-list deletes the owned playlist.
+LIST_ACTIONS = {
+    'create-list': frozenset({'playlist.manage', 'home.manage', 'object.share'}),
+    'set-members': frozenset({'playlist.manage'}),
+    'set-title': frozenset({'home.manage'}),
+    'attach-row': frozenset({'home.manage'}),
+    'detach-row': frozenset({'home.manage'}),
+    'move-row': frozenset({'home.manage'}),
+    'delete-list': frozenset({'playlist.manage', 'home.manage', 'object.delete'}),
+}
+if set(LIST_ACTIONS) != set(LIST_OPERATIONS):
+    raise ImportError('Worker list actions differ from the core list operations')
 WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply')
 REQUEST_FIELDS = frozenset({'version', 'caller', 'recipient', 'deadline_unix_ms',
                             'operation', 'request'})
@@ -217,9 +230,9 @@ def typed_request(operation, request):
         check(not fields, 'refused', 'Invalid request fields')
     else:
         target = request.get('operation')
-        check(isinstance(target, str) and target in LIST_ARGUMENT,
+        check(isinstance(target, str) and target in LIST_ACTIONS,
               'refused', 'Unsupported list operation')
-        expected = {'operation', 'list', LIST_ARGUMENT[target]}
+        expected = {'operation', 'list', *LIST_OPERATIONS[target]}
         if operation == 'apply':
             expected |= {'key', 'intent_digest'}
         check(fields == expected, 'refused', 'Invalid request fields')
@@ -231,6 +244,8 @@ def typed_request(operation, request):
         if 'title' in request:
             checked_title(request['title'])
             check(bounded_text(request['title'], 256), 'refused', 'Invalid journal display title')
+        if 'position' in request:
+            row_position(request['position'])
         if 'key' in request:
             opaque(request['key'])
     except Refused as error:
@@ -250,7 +265,7 @@ def authorize(call, policy):
           'refused', 'Recipient outside management policy')
     required = set(BASE_ACTIONS)
     if call['operation'] in ('preview', 'apply'):
-        required.add(LIST_ACTION[call['request']['operation']])
+        required |= LIST_ACTIONS[call['request']['operation']]
     check(required <= set(caller['actions']), 'refused', 'Missing required action')
 
 
@@ -348,14 +363,14 @@ def dispatch(operator, call):
         return show(operator, request)
     if operation == 'reconcile':
         return invoke(operator, 'reconcile', {})
-    target, argument = request['operation'], LIST_ARGUMENT[request['operation']]
+    # Every validated argument of the list operation, and nothing else.
+    target = request['operation']
+    args = {name: request[name] for name in LIST_OPERATIONS[target]}
     if operation == 'preview':
-        return invoke(operator, 'list-preview', {
-            'operation': target, 'list': request['list'], argument: request[argument]})
+        return invoke(operator, 'list-preview', dict(args, operation=target, list=request['list']))
     key = internal_key(call['caller'], call['recipient'], request['key'])
-    return invoke(operator, target, {'key': key, 'list': request['list'],
-                                     argument: request[argument],
-                                     'intent_digest': request['intent_digest']})
+    return invoke(operator, target, dict(args, key=key, list=request['list'],
+                                         intent_digest=request['intent_digest']))
 
 
 def execute(config, call, guard):
