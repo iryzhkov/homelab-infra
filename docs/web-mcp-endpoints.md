@@ -163,9 +163,10 @@ existing `holonet.service` unit are unchanged.
 
 Artifact pins: `HOLONET_OPERATOR_SOURCE` and `HOLONET_OPERATOR_CONTRACT` in
 `filter_plugins/web_mcp.py` name the one reviewed build that understands the
-key: source `72c1e2fd2642d87832cd23fdb7f2e7a7ff261d9a`, interface
-`df3ea666b2bd672818933034b2780b80b0ece245`. These are candidate pins pending
-final source review and hosted CI; activation requires those gates. Older
+key: full-lifecycle source `49022d6fc1cccb6f76c225a760b401cce2b115f6`, interface
+`2cd99eb967690de97e9be01b411f4df119283d4c`. Both passed independent review and
+hosted CI. Deploy the compatible worker first. Complete any unfinished lifecycle
+request before downgrading the client, or use protected exact-request recovery. Older
 binaries reject the unknown key. Existing exact catalog and writer pairs stay
 accepted without the key and refuse it even when null. The build's SHA256 stays an operator input, as for
 every other artifact.
