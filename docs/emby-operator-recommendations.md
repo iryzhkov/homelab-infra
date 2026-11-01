@@ -102,6 +102,7 @@ Protected request shapes:
 | set-title | `key`, `list`, `title`, `intent_digest` |
 | detach-row, delete-list | `key`, `list`, `intent_digest` |
 | attach-row | `key`, `list`, `title`, `intent_digest` |
+| move-row | `key`, `list`, `position` (integer, not Boolean, 0 <= position < fresh Home row count), `intent_digest` |
 
 The first seven operations keep their request shapes. Their version 2 meaning
 is described under "Legacy aliases". List-scoped operations refuse on a version
@@ -209,6 +210,7 @@ snapshot must satisfy the core's exact postcondition.
 | delete_entries | POST /Playlists/{saved ID}/Items/Delete, EntryIds=comma-separated current occurrences |
 | add_movies | POST /Playlists/{saved ID}/Items, Ids=validated Movies, userId=actor, SkipDuplicates=false |
 | delete_row | POST /Users/{Igor}/HomeSections/Delete, ids=[exact saved row], preserving type |
+| move_row | POST /Users/{Igor}/HomeSections/Move, ids=[exact saved row], preserving type, newIndex=edit-view index freshly translated from the journaled normal position (see "Row placement"); refused when the row is already there |
 | delete_owned_playlist | POST /Items/Delete?Ids=exact saved Playlist, after saved row removal and no recipient Home reference |
 
 The transport accepts 200 reads/auth, 200 or 204 mutations, and empty mutation
@@ -294,11 +296,12 @@ attempted, all failures remain uncertain, even if the response suggests no chang
 
 Operator requests still reject duplicate Movie IDs within one list. Intentional
 repeats are not delivered through this operator; default-off CLI source does not
-change that. Independent sharing, Home row placement or move, arbitrary object
-selection, native incremental membership and intentional repeats remain
-unsupported. Version 2 detach-row and attach-row only delete an owned row or
-append a new one at the end of Home. Existing apply/remove continue their
-bounded owned-resource lifecycle.
+change that. Independent sharing, placement of any row other than an owned
+list's saved row, arbitrary object selection, native incremental membership and
+intentional repeats remain unsupported. Version 2 detach-row and attach-row only
+delete an owned row or append a new one at the end of Home; move-row only
+changes the index of an attached owned row (see below). Existing apply/remove
+continue their bounded owned-resource lifecycle.
 
 Updates clear exact current occurrences and add the validated desired sequence;
 the Home row stays stable. Removal deletes only the saved row and playlist and
@@ -357,6 +360,7 @@ other. Operations:
 | detach-row | delete the owned row; playlist, membership and saved display title remain |
 | attach-row | create a marker-titled row at the end of Home, then set its title |
 | delete-list | delete the row if attached, then the playlist; the record is removed |
+| move-row | move the attached owned row to its final 0-based `position` in the normalized Home list; no write when it is already there |
 
 Friendly row titles at creation use the qualified two-step path, so the marker
 is briefly visible as the row title. Direct creation with a friendly title is
@@ -378,9 +382,93 @@ step, an unchanged state after an attempted POST stays unresolved, and
 NotDispatched clears only the pending step while keeping the run. Show and
 reconcile remain read-only; pending state names its list.
 
+### Row placement (move-row)
+
+`move-row` moves only the saved row of one named, attached list, found by its
+journal creation provenance and exact typed row ID. It accepts no row ID,
+recipient, raw body or title selector. `position` is the row's final 0-based
+index in the normalized snapshot Home list, an integer (Boolean refuses) with
+0 <= position < 100 at request validation. Preview and a new request, before a
+run is journaled, also require the list to exist, a saved row, the fixed saved
+row checks used by set-title (typed ID, SectionType=playlist, ParentId of the
+saved playlist, CustomName equal to the expected display title, field whitelist,
+optional UserId equal to the recipient) and position below the fresh Home row
+count. The intent digest binds operation, list, position and the fresh
+snapshot, so it cannot authorize another list, operation or position, and any
+Home drift refuses.
+
+`position` counts the normal Home view that the snapshot reads, which is not
+the index space of the native Move call. Emby's edit view (GET
+`/Users/{Igor}/HomeSections?isEditMode=true`) can list one generated section,
+for example `latestmediablock`, where the normal view shows one or more rows
+with other typed IDs, for example `latestmedia_3`. The normal position is
+therefore never sent as `newIndex`. Instead the adapter translates it from a
+fresh read of both views. The edit view is read through the same fixed
+HomeSections route and the same bounded Home normalization (complete, at most
+100 rows, unique typed IDs). The translation requires the following:
+
+1. The saved row is present in both views and its normalized object is identical
+   in both.
+2. The rows whose typed IDs appear in both views have the same relative order in
+   both views.
+3. If the row is already at `position`, nothing is sent and the request
+   completes with zero writes. This holds even when the next normal row has no
+   edit-view counterpart.
+4. Otherwise the saved row is removed from both views. If `position` is the end
+   of the remaining normal rows, `newIndex` is the length of the remaining edit
+   rows. Otherwise the normal row that will follow the moved row must have the
+   same typed ID in the remaining edit rows, and its edit index is `newIndex`.
+
+A following row that exists only in the normal view, such as one row of a
+generated section, refuses ("Unsupported generated Home section at position").
+The operator never guesses a native index and never splits a generated section.
+Placement directly before such a row is unsupported. A saved row that differs
+between the views, a mismatched shared order, duplicate IDs and an unmatched
+following row all refuse.
+
+The core runs this translation as a read-only preflight in preview and before a
+run is journaled, so an untranslatable request leaves no run or pending state.
+A row already at `position` completes with zero writes. Otherwise one step is
+journaled with `{row, position}`; the journal never stores a native index. The
+adapter re-reads the full snapshot, repeats the same checks, refuses a redundant
+dispatch, recomputes the translation from a fresh edit view and sends one POST
+`/Users/{Igor}/HomeSections/Move` with `ids=[saved row]` and the translated
+`newIndex`. If the edit view changed between preflight and dispatch so that the
+translation now refuses, nothing is sent; NotDispatched clears only the pending
+step and the same key resumes.
+
+The exact accepted readback compares the normal view only. It removes that
+identical row object and inserts it at `position`; every other row object,
+manual row, sibling list row and their relative order, every playlist, grant and
+entry, the list records and the shared baseline stay unchanged. Absolute indices
+of other rows shift by at most one. Because no-op moves are never journaled, an
+unchanged Home after an attempted dispatch stays unresolved. Lost responses,
+NotDispatched, replay and key reuse behave as for every other step. Delete-list
+still restores the baseline after moves, since moves keep the relative order of
+rows no list owns.
+
+The general inverse is a move-row of the same row back to its prior index, which
+show reports per list as `position`. That inverse refuses before journaling when
+the row that would follow it is a generated-section row with no edit-view
+counterpart. There is no native undo and no automatic rollback.
+
+Runtime qualification: an isolated Emby 4.10.1.0 fixture
+(`5ce7adf4d2c8f535560a2094388aded1@1`, job a100bf88-08c5-4dd9-a7a9-278fb20b24f1)
+moved one saved row to native indices 0, 3, 1, 7 and 5. Each final edit-view
+index equaled `newIndex`, counted after the row's removal; each view kept every
+other object and relative order, and the same-ID inverse restored both views.
+That fixture had one generated section and equal view lengths, so it does not
+distinguish normal from edit indices. The translation above is therefore a
+source rule, checked by recording tests, not a native-qualified mapping. Homes
+with several libraries or hidden or grouped sections are not qualified. This
+operator's composed runtime behavior, production Home composition, the
+production Emby version, restart persistence and web or TV rendering are also
+unqualified. Runtime use stays gated on final exact-source review, tests and CI.
+
 The version 2 show catalog contains `version`, recipient `scope`, `legacy_list`,
 `lists` (each with list ID, marker, legacy flag, expected display title, observed
-playlist and the saved and observed row), `list_count`, `list_limit`, `revision`,
+playlist, the saved and observed row, and `position`, the observed index of the
+saved row or null), `list_count`, `list_limit`, `revision`,
 `journal_digest`, `pending`, `run`, `done_count`, `done_limit`, `keys_exhausted`,
 `migrated_from` and reconcile state. `{"list": id}` narrows `lists` to one list
 and refuses an unknown ID.

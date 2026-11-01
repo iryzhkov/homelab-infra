@@ -1313,6 +1313,9 @@ class MultiBackend:
         self.writes = []
         self.lose = self.fail_before = None
         self.journal = None
+        # self.home is the stored edit view. A generated edit section listed here
+        # is shown as these different-ID rows in the normal view.
+        self.expand = {}
 
     @staticmethod
     def envelope(rows):
@@ -1338,7 +1341,9 @@ class MultiBackend:
         return (500, b'no response body disclosure') if self.lose == op else (204, b'')
 
     def get(self, path, q):
-        admin = {A: True, R: False}
+        # Patching R to A models an admin managing its own Home.
+        admin = dict.fromkeys((A, R), False)
+        admin[A] = True
         parts = path.split('/')
         if path == '/Users':
             return [{'Id': i} for i in admin]
@@ -1350,9 +1355,12 @@ class MultiBackend:
         if path == '/Users/' + R + '/Views':
             return self.envelope([{'Id': '7'}])
         if path == '/Users/' + R + '/HomeSections':
-            return copy.deepcopy(self.home)
-        if path == '/Users/' + R + '/Items':
-            assert q['ParentId'] == ['7'] and q['IncludeItemTypes'] == ['Movie']
+            if q == {'isEditMode': ['true']}:
+                return copy.deepcopy(self.home)
+            assert q == {}
+            return copy.deepcopy([x for r in self.home for x in self.expand.get(r['Id'], [r])])
+        if path == '/Users/' + R + '/Items' and q.get('IncludeItemTypes') == ['Movie']:
+            assert q['ParentId'] == ['7']
             return self.envelope([{'Id': i, 'Type': 'Movie'} for i in q['Ids'][0].split(',')
                                   if i in self.visible])
         if path == '/Users/' + A + '/Items':
@@ -1364,8 +1372,9 @@ class MultiBackend:
                                   {'Id': R, 'ServerId': S,
                                    'UserItemShareLevel': self.items[q['ItemId'][0]]['grant']}])
         if path.startswith('/Users/' + A + '/Items/') and parts[-1] in self.items:
-            return {'Id': parts[-1], 'Type': 'Playlist', 'Name': self.items[parts[-1]]['Name'],
-                    'CanEditItems': True, 'CanManageAccess': True}
+            capability = {'CanDelete': True} if A == R else {'CanManageAccess': True}
+            return dict({'Id': parts[-1], 'Type': 'Playlist', 'Name': self.items[parts[-1]]['Name'],
+                         'CanEditItems': True}, **capability)
         if len(parts) == 4 and parts[1] == 'Playlists' and parts[3] == 'Items' and parts[2] in self.items:
             assert q['UserId'] == [A]
             return self.envelope(self.items[parts[2]]['entries'])
@@ -1401,6 +1410,13 @@ class MultiBackend:
         elif op == 'unrow':
             assert path == '/Users/' + R + '/HomeSections/Delete' and body == {'ids': [args]}
             self.home = [r for r in self.home if r['Id'] != args]
+        elif op == 'move':
+            # Qualified native shape: the typed saved row ID and its final edit-view
+            # index after removal. Tests assert the exact translated newIndex.
+            assert path == '/Users/' + R + '/HomeSections/Move' and q == {} and set(body) == {
+                'ids', 'newIndex'} and body['ids'] == [args['row']] and type(body['newIndex']) is int
+            index = [r['Id'] for r in self.home].index(args['row'])
+            self.home.insert(body['newIndex'], self.home.pop(index))
         elif op == 'delete':
             assert path == '/Items/Delete' and body is None
             del self.items[q['Ids'][0]]
@@ -1901,6 +1917,368 @@ class MultiListTests(unittest.TestCase):
                 self.operator.downgrade_preview()
             self.assertEqual(self.bytes(), before)
 
+    def move(self, key, list_id, position):
+        return self.do('move-row', key, list_id, position=position)
+
+    def posts(self, offset):
+        return [(c[1], c[3]) for c in self.http.calls[offset:]
+                if c[0] == 'POST' and c[1] != '/emby/Users/AuthenticateByName']
+
+    def moves(self):
+        return [w for w in self.backend.writes if w[0] == 'move']
+
+    def test_move_row_two_lists_manual_rows_every_direction_and_same_row_inverse(self):
+        self.backend.home.append({'Id': 'manual', 'Name': 'Same', 'CustomName': 'Same',
+                                  'SectionType': 'playlist', 'ParentId': 'manual-playlist'})
+        baseline = copy.deepcopy(self.backend.home)
+        self.do('create-list', 'create-a', 'a', title='Same', movies=['m1'])
+        self.do('create-list', 'create-b', 'b', title='Same', movies=['m2'])
+        a, b = self.row('a'), self.row('b')
+        start, items = copy.deepcopy(self.backend.home), copy.deepcopy(self.backend.items)
+        self.assertEqual([r['Id'] for r in start], [1, 'manual', a, b])
+        stored = self.stored()
+        lists, shared = stored['lists'], stored['baseline']
+        # Up, middle, top, end and back: both rows return to their exact start index.
+        plan = [('b', 0, [b, 1, 'manual', a]), ('b', 2, [1, 'manual', b, a]),
+                ('a', 0, [a, 1, 'manual', b]), ('a', 3, [1, 'manual', b, a]),
+                ('b', 3, [1, 'manual', a, b])]
+        for n, (list_id, position, order) in enumerate(plan):
+            with self.subTest(n=n, list_id=list_id, position=position):
+                moved, sibling = self.row(list_id), 'b' if list_id == 'a' else 'a'
+                row = copy.deepcopy(next(r for r in self.backend.home if r['Id'] == moved))
+                kept, others = self.sibling(sibling), self.others(moved)
+                offset = len(self.http.calls)
+                self.assertEqual(self.move('move-%d' % n, list_id, position),
+                                 {'state': 'moved', 'writes': 1})
+                self.assertEqual(self.posts(offset), [('/emby/Users/' + R + '/HomeSections/Move',
+                                                       {'ids': [moved], 'newIndex': position})])
+                self.assertEqual([r['Id'] for r in self.backend.home], order)
+                self.assertEqual(self.backend.home[position], row)
+                self.assertEqual(self.sibling(sibling), kept)
+                self.assertEqual(self.others(moved), others)
+                self.assertEqual(self.backend.items, items)
+                stored = self.stored()
+                self.assertEqual((stored['lists'], stored['baseline']), (lists, shared))
+                self.fresh_session()
+                shown = {x['list']: x['position'] for x in self.operator.show()['lists']}
+                self.assertEqual(shown, {x: order.index(self.row(x)) for x in 'ab'})
+        self.assertEqual(self.backend.home, start)
+        writes = copy.deepcopy(self.backend.writes)
+        self.assertEqual(self.move('noop', 'b', 3), {'state': 'moved', 'writes': 0})
+        self.assertEqual(self.resume('move-row', 'move-4', 'b', position=3),
+                         {'state': 'replayed', 'writes': 0})
+        with self.assertRaisesRegex(Refused, 'Idempotency key reused'):
+            self.resume('move-row', 'move-4', 'b', position=0)
+        self.assertEqual(self.backend.writes, writes)
+        self.move('top-a', 'a', 0)
+        for list_id in 'ba':
+            self.do('delete-list', 'delete-' + list_id, list_id)
+        self.assertEqual((self.backend.home, self.backend.items), (baseline, {}))
+
+    def test_move_row_digest_binds_list_operation_position_and_snapshot(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.do('create-list', 'create-b', 'b', title='B', movies=['m2'])
+        top_b = self.intent('move-row', 'b', position=0)
+        top_a = self.intent('move-row', 'a', position=0)
+        title_b = self.intent('set-title', 'b', title='X')
+        writes, before = copy.deepcopy(self.backend.writes), self.bytes()
+        self.fresh_session()
+        for call in (lambda: self.operator.move_row('k1', 'a', 0, top_b),
+                     lambda: self.operator.move_row('k2', 'b', 1, top_b),
+                     lambda: self.operator.set_title('k3', 'b', 'X', top_b),
+                     lambda: self.operator.detach_row('k4', 'b', top_b),
+                     lambda: self.operator.move_row('k5', 'b', 0, title_b)):
+            with self.assertRaisesRegex(Refused, 'Fresh preview digest required'):
+                call()
+        self.assertEqual((self.backend.writes, self.bytes()), (writes, before))
+        self.assertEqual(self.operator.move_row('k6', 'b', 0, top_b)['writes'], 1)
+        self.fresh_session()
+        # The list a digest is bound to the snapshot before the list b move.
+        with self.assertRaisesRegex(Refused, 'Fresh preview digest required'):
+            self.operator.move_row('k7', 'a', 0, top_a)
+        self.assertEqual(len(self.moves()), 1)
+
+    def test_move_row_lost_response_presend_and_uncertain_recovery(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.do('create-list', 'create-b', 'b', title='B', movies=['m2'])
+        kept = self.sibling('a')
+        self.backend.lose = 'move'
+        with self.assertRaises(Refused):
+            self.move('lost', 'b', 0)
+        self.backend.lose = None
+        before = self.bytes()
+        self.fresh_session()
+        shown = self.operator.show()
+        self.assertEqual((shown['reconcile'], shown['pending']),
+                         ({'state': 'observed-applied'}, {'operation': 'move', 'list': 'b'}))
+        self.assertEqual(self.operator.reconcile(),
+                         {'state': 'observed-applied', 'operation': 'move', 'list': 'b'})
+        self.assertEqual(self.bytes(), before)
+        self.assertEqual(self.resume('move-row', 'lost', 'b', position=0),
+                         {'state': 'moved', 'writes': 0})
+        self.assertEqual((len(self.moves()), self.sibling('a')), (1, kept))
+        original = self.http.open
+        def fail(request, *args, **kwargs):
+            d = self.journal.load() if self.journal._locked else None
+            if d and d['pending'] and d['pending']['operation'] == 'move':
+                raise OSError('synthetic pre-send GET failure')
+            return original(request, *args, **kwargs)
+        with patch.object(self.http, 'open', side_effect=fail):
+            with self.assertRaises(adapter.NotDispatched):
+                self.move('presend', 'a', 0)
+        stored = self.stored()
+        self.assertIsNone(stored['pending'])
+        self.assertEqual(stored['run'], {'key': 'presend', 'request': {
+            'operation': 'move-row', 'list': 'a', 'position': 0}})
+        self.assertEqual(len(self.moves()), 1)
+        self.assertEqual(self.resume('move-row', 'presend', 'a', position=0)['writes'], 1)
+        self.assertEqual(self.backend.home[0]['Id'], self.row('a'))
+        self.backend.fail_before = 'move'
+        with self.assertRaises(Refused):
+            self.move('uncertain', 'b', 0)
+        self.backend.fail_before = None
+        before = self.bytes()
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'unresolved'})
+        self.assertEqual(self.operator.reconcile()['state'], 'unresolved')
+        for call in (lambda: self.operator.move_row('uncertain', 'b', 0),
+                     lambda: self.operator.move_row('other', 'a', 1, 'x')):
+            with self.assertRaises(Refused):
+                call()
+        self.assertEqual(self.bytes(), before)
+        self.assertEqual(len(self.moves()), 3)
+
+    def test_move_row_refusals_before_journaling_and_typed_adapter_gates(self):
+        self.v1_apply('v1', ['m1'])
+        before = self.bytes()
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Journal migration required'):
+            self.operator.list_preview('move-row', 'igor-movies', position=0)
+        self.assertEqual(self.bytes(), before)
+        migration = self.operator.migrate_preview()
+        self.fresh_session()
+        self.operator.migrate('migrate', migration['intent_digest'])
+        self.do('create-list', 'create-b', 'b', title='B', movies=['m2'])
+        self.do('create-list', 'create-c', 'c', title='C', movies=[])
+        self.do('detach-row', 'detach-c', 'c')
+        writes, before, d = copy.deepcopy(self.backend.writes), self.bytes(), self.stored()
+        home = d['current']['home']
+        b, legacy = d['lists']['b']['row'], d['lists']['igor-movies']['row']
+        index = [r['Id'] for r in home].index(b)
+        self.fresh_session()
+        cases = [('b', p, 'Invalid row position') for p in (True, False, -1, 100, '0', 0.0, None)]
+        cases += [('b', len(home), 'Row position out of range'), ('c', 0, 'List detached'),
+                  ('zz', 0, 'Unknown list')]
+        for list_id, position, message in cases:
+            forged = digest(dict(version=2, scope=self.operator.base, snapshot=d['current'],
+                                 request=dict(operation='move-row', list=list_id, position=position)))
+            with self.subTest(list_id=list_id, position=position):
+                with self.assertRaisesRegex(Refused, message):
+                    self.operator.list_preview('move-row', list_id, position=position)
+                with self.assertRaisesRegex(Refused, message):
+                    self.operator.move_row('bad', list_id, position, forged)
+        self.assertEqual((self.backend.writes, self.bytes()), (writes, before))
+
+        def direct(pending, call=None, recipient=None, record=None):
+            # Durable synthetic intent, then a direct typed call under the held lock.
+            fixture = copy.deepcopy(d)
+            fixture['run'] = {'key': 'direct', 'request': {
+                'operation': 'move-row', 'list': 'b', 'position': 0}}
+            fixture['pending'] = {'operation': 'move', 'list': 'b', 'args': pending,
+                                  'before': fixture['current']}
+            fixture['lists']['b'].update(record or {})
+            self.fresh_session()
+            offset = len(self.http.calls)
+            with self.journal.locked():
+                self.journal.save(fixture)
+                try:
+                    with self.assertRaises(adapter.NotDispatched):
+                        self.api.move_row(recipient or R,
+                                          copy.deepcopy(pending if call is None else call))
+                finally:
+                    self.journal.save(d)
+            self.assertEqual(self.posts(offset), [])
+        good = {'row': b, 'position': 0}
+        cases = [dict(pending=good, recipient=A),
+                 dict(pending=good, call={'row': b, 'position': 1}),
+                 dict(pending={'row': legacy, 'position': 0}),
+                 dict(pending={'row': b, 'position': True}),
+                 dict(pending={'row': b, 'position': len(home)}),
+                 dict(pending={'row': b, 'position': index}),
+                 dict(pending={'row': b, 'position': 0, 'ids': [b]}),
+                 dict(pending=good, record={'display_title': 'Other'}),
+                 dict(pending={'row': legacy, 'position': 0}, record={'row': legacy})]
+        for n, case in enumerate(cases):
+            with self.subTest(case=n):
+                direct(**case)
+        self.assertEqual((self.backend.writes, self.bytes()), (writes, before))
+
+    def test_move_row_admin_own_home_uses_same_contract(self):
+        with patch(__name__ + '.R', A):
+            self.fresh_session()
+            self.backend.home.append({'Id': 'manual', 'Name': 'Same', 'CustomName': 'Same',
+                                      'SectionType': 'playlist', 'ParentId': 'manual-playlist'})
+            baseline = copy.deepcopy(self.backend.home)
+            self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+            self.do('create-list', 'create-b', 'b', title='B', movies=['m2'])
+            self.assertNotIn('share', [w[0] for w in self.backend.writes])
+            start, items = copy.deepcopy(self.backend.home), copy.deepcopy(self.backend.items)
+            a, b = self.row('a'), self.row('b')
+            offset = len(self.http.calls)
+            self.assertEqual(self.move('top', 'b', 0), {'state': 'moved', 'writes': 1})
+            self.assertEqual([r['Id'] for r in self.backend.home], [b, 1, 'manual', a])
+            self.assertEqual(self.posts(offset), [('/emby/Users/' + A + '/HomeSections/Move',
+                                                   {'ids': [b], 'newIndex': 0})])
+            self.assertEqual(self.move('back', 'b', 3)['writes'], 1)
+            self.assertEqual((self.backend.home, self.backend.items), (start, items))
+            for list_id in 'ab':
+                self.do('delete-list', 'delete-' + list_id, list_id)
+            self.assertEqual(self.backend.home, baseline)
+
+    def normal(self):
+        return [x for r in self.backend.home for x in self.backend.expand.get(r['Id'], [r])]
+
+    def edit_ids(self):
+        return [r['Id'] for r in self.backend.home]
+
+    def edit_view(self, change):
+        original = self.backend.get
+        def get(path, q):
+            rows = original(path, q)
+            return change(rows) if q == {'isEditMode': ['true']} else rows
+        return patch.object(self.backend, 'get', side_effect=get)
+
+    def refused_before_run(self, list_id, position, message):
+        before, writes, d = self.bytes(), copy.deepcopy(self.backend.writes), self.stored()
+        forged = digest(dict(version=2, scope=self.operator.base, snapshot=d['current'],
+                             request=dict(operation='move-row', list=list_id, position=position)))
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, message):
+            self.operator.list_preview('move-row', list_id, position=position)
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, message):
+            self.operator.move_row('refused', list_id, position, forged)
+        self.assertEqual((self.bytes(), self.backend.writes), (before, writes))
+        self.assertIsNone(d['run'])
+
+    def test_move_row_translates_normal_position_across_generated_edit_block(self):
+        g3 = {'Id': 'latestmedia_3', 'SectionType': 'latestmedia', 'ParentId': 'l3'}
+        g4 = dict(g3, Id='latestmedia_4', ParentId='l4')
+        g = (g3['Id'], g4['Id'])
+        # One edit-view block is shown as two different-ID rows in the normal view.
+        self.backend.home += [{'Id': 'latestmediablock', 'SectionType': 'latestmedia'},
+                              {'Id': 'manual', 'Name': 'Same', 'CustomName': 'Same',
+                               'SectionType': 'playlist', 'ParentId': 'manual-playlist'}]
+        self.backend.expand = {'latestmediablock': [g3, g4]}
+        edit_baseline, normal_baseline = copy.deepcopy(self.backend.home), self.normal()
+        self.do('create-list', 'create-a', 'a', title='Same', movies=['m1'])
+        self.do('create-list', 'create-b', 'b', title='Same', movies=['m2'])
+        a, b = self.row('a'), self.row('b')
+        start, items = copy.deepcopy(self.backend.home), copy.deepcopy(self.backend.items)
+        self.assertEqual([r['Id'] for r in self.normal()], [1, *g, 'manual', a, b])
+        stored = self.stored()
+        lists, shared = stored['lists'], stored['baseline']
+        self.assertEqual(shared['home'], normal_baseline)
+        # A generated row as the following target is never guessed or split.
+        for list_id, position in (('b', 1), ('b', 2), ('a', 1), ('a', 2)):
+            with self.subTest(alias=(list_id, position)):
+                self.refused_before_run(list_id, position,
+                                        'Unsupported generated Home section at position')
+        collapse = lambda order: ['latestmediablock' if x == g[0] else x for x in order if x != g[1]]
+        # (list, final normal position, translated native index, normal order after)
+        plan = [('b', 0, 0, [b, 1, *g, 'manual', a]), ('b', 5, 4, [1, *g, 'manual', a, b]),
+                ('b', 3, 2, [1, *g, b, 'manual', a]), ('a', 0, 0, [a, 1, *g, b, 'manual']),
+                ('a', 4, 3, [1, *g, b, a, 'manual']), ('a', 5, 4, [1, *g, b, 'manual', a]),
+                ('b', 5, 4, [1, *g, 'manual', a, b])]
+        for n, (list_id, position, native, order) in enumerate(plan):
+            with self.subTest(n=n, list_id=list_id, position=position):
+                moved, sibling = self.row(list_id), 'b' if list_id == 'a' else 'a'
+                row = copy.deepcopy(next(r for r in self.backend.home if r['Id'] == moved))
+                kept, others = self.sibling(sibling), self.others(moved)
+                offset = len(self.http.calls)
+                self.assertEqual(self.move('move-%d' % n, list_id, position),
+                                 {'state': 'moved', 'writes': 1})
+                self.assertEqual(self.posts(offset), [('/emby/Users/' + R + '/HomeSections/Move',
+                                                       {'ids': [moved], 'newIndex': native})])
+                self.assertEqual([r['Id'] for r in self.normal()], order)
+                self.assertEqual(self.edit_ids(), collapse(order))
+                self.assertEqual((self.normal()[position], self.backend.home[native]), (row, row))
+                self.assertEqual(self.sibling(sibling), kept)
+                self.assertEqual(self.others(moved), others)
+                self.assertEqual(self.backend.items, items)
+                stored = self.stored()
+                self.assertEqual((stored['lists'], stored['baseline']), (lists, shared))
+                self.fresh_session()
+                shown = {x['list']: x['position'] for x in self.operator.show()['lists']}
+                self.assertEqual(shown, {x: order.index(self.row(x)) for x in 'ab'})
+        self.assertEqual((self.backend.home, self.backend.expand),
+                         (start, {'latestmediablock': [g3, g4]}))
+        for list_id in 'ba':
+            self.do('delete-list', 'delete-' + list_id, list_id)
+        self.assertEqual((self.backend.home, self.normal(), self.backend.items),
+                         (edit_baseline, normal_baseline, {}))
+
+    def test_move_row_projection_noop_mismatch_and_dispatch_drift_refuse_before_post(self):
+        latest = {'Id': 'latestmedia_3', 'SectionType': 'latestmedia', 'ParentId': 'l3'}
+        self.backend.home += [latest, {'Id': 'manual', 'Name': 'Same', 'CustomName': 'Same',
+                                       'SectionType': 'playlist', 'ParentId': 'manual-playlist'}]
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.do('create-list', 'create-b', 'b', title='B', movies=['m2'])
+        a, b = self.row('a'), self.row('b')
+        move = '/emby/Users/' + R + '/HomeSections/Move'
+        # Equal views: the generated row is still a shared typed-ID target.
+        offset = len(self.http.calls)
+        self.assertEqual(self.move('before-latest', 'a', 1), {'state': 'moved', 'writes': 1})
+        self.assertEqual(self.posts(offset), [(move, {'ids': [a], 'newIndex': 1})])
+        # The edit view now lists that section under another ID; the normal view,
+        # and so the journaled snapshot, is unchanged.
+        normal = self.normal()
+        self.backend.home[2] = dict(latest, Id='latestmediablock')
+        self.backend.expand = {'latestmediablock': [latest]}
+        self.assertEqual(self.normal(), normal)
+        self.assertEqual([r['Id'] for r in normal], [1, a, 'latestmedia_3', 'manual', b])
+        # Already at the requested position: zero writes although its next row is an alias.
+        writes = copy.deepcopy(self.backend.writes)
+        self.assertEqual(self.move('noop', 'a', 1), {'state': 'moved', 'writes': 0})
+        self.assertEqual(self.backend.writes, writes)
+        self.refused_before_run('b', 2, 'Unsupported generated Home section at position')
+        mismatches = [
+            (lambda rows: rows[::-1], 0, 'Home views disagree on row order'),
+            (lambda rows: rows + [rows[0]], 0, 'Duplicate Home IDs'),
+            (lambda rows: [dict(r, CustomName='Drift') if r['Id'] == b else r for r in rows], 0,
+             'Saved row differs between Home views'),
+            (lambda rows: [r for r in rows if r['Id'] != b], 0, 'Saved row differs between Home views'),
+            # Typed IDs never coerce: string "1" is not the normal row 1.
+            (lambda rows: [dict(r, Id='1') if r['Id'] == 1 else r for r in rows], 0,
+             'Unsupported generated Home section at position')]
+        for n, (change, position, message) in enumerate(mismatches):
+            with self.subTest(mismatch=n):
+                with self.edit_view(change):
+                    self.refused_before_run('b', position, message)
+        # Projection drift after the preflight: the adapter's fresh translation
+        # refuses before any POST, so only pending clears and the run resumes.
+        def drift(rows):
+            d = self.journal.load() if self.journal._locked else None
+            return rows[::-1] if d and d['pending'] else rows
+        offset = len(self.http.calls)
+        with self.edit_view(drift):
+            with self.assertRaises(adapter.NotDispatched):
+                self.move('drift', 'b', 0)
+        stored = self.stored()
+        self.assertIsNone(stored['pending'])
+        self.assertEqual(stored['run'], {'key': 'drift', 'request': {
+            'operation': 'move-row', 'list': 'b', 'position': 0}})
+        self.assertEqual(self.posts(offset), [])
+        offset = len(self.http.calls)
+        self.assertEqual(self.resume('move-row', 'drift', 'b', position=0),
+                         {'state': 'moved', 'writes': 1})
+        self.assertEqual(self.posts(offset), [(move, {'ids': [b], 'newIndex': 0})])
+        self.assertEqual([r['Id'] for r in self.normal()], [b, 1, a, 'latestmedia_3', 'manual'])
+        for list_id in 'ab':
+            self.do('delete-list', 'delete-' + list_id, list_id)
+        self.assertEqual(([r['Id'] for r in self.normal()], self.edit_ids(), self.backend.items),
+                         ([1, 'latestmedia_3', 'manual'], [1, 'latestmediablock', 'manual'], {}))
+
 
 class ListEntryTests(unittest.TestCase):
     def test_entry_routes_list_and_migration_requests_with_exact_fields(self):
@@ -1915,6 +2293,8 @@ class ListEntryTests(unittest.TestCase):
                 ('detach-row', {'key': 'k', 'list': 'a', 'intent_digest': 'd'}),
                 ('attach-row', {'key': 'k', 'list': 'a', 'title': 'T', 'intent_digest': 'd'}),
                 ('delete-list', {'key': 'k', 'list': 'a', 'intent_digest': 'd'}),
+                ('list-preview', {'operation': 'move-row', 'list': 'a', 'position': 2}),
+                ('move-row', {'key': 'k', 'list': 'a', 'position': 2, 'intent_digest': 'd'}),
                 ('show', {'list': 'a'}), ('migrate-preview', {}), ('downgrade-preview', {}),
                 ('migrate', {'key': 'k', 'intent_digest': 'd'}),
                 ('downgrade', {'key': 'k', 'intent_digest': 'd'})]
@@ -1925,7 +2305,13 @@ class ListEntryTests(unittest.TestCase):
                                 'baseline_digest': 'd'}),
                ('set-members', {'key': 'k', 'list': 'a', 'movies': ['m1']}),
                ('show', {'list': 'a', 'key': 'k'}),
-               ('migrate', {'key': 'k', 'baseline_digest': 'd'})]
+               ('migrate', {'key': 'k', 'baseline_digest': 'd'}),
+               ('list-preview', {'operation': 'move-row', 'list': 'a'}),
+               ('move-row', {'key': 'k', 'list': 'a', 'intent_digest': 'd'}),
+               ('move-row', {'key': 'k', 'list': 'a', 'position': 0, 'row': 'r1',
+                             'intent_digest': 'd'}),
+               ('move-row', {'key': 'k', 'list': 'a', 'position': 0, 'recipient': R,
+                             'intent_digest': 'd'})]
         for operation, request in good + bad:
             with self.subTest(operation=operation, request=request):
                 api, operator = MagicMock(), MagicMock()

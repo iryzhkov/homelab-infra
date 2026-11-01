@@ -27,17 +27,21 @@ MARKER = re.compile(r"holonet-recommendations-[0-9a-f]{32}")
 # Arguments bound into each list-scoped request and its intent digest.
 LIST_OPERATIONS = {"create-list": ("title", "movies"), "set-members": ("movies",),
                    "set-title": ("title",), "detach-row": (), "attach-row": ("title",),
-                   "delete-list": ()}
+                   "delete-list": (), "move-row": ("position",)}
 # Ordered mutation phases. apply, remove and set-display-title keep their
 # version 1 request shapes. Rows are always created with the marker title.
 PHASES = {"apply": ("create", "share", "row", "members"), "remove": ("unrow", "delete"),
           "set-display-title": ("title",),
           "create-list": ("create", "share", "row", "title", "members"),
           "set-members": ("members",), "set-title": ("title",), "detach-row": ("unrow",),
-          "attach-row": ("row", "title"), "delete-list": ("unrow", "delete")}
+          "attach-row": ("row", "title"), "delete-list": ("unrow", "delete"),
+          "move-row": ("move",)}
 RESULT = {"apply": "applied", "remove": "removed", "set-display-title": "display-title-set",
           "create-list": "created", "set-members": "members-set", "set-title": "title-set",
-          "detach-row": "detached", "attach-row": "attached", "delete-list": "deleted"}
+          "detach-row": "detached", "attach-row": "attached", "delete-list": "deleted",
+          "move-row": "moved"}
+# Snapshot Home is bounded to this many rows, so a final row index is below it.
+MAX_HOME = 100
 V1_FIELDS = frozenset("version scope baseline current row pending run done display_title".split())
 V2_FIELDS = frozenset("version scope baseline current lists pending run done".split())
 
@@ -119,7 +123,51 @@ def list_request(operation, list_id, args):
         request["title"] = checked_title(args["title"])
     if "movies" in args:
         request["movies"] = movie_ids(args["movies"], 0)
+    if "position" in args:
+        request["position"] = row_position(args["position"])
     return request
+
+
+def row_position(value):
+    """Final 0-based index of an owned row in the normalized Home list. Never bool."""
+    require(type(value) is int and 0 <= value < MAX_HOME, "Invalid row position")
+    return value
+
+
+def row_index(home, row):
+    """Index of the one row whose typed ID equals the saved row ID."""
+    found = [n for n, r in enumerate(home) if row_id(r["Id"]) == row_id(row)]
+    require(len(found) == 1, "Missing saved row")
+    return found[0]
+
+
+def native_move_index(normal, edit, row, position):
+    """Edit-view Move index that puts the saved row at final normal index position.
+
+    None means the row is already there, so no write is needed. Emby's edit view
+    can show one generated section where the normal view shows several rows with
+    other typed IDs, so a normal index is never sent as the native index. The
+    target is the normal row that will follow the moved row, matched by typed ID
+    in the edit view (or the end of both views); an unmatched target refuses.
+    """
+    ids, edit_ids = [row_id(r["Id"]) for r in normal], [row_id(r["Id"]) for r in edit]
+    require(len(normal) <= MAX_HOME and len(edit) <= MAX_HOME and
+            len(ids) == len(set(ids)) and len(edit_ids) == len(set(edit_ids)), "Duplicate Home IDs")
+    key = row_id(row)
+    require(key in ids and key in edit_ids and
+            normal[ids.index(key)] == edit[edit_ids.index(key)], "Saved row differs between Home views")
+    shared = set(ids) & set(edit_ids)
+    require([x for x in ids if x in shared] == [x for x in edit_ids if x in shared],
+            "Home views disagree on row order")
+    require(type(position) is int and 0 <= position < len(normal), "Row position out of range")
+    if ids.index(key) == position:
+        return None
+    ids.remove(key)
+    edit_ids.remove(key)
+    if position == len(ids):
+        return len(edit_ids)
+    require(ids[position] in edit_ids, "Unsupported generated Home section at position")
+    return edit_ids.index(ids[position])
 
 
 def title_row(record, playlist, home, recipient, marker):
@@ -160,6 +208,8 @@ class ProtectedAPI(Protocol):
     def delete_entries(self, playlist: str, actor: str, entries: list): ...
     def add_movies(self, playlist: str, actor: str, movies: list): ...
     def delete_row(self, recipient: str, row): ...
+    def move_index(self, recipient: str, home: list, row, position: int): ...
+    def move_row(self, recipient: str, args: dict): ...
     def delete_owned_playlist(self, playlist: str, marker: str, actor: str): ...
 
 
@@ -434,6 +484,18 @@ class Operator:
             target["entries"] = new[0]["entries"]
         elif operation == "unrow":
             expected["home"] = [r for r in before["home"] if row_id(r["Id"]) != row_id(args)]
+        elif operation == "move":
+            # The identical row object moves to its final index; every other row
+            # keeps its object and relative order. A move never journals a no-op,
+            # so an unchanged Home after an attempted dispatch stays unresolved.
+            if type(args) is not dict or set(args) != {"row", "position"}:
+                return False
+            rows = [n for n, r in enumerate(before["home"]) if row_id(r["Id"]) == row_id(args["row"])]
+            position = args["position"]
+            if (len(rows) != 1 or type(position) is not int or
+                    not 0 <= position < len(before["home"]) or rows[0] == position):
+                return False
+            expected["home"].insert(position, expected["home"].pop(rows[0]))
         elif operation == "delete":
             expected["playlists"].remove(target)
         return expected == after
@@ -469,6 +531,15 @@ class Operator:
         require(record is not None, "Unknown list")
         require(name != "detach-row" or record["row"] is not None, "List already detached")
         require(name != "attach-row" or record["row"] is None, "List already attached")
+        if name == "move-row":
+            # Gates run in preview and before a run is journaled, never only in the adapter.
+            require(record["row"] is not None, "List detached")
+            title_row(record, playlist, snapshot["home"], self.scope["recipient"], marker)
+            require(request["position"] < len(snapshot["home"]), "Row position out of range")
+            # position is a final normal-view index. The backend translates it
+            # against a fresh edit view and refuses here, before any run exists.
+            self.api.move_index(self.scope["recipient"], copy.deepcopy(snapshot["home"]),
+                                record["row"], request["position"])
 
     def _preview(self, legacy, scoped):
         with self.journal.locked():
@@ -535,6 +606,9 @@ class Operator:
     def delete_list(self, key, list, intent_digest=None):
         return self._scoped(key, intent_digest, "delete-list", list)
 
+    def move_row(self, key, list, position, intent_digest=None):
+        return self._scoped(key, intent_digest, "move-row", list, position=position)
+
     def _scoped(self, key, intent, operation, list_id, **args):
         return self._execute(key, intent, None, list_request(operation, list_id, args))
 
@@ -599,12 +673,17 @@ class Operator:
             lists = []
             for list_id in sorted(d["lists"]):
                 record, marker, playlist = self._target(d, s, list_id)
+                # Observed final index of the saved row, for placement readback and
+                # a same-row inverse. Version 1 show output is unchanged.
+                position = next((n for n, r in enumerate(s["home"]) if record["row"] is not None
+                                 and row_id(r["Id"]) == row_id(record["row"])), None)
                 if list is None or list == list_id:
                     lists.append(dict(list=list_id, marker=marker,
                                       legacy=list_id == self.scope["recipe"],
                                       display_title=display_title(record, marker),
                                       playlist=copy.deepcopy(playlist),
-                                      row=self._row_view(d, s, record, playlist)))
+                                      row=self._row_view(d, s, record, playlist),
+                                      position=position))
             require(list is None or len(lists) == 1, "Unknown list")
             return dict(status, version=2, scope=copy.deepcopy(self.base),
                         legacy_list=self.scope["recipe"], lists=lists,
@@ -748,6 +827,12 @@ class Operator:
                 step = ("unrow", record["row"])
             elif phase == "delete" and p is not None:
                 step = ("delete", None)
+            elif phase == "move":
+                title_row(record, p, snapshot["home"], recipient, marker)
+                position = request["position"]
+                require(position < len(snapshot["home"]), "Row position out of range")
+                if row_index(snapshot["home"], record["row"]) != position:
+                    step = ("move", {"row": record["row"], "position": position})
             if step:
                 return step + (p, marker)
         return None, None, p, marker
@@ -823,6 +908,8 @@ class Operator:
             self.api.add_movies(playlist["id"], a, list(args))
         elif operation == "unrow":
             self.api.delete_row(u, args)
+        elif operation == "move":
+            self.api.move_row(u, copy.deepcopy(args))
         elif operation == "delete":
             self.api.delete_owned_playlist(playlist["id"], marker, a)
         else:
