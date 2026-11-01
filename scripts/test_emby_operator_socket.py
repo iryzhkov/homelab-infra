@@ -100,6 +100,7 @@ class WorkerCase(unittest.TestCase):
         self.addCleanup(self.http.__exit__, None, None, None)
         self.policy = policy()
         self.client = None
+        self.reset()
         for target, name, value in ((worker, 'load_policy', lambda: copy.deepcopy(self.policy)),
                                     (worker, 'load_config', self.load_config),
                                     (lifecycle, 'load_credentials', self.load_credentials),
