@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import pwd
+import re
 import stat
 import struct
 import subprocess
@@ -104,6 +105,115 @@ def recommendation_journal(uid, gid):
     current = inspect(JOURNAL_ROOT / "recommendations", {0, uid}, directory=True)
     if current:
         need(current.st_uid == uid and current.st_gid == gid and stat.S_IMODE(current.st_mode) == 0o700)
+
+
+OPERATOR_PACKAGE = Path("/opt/holonet-playlists")
+OPERATOR_POLICY = Path("/etc/holonet-playlists")
+OPERATOR_RUNTIME = Path("/run/holonet-playlists")
+OPERATOR_STATE = Path("/var/lib/holonet-operator")
+OPERATOR_INTERPRETER = Path("/usr/bin/python3")
+# Socket unit first: its presence decides whether an unselected run stops it.
+OPERATOR_UNITS = (Path("/etc/systemd/system/holonet-playlists-worker.socket"),
+                  Path("/etc/systemd/system/holonet-playlists-worker@.service"),
+                  Path("/etc/tmpfiles.d/holonet-playlists.conf"))
+OPERATOR_OWNER = "homelab-infra holonet-playlists\n"
+OPERATOR_HEADER = "# Managed by homelab-infra holonet-playlists\n"
+OPERATOR_MODULES = frozenset({"emby_operator_adapter.py", "emby_operator_entry.py",
+                              "emby_operator_recommendations.py", "emby_operator_socket.py"})
+HEX64 = re.compile(r"[0-9a-f]{64}")
+# Production trusts only root. Synthetic tests substitute their own uid.
+ROOT_UID = 0
+
+
+def roots():
+    return {0, ROOT_UID}
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def operator_unit(path):
+    if inspect(path, roots(), exact_mode=0o644) is None:
+        return False
+    with path.open() as stream:
+        need(stream.readline() == OPERATOR_HEADER)
+    return True
+
+
+def operator_interpreter():
+    """Fixed system python3, or its same-directory python3.N link, root custody."""
+    path = OPERATOR_INTERPRETER
+    inspect(path.parent, roots(), directory=True, required=True)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        need(info.st_uid in roots() and re.fullmatch(r"python3\.[0-9]{1,2}", os.readlink(path)))
+        path = path.parent / os.readlink(path)
+        info = path.lstat()
+    need(stat.S_ISREG(info.st_mode) and info.st_uid in roots() and not info.st_mode & 0o022)
+
+
+def playlist_operator(gid, selected, release=None, modules=None, journals=(), configs=()):
+    """Metadata-only preflight for the root worker. Never opens, lists or hashes a
+    credential, journal or recipient config, and never repairs or adopts."""
+    marker = OPERATOR_PACKAGE / ".homelab-infra-owned"
+    if not selected and not os.path.lexists(marker):
+        # A catalog-only run never acts on, so never judges, unowned names.
+        return {"installed": False, "runtime": False}
+    if inspect(marker, roots(), exact_mode=0o644):
+        need(marker.read_text() == OPERATOR_OWNER)
+    else:
+        need(not any(os.path.lexists(p) for p in
+                     (OPERATOR_PACKAGE, OPERATOR_POLICY, OPERATOR_RUNTIME, *OPERATOR_UNITS)))
+    installed = [operator_unit(path) for path in OPERATOR_UNITS]
+    inspect(OPERATOR_RUNTIME.parent, roots(), directory=True, required=True)
+    runtime = OPERATOR_RUNTIME.lstat() if os.path.lexists(OPERATOR_RUNTIME) else None
+    if runtime:
+        need(stat.S_ISDIR(runtime.st_mode) and runtime.st_uid in roots() and runtime.st_gid == gid
+             and stat.S_IMODE(runtime.st_mode) == 0o750)
+        node = OPERATOR_RUNTIME / "operator.sock"
+        if os.path.lexists(node):
+            info = node.lstat()
+            need(stat.S_ISSOCK(info.st_mode) and info.st_uid in roots() and info.st_gid == gid
+                 and stat.S_IMODE(info.st_mode) == 0o660)
+    result = {"installed": installed[0], "runtime": runtime is not None}
+    if not selected:
+        return result
+    need(isinstance(release, str) and HEX64.fullmatch(release)
+         and isinstance(modules, dict) and set(modules) == OPERATOR_MODULES
+         and all(isinstance(v, str) and HEX64.fullmatch(v) for v in modules.values()))
+    operator_interpreter()
+    for path in (OPERATOR_PACKAGE, OPERATOR_PACKAGE / "releases"):
+        info = inspect(path, roots(), directory=True)
+        need(info is None or stat.S_IMODE(info.st_mode) == 0o755)
+    directory = OPERATOR_PACKAGE / "releases" / release
+    info = inspect(directory, roots(), directory=True)
+    if info:
+        need(stat.S_IMODE(info.st_mode) == 0o555)
+        names = os.listdir(directory)
+        need(set(names) == set(modules))
+        for name in names:
+            inspect(directory / name, roots(), exact_mode=0o444, required=True)
+            need(file_sha256(directory / name) == modules[name])
+    info = inspect(OPERATOR_POLICY, roots(), directory=True)
+    if info:
+        need(stat.S_IMODE(info.st_mode) == 0o700)
+        inspect(OPERATOR_POLICY / "policy.json", roots(), exact_mode=0o600)
+    need(isinstance(journals, list) and isinstance(configs, list)
+         and 1 <= len(journals) == len(configs) <= 16 and len(set(journals)) == len(journals))
+    for journal, config in zip(map(Path, journals), map(Path, configs)):
+        need(journal.is_relative_to(OPERATOR_STATE) and journal.name == "journal"
+             and config.name == "config.json" and journal.parent == config.parent)
+        # lstat of the directory and its ancestors only; never listed or opened.
+        info = inspect(journal, roots(), directory=True, required=True)
+        need(stat.S_IMODE(info.st_mode) == 0o700)
+        inspect(config, roots(), exact_mode=0o600, required=True)
+        need(stat.S_IMODE(config.parent.lstat().st_mode) == 0o700)
+    return result
 
 
 def route(service, uid):
@@ -210,7 +320,8 @@ def ov_runtime():
 
 def main():
     module = AnsibleModule(argument_spec={
-        "kind": {"type": "str", "choices": ["endpoint", "credential", "route", "binary", "ov-package", "ov-files", "ov-runtime"],
+        "kind": {"type": "str", "choices": ["endpoint", "credential", "route", "binary", "ov-package", "ov-files",
+                                             "ov-runtime", "playlist-operator"],
                  "required": True},
         "service": {"type": "str", "choices": [*SERVICES, "ov-http", "jocasta"]},
         "uid": {"type": "int"},
@@ -220,10 +331,19 @@ def main():
         "journal": {"type": "bool", "default": False},
         "source": {"type": "path", "no_log": True},
         "release": {"type": "str"},
+        "selected": {"type": "bool", "default": False},
+        "modules": {"type": "dict", "default": {}},
+        "journals": {"type": "list", "elements": "str", "default": []},
+        "configs": {"type": "list", "elements": "str", "default": []},
     }, supports_check_mode=True)
     p = module.params
+    facts = {}
     try:
-        if p["kind"] == "credential":
+        if p["kind"] == "playlist-operator":
+            need(p["gid"] is not None and 100 <= p["gid"] <= 999)
+            facts = playlist_operator(p["gid"], p["selected"], p["release"], p["modules"],
+                                      p["journals"], p["configs"])
+        elif p["kind"] == "credential":
             need(p["uid"] is not None and p["source"])
             result = inspect(p["source"], {0, p["uid"]}, exact_mode=0o600, required=True)
             if result is None:
@@ -251,7 +371,7 @@ def main():
                 route(p["service"], p["uid"])
     except (OSError, ValueError, TypeError, subprocess.SubprocessError, KeyError, IndexError):
         module.fail_json(msg="web-mcp protected preflight refused; inspect fixed paths and identity")
-    module.exit_json(changed=False)
+    module.exit_json(changed=False, **facts)
 
 
 if __name__ == "__main__":

@@ -173,10 +173,14 @@ class OperatorAdapter:
 
     The constructor is trusted operator code, never exposed through WebMCP.
     A token can only originate in this instance's AuthenticateByName response.
+    request_guard is an optional trusted callback run before every send. It
+    returns the caller's remaining seconds or raises Refused; it never
+    changes routes, bodies or retries.
     """
-    def __init__(self, config, journal=None):
+    def __init__(self, config, journal=None, *, request_guard=None):
         self._config = validate_config(config)
         self._journal = journal
+        self._guard = request_guard
         self._base = {k: self._config[k] for k in ('server', 'actor', 'recipient', 'library')}
         self._legacy = list_marker(self._base, self._config['recipe'])
         self._routes = set()
@@ -210,8 +214,16 @@ class OperatorAdapter:
         require(authenticating == (path == '/Users/AuthenticateByName'),
                 "Invalid authentication route")
         require(authenticating or self._token is not None, "Fresh authentication required")
-        remaining = MAX_SECONDS - (time.monotonic() - self._started)
+        now = time.monotonic()
+        remaining = MAX_SECONDS - (now - self._started)
         require(self._requests < MAX_REQUESTS and remaining > 0, "Transport budget exhausted")
+        if self._guard is not None:
+            # Caller deadline and disconnect, before every send including
+            # authentication and reads. A stop here precedes the mutation
+            # count, so a mutation method still reports NotDispatched.
+            remaining = min(remaining, self._guard())
+            require(remaining > 0, "Caller deadline exceeded")
+        deadline = now + remaining
         raw = json.dumps(body, allow_nan=False).encode() if body is not None else None
         require(raw is None or len(raw) <= MAX_BODY, "Request body too large")
         url = c['origin'] + '/emby' + path
@@ -231,10 +243,10 @@ class OperatorAdapter:
                 require(response.status in ((200,) if method == 'GET' or authenticating else (200, 204)) and response.geturl() == url,
                         "Unexpected HTTP status or redirect")
                 # Chunked reads check a wall deadline as well as socket timeouts.
+                # Without a guard the deadline is exactly started + MAX_SECONDS.
                 parts, size = [], 0
                 while True:
-                    require(time.monotonic() - self._started < MAX_SECONDS,
-                            "Transport deadline exceeded")
+                    require(time.monotonic() < deadline, "Transport deadline exceeded")
                     part = response.read1(min(65536, MAX_BYTES + 1 - size))
                     if not part:
                         break

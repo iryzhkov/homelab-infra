@@ -64,6 +64,12 @@ Invoke `python3 scripts/emby-operator-recommendations.py --config PATH OPERATION
 stay in protected files. Results include private scope and Movie IDs. Keep stdout
 in operator custody. Errors omit upstream bodies, credentials and tracebacks.
 
+The entry's config, journal, credential and Operator lifecycle and its typed
+request fields live in `scripts/emby_operator_entry.py`, which the CLI and the
+default-off MCP socket worker share; install it next to the CLI. CLI arguments,
+request shapes and output are unchanged. See `docs/emby-operator-mcp.md` for the
+worker, which nothing installs or enables yet.
+
 Config has exactly these fields:
 
 | Field | Meaning |

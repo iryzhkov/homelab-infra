@@ -1,0 +1,162 @@
+{
+  "contract": "emby-operator-mcp local wire v1; synthetic IDs only, see docs/emby-operator-mcp.md",
+  "version": 1,
+  "framing": {
+    "encoding": "utf-8",
+    "request": "one compact JSON object, no leading or trailing whitespace, then one newline; nothing after it",
+    "response": "one compact ASCII-escaped JSON object, then one newline; the worker then closes",
+    "max_request_bytes_including_newline": 65536,
+    "max_response_bytes_including_newline": 262144,
+    "requests_per_connection": 1,
+    "client_must_not_half_close": true
+  },
+  "error_codes": ["refused", "busy", "unfinished", "deadline", "unavailable"],
+  "required_actions": {
+    "every_call": ["catalog.read", "playlist.read", "home.read"],
+    "set-members": "playlist.manage",
+    "set-title": "home.manage"
+  },
+  "deadline": "worker deadline = min(caller.expires_at * 1000, deadline_unix_ms, now_ms + 120000); never renewed",
+  "policy": {
+    "version": 1,
+    "enabled": true,
+    "peer": {"uid": 940, "gid": 940},
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-recommendations",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "7",
+      "catalog_user": "99999999999999999999999999999999"
+    },
+    "recipients": {
+      "cccccccccccccccccccccccccccccccc": "/synthetic/recipient/config.json"
+    }
+  },
+  "internal_key": [
+    {
+      "caller": {"issuer": "https://issuer.invalid/application/o/synthetic/", "subject": "synthetic-writer-subject",
+                 "namespace": "managed-recommendations", "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "library": "7"},
+      "recipient": "cccccccccccccccccccccccccccccccc",
+      "key": "logical-1",
+      "canonical": "[\"https://issuer.invalid/application/o/synthetic/\",\"synthetic-writer-subject\",\"managed-recommendations\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"7\",\"cccccccccccccccccccccccccccccccc\",\"logical-1\"]",
+      "internal_key": "mcp-71b313c303fdbba3371a5446a0fad70e135d4a9e5a004486f5930062728ef5fe"
+    },
+    {
+      "caller": {"issuer": "https://issuer.invalid/application/o/synthetic/", "subject": "synthetic-writer-subject",
+                 "namespace": "managed-recommendations", "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "library": "7"},
+      "recipient": "cccccccccccccccccccccccccccccccc",
+      "key": "logical-2",
+      "canonical": "[\"https://issuer.invalid/application/o/synthetic/\",\"synthetic-writer-subject\",\"managed-recommendations\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"7\",\"cccccccccccccccccccccccccccccccc\",\"logical-2\"]",
+      "internal_key": "mcp-420e261fa6e3837ea5ef40f5e37463c2a44388506ac68cffa0e093420ec5c0d6"
+    },
+    {
+      "caller": {"issuer": "https://issuer.invalid/application/o/synthetic/", "subject": "synthetic-subject-é",
+                 "namespace": "managed-recommendations", "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "library": "7"},
+      "recipient": "cccccccccccccccccccccccccccccccc",
+      "key": "logical-1",
+      "canonical": "[\"https://issuer.invalid/application/o/synthetic/\",\"synthetic-subject-é\",\"managed-recommendations\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"7\",\"cccccccccccccccccccccccccccccccc\",\"logical-1\"]",
+      "canonical_note": "UTF-8 bytes of the canonical text, no ASCII escaping",
+      "internal_key": "mcp-14ee8686faa16eb826e796baedbbfd0bc57ab2dba59ae421658ba31fda2afdb5"
+    }
+  ],
+  "caller": {
+    "issuer": "https://issuer.invalid/application/o/synthetic/",
+    "subject": "synthetic-writer-subject",
+    "namespace": "managed-recommendations",
+    "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "library": "7",
+    "catalog_user": "99999999999999999999999999999999",
+    "actions": ["catalog.read", "playlist.read", "playlist.manage", "object.share", "home.read", "home.manage", "object.delete"],
+    "expires_at": 1793491200
+  },
+  "frame_example": "{\"version\":1,\"caller\":{\"issuer\":\"https://issuer.invalid/application/o/synthetic/\",\"subject\":\"synthetic-writer-subject\",\"namespace\":\"managed-recommendations\",\"server\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"library\":\"7\",\"catalog_user\":\"99999999999999999999999999999999\",\"actions\":[\"catalog.read\",\"playlist.read\",\"playlist.manage\",\"object.share\",\"home.read\",\"home.manage\",\"object.delete\"],\"expires_at\":1793491200},\"recipient\":\"cccccccccccccccccccccccccccccccc\",\"deadline_unix_ms\":1793491140000,\"operation\":\"show\",\"request\":{}}\n",
+  "valid": [
+    {"name": "show-all", "operation": "show", "request": {}},
+    {"name": "show-list", "operation": "show", "request": {"list": "a"}},
+    {"name": "reconcile", "operation": "reconcile", "request": {}},
+    {"name": "preview-set-members", "operation": "preview",
+     "request": {"operation": "set-members", "list": "a", "movies": ["m2", "m3"]}},
+    {"name": "preview-set-members-empty", "operation": "preview",
+     "request": {"operation": "set-members", "list": "a", "movies": []}},
+    {"name": "preview-set-title", "operation": "preview",
+     "request": {"operation": "set-title", "list": "a", "title": "Movies for tonight"}},
+    {"name": "apply-set-members", "operation": "apply",
+     "request": {"operation": "set-members", "list": "a", "movies": ["m2", "m3"], "key": "logical-1",
+                 "intent_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}},
+    {"name": "apply-set-title", "operation": "apply",
+     "request": {"operation": "set-title", "list": "a", "title": "Movies for tonight", "key": "logical-2",
+                 "intent_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+  ],
+  "invalid_text": [
+    {"name": "not-json", "text": "{", "code": "refused", "message": "Invalid JSON"},
+    {"name": "array", "text": "[]", "code": "refused", "message": "Invalid request fields"},
+    {"name": "empty", "text": "", "code": "refused", "message": "Invalid request frame"},
+    {"name": "leading-space", "text": " {}", "code": "refused", "message": "Invalid request frame"},
+    {"name": "duplicate-key", "text": "{\"version\":1,\"version\":1}", "code": "refused", "message": "Duplicate JSON key"},
+    {"name": "nonfinite", "text": "{\"version\":NaN}", "code": "refused", "message": "Nonfinite JSON"}
+  ],
+  "invalid": [
+    {"name": "unknown-top-level", "set": {"path": "/etc/holonet-playlists/policy.json"}, "code": "refused", "message": "Invalid request fields"},
+    {"name": "missing-request", "delete": ["request"], "code": "refused", "message": "Invalid request fields"},
+    {"name": "version-2", "set": {"version": 2}, "code": "refused", "message": "Unsupported version"},
+    {"name": "version-true", "set": {"version": true}, "code": "refused", "message": "Unsupported version"},
+    {"name": "version-float", "set": {"version": 1.0}, "code": "refused", "message": "Unsupported version"},
+    {"name": "caller-extra-field", "caller_set": {"target_users": ["cccccccccccccccccccccccccccccccc"]}, "code": "refused", "message": "Invalid caller"},
+    {"name": "caller-duplicate-action", "caller_set": {"actions": ["catalog.read", "catalog.read"]}, "code": "refused", "message": "Invalid caller"},
+    {"name": "caller-expiry-string", "caller_set": {"expires_at": "1793491200"}, "code": "refused", "message": "Invalid caller"},
+    {"name": "recipient-uppercase", "set": {"recipient": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}, "code": "refused", "message": "Invalid recipient"},
+    {"name": "deadline-negative", "set": {"deadline_unix_ms": -1}, "code": "refused", "message": "Invalid deadline"},
+    {"name": "operation-unknown", "set": {"operation": "delete"}, "code": "refused", "message": "Unsupported operation"},
+    {"name": "operation-cli-name", "set": {"operation": "list-preview"}, "code": "refused", "message": "Unsupported operation"},
+    {"name": "list-operation-outside-slice", "set": {"operation": "preview", "request": {"operation": "delete-list", "list": "a"}}, "code": "refused", "message": "Unsupported list operation"},
+    {"name": "preview-with-key", "set": {"operation": "preview", "request": {"operation": "set-title", "list": "a", "title": "T", "key": "k"}}, "code": "refused", "message": "Invalid request fields"},
+    {"name": "apply-without-digest", "set": {"operation": "apply", "request": {"operation": "set-title", "list": "a", "title": "T", "key": "k"}}, "code": "refused", "message": "Invalid request fields"},
+    {"name": "show-with-key", "set": {"request": {"list": "a", "key": "k"}}, "code": "refused", "message": "Invalid request fields"},
+    {"name": "request-config-path", "set": {"request": {"config": "/synthetic/other/config.json"}}, "code": "refused", "message": "Invalid request fields"},
+    {"name": "too-many-movies", "set": {"operation": "preview", "request": {"operation": "set-members", "list": "a", "movies": ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16", "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26"]}}, "code": "refused", "message": "Expected 0..25 Movies"},
+    {"name": "apply-bad-digest", "set": {"operation": "apply", "request": {"operation": "set-title", "list": "a", "title": "T", "key": "k", "intent_digest": "ABC"}}, "code": "refused", "message": "Invalid intent digest"}
+  ],
+  "denied": [
+    {"name": "foreign-issuer", "caller_set": {"issuer": "https://other.invalid/"}, "code": "refused", "message": "Caller outside management policy"},
+    {"name": "foreign-subject", "caller_set": {"subject": "synthetic-other-subject"}, "code": "refused", "message": "Caller outside management policy"},
+    {"name": "foreign-namespace", "caller_set": {"namespace": "other"}, "code": "refused", "message": "Caller outside management policy"},
+    {"name": "foreign-server", "caller_set": {"server": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "code": "refused", "message": "Caller outside management policy"},
+    {"name": "foreign-library", "caller_set": {"library": "8"}, "code": "refused", "message": "Caller outside management policy"},
+    {"name": "foreign-catalog-user", "caller_set": {"catalog_user": "88888888888888888888888888888888"}, "code": "refused", "message": "Caller outside management policy"},
+    {"name": "foreign-recipient", "set": {"recipient": "88888888888888888888888888888888"}, "code": "refused", "message": "Recipient outside management policy"},
+    {"name": "reader-actions-show", "caller_set": {"actions": ["catalog.read", "playlist.read"]}, "code": "refused", "message": "Missing required action"},
+    {"name": "members-without-playlist-manage", "caller_set": {"actions": ["catalog.read", "playlist.read", "home.read", "home.manage"]},
+     "set": {"operation": "preview", "request": {"operation": "set-members", "list": "a", "movies": ["m2"]}}, "code": "refused", "message": "Missing required action"},
+    {"name": "title-without-home-manage", "caller_set": {"actions": ["catalog.read", "playlist.read", "home.read", "playlist.manage"]},
+     "set": {"operation": "apply", "request": {"operation": "set-title", "list": "a", "title": "T", "key": "k",
+                                                "intent_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}},
+     "code": "refused", "message": "Missing required action"}
+  ],
+  "responses": [
+    {"name": "apply-ok", "envelope": {"version": 1, "ok": true, "result": {"state": "members-set", "writes": 2}},
+     "line": "{\"version\":1,\"ok\":true,\"result\":{\"state\":\"members-set\",\"writes\":2}}\n"},
+    {"name": "replay-ok", "envelope": {"version": 1, "ok": true, "result": {"state": "replayed", "writes": 0}},
+     "line": "{\"version\":1,\"ok\":true,\"result\":{\"state\":\"replayed\",\"writes\":0}}\n"},
+    {"name": "preview-ok", "envelope": {"version": 1, "ok": true, "result": {"request": {"operation": "set-title", "list": "a", "title": "Café"}, "intent_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}},
+     "line": "{\"version\":1,\"ok\":true,\"result\":{\"request\":{\"operation\":\"set-title\",\"list\":\"a\",\"title\":\"Caf\\u00e9\"},\"intent_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}\n"},
+    {"name": "unfinished", "error": {"code": "unfinished", "message": "Another request is unfinished", "operation": "set-members", "list": "a"},
+     "line": "{\"version\":1,\"ok\":false,\"error\":{\"code\":\"unfinished\",\"message\":\"Another request is unfinished\",\"operation\":\"set-members\",\"list\":\"a\"}}\n"},
+    {"name": "busy", "error": {"code": "busy", "message": "Recipient journal busy; nothing was changed"},
+     "line": "{\"version\":1,\"ok\":false,\"error\":{\"code\":\"busy\",\"message\":\"Recipient journal busy; nothing was changed\"}}\n"},
+    {"name": "deadline", "error": {"code": "deadline", "message": "Stopped at caller deadline; use show before resubmitting the same request"},
+     "line": "{\"version\":1,\"ok\":false,\"error\":{\"code\":\"deadline\",\"message\":\"Stopped at caller deadline; use show before resubmitting the same request\"}}\n"},
+    {"name": "refused", "error": {"code": "refused", "message": "Missing required action"},
+     "line": "{\"version\":1,\"ok\":false,\"error\":{\"code\":\"refused\",\"message\":\"Missing required action\"}}\n"},
+    {"name": "unavailable", "error": {"code": "unavailable", "message": "Operator failed; protected manual inspection required"},
+     "line": "{\"version\":1,\"ok\":false,\"error\":{\"code\":\"unavailable\",\"message\":\"Operator failed; protected manual inspection required\"}}\n"}
+  ],
+  "show_result_fields": {
+    "from_core_version_2": ["revision", "journal_digest", "pending", "run", "done_count", "done_limit", "keys_exhausted",
+                            "reconcile", "version", "scope", "legacy_list", "lists", "list_count", "list_limit", "migrated_from"],
+    "added_by_worker": ["capacity_warning"],
+    "run": "null or {\"operation\": string, \"list\": string, \"args\": object}; never a key",
+    "pending": "null or {\"operation\": step name, \"list\": string}",
+    "migrated_from": "null or the core object without its key"
+  }
+}

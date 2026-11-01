@@ -17,6 +17,7 @@ from unittest.mock import patch
 import urllib.request
 
 import emby_operator_adapter as adapter
+import emby_operator_entry as lifecycle
 from emby_operator_recommendations import Refused, Journal, Operator, digest
 
 S, A, R, G = 'a' * 32, 'b' * 32, 'c' * 32, 'd' * 32
@@ -330,7 +331,7 @@ class CustodyTests(unittest.TestCase):
         entry = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(entry)
         with patch.object(entry, 'load_config', return_value=config()), \
-             patch.object(entry, 'load_credentials') as credentials, \
+             patch.object(lifecycle, 'load_credentials') as credentials, \
              patch.object(adapter.urllib.request, 'build_opener') as network, \
              contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(entry.main(['--config', '/synthetic/config', 'preview']), 2)
@@ -525,9 +526,9 @@ class LifecycleHTTPTests(unittest.TestCase):
             return api
         offset = len(self.http.calls)
         with patch.object(entry, 'load_config', return_value=config()), \
-             patch.object(entry, 'load_credentials', return_value={'username': 'synthetic', 'password': 'synthetic'}), \
-             patch.object(entry, 'Journal', return_value=self.journal), \
-             patch.object(entry, 'OperatorAdapter', side_effect=make_api), \
+             patch.object(lifecycle, 'load_credentials', return_value={'username': 'synthetic', 'password': 'synthetic'}), \
+             patch.object(lifecycle, 'Journal', return_value=self.journal), \
+             patch.object(lifecycle, 'OperatorAdapter', side_effect=make_api), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(entry.main(['--config', '/synthetic/config', 'show']), 0)
         result = json.loads(output.getvalue())
@@ -1193,9 +1194,9 @@ class LifecycleHTTPTests(unittest.TestCase):
         # Entry closes the actual adapter; keep the shared journal for assertions.
         with patch.object(entry, 'load_config', return_value=config()), \
              patch.object(entry, 'private_read', return_value=json.dumps(request)), \
-             patch.object(entry, 'load_credentials', return_value={'username': 'synthetic', 'password': 'synthetic'}), \
-             patch.object(entry, 'Journal', return_value=self.journal), \
-             patch.object(entry, 'OperatorAdapter', side_effect=make_api), \
+             patch.object(lifecycle, 'load_credentials', return_value={'username': 'synthetic', 'password': 'synthetic'}), \
+             patch.object(lifecycle, 'Journal', return_value=self.journal), \
+             patch.object(lifecycle, 'OperatorAdapter', side_effect=make_api), \
              patch.object(self.journal, 'close'), \
              patch.object(adapter.OperatorAdapter, 'snapshot', snapshot), \
              contextlib.redirect_stdout(io.StringIO()) as output:
@@ -1279,10 +1280,10 @@ class EntryTests(unittest.TestCase):
                 getattr(operator, operation.replace('-', '_')).return_value = {'state': 'synthetic-success'}
                 with patch.object(entry, 'load_config', return_value=config()), \
                      patch.object(entry, 'private_read', return_value=json.dumps(request)), \
-                     patch.object(entry, 'load_credentials', return_value=credentials), \
-                     patch.object(entry, 'Journal', return_value=journal) as make_journal, \
-                     patch.object(entry, 'OperatorAdapter', return_value=api) as make_api, \
-                     patch.object(entry, 'Operator', return_value=operator) as make_operator, \
+                     patch.object(lifecycle, 'load_credentials', return_value=credentials), \
+                     patch.object(lifecycle, 'Journal', return_value=journal) as make_journal, \
+                     patch.object(lifecycle, 'OperatorAdapter', return_value=api) as make_api, \
+                     patch.object(lifecycle, 'Operator', return_value=operator) as make_operator, \
                      contextlib.redirect_stdout(io.StringIO()) as output:
                     self.assertEqual(entry.main(['--config', '/synthetic/config', operation,
                                                  '--request-file', '/synthetic/request']), 0)
@@ -2319,11 +2320,11 @@ class ListEntryTests(unittest.TestCase):
                 method.return_value = {'state': 'synthetic-success'}
                 with patch.object(entry, 'load_config', return_value=config()), \
                      patch.object(entry, 'private_read', return_value=json.dumps(request)), \
-                     patch.object(entry, 'load_credentials', return_value={
+                     patch.object(lifecycle, 'load_credentials', return_value={
                          'username': 'synthetic', 'password': 'synthetic'}) as credentials, \
-                     patch.object(entry, 'Journal', return_value=MagicMock()), \
-                     patch.object(entry, 'OperatorAdapter', return_value=api), \
-                     patch.object(entry, 'Operator', return_value=operator), \
+                     patch.object(lifecycle, 'Journal', return_value=MagicMock()), \
+                     patch.object(lifecycle, 'OperatorAdapter', return_value=api), \
+                     patch.object(lifecycle, 'Operator', return_value=operator), \
                      contextlib.redirect_stdout(io.StringIO()), \
                      contextlib.redirect_stderr(io.StringIO()) as errors:
                     code = entry.main(['--config', '/synthetic/config', operation,

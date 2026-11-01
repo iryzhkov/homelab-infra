@@ -145,6 +145,68 @@ native client acceptance remain separate gates. In particular, the isolated
 owner's deletion permission is not a production grant. No deployment, account,
 grant, history collection, recurrence or live canary follows from this section.
 
+## Opt-in HoloNet playlist operator management
+
+The HoloNet config accepts an optional top-level `playlist_operator` object, the
+Go service's management ceiling (homelab-cli `mcp-holonet/OPERATOR.md`). Absent
+means off: no worker file, unit or socket is written. The object has exactly
+`wire_version` (integer 1), `subject` (1..128 printable ASCII without space),
+`namespace` (`managed-recommendations`), `library`, `catalog_user` and
+`recipients` (1..16 unique IDs). It excludes `recommendations`. Issuer (at most
+512 characters) and server are the config's own `issuer` and `server_id`.
+The installer additionally pins homelab: `server_id`
+3c86e6d7ff6c4a3296522cdf03d22bb0, library `3` and catalog user
+54b7d36cef804d3c8478474553ed3a82, each also inside the existing read policy,
+runtime UID/GID 940, and recipients drawn only from the seven provisioned
+operator configs in `OPERATOR_RECIPIENTS`. Reader policy, credentials and the
+existing `holonet.service` unit are unchanged.
+
+Artifact pins: `HOLONET_OPERATOR_SOURCE` and `HOLONET_OPERATOR_CONTRACT` in
+`filter_plugins/web_mcp.py` name the one reviewed build that understands the
+key: source `72c1e2fd2642d87832cd23fdb7f2e7a7ff261d9a`, interface
+`df3ea666b2bd672818933034b2780b80b0ece245`. These are candidate pins pending
+final source review and hosted CI; activation requires those gates. Older
+binaries reject the unknown key. Existing exact catalog and writer pairs stay
+accepted without the key and refuse it even when null. The build's SHA256 stays an operator input, as for
+every other artifact.
+
+When the key is non-null the role, after the existing guards and before any
+write, runs a metadata-only `playlist-operator` guard. It refuses symlinks,
+wrong owners or modes, group or world writable ancestors, an unmarked existing
+`/opt/holonet-playlists`, `/etc/holonet-playlists`, `/run/holonet-playlists` or
+unit file, unit files without the managed header, a release whose files are
+not exactly the pinned bytes, a socket parent other than `root:holonet 0750`,
+and any selected recipient whose `journal/` directory (`0700`) or `config.json`
+(`0600`, parent `0700`) is missing or unsafe. It never opens, lists or hashes a
+journal or config and never touches the shared credential. Nothing is repaired
+or adopted. Check mode runs the same guard and writes nothing.
+
+Then it installs, all root-owned:
+
+| Path | Mode | Content |
+| --- | --- | --- |
+| `/opt/holonet-playlists/releases/<release>/` | `0555` | the four pinned worker modules, `0444` |
+| `/etc/holonet-playlists/policy.json` | `0600` in `0700` | root ceiling rendered from the validated config |
+| `/etc/tmpfiles.d/holonet-playlists.conf` | `0644` | `d /run/holonet-playlists 0750 root holonet -` |
+| `/etc/systemd/system/holonet-playlists-worker.socket` | `0644` | `Accept=yes`, `operator.sock`, `root:holonet 0660` |
+| `/etc/systemd/system/holonet-playlists-worker@.service` | `0644` | hardened root worker, `ReadWritePaths=` the selected journals |
+
+`<release>` is the SHA256 of the module manifest, so a repeat run changes
+nothing and a module change gets a new directory. Older releases are kept.
+Without `web_mcp_activate` the role refuses to stage over an active or enabled
+socket and starts nothing. With it, the role creates the socket parent through
+`systemd-tmpfiles` and enables and starts the socket. Removing the key later
+stops and disables an installed socket and keeps the release, policy, configs,
+journals and credential. docs/emby-operator-mcp.md describes the worker, its
+units and the wire contract.
+
+The synthetic tests cover the off default, old artifact refusal, the ceiling
+and cohort, the plan, rendered units, the guard's refusals and its file access,
+and check, apply and repeat of the staging tasks in scratch. Actual root custody
+on homelab, `systemd-tmpfiles`, unit loading, the hardened service reaching the
+socket, the worker running under its unit and native acceptance remain runtime
+gates.
+
 ## HoloNet catalog-only boundary
 
 The accepted HoloNet command/config interface remains homelab-cli
@@ -369,6 +431,7 @@ revision under test:
 - ansible.cfg and filter_plugins/web_mcp.py
 - playbooks/library/web_mcp_guard.py and the two playbooks/web-mcp-*.yml files
 - roles/web_mcp_endpoint/, including library/web_mcp_local_artifact.py, and roles/web_mcp_route/
+- scripts/emby_operator_{adapter,entry,recommendations,socket}.py, the pinned worker modules
 - scripts/test-web-mcp-packaging.py, scripts/run-web-mcp-ci.py and this document
 - .github/workflows/check.yml when inspecting or executing the packaging CI step
 

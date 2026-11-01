@@ -1,5 +1,7 @@
 """Bounded packaging contracts. Service authorization remains in each binary."""
+import hashlib
 import ipaddress
+from pathlib import Path, PurePosixPath
 import re
 from urllib.parse import quote_from_bytes, unquote_to_bytes, urlsplit
 
@@ -21,6 +23,41 @@ HOLONET_CATALOG_SOURCE_REVISIONS = frozenset({
 HOLONET_WRITER_SOURCE = "f0620d641710b6da89b0cd04587b68a998fe22b4"
 HOLONET_WRITER_CONTRACT = "c0c429ed04aa06f46c5e0c639a4dcc000dde4431"
 HOLONET_SOURCE_REVISIONS = HOLONET_CATALOG_SOURCE_REVISIONS | {HOLONET_WRITER_SOURCE}
+
+# Exact candidate build and interface pins for playlist_operator. Source review,
+# hosted CI and deployment acceptance are required before activation.
+HOLONET_OPERATOR_SOURCE = "72c1e2fd2642d87832cd23fdb7f2e7a7ff261d9a"
+HOLONET_OPERATOR_CONTRACT = "df3ea666b2bd672818933034b2780b80b0ece245"
+
+# Root playlist operator worker (docs/emby-operator-mcp.md). The four modules are
+# installed together, byte for byte, as one release named by the digest of this
+# manifest. Changing any module requires a reviewed pin update here.
+OPERATOR_MODULES = {
+    "emby_operator_adapter.py": "face84c9a28a84431b211ed806dd2956a5897c79ccfd93dd7ed138249cc2e03f",
+    "emby_operator_entry.py": "c37acc5c3b430d4874c1bae13b895c1ab78ef2f59ea7e76de830ea342f68007a",
+    "emby_operator_recommendations.py": "a71d0d3c40c02690a6bee83a14a29f21d47e61e9a568a389c4b3d0e8440cdccf",
+    "emby_operator_socket.py": "181a325a158a0174da3fa4220afaf89b7a21fd859966d18aac1dfacafb640849",
+}
+OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
+# Homelab's dedicated holonet identity and the existing Movies read ceiling.
+OPERATOR_UID = OPERATOR_GID = 940
+OPERATOR_SERVER = "3c86e6d7ff6c4a3296522cdf03d22bb0"
+OPERATOR_LIBRARY = "3"
+OPERATOR_CATALOG_USER = "54b7d36cef804d3c8478474553ed3a82"
+OPERATOR_NAMESPACE = "managed-recommendations"
+# The only protected operator configs a worker policy may name. Each journal is
+# the config's sibling journal/ directory. No variable or request selects a path.
+OPERATOR_RECIPIENTS = {
+    "545014d1c9d1416b8e0b5a445d6ff9ec":
+        "/var/lib/holonet-operator/igor-pr116-retain-20261031-next/config.json",
+    "b8f4f6de49b443f1948cf0118679e863": "/var/lib/holonet-operator/viewers-20261101/tv/config.json",
+    "db2f3bfb1f84438ebcde94f228183011": "/var/lib/holonet-operator/viewers-20261101/kostya/config.json",
+    "313e39bb4d8c4b92b81d4b170c3f1b8e": "/var/lib/holonet-operator/viewers-20261101/lisa/config.json",
+    "c06c7d2c3e224d8ba2e466efa5bcb97b": "/var/lib/holonet-operator/viewers-20261101/oleg/config.json",
+    "22703968ab0b48eebb4faf7c1d16262c": "/var/lib/holonet-operator/viewers-20261101/tanya/config.json",
+    "e05efa68303043b893b0f5c2e200ccd7": "/var/lib/holonet-operator/viewers-20261101/tetiana/config.json",
+}
 
 
 def require(ok, message):
@@ -208,7 +245,8 @@ def observer_config(config):
 
 def holonet_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
-                  "credential_file", "policy_revision", "policy", "library_guids"), ("recommendations",))
+                  "credential_file", "policy_revision", "policy", "library_guids"),
+         ("recommendations", "playlist_operator"))
     require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
             "HoloNet resource is fixed")
     trust(config, "resource", "issuer", ha_canonical_url)
@@ -238,7 +276,32 @@ def holonet_config(config):
         match(guid, r"[0-9a-f]{32}")
     if "recommendations" in config:
         holonet_recommendations(config["recommendations"], libraries, users)
+    if config.get("playlist_operator") is not None:
+        holonet_playlist_operator(config, libraries, users)
     return {"backend.json"}
+
+
+def holonet_playlist_operator(config, libraries, users):
+    """The Go playlist_operator rules plus homelab's fixed ceiling and cohort."""
+    value = config["playlist_operator"]
+    require("recommendations" not in config, "playlist_operator excludes legacy recommendations")
+    keys(value, ("wire_version", "subject", "namespace", "library", "catalog_user", "recipients"))
+    require(type(value["wire_version"]) is int and value["wire_version"] == 1,
+            "unsupported operator wire version")
+    subject = value["subject"]
+    require(isinstance(subject, str) and 1 <= len(subject) <= 128
+            and all(33 <= ord(c) <= 126 for c in subject), "invalid bounded subject")
+    require(value["namespace"] == OPERATOR_NAMESPACE, "fixed writer namespace required")
+    require(len(config["issuer"]) <= 512, "operator issuer exceeds the wire bound")
+    require(config["server_id"] == OPERATOR_SERVER
+            and value["library"] == OPERATOR_LIBRARY and value["library"] in libraries
+            and value["catalog_user"] == OPERATOR_CATALOG_USER and value["catalog_user"] in users,
+            "operator ceiling must be the existing homelab Movies read ceiling")
+    recipients = records(value["recipients"], 1, 16)
+    require(all(isinstance(r, str) for r in recipients), "invalid operator recipient")
+    unique(recipients)
+    require(all(r in OPERATOR_RECIPIENTS for r in recipients),
+            "recipient outside the fixed protected operator cohort")
 
 
 def holonet_recommendations(value, libraries, users):
@@ -291,6 +354,10 @@ def endpoint_contract(value):
     _, contract = SERVICES[service]
     if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
         contract = HOLONET_WRITER_CONTRACT
+    operator_build = (service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
+                      and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
+    if operator_build:
+        contract = HOLONET_OPERATOR_CONTRACT
     require(artifact["contract_revision"] == contract, "unaccepted source interface")
     if "url" in artifact:
         p = url(artifact["url"])
@@ -307,10 +374,17 @@ def endpoint_contract(value):
                 "unsafe local artifact path")
         integer(source["owner_uid"], 0, 2147483647)
     if service == "holonet":
-        require(artifact["source_revision"] in HOLONET_SOURCE_REVISIONS, "unaccepted HoloNet source revision")
+        require(artifact["source_revision"] in HOLONET_SOURCE_REVISIONS or operator_build,
+                "unaccepted HoloNet source revision")
         require("recommendations" not in value["config"] or artifact["source_revision"] == HOLONET_WRITER_SOURCE,
                 "writer configuration requires its exact reviewed artifact")
         expected = holonet_config(value["config"])
+        # Older binaries refuse the unknown key, so even null needs the new build.
+        require("playlist_operator" not in value["config"] or operator_build,
+                "playlist_operator requires its exact reviewed artifact")
+        if value["config"].get("playlist_operator") is not None:
+            require(value["uid"] == OPERATOR_UID and value["gid"] == OPERATOR_GID,
+                    "management requires the homelab holonet identity")
     else:
         expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
                     else observer_config(value["config"]))
@@ -324,6 +398,48 @@ def endpoint_contract(value):
     unique(names)
     require(set(names) == expected, "credential sources must exactly match config references")
     return value
+
+
+def operator_release():
+    """Release identity: SHA256 of the sorted sha256sum-style module manifest."""
+    manifest = "".join(digest + "  " + name + "\n" for name, digest in sorted(OPERATOR_MODULES.items()))
+    return hashlib.sha256(manifest.encode("ascii")).hexdigest()
+
+
+def playlist_operator_plan(value):
+    """Fixed root worker deployment for a validated endpoint; selected only when
+    a HoloNet config carries a non-null playlist_operator."""
+    endpoint_contract(value)
+    operator = value["config"].get("playlist_operator") if value["service"] == "holonet" else None
+    if operator is None:
+        return {"selected": False}
+    modules = []
+    for name, digest in sorted(OPERATOR_MODULES.items()):
+        source = OPERATOR_SCRIPTS / name
+        require(not source.is_symlink() and source.is_file()
+                and hashlib.sha256(source.read_bytes()).hexdigest() == digest,
+                "worker module differs from its reviewed pin")
+        modules.append({"name": name, "sha256": digest, "source": str(source)})
+    release = operator_release()
+    selected = sorted(operator["recipients"])
+    config = value["config"]
+    return {
+        "selected": True,
+        "release": release,
+        "release_directory": OPERATOR_RELEASES + "/" + release,
+        "modules": modules,
+        "pins": dict(OPERATOR_MODULES),
+        "configs": [OPERATOR_RECIPIENTS[r] for r in selected],
+        "journals": [str(PurePosixPath(OPERATOR_RECIPIENTS[r]).parent / "journal") for r in selected],
+        "policy": {
+            "version": 1, "enabled": True,
+            "peer": {"uid": value["uid"], "gid": value["gid"]},
+            "caller": {"issuer": config["issuer"], "subject": operator["subject"],
+                       "namespace": operator["namespace"], "server": config["server_id"],
+                       "library": operator["library"], "catalog_user": operator["catalog_user"]},
+            "recipients": {r: OPERATOR_RECIPIENTS[r] for r in selected},
+        },
+    }
 
 
 # Route-only services: packaged elsewhere, routed by this contract.
@@ -499,6 +615,7 @@ def ov_contract(value):
 class FilterModule:
     def filters(self):
         return {"web_mcp_endpoint_contract": endpoint_contract,
+                "web_mcp_playlist_operator": playlist_operator_plan,
                 "web_mcp_route_contract": route_contract,
                 "ov_http_contract": ov_contract,
                 "ov_http_local_image": ov_local_image}

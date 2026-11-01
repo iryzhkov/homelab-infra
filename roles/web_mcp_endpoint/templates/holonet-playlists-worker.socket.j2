@@ -1,0 +1,22 @@
+# Managed by homelab-infra holonet-playlists
+# Local root operator socket for HoloNet playlist management. One root worker
+# instance per connection; no network listener. See docs/emby-operator-mcp.md.
+[Unit]
+Description=HoloNet playlist operator local socket
+# The root:holonet 0750 parent comes from the tmpfiles declaration. Refuse to
+# start rather than let DirectoryMode create a root:root parent.
+AssertPathIsDirectory=/run/holonet-playlists
+
+[Socket]
+ListenStream=/run/holonet-playlists/operator.sock
+Accept=yes
+SocketUser=root
+SocketGroup=holonet
+SocketMode=0660
+DirectoryMode=0750
+MaxConnections=4
+MaxConnectionsPerSource=4
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
