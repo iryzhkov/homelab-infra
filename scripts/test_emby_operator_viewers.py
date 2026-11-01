@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 import emby_operator_adapter as adapter
+import emby_operator_entry as lifecycle
 import test_emby_operator_adapter as base
 from emby_operator_recommendations import INIT_REQUEST, Journal, Operator, Refused, digest
 
@@ -343,11 +344,11 @@ class InitEntryTests(unittest.TestCase):
                 method.return_value = {'state': 'synthetic-success'}
                 with patch.object(entry, 'load_config', return_value=base.config()), \
                      patch.object(entry, 'private_read', return_value=json.dumps(request)), \
-                     patch.object(entry, 'load_credentials', return_value={
+                     patch.object(lifecycle, 'load_credentials', return_value={
                          'username': 'synthetic', 'password': 'synthetic'}) as credentials, \
-                     patch.object(entry, 'Journal', return_value=MagicMock()) as journal, \
-                     patch.object(entry, 'OperatorAdapter', return_value=api), \
-                     patch.object(entry, 'Operator', return_value=operator), \
+                     patch.object(lifecycle, 'Journal', return_value=MagicMock()) as journal, \
+                     patch.object(lifecycle, 'OperatorAdapter', return_value=api), \
+                     patch.object(lifecycle, 'Operator', return_value=operator), \
                      contextlib.redirect_stdout(io.StringIO()), \
                      contextlib.redirect_stderr(io.StringIO()) as errors:
                     code = entry.main(['--config', '/synthetic/config', operation,
