@@ -115,7 +115,11 @@ class WorkerCase(unittest.TestCase):
                                     (worker, 'load_config', self.load_config),
                                     (lifecycle, 'load_credentials', self.load_credentials),
                                     (lifecycle, 'Journal', self.make_journal),
-                                    (lifecycle, 'OperatorAdapter', self.make_api)):
+                                    (lifecycle, 'OperatorAdapter', self.make_api),
+                                    # The read-only movie-metadata path builds these directly.
+                                    (worker, 'load_credentials', self.load_credentials),
+                                    (worker, 'Journal', self.make_journal),
+                                    (worker, 'OperatorAdapter', self.make_api)):
             patcher = patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -486,6 +490,9 @@ class SocketBoundaryTests(WorkerCase):
 class LifecycleTests(WorkerCase):
     def test_show_preview_apply_replay_conflict_and_title(self):
         shown = self.ok('show')
+        fields = FIXTURES['show_result_fields']
+        self.assertEqual(set(shown), set(fields['from_core_version_2'] + fields['added_by_worker']))
+        self.assertEqual((shown['archived_count'], shown['completed_count']), (0, 1))
         self.assertEqual([x['list'] for x in shown['lists']], ['a'])
         self.assertIsNone(shown['run'])
         self.assertEqual((shown['done_count'], shown['done_limit'], shown['keys_exhausted'],
@@ -756,7 +763,7 @@ class LifecycleTests(WorkerCase):
                     self.assertEqual(self.mutation_posts(), [])
         self.assertEqual(self.journal_bytes(), before)
 
-    def test_show_capacity_warning_exhaustion_and_replay(self):
+    def test_show_capacity_warning_retirement_and_replay(self):
         preview = self.ok('preview', MEMBERS)
         request = dict(preview['request'], key='logical-1', intent_digest=preview['intent_digest'])
         self.ok('apply', request)
@@ -783,12 +790,27 @@ class LifecycleTests(WorkerCase):
         fill(DONE_LIMIT - shown['done_count'])
         shown = self.ok('show')
         self.assertEqual((shown['done_count'], shown['done_limit'], shown['keys_exhausted'],
-                          shown['capacity_warning']), (DONE_LIMIT, DONE_LIMIT, True, True))
+                          shown['capacity_warning'], shown['archived_count'],
+                          shown['completed_count']),
+                         (DONE_LIMIT, DONE_LIMIT, True, True, 0, DONE_LIMIT))
         self.assertEqual(self.ok('apply', request), {'state': 'replayed', 'writes': 0})
+        # The next new request first retires every active key into the archive.
         preview = self.ok('preview', dict(MEMBERS, movies=['m3']))
-        self.error(frame('apply', dict(preview['request'], key='logical-new',
-                                       intent_digest=preview['intent_digest'])),
-                   'refused', 'Journal request limit reached')
+        self.reset()
+        self.assertEqual(self.ok('apply', dict(preview['request'], key='logical-new',
+                                               intent_digest=preview['intent_digest'])),
+                         {'state': 'members-set', 'writes': 2})
+        self.assertEqual(self.writes(), ['clear', 'add'])
+        shown = self.ok('show')
+        self.assertEqual((shown['done_count'], shown['done_limit'], shown['keys_exhausted'],
+                          shown['capacity_warning'], shown['archived_count'],
+                          shown['completed_count']),
+                         (1, DONE_LIMIT, False, False, DONE_LIMIT, DONE_LIMIT + 1))
+        before = self.journal_bytes()
+        self.reset()
+        self.assertEqual(self.ok('apply', request), {'state': 'replayed', 'writes': 0})
+        self.error(frame('apply', dict(request, movies=['m1'])), 'refused', 'Idempotency key reused')
+        self.assertEqual((self.mutation_posts(), self.journal_bytes()), ([], before))
 
     def test_uninitialized_or_version_1_journal_is_not_managed(self):
         self.directory = self.scratch / 'empty'
@@ -938,6 +960,262 @@ class ActivationTests(unittest.TestCase):
         for value in bad:
             with self.subTest(value=value), self.assertRaisesRegex(Refused, 'Invalid management policy'):
                 worker.validate_policy(value)
+
+
+META = FIXTURES['movie_metadata']
+E = 'e' * 32
+OTHER_CONFIG = '/synthetic/other/config.json'
+# Server-side synthetic items. Only Movies of library 7 visible to the recipient
+# may ever be returned; every other title must never reach a response.
+ITEMS = {
+    '8001': dict(META['result_example']['movies'][0], LibraryId=None,
+                 People=[{'Id': '71', 'Name': 'Synthetic Director', 'Type': 'Director',
+                          'Role': 'private-role', 'PrimaryImageTag': 'private-image'},
+                         {'Id': '73', 'Name': 'private-actor', 'Type': 'Actor'},
+                         {'Id': '74', 'Name': 'private-music', 'Type': 'MusicDirector'},
+                         {'Id': '72', 'Name': 'Synthetic Producer', 'Type': 'Producer'},
+                         {'Id': '71', 'Name': 'Synthetic Director', 'Type': 'Director'}],
+                 UserData={'Played': True, 'PlayCount': 3}, Path='/private/movie.mkv',
+                 MediaSources=[{'Path': '/private/source'}], Overview='private-overview'),
+    '9': {'Id': '9', 'Type': 'Movie', 'Name': 'Synthetic Movie Without Metadata',
+          'ProductionYear': None},
+    '7': {'Id': '7', 'Type': 'Movie', 'Name': 'private-hidden-title', 'hidden': True},
+    '55': {'Id': '55', 'Type': 'Episode', 'Name': 'private-episode-title'},
+    '66': {'Id': '66', 'Type': 'Movie', 'Name': 'private-off-library-title', 'library': '8'},
+}
+
+
+def history_policy(history=None, recipients=None, **change):
+    value = copy.deepcopy(FIXTURES['policy'])
+    value['peer'] = {'uid': os.getuid(), 'gid': os.getgid()}
+    if recipients is not None:
+        value['recipients'] = recipients
+    value['history_users'] = list(META['policy_history_users'] if history is None else history)
+    value.update(change)
+    return worker.validate_policy(value)
+
+
+def metadata_frame(ids=('8001', '7', '9'), *, caller=None, delete=(), **top):
+    value = frame(META['operation'], {'ids': list(ids)}, **top)
+    value['caller']['actions'] = list(META['caller_actions'])
+    value['caller']['history_users'] = list(META['caller_history_users'])
+    value['caller'].update(caller or {})
+    for name in delete:
+        del value['caller'][name]
+    return value
+
+
+class MovieMetadataTests(WorkerCase):
+    """Read-only movie-metadata over the real socket, guard and adapter."""
+    def setUp(self):
+        super().setUp()
+        self.policy = history_policy()
+        self.metadata_queries = []
+        self.items = copy.deepcopy(ITEMS)
+        original = self.backend.respond
+
+        def respond(call):
+            from urllib.parse import urlsplit, parse_qs
+            u = urlsplit(call[1])
+            q = parse_qs(u.query)
+            if call[0] == 'GET' and q.get('Fields') == [adapter.METADATA_FIELDS]:
+                self.metadata_queries.append((u.path, q))
+                ids = q['Ids'][0].split(',')
+                # Emby applies the type, library and per-user visibility filters.
+                rows = [{k: v for k, v in self.items[i].items() if k not in ('hidden', 'library')}
+                        for i in reversed(ids) if i in self.items and
+                        self.items[i]['Type'] == q['IncludeItemTypes'][0] and
+                        self.items[i].get('library', '7') == q['ParentId'][0] and
+                        not self.items[i].get('hidden')]
+                for row in rows:
+                    row.pop('LibraryId', None)
+                return {'Items': rows, 'TotalRecordCount': len(rows)}
+            return original(call)
+        self.http.responder = respond
+
+    def tree(self):
+        """Every journal custody file and its bytes, including the replay archive."""
+        return {str(p.relative_to(self.directory)): p.read_bytes()
+                for p in sorted(self.directory.rglob('*')) if p.is_file()}
+
+    def test_frozen_metadata_requests_parse_or_refuse_with_exact_codes(self):
+        example = META['frame_example'].encode()
+        call = worker.parse_request(example[:-1])
+        worker.authorize(call, self.policy)
+        self.assertEqual(json.dumps(call, separators=(',', ':')).encode() + b'\n', example)
+        self.assertEqual(META['caller_actions'], worker.HISTORY_ACTIONS)
+        for case in META['valid']:
+            with self.subTest(case=case['name']):
+                call = worker.parse_request(encode(metadata_frame(case['request']['ids']))[:-1])
+                worker.authorize(call, self.policy)
+                self.assertEqual(call['request'], case['request'])
+        for case in META['invalid'] + META['denied']:
+            value = metadata_frame(delete=case.get('caller_delete', ()))
+            value.update(copy.deepcopy(case.get('set', {})))
+            value['caller'].update(copy.deepcopy(case.get('caller_set', {})))
+            with self.subTest(case=case['name']), self.assertRaises(worker.WireError) as caught:
+                worker.authorize(worker.parse_request(encode(value)[:-1]), self.policy)
+            self.assertEqual((caught.exception.code, caught.exception.message),
+                             (case['code'], case['message']))
+        self.assertEqual(META['credit_roles'], list(adapter.CREDIT_ROLES))
+        bounds = META['bounds']
+        self.assertEqual((bounds['raw_credits'], bounds['director_composer_credits'],
+                          bounds['producer_credits'], bounds['projected_credits'],
+                          bounds['genres'], bounds['credit_or_genre_name_bytes'],
+                          bounds['title_bytes']),
+                         (adapter.MAX_RAW_CREDITS, adapter.MAX_CREDITS, adapter.MAX_PRODUCERS,
+                          adapter.MAX_CREDITS + adapter.MAX_PRODUCERS, adapter.MAX_GENRES,
+                          adapter.MAX_NAME_BYTES, adapter.MAX_TITLE_BYTES))
+
+    def test_visible_subset_in_request_order_with_only_allowlisted_metadata(self):
+        before = self.tree()
+        raw, served = self.call(encode(metadata_frame(['9', '55', '66', '7', '8001'])))
+        self.assertTrue(served['ok'], served)
+        expected = copy.deepcopy(META['result_example'])
+        expected['movies'].reverse()
+        self.assertEqual(served['result'], expected)
+        for private in (b'private', b'UserData', b'Path', b'MediaSources', b'Overview', b'Actor'):
+            self.assertNotIn(private, raw)
+        self.assertEqual(self.metadata_queries, [('/emby/Users/' + base.R + '/Items', {
+            'Recursive': ['true'], 'IncludeItemTypes': ['Movie'], 'ParentId': ['7'],
+            'Ids': ['9,55,66,7,8001'], 'Fields': ['People,Genres'],
+            'StartIndex': ['0'], 'Limit': ['26'], 'EnableUserData': ['false']})])
+        # Read only: authentication is the only POST, nothing is written or journaled.
+        self.assertEqual([c[0] for c in self.backend_calls()], ['POST'] + ['GET'] * 11)
+        self.assertEqual((self.mutation_posts(), self.writes()), ([], []))
+        self.assertEqual(self.tree(), before)
+        self.assertEqual((self.config_reads, self.credential_reads), ([CONFIG_PATH], 1))
+        self.assertIsInstance(self.guards[-1], worker.Guard)
+        self.assertIsNone(self.apis[-1]._token)
+        result = self.ok(META['operation'], {'ids': ['7', '55']}, caller={
+            'actions': list(META['caller_actions']), 'history_users': [base.R]})
+        self.assertEqual(result, {'movies': []})
+
+    def test_management_caller_and_operations_unchanged_under_history_policy(self):
+        self.assertEqual(self.ok('show')['version'], 2)
+        self.assertEqual(self.ok('preview', MEMBERS)['request'], MEMBERS)
+        self.reset()
+        self.error(frame(META['operation'], {'ids': ['8001']}), 'refused', 'Invalid caller')
+        self.assert_untouched()
+        self.policy = policy()
+        self.assertEqual(self.ok('show')['version'], 2)
+
+    def test_policy_caller_and_expiry_refused_before_config_credential_or_backend(self):
+        now = int(time.time())
+        two = {base.R: CONFIG_PATH, E: OTHER_CONFIG}
+        cases = [
+            (policy(), metadata_frame(), 'refused', 'History read not enabled by policy'),
+            (history_policy([E], two), metadata_frame(caller={'history_users': [base.R, E]}),
+             'refused', 'Recipient outside history policy'),
+            (history_policy([base.R, E], two), metadata_frame(caller={'history_users': [E]}),
+             'refused', 'Recipient outside history policy'),
+            (history_policy(), metadata_frame(caller={'history_users': [base.R, E]}),
+             'refused', 'History users outside management policy'),
+            (history_policy(), metadata_frame(caller={'actions': list(worker.BASE_ACTIONS)}),
+             'refused', 'History read needs exactly the fixed actions'),
+            (history_policy(), metadata_frame(caller={'expires_at': now - 1}),
+             'deadline', 'Deadline or token expiry already reached'),
+            (history_policy(), metadata_frame(deadline_unix_ms=now * 1000 - 1),
+             'deadline', 'Deadline or token expiry already reached'),
+            (history_policy(enabled=False), metadata_frame(), 'unavailable', 'Management disabled'),
+            (history_policy(), metadata_frame(['8001', '8001']), 'refused', 'Duplicate Movie IDs'),
+            (history_policy(), metadata_frame([]), 'refused', 'Expected 1..25 Movies'),
+        ]
+        for current, value, code, message in cases:
+            with self.subTest(message=message):
+                self.policy = current
+                self.reset()
+                self.error(value, code, message)
+                self.assert_untouched()
+        self.policy = history_policy()
+        self.config['enabled'] = False
+        self.reset()
+        self.error(metadata_frame(), 'unavailable', 'Recipient management disabled')
+        self.assertEqual((self.backend_calls(), self.config_reads, self.credential_reads),
+                         ([], [CONFIG_PATH], 0))
+
+    def test_held_journal_lock_is_busy_before_credential_or_backend(self):
+        journal = Journal(str(self.directory))
+        self.addCleanup(journal.close)
+        with journal.locked():
+            self.error(metadata_frame(), 'busy', 'Recipient journal busy; nothing was changed')
+        self.assertEqual((self.backend_calls(), self.credential_reads), ([], 0))
+
+    def test_cancellation_and_deadline_stop_before_each_later_send(self):
+        original = self.http.responder
+        for stop, after in (('cancelled', 1), ('cancelled', 11), ('deadline', 1),
+                            ('deadline', 6), ('deadline', 11)):
+            with self.subTest(stop=stop, after=after):
+                self.reset()
+                offset = len(self.http.calls)
+
+                def respond(call, stop=stop, after=after, offset=offset):
+                    if len(self.http.calls) - offset == after:
+                        if stop == 'cancelled':
+                            self.client.shutdown(socket.SHUT_RDWR)
+                        else:
+                            self.guards[-1].deadline = time.monotonic() - 1
+                    return original(call)
+                self.http.responder = respond
+                try:
+                    raw, served = self.call(encode(metadata_frame()))
+                finally:
+                    self.http.responder = original
+                self.assertEqual(served['error'], {'code': 'deadline', 'message': worker.STOPPED[stop]})
+                self.assertEqual(len(self.backend_calls()), after)
+                if stop == 'cancelled':
+                    self.assertEqual(raw, b'')
+                self.assertEqual(self.metadata_queries, [])
+
+    def test_request_time_and_response_bounds(self):
+        with patch.object(adapter, 'MAX_REQUESTS', 11):
+            self.error(metadata_frame(), 'refused', 'Transport budget exhausted')
+        self.assertEqual((len(self.backend_calls()), self.metadata_queries), (11, []))
+        self.reset()
+        with patch.object(adapter, 'MAX_SECONDS', 0):
+            self.error(metadata_frame(), 'refused', 'Transport budget exhausted')
+        self.assertEqual(self.backend_calls(), [])
+        self.reset()
+        with patch.object(worker, 'MAX_RESPONSE', 200):
+            self.error(metadata_frame(), 'unavailable', 'Response too large')
+        self.assertEqual(len(self.metadata_queries), 1)
+        # A full page of 25 maximal Movies still fits the unchanged response cap.
+        self.reset()
+        self.items = {str(n): {'Id': str(n), 'Type': 'Movie', 'Name': 'n' * 512,
+                               'ProductionYear': 2020, 'Genres': ['g' * 128] * 16,
+                               'People': [{'Id': str(1000 + c), 'Name': 'p' * 128,
+                                           'Type': ('Director', 'Producer')[c % 2]}
+                                          for c in range(32)]}
+                      for n in range(1, 26)}
+        result = self.ok(META['operation'], {'ids': list(self.items)}, caller={
+            'actions': list(META['caller_actions']), 'history_users': [base.R]})
+        self.assertEqual([m['Id'] for m in result['movies']], list(self.items))
+        self.assertTrue(all(len(m['People']) == 32 for m in result['movies']))
+
+    def test_malformed_backend_metadata_returns_no_facts(self):
+        self.items['8001']['Genres'] = ['g'] * 17
+        self.error(metadata_frame(), 'refused', 'Invalid Movie metadata')
+        self.items['8001']['Genres'] = ['Drama']
+        self.items['8001']['People'] = [{'Id': str(100 + n), 'Name': 'D', 'Type': 'Director'}
+                                        for n in range(17)]
+        self.reset()
+        self.error(metadata_frame(), 'refused', 'Invalid Movie metadata')
+        self.items['8001']['People'] = [{'Id': str(100 + n), 'Name': 'P', 'Type': 'Producer'}
+                                        for n in range(40)]
+        self.reset()
+        movies = self.ok(META['operation'], {'ids': ['8001']}, caller={
+            'actions': list(META['caller_actions']), 'history_users': [base.R]})['movies']
+        self.assertEqual(len(movies[0]['People']), 16)
+
+    def test_history_policy_is_optional_exact_and_bounded(self):
+        good = copy.deepcopy(FIXTURES['policy'])
+        self.assertNotIn('history_users', worker.validate_policy(good))
+        good['history_users'] = [base.R]
+        self.assertEqual(worker.validate_policy(good), good)
+        for value in ([], [E], [base.R, base.R], [base.R.upper()], base.R, None,
+                      ['%032x' % n for n in range(17)]):
+            with self.subTest(value=value), self.assertRaisesRegex(Refused, 'Invalid management policy'):
+                worker.validate_policy(dict(copy.deepcopy(good), history_users=value))
 
 
 if __name__ == '__main__':

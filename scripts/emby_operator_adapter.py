@@ -21,6 +21,17 @@ MAX_BODY = 16 * 1024
 MAX_REQUESTS = 512
 MAX_SECONDS = 120
 TIMEOUT = 5
+# Movie metadata projection, matching the HoloNet catalog metadata projection.
+CREDIT_ROLES = ('Director', 'Producer', 'Composer')
+MAX_RAW_CREDITS = 512
+# Director and Composer share one budget whose overflow refuses, as before.
+# Producer has its own budget; further valid Producer credits are skipped.
+MAX_CREDITS = 16
+MAX_PRODUCERS = 16
+MAX_GENRES = 16
+MAX_NAME_BYTES = 128
+MAX_TITLE_BYTES = 512
+METADATA_FIELDS = 'People,Genres'
 
 
 def strict_json(raw):
@@ -152,6 +163,69 @@ def normalize_home(dto):
         if row.get('Query') == empty_query:
             row['Query'] = {}
     return result
+
+
+def printable(value, limit):
+    """1..limit UTF-8 bytes, no control characters, as the HoloNet projection."""
+    if not isinstance(value, str):
+        return False
+    try:
+        size = len(value.encode('utf-8'))
+    except UnicodeEncodeError:
+        return False
+    return 1 <= size <= limit and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+
+
+def catalog_id(value):
+    """Canonical positive decimal int64, as HoloNet ValidCatalogID."""
+    return (isinstance(value, str) and re.fullmatch('[1-9][0-9]{0,18}', value) is not None
+            and int(value) < 2 ** 63)
+
+
+def movie_metadata_item(row, library):
+    """Allowlisted Movie facts; a missing or null field stays unknown.
+
+    Any malformed known field refuses the whole result instead of guessing.
+    Only Director, Producer and Composer credits are kept, as {Id, Name, Type}:
+    at most 16 Director/Composer (a 17th refuses) plus at most 16 Producer
+    (later valid Producer credits are skipped), so at most 32 in total.
+    """
+    require(row.get('Type') == 'Movie' and printable(row.get('Name'), MAX_TITLE_BYTES),
+            'Invalid Movie metadata')
+    item = {'Id': opaque(row.get('Id')), 'Type': 'Movie', 'LibraryId': library,
+            'Name': row['Name']}
+    year = row.get('ProductionYear')
+    if year is not None:
+        require(type(year) is int and 1 <= year <= 9999, 'Invalid Movie metadata')
+        item['ProductionYear'] = year
+    genres = row.get('Genres')
+    if genres is not None:
+        require(type(genres) is list and len(genres) <= MAX_GENRES and
+                all(printable(g, MAX_NAME_BYTES) for g in genres), 'Invalid Movie metadata')
+        item['Genres'] = list(genres)
+    people = row.get('People')
+    if people is not None:
+        require(type(people) is list and len(people) <= MAX_RAW_CREDITS and
+                all(type(p) is dict for p in people), 'Invalid Movie metadata')
+        credits, seen, producers, others = [], set(), 0, 0
+        for p in people:
+            if p.get('Type') not in CREDIT_ROLES:
+                continue
+            require(catalog_id(p.get('Id')) and printable(p.get('Name'), MAX_NAME_BYTES),
+                    'Invalid Movie metadata')
+            if (p['Id'], p['Type']) in seen:
+                continue
+            seen.add((p['Id'], p['Type']))
+            if p['Type'] == 'Producer':
+                if producers >= MAX_PRODUCERS:
+                    continue
+                producers += 1
+            else:
+                require(others < MAX_CREDITS, 'Invalid Movie metadata')
+                others += 1
+            credits.append({'Id': p['Id'], 'Name': p['Name'], 'Type': p['Type']})
+        item['People'] = credits
+    return item
 
 
 def mutation_dispatch(method):
@@ -334,6 +408,30 @@ class OperatorAdapter:
                 set(got) == set(ids) and all(x.get('Type') == 'Movie' for x in result),
                 "Recipient Movie set incomplete or unauthorized")
         return [{'Id': x, 'Type': 'Movie', 'LibraryId': library} for x in ids]
+
+    def movie_metadata(self, recipient, library, ids):
+        """Read-only metadata of the requested Movies this recipient can see.
+
+        Unlike query_movies, which proves every ID for a write, this returns
+        only the visible subset in request order and silently omits the rest.
+        The same fixed recipient/library Movie query proves type, library and
+        visibility. No user data, paths or other users' facts are requested.
+        """
+        c = self._config
+        require(recipient == c['recipient'] and library == c['library'], 'Foreign query scope')
+        ids = movie_ids(ids)
+        self.verified_identity()
+        rows = complete(self._http('GET', '/Users/' + recipient + '/Items', {
+            'Recursive': 'true', 'IncludeItemTypes': 'Movie', 'ParentId': library,
+            'Ids': ','.join(ids), 'Fields': METADATA_FIELDS, 'StartIndex': 0, 'Limit': 26,
+            'EnableUserData': 'false'}), 25)
+        found = {}
+        for row in rows:
+            item = movie_metadata_item(row, library)
+            require(item['Id'] in ids and item['Id'] not in found,
+                    'Unrequested or duplicate Movie')
+            found[item['Id']] = item
+        return [found[x] for x in ids if x in found]
 
     def _marker(self, list_id):
         return self._legacy if list_id is None else list_marker(self._base, list_id)
