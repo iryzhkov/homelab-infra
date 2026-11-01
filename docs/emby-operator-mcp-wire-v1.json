@@ -276,7 +276,7 @@
       "method": "GET",
       "path": "/emby/Users/<recipient>/Items",
       "query": {"Recursive": "true", "IncludeItemTypes": "Movie", "ParentId": "<library>", "Ids": "<ids joined by comma>",
-                "Fields": "ProductionYear,Genres,People", "StartIndex": "0", "Limit": "26", "EnableUserData": "false"}
+                "Fields": "People,Genres", "StartIndex": "0", "Limit": "26", "EnableUserData": "false"}
     },
     "result_example": {"movies": [
       {"Id": "8001", "Type": "Movie", "LibraryId": "7", "Name": "Synthetic Movie", "ProductionYear": 2020, "Genres": ["Drama"],

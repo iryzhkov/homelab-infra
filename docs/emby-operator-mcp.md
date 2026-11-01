@@ -395,8 +395,9 @@ IDs, each mapped through the fixed seven-entry table above
 selected config must be enabled and match its map key as `recipient`, plus the
 policy `server` and `library`, or the request is `unavailable`. The policy's
 `enabled` is the worker kill switch. The optional `history_users` list (see
-[Movie metadata read](#movie-metadata-read)) is not rendered by the installer
-yet, so deployed policies keep the metadata read off.
+[Movie metadata read](#movie-metadata-read)) is rendered by the installer only
+when playback is configured, using the explicit server history ceiling.
+Without playback it is omitted, so metadata reads remain disabled.
 
 Socket parent: `/run/holonet-playlists`, `root:holonet 0750`, declared by
 `/etc/tmpfiles.d/holonet-playlists.conf` so it is recreated at every boot.
