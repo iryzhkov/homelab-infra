@@ -286,8 +286,7 @@ def holonet_playlist_operator(config, libraries, users):
     value = config["playlist_operator"]
     require("recommendations" not in config, "playlist_operator excludes legacy recommendations")
     keys(value, ("wire_version", "subject", "namespace", "library", "catalog_user", "recipients"))
-    require(type(value["wire_version"]) is int and value["wire_version"] == 1,
-            "unsupported operator wire version")
+    integer(value["wire_version"], 1, 1)
     subject = value["subject"]
     require(isinstance(subject, str) and 1 <= len(subject) <= 128
             and all(33 <= ord(c) <= 126 for c in subject), "invalid bounded subject")
