@@ -26,7 +26,7 @@ HOLONET_SOURCE_REVISIONS = HOLONET_CATALOG_SOURCE_REVISIONS | {HOLONET_WRITER_SO
 
 # Exact candidate build and interface pins for playlist_operator. Source review,
 # hosted CI and deployment acceptance are required before activation.
-HOLONET_OPERATOR_SOURCE = "e050905fbf9a7bc7226cb1f06738eb8fead2d21d"
+HOLONET_OPERATOR_SOURCE = "72c1e2fd2642d87832cd23fdb7f2e7a7ff261d9a"
 HOLONET_OPERATOR_CONTRACT = "df3ea666b2bd672818933034b2780b80b0ece245"
 
 # Root playlist operator worker (docs/emby-operator-mcp.md). The four modules are

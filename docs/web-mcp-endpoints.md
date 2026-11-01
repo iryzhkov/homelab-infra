@@ -163,7 +163,7 @@ existing `holonet.service` unit are unchanged.
 
 Artifact pins: `HOLONET_OPERATOR_SOURCE` and `HOLONET_OPERATOR_CONTRACT` in
 `filter_plugins/web_mcp.py` name the one reviewed build that understands the
-key: source `e050905fbf9a7bc7226cb1f06738eb8fead2d21d`, interface
+key: source `72c1e2fd2642d87832cd23fdb7f2e7a7ff261d9a`, interface
 `df3ea666b2bd672818933034b2780b80b0ece245`. These are candidate pins pending
 final source review and hosted CI; activation requires those gates. Older
 binaries reject the unknown key. Existing exact catalog and writer pairs stay

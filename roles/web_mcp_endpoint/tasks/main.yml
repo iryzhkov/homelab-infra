@@ -280,13 +280,23 @@
             group: root
             mode: "0755"
 
-        - name: Create the read-only content-addressed worker release
+        - name: Inspect the already guarded worker release before staging
+          ansible.builtin.stat:
+            path: "{{ web_mcp_operator.release_directory }}"
+            follow: false
+            get_checksum: false
+            get_mime: false
+            get_attributes: false
+          register: web_mcp_operator_release
+
+        - name: Create a missing worker release with owner staging access
           ansible.builtin.file:
             path: "{{ web_mcp_operator.release_directory }}"
             state: directory
             owner: root
             group: root
-            mode: "0555"
+            mode: "0755"
+          when: not web_mcp_operator_release.stat.exists
 
         - name: Install the pinned worker, shared entry, adapter and core as one release
           ansible.builtin.copy:
@@ -298,6 +308,16 @@
           loop: "{{ web_mcp_operator.modules }}"
           loop_control:
             label: "{{ item.name }}"
+          when: not web_mcp_operator_release.stat.exists
+
+        - name: Seal a newly staged worker release read-only
+          ansible.builtin.file:
+            path: "{{ web_mcp_operator.release_directory }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0555"
+          when: not web_mcp_operator_release.stat.exists
 
         - name: Verify the staged worker modules independently
           ansible.builtin.stat:

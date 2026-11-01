@@ -195,7 +195,7 @@ def playlist_operator(gid, selected, release=None, modules=None, journals=(), co
     if info:
         need(stat.S_IMODE(info.st_mode) == 0o555)
         names = os.listdir(directory)
-        need(set(names) <= set(modules))
+        need(set(names) == set(modules))
         for name in names:
             inspect(directory / name, roots(), exact_mode=0o444, required=True)
             need(file_sha256(directory / name) == modules[name])

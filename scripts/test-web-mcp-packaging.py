@@ -1307,6 +1307,10 @@ class PackagingTest(unittest.TestCase):
                   lambda p: p.write_text(guard.OPERATOR_HEADER))
             node = runtime / "operator.sock"
             drift(node, lambda p: private_file(p, "", 0o660), lambda p: p.unlink())
+            missing = release / "emby_operator_entry.py"
+            held = base / "held-module"
+            drift(release, lambda p: (p.chmod(0o755), missing.rename(held), p.chmod(0o555)),
+                  lambda p: (p.chmod(0o755), held.rename(missing), p.chmod(0o555)))
             extra = release / "sitecustomize.py"
             drift(release, lambda p: (p.chmod(0o755), private_file(extra, "", 0o444), p.chmod(0o555)),
                   lambda p: (p.chmod(0o755), extra.unlink(), p.chmod(0o555)))

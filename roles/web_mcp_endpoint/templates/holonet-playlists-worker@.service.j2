@@ -10,7 +10,7 @@ User=root
 Group=root
 WorkingDirectory=/
 Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-# -E -s -B keep the pinned script directory on sys.path; -I would drop it.
+# Keep sibling imports while ignoring environment and user-site Python settings.
 ExecStart=/usr/bin/python3 -E -s -B {{ web_mcp_operator.release_directory }}/emby_operator_socket.py
 StandardInput=null
 StandardOutput=journal
