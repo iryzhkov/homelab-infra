@@ -1,0 +1,74 @@
+---
+# Explicit, opt-in creation of the protected per-recipient operator configuration
+# for the six pinned additional Emby viewers on homelab. Nothing in site.yml
+# selects this playbook. The default action is a metadata-only check that never
+# changes the host. No secret is loaded: each configuration only points at the
+# retained Igor credential, which this playbook never reads, copies or changes.
+# See docs/emby-operator-viewers.md.
+- name: Manage protected Emby viewer operator configuration on homelab
+  hosts: homelab
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  pre_tasks:
+    - name: Require the pinned host and one explicit bounded action
+      ansible.builtin.assert:
+        that:
+          - emby_operator_viewers_helper is not defined
+          - emby_operator_viewers_argv is not defined
+          - emby_operator_viewers_apply | default(false) is boolean
+          - inventory_hostname == 'homelab'
+          - ansible_play_hosts_all == ['homelab']
+          - emby_operator_viewers_action | default('check') in ['check', 'provision', 'enable', 'disable']
+          - >-
+            emby_operator_viewers_action | default('check') != 'check'
+            or not emby_operator_viewers_apply | default(false) | bool
+          - >-
+            emby_operator_viewers_recipient | default('all')
+            in ['all', 'kostya', 'lisa', 'oleg', 'tanya', 'tetiana', 'tv']
+        fail_msg: >-
+          Use action check, provision, enable or disable, optionally limited to one
+          fixed cohort recipient; check never applies.
+        quiet: true
+
+  tasks:
+    - name: Check the pinned viewer configuration and action preconditions
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/usr/bin/python3', '-I', '-c',
+            lookup('file', playbook_dir ~ '/../scripts/emby-operator-viewers.py'),
+            '--action', emby_operator_viewers_action | default('check')]
+           + (['--recipient', emby_operator_viewers_recipient]
+              if emby_operator_viewers_recipient | default('all') != 'all' else []) }}
+      register: emby_operator_viewers_check
+      changed_when: false
+      check_mode: false
+
+    - name: Report the viewer configuration state
+      ansible.builtin.debug:
+        msg: "{{ emby_operator_viewers_check.stdout | from_json }}"
+
+    - name: Apply the explicitly selected bounded action
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/usr/bin/python3', '-I', '-c',
+            lookup('file', playbook_dir ~ '/../scripts/emby-operator-viewers.py'),
+            '--action', emby_operator_viewers_action | default('check')]
+           + (['--recipient', emby_operator_viewers_recipient]
+              if emby_operator_viewers_recipient | default('all') != 'all' else [])
+           + ['--apply'] }}
+      register: emby_operator_viewers_result
+      changed_when: false
+      failed_when: false
+      when: emby_operator_viewers_apply | default(false) | bool and not ansible_check_mode
+
+    - name: Report the helper outcome
+      ansible.builtin.assert:
+        that:
+          - emby_operator_viewers_result.rc == 0
+        fail_msg: "{{ emby_operator_viewers_result.stderr }}"
+        success_msg: "{{ emby_operator_viewers_result.stdout }}"
+      changed_when: >-
+        emby_operator_viewers_result.rc == 0
+        and (emby_operator_viewers_result.stdout | from_json).changed
+      when: emby_operator_viewers_apply | default(false) | bool and not ansible_check_mode

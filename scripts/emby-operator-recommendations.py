@@ -13,7 +13,8 @@ LEGACY_FIELDS = {'preview': {'movies'}, 'apply': {'key', 'movies', 'baseline_dig
                  'set-display-title': {'key', 'title', 'baseline_digest'},
                  'remove': {'key', 'baseline_digest'}, 'reconcile': set(),
                  'migrate-preview': set(), 'downgrade-preview': set(),
-                 'migrate': {'key', 'intent_digest'}, 'downgrade': {'key', 'intent_digest'}}
+                 'migrate': {'key', 'intent_digest'}, 'downgrade': {'key', 'intent_digest'},
+                 'init-preview': set(), 'init': {'key', 'intent_digest'}}
 OPERATIONS = (*LEGACY_FIELDS, 'show', 'list-preview', *LIST_OPERATIONS)
 
 

@@ -60,6 +60,8 @@ jobs:
           python3 scripts/test_emby_operator_recommendations.py
           python3 scripts/test_emby_operator_adapter.py
           python3 scripts/test_emby_operator_credential.py
+          python3 scripts/test_emby_operator_viewers.py
+          ansible-playbook playbooks/emby-operator-viewers.yml --syntax-check
       - name: Test opt-in Jocasta MCP stack configuration
         run: |
           export HOME="$PWD/.cache/jocasta-mcp-tests/home"
