@@ -24,13 +24,11 @@ HOLONET_WRITER_SOURCE = "f0620d641710b6da89b0cd04587b68a998fe22b4"
 HOLONET_WRITER_CONTRACT = "c0c429ed04aa06f46c5e0c639a4dcc000dde4431"
 HOLONET_SOURCE_REVISIONS = HOLONET_CATALOG_SOURCE_REVISIONS | {HOLONET_WRITER_SOURCE}
 
-# Exact candidate build and interface pins for playlist_operator. Source review,
-# hosted CI and deployment acceptance are required before activation. This pair
-# is the first-slice build (set-members and set-title). It stays accepted while
-# the full-lifecycle worker modules below roll out first; the reviewed
-# full-lifecycle build replaces it in a separate change after the worker.
-HOLONET_OPERATOR_SOURCE = "72c1e2fd2642d87832cd23fdb7f2e7a7ff261d9a"
-HOLONET_OPERATOR_CONTRACT = "df3ea666b2bd672818933034b2780b80b0ece245"
+# Exact reviewed full-lifecycle build and wire fixture/interface pins.
+# Deploy the compatible worker before this binary. Never downgrade the client
+# while a lifecycle request is unfinished; complete it or use protected recovery.
+HOLONET_OPERATOR_SOURCE = "49022d6fc1cccb6f76c225a760b401cce2b115f6"
+HOLONET_OPERATOR_CONTRACT = "2cd99eb967690de97e9be01b411f4df119283d4c"
 
 # Root playlist operator worker (docs/emby-operator-mcp.md). The four modules are
 # installed together, byte for byte, as one release named by the digest of this
