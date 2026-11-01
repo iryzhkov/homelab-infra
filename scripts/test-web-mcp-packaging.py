@@ -2,6 +2,7 @@
 """Synthetic source contracts and isolated Ansible render fixtures. No live inventory."""
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -119,6 +120,83 @@ def jocasta_route():
     return {"service": "jocasta", "state": "present", "directory_uid": 1000,
             "resource": "https://jocasta.mcp.ryzhkov.dev/mcp",
             "upstream": "http://10.42.0.2:1935"}
+
+
+# Synthetic stand-ins for root's reviewed playlist_operator build pins.
+OPERATOR_SOURCE, OPERATOR_INTERFACE = "e" * 40, "f" * 40
+# The fixed protected cohort as provisioned (docs/emby-operator-viewers.md).
+OPERATOR_COHORT = {
+    "545014d1c9d1416b8e0b5a445d6ff9ec": "/var/lib/holonet-operator/igor-pr116-retain-20261031-next/config.json",
+    "b8f4f6de49b443f1948cf0118679e863": "/var/lib/holonet-operator/viewers-20261101/tv/config.json",
+    "db2f3bfb1f84438ebcde94f228183011": "/var/lib/holonet-operator/viewers-20261101/kostya/config.json",
+    "313e39bb4d8c4b92b81d4b170c3f1b8e": "/var/lib/holonet-operator/viewers-20261101/lisa/config.json",
+    "c06c7d2c3e224d8ba2e466efa5bcb97b": "/var/lib/holonet-operator/viewers-20261101/oleg/config.json",
+    "22703968ab0b48eebb4faf7c1d16262c": "/var/lib/holonet-operator/viewers-20261101/tanya/config.json",
+    "e05efa68303043b893b0f5c2e200ccd7": "/var/lib/holonet-operator/viewers-20261101/tetiana/config.json",
+}
+
+
+def operator_pins():
+    return mock.patch.multiple(contract, HOLONET_OPERATOR_SOURCE=OPERATOR_SOURCE,
+                               HOLONET_OPERATOR_CONTRACT=OPERATOR_INTERFACE)
+
+
+def operator_fixture(recipients=None):
+    value = fixture("holonet")
+    value.update(uid=940, gid=940)
+    value["artifact"].update(source_revision=OPERATOR_SOURCE, contract_revision=OPERATOR_INTERFACE)
+    config = value["config"]
+    config["server_id"] = "3c86e6d7ff6c4a3296522cdf03d22bb0"
+    config["policy"].update(Server=config["server_id"], Libraries=["3"],
+                            CatalogUsers=["54b7d36cef804d3c8478474553ed3a82"])
+    config["library_guids"] = {"3": "d" * 32}
+    config["playlist_operator"] = {
+        "wire_version": 1, "subject": "writer-subject", "namespace": "managed-recommendations",
+        "library": "3", "catalog_user": "54b7d36cef804d3c8478474553ed3a82",
+        "recipients": list(OPERATOR_COHORT) if recipients is None else recipients}
+    return value
+
+
+def directory(path, mode=0o755):
+    path.mkdir()
+    path.chmod(mode)  # The job umask must not change the intended fixture mode.
+    return path
+
+
+def private_file(path, content, mode):
+    path.write_text(content)
+    path.chmod(mode)
+    return path
+
+
+def operator_layout(base):
+    """Synthetic fixed root paths and two provisioned recipients below scratch."""
+    for part in ("opt", "run", "bin", "etc", "etc/systemd", "etc/systemd/system", "etc/tmpfiles.d"):
+        directory(base / part)
+    private_file(base / "bin/python3.11", "synthetic interpreter", 0o755)
+    (base / "bin/python3").symlink_to("python3.11")
+    state = directory(base / "state")
+    directory(state / "viewers", 0o700)
+    journals, configs = [], []
+    for root in (state / "igor", state / "viewers" / "tv"):
+        directory(root, 0o700)
+        journal = directory(root / "journal", 0o700)
+        private_file(journal / "journal.json", "synthetic retained journal", 0o600)
+        configs.append(str(private_file(root / "config.json", "{}", 0o600)))
+        journals.append(str(journal))
+    credential = private_file(state / "igor" / "credential.json", "synthetic", 0o600)
+    units = (base / "etc/systemd/system/holonet-playlists-worker.socket",
+             base / "etc/systemd/system/holonet-playlists-worker@.service",
+             base / "etc/tmpfiles.d/holonet-playlists.conf")
+
+    def patch():
+        return mock.patch.multiple(
+            guard, OPERATOR_PACKAGE=base / "opt/holonet-playlists",
+            OPERATOR_POLICY=base / "etc/holonet-playlists", OPERATOR_RUNTIME=base / "run/holonet-playlists",
+            OPERATOR_STATE=state, OPERATOR_INTERPRETER=base / "bin/python3", OPERATOR_UNITS=units,
+            ROOT_UID=os.getuid())
+    return SimpleNamespace(base=base, state=state, journals=journals, configs=configs,
+                           credential=credential, units=units, patch=patch)
 
 
 class PackagingTest(unittest.TestCase):
@@ -985,6 +1063,389 @@ class PackagingTest(unittest.TestCase):
                                     env=env, check=True, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
             self.assertIn("changed=0", result)
+
+    def test_playlist_operator_is_default_off_and_needs_its_reviewed_artifact(self):
+        for service in contract.SERVICES:
+            self.assertEqual(contract.playlist_operator_plan(fixture(service)), {"selected": False})
+        # Synthetic pins cannot select the separately pinned production candidate.
+        self.rejected(operator_fixture())
+        with operator_pins():
+            managed = operator_fixture()
+            before = copy.deepcopy(managed)
+            self.assertEqual(contract.endpoint_contract(managed), before)
+            self.assertTrue(contract.playlist_operator_plan(managed)["selected"])
+            # The new build alone stays catalog-only: absent and null both mean off.
+            for null in (False, True):
+                value = copy.deepcopy(managed)
+                value["config"].pop("playlist_operator")
+                if null:
+                    value["config"]["playlist_operator"] = None
+                before = copy.deepcopy(value)
+                self.assertEqual(contract.endpoint_contract(value), before)
+                self.assertEqual(contract.playlist_operator_plan(value), {"selected": False})
+            # Every existing exact pair stays accepted for catalog-only config and
+            # refuses management, including a null key that old binaries reject.
+            pairs = [(source, contract.SERVICES["holonet"][1])
+                     for source in sorted(contract.HOLONET_CATALOG_SOURCE_REVISIONS)]
+            pairs.append((contract.HOLONET_WRITER_SOURCE, contract.HOLONET_WRITER_CONTRACT))
+            for source, interface in pairs:
+                value = copy.deepcopy(managed)
+                value["artifact"].update(source_revision=source, contract_revision=interface)
+                with self.subTest(source=source):
+                    self.rejected(value)
+                    value["config"]["playlist_operator"] = None
+                    self.rejected(value)
+                    value["config"].pop("playlist_operator")
+                    before = copy.deepcopy(value)
+                    self.assertEqual(contract.endpoint_contract(value), before)
+            for interface in (contract.SERVICES["holonet"][1], contract.HOLONET_WRITER_CONTRACT):
+                value = copy.deepcopy(managed)
+                value["artifact"]["contract_revision"] = interface
+                self.rejected(value)
+
+    def test_playlist_operator_ceiling_fixed_cohort_and_plan(self):
+        self.assertEqual(contract.OPERATOR_RECIPIENTS, OPERATOR_COHORT)
+        ids = sorted(OPERATOR_COHORT)
+        with operator_pins():
+            for field, item in (
+                    ("wire_version", True), ("wire_version", 1.0), ("wire_version", "1"), ("wire_version", 2),
+                    ("subject", ""), ("subject", "a b"), ("subject", "x" * 129), ("subject", "é"),
+                    ("subject", ["writer"]), ("namespace", "other"), ("library", 3), ("library", "1"),
+                    ("library", "03"), ("catalog_user", "c" * 32), ("recipients", []),
+                    ("recipients", [ids[0], ids[0]]), ("recipients", ["%032x" % i for i in range(17)]),
+                    ("recipients", ["a" * 32]), ("recipients", [ids[0].upper()]), ("recipients", [1]),
+                    ("recipients", ids[0])):
+                value = operator_fixture()
+                value["config"]["playlist_operator"][field] = item
+                with self.subTest(field=field, item=item):
+                    self.rejected(value)
+
+            def foreign_library(v):
+                v["config"]["policy"]["Libraries"] = ["1"]
+                v["config"]["library_guids"] = {"1": "d" * 32}
+
+            def foreign_server(v):
+                v["config"]["server_id"] = v["config"]["policy"]["Server"] = "a" * 32
+
+            for name, mutate in (
+                    ("missing field", lambda v: v["config"]["playlist_operator"].pop("subject")),
+                    ("socket selector", lambda v: v["config"]["playlist_operator"].update(socket="/tmp/s")),
+                    ("recipient path", lambda v: v["config"]["playlist_operator"].update(configs=["/x"])),
+                    ("legacy writer", lambda v: v["config"].update(recommendations={})),
+                    ("uid", lambda v: v.update(uid=941)), ("gid", lambda v: v.update(gid=941)),
+                    ("server", foreign_server), ("library ceiling", foreign_library),
+                    ("catalog ceiling", lambda v: v["config"]["policy"].update(CatalogUsers=["c" * 32])),
+                    ("issuer bound", lambda v: v["config"].update(
+                        issuer="https://auth.example.invalid/" + "a" * 600 + "/"))):
+                value = operator_fixture()
+                mutate(value)
+                with self.subTest(name=name):
+                    self.rejected(value)
+            value = operator_fixture([ids[3], ids[0]])
+            plan = contract.playlist_operator_plan(value)
+        manifest = "".join(hashlib.sha256((ROOT / "scripts" / name).read_bytes()).hexdigest() + "  " + name + "\n"
+                           for name in sorted(contract.OPERATOR_MODULES))
+        release = hashlib.sha256(manifest.encode()).hexdigest()
+        self.assertEqual(plan["release"], release)
+        self.assertEqual(plan["release_directory"], "/opt/holonet-playlists/releases/" + release)
+        self.assertEqual(plan["pins"], contract.OPERATOR_MODULES)
+        self.assertEqual([(m["name"], Path(m["source"])) for m in plan["modules"]],
+                         [(name, ROOT / "scripts" / name) for name in sorted(contract.OPERATOR_MODULES)])
+        selected = sorted([ids[3], ids[0]])
+        self.assertEqual(plan["policy"], {
+            "version": 1, "enabled": True, "peer": {"uid": 940, "gid": 940},
+            "caller": {"issuer": value["config"]["issuer"], "subject": "writer-subject",
+                       "namespace": "managed-recommendations", "server": "3c86e6d7ff6c4a3296522cdf03d22bb0",
+                       "library": "3", "catalog_user": "54b7d36cef804d3c8478474553ed3a82"},
+            "recipients": {r: OPERATOR_COHORT[r] for r in selected}})
+        self.assertEqual(plan["configs"], [OPERATOR_COHORT[r] for r in selected])
+        self.assertEqual(plan["journals"], [str(Path(c).parent / "journal") for c in plan["configs"]])
+        # No credential, ROOT/source or CLI path is derived or installed.
+        self.assertNotIn("credential", json.dumps(plan))
+        self.assertNotIn("/source", json.dumps(plan))
+        # A module whose bytes differ from its reviewed pin is never planned.
+        with operator_pins(), mock.patch.dict(contract.OPERATOR_MODULES, {"emby_operator_socket.py": "0" * 64}):
+            with self.assertRaises(AnsibleFilterError):
+                contract.playlist_operator_plan(value)
+
+    def test_playlist_operator_units_render_the_reviewed_worker_boundary(self):
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+        templates = ROOT / "roles/web_mcp_endpoint/templates"
+
+        def render(name, **variables):
+            return env.from_string((templates / name).read_text()).render(**variables)
+        with operator_pins():
+            value = operator_fixture()
+            plan = contract.playlist_operator_plan(value)
+        service = render("holonet-playlists-worker@.service.j2", web_mcp_operator=plan)
+        lines = service.splitlines()
+        self.assertTrue(service.startswith(guard.OPERATOR_HEADER))
+        self.assertEqual([line for line in lines if line.startswith("ExecStart=")],
+                         ["ExecStart=/usr/bin/python3 -E -s -B " + plan["release_directory"]
+                          + "/emby_operator_socket.py"])
+        for setting in ("User=root", "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
+                        "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "RuntimeMaxSec=150",
+                        "TasksMax=8", "MemoryMax=128M", "LimitNOFILE=64",
+                        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"):
+            self.assertIn(setting, lines)
+        self.assertEqual(len(plan["journals"]), 7)
+        self.assertEqual([line for line in lines if line.startswith("ReadWritePaths=")],
+                         ["ReadWritePaths=" + " ".join(plan["journals"])])
+        for word in (" -I ", "ReadOnlyPaths=", "RuntimeDirectory", "Listen", "credential.json", "/source"):
+            self.assertNotIn(word, service)
+        socket_unit = render("holonet-playlists-worker.socket.j2")
+        socket_lines = socket_unit.splitlines()
+        self.assertTrue(socket_unit.startswith(guard.OPERATOR_HEADER))
+        self.assertEqual([line for line in socket_lines if line.startswith("Listen")],
+                         ["ListenStream=/run/holonet-playlists/operator.sock"])
+        for setting in ("Accept=yes", "SocketUser=root", "SocketGroup=holonet", "SocketMode=0660",
+                        "DirectoryMode=0750", "MaxConnections=4", "RemoveOnStop=yes",
+                        "AssertPathIsDirectory=/run/holonet-playlists"):
+            self.assertIn(setting, socket_lines)
+        self.assertNotIn("worker.sock", socket_unit)
+        tmpfiles = render("holonet-playlists.tmpfiles.j2")
+        self.assertTrue(tmpfiles.startswith(guard.OPERATOR_HEADER))
+        self.assertEqual([line for line in tmpfiles.splitlines() if not line.startswith("#")],
+                         ["d /run/holonet-playlists 0750 root holonet -"])
+        # Accept=yes pairs NAME.socket with NAME@.service.
+        self.assertEqual(guard.OPERATOR_UNITS[0].name.removesuffix(".socket") + "@.service",
+                         guard.OPERATOR_UNITS[1].name)
+        # The existing holonet.service is byte-identical with management configured.
+        catalog = copy.deepcopy(value)
+        catalog["config"].pop("playlist_operator")
+        self.assertEqual(render("endpoint.service.j2", web_mcp=value), render("endpoint.service.j2", web_mcp=catalog))
+        self.assertNotIn("ReadWritePaths", render("endpoint.service.j2", web_mcp=value))
+
+    def operator_install(self, layout, plan):
+        """Hand-built installed state matching what the role tasks produce."""
+        package = directory(layout.base / "opt/holonet-playlists")
+        private_file(package / ".homelab-infra-owned", guard.OPERATOR_OWNER, 0o644)
+        release = directory(directory(package / "releases") / plan["release"])
+        for name in plan["pins"]:
+            (release / name).write_bytes((ROOT / "scripts" / name).read_bytes())
+            (release / name).chmod(0o444)
+        release.chmod(0o555)
+        policy = directory(layout.base / "etc/holonet-playlists", 0o700)
+        private_file(policy / "policy.json", json.dumps(plan["policy"]), 0o600)
+        for unit in layout.units:
+            private_file(unit, guard.OPERATOR_HEADER + "synthetic\n", 0o644)
+        runtime = directory(layout.base / "run/holonet-playlists", 0o750)
+        os.chown(runtime, -1, os.getegid())
+        return release, policy, runtime
+
+    def test_playlist_operator_guard_refuses_unsafe_state_without_opening_protected_files(self):
+        with operator_pins():
+            plan = contract.playlist_operator_plan(operator_fixture())
+        gid = os.getegid()
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as scratch:
+            layout = operator_layout(Path(scratch))
+            base = layout.base
+
+            def selected(**override):
+                args = dict(release=plan["release"], modules=plan["pins"], journals=layout.journals,
+                            configs=layout.configs)
+                args.update(override)
+                with layout.patch():
+                    return guard.playlist_operator(gid, True, **args)
+
+            def refused(**override):
+                with self.assertRaises(ValueError):
+                    selected(**override)
+            self.assertEqual(selected(), {"installed": False, "runtime": False})
+            with layout.patch():
+                self.assertEqual(guard.playlist_operator(gid, False), {"installed": False, "runtime": False})
+            # No adoption: any fixed name without the ownership marker refuses
+            # management, while a catalog-only run neither judges nor touches it.
+            for path in (base / "etc/holonet-playlists", base / "run/holonet-playlists", base / "opt/holonet-playlists"):
+                directory(path, 0o700)
+                with self.subTest(unowned=path.name):
+                    refused()
+                    with layout.patch():
+                        self.assertEqual(guard.playlist_operator(gid, False),
+                                         {"installed": False, "runtime": False})
+                path.rmdir()
+            release, policy, runtime = self.operator_install(layout, plan)
+            self.assertEqual(selected(), {"installed": True, "runtime": True})
+            # Once owned, an unselected run reports the socket for stopping and
+            # still refuses unsafe owned state rather than acting on it.
+            with layout.patch():
+                self.assertEqual(guard.playlist_operator(gid, False), {"installed": True, "runtime": True})
+                runtime.chmod(0o755)
+                with self.assertRaises(ValueError):
+                    guard.playlist_operator(gid, False)
+                runtime.chmod(0o750)
+            # Selected recipients must be the fixed, already provisioned journal/config pairs.
+            igor, viewer = layout.journals
+            for journals, configs in (([igor], layout.configs), ([igor, igor], layout.configs),
+                                      ([str(base / "journal")], [str(base / "config.json")]),
+                                      ([igor, viewer], list(reversed(layout.configs))), ([], [])):
+                with self.subTest(journals=journals, configs=configs):
+                    refused(journals=journals, configs=configs)
+            refused(release="../" + plan["release"][3:])
+            refused(modules=dict(plan["pins"], extra="0" * 64))
+
+            def drift(path, change, restore):
+                change(path)
+                with self.subTest(drift=str(path.relative_to(base))):
+                    refused()
+                restore(path)
+                selected()
+            journal, config = Path(igor), Path(layout.configs[0])
+
+            def mode(value):
+                return lambda path: path.chmod(value)
+            drift(journal, mode(0o755), mode(0o700))
+            drift(config, mode(0o644), mode(0o600))
+            drift(config.parent, mode(0o750), mode(0o700))
+            drift(layout.state, mode(0o775), mode(0o755))
+            drift(release, mode(0o755), mode(0o555))
+            drift(release / "emby_operator_entry.py", mode(0o644), mode(0o444))
+            drift(policy, mode(0o750), mode(0o700))
+            drift(policy / "policy.json", mode(0o644), mode(0o600))
+            drift(runtime, mode(0o755), mode(0o750))
+            drift(layout.units[1], lambda p: p.write_text("# foreign unit\n"),
+                  lambda p: p.write_text(guard.OPERATOR_HEADER))
+            node = runtime / "operator.sock"
+            drift(node, lambda p: private_file(p, "", 0o660), lambda p: p.unlink())
+            extra = release / "sitecustomize.py"
+            drift(release, lambda p: (p.chmod(0o755), private_file(extra, "", 0o444), p.chmod(0o555)),
+                  lambda p: (p.chmod(0o755), extra.unlink(), p.chmod(0o555)))
+            module = release / "emby_operator_recommendations.py"
+            original = module.read_bytes()
+
+            def rewrite(content):
+                def change(path):
+                    path.chmod(0o644)
+                    path.write_bytes(content)
+                    path.chmod(0o444)  # Same mode: only the bytes differ from the pin.
+                return change
+            drift(module, rewrite(original + b"#"), rewrite(original))
+            saved = base / "saved-journal"
+            drift(journal, lambda p: (p.rename(saved), p.symlink_to(saved, target_is_directory=True)),
+                  lambda p: (p.unlink(), saved.rename(p)))
+            drift(base / "bin/python3", lambda p: (p.unlink(), p.symlink_to("../python3.11")),
+                  lambda p: (p.unlink(), p.symlink_to("python3.11")))
+            # Refusal never repairs: the unsafe journal mode remains for inspection.
+            journal.chmod(0o755)
+            refused()
+            self.assertEqual(stat.S_IMODE(journal.stat().st_mode), 0o755)
+            journal.chmod(0o700)
+            # A passing preflight never opens, lists or stats a credential, never
+            # opens or lists a recipient config, and touches journals by lstat only.
+            seen = {"open": [], "list": [], "stat": []}
+            real = {"io.open": io.open, "os.listdir": os.listdir, "os.scandir": os.scandir,
+                    "os.stat": os.stat, "os.lstat": os.lstat}
+
+            def recorder(kind, name):
+                def call(path, *args, **kwargs):
+                    if isinstance(path, (str, os.PathLike)):
+                        seen[kind].append(Path(os.fspath(path)))
+                    return real[name](path, *args, **kwargs)
+                return call
+            with mock.patch("io.open", recorder("open", "io.open")), \
+                    mock.patch("os.listdir", recorder("list", "os.listdir")), \
+                    mock.patch("os.scandir", recorder("list", "os.scandir")), \
+                    mock.patch("os.stat", recorder("stat", "os.stat")), \
+                    mock.patch("os.lstat", recorder("stat", "os.lstat")):
+                self.assertEqual(selected(), {"installed": True, "runtime": True})
+            self.assertTrue(seen["open"] and seen["stat"])
+            journals = [Path(path) for path in layout.journals]
+            for kind, paths in seen.items():
+                for path in paths:
+                    self.assertNotEqual(path, layout.credential)
+                    for journal_path in journals:
+                        inside = path.is_relative_to(journal_path)
+                        self.assertFalse(inside and (kind != "stat" or path != journal_path), (kind, path))
+            self.assertFalse(set(seen["open"] + seen["list"]) & {Path(c) for c in layout.configs})
+            for path in [layout.credential] + [Path(j) / "journal.json" for j in layout.journals]:
+                self.assertEqual(path.read_text(), "synthetic" if path == layout.credential
+                                 else "synthetic retained journal")
+
+    def test_playlist_operator_tasks_guard_first_check_apply_repeat_and_preserve(self):
+        source = (ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text()
+        original = yaml.safe_load(source)[0]["block"]
+        names = [task["name"] for task in original]
+        first_write = names.index("Create the dedicated system group")
+        for name in ("Refuse an externally supplied playlist operator plan",
+                     "Derive the fixed playlist operator worker plan from the validated contract",
+                     "Guard playlist operator root paths and selected journals without opening them",
+                     "Refuse staging the playlist operator over a running or enabled socket"):
+            self.assertLess(names.index(name), first_write)
+        by_name = {task["name"]: task for task in original}
+        stage = by_name["Stage the root playlist operator worker for configured management"]
+        self.assertEqual(stage["when"], "web_mcp_operator.selected")
+        for name in ("Create the declared socket parent before the first activation",
+                     "Activate the playlist operator socket only with explicit activation"):
+            self.assertIn("web_mcp_operator.selected", by_name[name]["when"])
+            self.assertIn("web_mcp_activate | bool", by_name[name]["when"])
+        self.assertEqual(by_name["Stop and disable an installed socket when management is not configured"]
+                         ["ansible.builtin.systemd_service"],
+                         {"name": "holonet-playlists-worker.socket", "enabled": False, "state": "stopped"})
+        self.assertEqual({task["ansible.builtin.template"]["dest"] for task in stage["block"]
+                          if "ansible.builtin.template" in task}, {str(path) for path in guard.OPERATOR_UNITS})
+        # The role never names a journal, recipient config, credential or ROOT/source path.
+        for word in ("/var/lib/holonet-operator", "credential.json", "/source", "journal.json"):
+            self.assertNotIn(word, source)
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            layout = operator_layout(base)
+            with operator_pins():
+                plan = contract.playlist_operator_plan(operator_fixture())
+            plan["release_directory"] = str(base) + plan["release_directory"]
+            text = yaml.safe_dump(stage["block"])
+            for fixed in ("/opt/holonet-playlists", "/etc/holonet-playlists", "/etc/systemd/system/",
+                          "/etc/tmpfiles.d/"):
+                text = text.replace(fixed, str(base) + fixed)
+            tasks = yaml.safe_load(text)
+            for task in tasks:
+                for module in ("ansible.builtin.file", "ansible.builtin.copy", "ansible.builtin.template"):
+                    args = task.get(module, {})
+                    for field in ("owner", "group"):
+                        if args.get(field) == "root":
+                            args[field] = "0"
+                    if module == "ansible.builtin.template" and args:
+                        args["src"] = str(ROOT / "roles/web_mcp_endpoint/templates" / args["src"])
+            play = base / "operator.yml"
+            play.write_text(yaml.safe_dump([{"hosts": "localhost", "connection": "local",
+                "gather_facts": False, "vars": {"web_mcp_operator": plan}, "tasks": tasks}]))
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                       ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"), ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+
+            def run(*flags):
+                with layout.patch():  # The production preflight runs before every pass.
+                    guard.playlist_operator(os.getegid(), True, plan["release"], plan["pins"],
+                                            layout.journals, layout.configs)
+                result = subprocess.run(["ansible-playbook", "-i", "localhost,", str(play), *flags],
+                                        env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                return result.stdout
+            protected = [layout.credential] + [Path(j) / "journal.json" for j in layout.journals]
+            saved = {path: (path.read_bytes(), path.stat().st_mode) for path in protected}
+            run("--check")
+            for path in (base / "opt/holonet-playlists", base / "etc/holonet-playlists", *layout.units):
+                self.assertFalse(path.exists(), path)
+            run()
+            release = Path(plan["release_directory"])
+            self.assertEqual(stat.S_IMODE(release.stat().st_mode), 0o555)
+            self.assertEqual(sorted(os.listdir(release)), sorted(plan["pins"]))
+            for name, digest in plan["pins"].items():
+                self.assertEqual(stat.S_IMODE((release / name).stat().st_mode), 0o444)
+                self.assertEqual(hashlib.sha256((release / name).read_bytes()).hexdigest(), digest)
+            policy = base / "etc/holonet-playlists/policy.json"
+            self.assertEqual(json.loads(policy.read_text()), plan["policy"])
+            self.assertEqual(stat.S_IMODE(policy.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(policy.parent.stat().st_mode), 0o700)
+            for unit in layout.units:
+                self.assertTrue(unit.read_text().startswith(guard.OPERATOR_HEADER))
+            self.assertIn("changed=0", run())
+            self.assertIn("changed=0", run("--check"))
+            self.assertEqual({path: (path.read_bytes(), path.stat().st_mode) for path in protected}, saved)
+            # Drift refuses in the production preflight before any task could chmod it.
+            module = release / "emby_operator_socket.py"
+            module.chmod(0o644)
+            with self.assertRaises(ValueError):
+                run()
+            self.assertEqual(stat.S_IMODE(module.stat().st_mode), 0o644)
 
 
 if __name__ == "__main__":

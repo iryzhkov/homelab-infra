@@ -1,0 +1,49 @@
+# Managed by homelab-infra holonet-playlists
+# One root worker per accepted connection, fd 3 from the socket unit.
+[Unit]
+Description=HoloNet playlist operator worker for one local connection
+CollectMode=inactive-or-failed
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+# -E -s -B keep the pinned script directory on sys.path; -I would drop it.
+ExecStart=/usr/bin/python3 -E -s -B {{ web_mcp_operator.release_directory }}/emby_operator_socket.py
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+RuntimeMaxSec=150
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# AF_UNIX for the inherited connection; INET for the pinned Emby origin.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Only the selected recipients' existing journals are writable. Source, policy,
+# configs and the shared credential stay read-only through ProtectSystem=strict.
+ReadWritePaths={{ web_mcp_operator.journals | join(' ') }}
+MemoryMax=128M
+CPUQuota=50%
+TasksMax=8
+LimitNOFILE=64

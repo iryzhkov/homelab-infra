@@ -2,9 +2,11 @@
 
 `scripts/emby_operator_socket.py` is a socket-activated root worker that lets
 the HoloNet MCP service manage existing journal-owned Movie playlists through
-the same protected operator the CLI uses. It is source only: nothing in this
-repository installs, enables or activates it, and the MCP service has no client
-for it yet. The adopted contract is
+the same protected operator the CLI uses. The `web_mcp_endpoint` role installs
+it only when the HoloNet endpoint config carries a non-null
+`playlist_operator`, and starts its socket only with the existing explicit
+activation flag; see "Opt-in HoloNet playlist operator management" in
+`docs/web-mcp-endpoints.md`. The adopted contract is
 `jocasta:8047884faa50daa3df712477b1196fcd@2`.
 
 ## What the first slice covers
@@ -26,7 +28,7 @@ operation exists in this slice. Membership replacement can take two writes
 
 ```text
 MCP service (UID/GID 940, verifies the JWT)
-  -> /run/holonet-playlists/worker.sock   AF_UNIX, root:holonet 0660
+  -> /run/holonet-playlists/operator.sock AF_UNIX, root:holonet 0660
   -> emby_operator_socket.py (root, one process per connection, Accept=yes)
   -> emby_operator_entry.operator_session  same Journal, adapter, credential, Operator as the CLI
   -> existing per-recipient journal, under its existing nonblocking lock
@@ -178,15 +180,19 @@ pending state and the restored baseline, disable management, and archive the
 whole journal unchanged. A replacement journal is a separately reviewed
 provisioning epoch, never a reset of the live one.
 
-## Deploy inputs for root integration
+## Deployed layout
 
-The following are inputs for a later reviewed infra change; nothing here
-creates them.
+`roles/web_mcp_endpoint` renders everything below from the validated endpoint
+config; `filter_plugins/web_mcp.py` pins the values.
 
-Installed source, root-owned, not writable by others, in one directory:
-`emby_operator_socket.py`, `emby_operator_entry.py`, `emby_operator_adapter.py`,
-`emby_operator_recommendations.py` and the CLI. The CLI now imports
-`emby_operator_entry.py`, so an installed CLI needs it too.
+Installed source: `emby_operator_socket.py`, `emby_operator_entry.py`,
+`emby_operator_adapter.py` and `emby_operator_recommendations.py`, byte for byte
+as pinned, in the root-owned `0555` release directory
+`/opt/holonet-playlists/releases/<release>`, files `0444`. The release name is the
+SHA256 of the sorted `sha256sum`-style manifest of the four pins. The existing
+protected CLI and its `source/` directory under the Igor operator root are not
+touched; the worker carries its own copy of the same core bytes. A CLI installed
+from this source imports `emby_operator_entry.py`, so it needs that file too.
 
 Policy file, fixed path `/etc/holonet-playlists/policy.json`, root-owned `0600`
 in a root-owned `0700` directory whose ancestors are root-owned and not group
@@ -196,7 +202,7 @@ operator config:
 ```json
 {
   "version": 1,
-  "enabled": false,
+  "enabled": true,
   "peer": {"uid": 940, "gid": 940},
   "caller": {
     "issuer": "<exact issuer of the separate writer identity>",
@@ -218,17 +224,26 @@ operator config:
 }
 ```
 
-The Igor config path above is inferred from the retained root name in
-`docs/emby-operator-viewers.md`; root must confirm it. Exactly these fields;
+The installer writes it from the endpoint config: `caller.issuer` and
+`caller.server` are the top-level `issuer` and `server_id`, the other caller
+fields come from `playlist_operator`, and `recipients` holds only the selected
+IDs, each mapped through the fixed seven-entry table above
+(`OPERATOR_RECIPIENTS`). Exactly these fields;
 1 to 16 recipients; lowercase 32-hex IDs; absolute, distinct config paths. Each
 selected config must be enabled and match its map key as `recipient`, plus the
 policy `server` and `library`, or the request is `unavailable`. The policy's
 `enabled` is the worker kill switch.
 
-Socket unit requirements: `ListenStream=/run/holonet-playlists/worker.sock`,
-`Accept=yes`, `SocketUser=root`, `SocketGroup=holonet` (GID 940),
-`SocketMode=0660`, `DirectoryMode=0750`, a small `MaxConnections=` (for
-example 4), and no network listener.
+Socket parent: `/run/holonet-playlists`, `root:holonet 0750`, declared by
+`/etc/tmpfiles.d/holonet-playlists.conf` so it is recreated at every boot.
+`DirectoryMode=` alone would create it `root:root`, which the service cannot
+search, so the socket unit asserts the directory exists instead. No unit uses
+`RuntimeDirectory=`, which would remove the parent when a worker exits.
+
+Socket unit `holonet-playlists-worker.socket`:
+`ListenStream=/run/holonet-playlists/operator.sock`, `Accept=yes`,
+`SocketUser=root`, `SocketGroup=holonet` (GID 940), `SocketMode=0660`,
+`MaxConnections=4`, `RemoveOnStop=yes`, and no network listener.
 
 Service template requirements (`holonet-playlists-worker@.service`):
 
@@ -236,8 +251,7 @@ Service template requirements (`holonet-playlists-worker@.service`):
   with no arguments. Do not use `-I`, which drops the script directory from the
   import path. The worker takes fd 3 from `LISTEN_FDS`/`LISTEN_PID`.
 - `RuntimeMaxSec=150` (above the 120-second ceiling plus read and write
-  bounds), `TasksMax=` small, `MemoryMax=` bounded, `LimitNOFILE=` small,
-  `UMask=0077`.
+  bounds), `TasksMax=8`, `MemoryMax=128M`, `LimitNOFILE=64`, `UMask=0077`.
 - `NoNewPrivileges=yes`, `CapabilityBoundingSet=` empty, `AmbientCapabilities=`
   empty, `ProtectSystem=strict`, `ReadWritePaths=` exactly the seven journal
   directories, `ProtectHome=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`,
@@ -246,20 +260,23 @@ Service template requirements (`holonet-playlists-worker@.service`):
   `ProtectHostname=yes`, `RestrictSUIDSGID=yes`, `RestrictRealtime=yes`,
   `RestrictNamespaces=yes`, `LockPersonality=yes`,
   `MemoryDenyWriteExecute=yes`, `SystemCallArchitectures=native`,
-  `SystemCallFilter=@system-service`.
+  `SystemCallFilter=@system-service`. `ReadWritePaths=` names the selected
+  recipients' existing `journal/` directories, so they must exist first.
 - `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`: the inherited socket is
   AF_UNIX and the adapter needs HTTPS to the pinned Emby origin. Network
   egress limits (for example `IPAddressAllow=`) depend on the actual origin
-  path and are root's decision.
+  path and are not set.
 - Credential, config, policy and source stay read-only through
   `ProtectSystem=strict`; only the journal directories are writable.
 
 The existing `holonet.service` keeps `NoNewPrivileges`, empty capabilities and
 read-only system paths. It needs only access to the socket through its GID.
 
-Rollback: set the policy `enabled` to false or stop the socket unit. Leave the
-catalog service, reader behavior, journals, pending state and credential in
-place; never delete a journal or the shared credential.
+Rollback: remove `playlist_operator` from the endpoint config and re-run the
+role, which stops and disables the socket. Release, policy, configs, journals,
+pending state and the credential stay in place; never delete a journal or the
+shared credential. In an emergency, stopping the socket unit or setting the
+policy `enabled` to false has the same effect until the next role run.
 
 ## Tests and boundaries
 

@@ -47,6 +47,48 @@
       register: web_mcp_local_artifact
       no_log: true
 
+    # Extra vars outrank set_fact; a supplied plan would bypass the contract.
+    - name: Refuse an externally supplied playlist operator plan
+      ansible.builtin.assert:
+        that:
+          - web_mcp_operator is not defined
+        quiet: true
+
+    # Off unless the validated HoloNet config carries a non-null playlist_operator.
+    - name: Derive the fixed playlist operator worker plan from the validated contract
+      ansible.builtin.set_fact:
+        web_mcp_operator: "{{ web_mcp_endpoint | web_mcp_playlist_operator }}"
+
+    - name: Guard playlist operator root paths and selected journals without opening them
+      web_mcp_guard:
+        kind: playlist-operator
+        gid: "{{ web_mcp.gid }}"
+        selected: "{{ web_mcp_operator.selected }}"
+        release: "{{ web_mcp_operator.release | default(omit) }}"
+        modules: "{{ web_mcp_operator.pins | default({}) }}"
+        journals: "{{ web_mcp_operator.journals | default([]) }}"
+        configs: "{{ web_mcp_operator.configs | default([]) }}"
+      register: web_mcp_operator_state
+      when: web_mcp.service == 'holonet'
+
+    - name: Inspect the playlist operator socket before staging
+      ansible.builtin.command:
+        argv: [systemctl, "{{ item }}", holonet-playlists-worker.socket]
+      loop: [is-active, is-enabled]
+      register: web_mcp_operator_unit_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: web_mcp_operator.selected and not (web_mcp_activate | bool)
+
+    - name: Refuse staging the playlist operator over a running or enabled socket
+      ansible.builtin.assert:
+        that:
+          - web_mcp_operator_unit_state.results[0].stdout in ['inactive', 'failed']
+          - web_mcp_operator_unit_state.results[1].stdout in ['', 'disabled', 'not-found']
+        quiet: true
+      when: web_mcp_operator.selected and not (web_mcp_activate | bool)
+
     - name: Inspect service state before staging
       ansible.builtin.service_facts:
       when: not (web_mcp_activate | bool)
@@ -211,6 +253,119 @@
       diff: false
       register: web_mcp_credentials
 
+    - name: Stage the root playlist operator worker for configured management
+      when: web_mcp_operator.selected
+      block:
+        - name: Create the root-owned playlist operator package root
+          ansible.builtin.file:
+            path: /opt/holonet-playlists
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Mark the playlist operator package as managed
+          ansible.builtin.copy:
+            content: "homelab-infra holonet-playlists\n"
+            dest: /opt/holonet-playlists/.homelab-infra-owned
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Create the root-owned worker release parent
+          ansible.builtin.file:
+            path: /opt/holonet-playlists/releases
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Create the read-only content-addressed worker release
+          ansible.builtin.file:
+            path: "{{ web_mcp_operator.release_directory }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0555"
+
+        - name: Install the pinned worker, shared entry, adapter and core as one release
+          ansible.builtin.copy:
+            src: "{{ item.source }}"
+            dest: "{{ web_mcp_operator.release_directory }}/{{ item.name }}"
+            owner: root
+            group: root
+            mode: "0444"
+          loop: "{{ web_mcp_operator.modules }}"
+          loop_control:
+            label: "{{ item.name }}"
+
+        - name: Verify the staged worker modules independently
+          ansible.builtin.stat:
+            path: "{{ web_mcp_operator.release_directory }}/{{ item.name }}"
+            follow: false
+            checksum_algorithm: sha256
+          loop: "{{ web_mcp_operator.modules }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: web_mcp_operator_staged
+
+        - name: Refuse a worker release that differs from its pins
+          ansible.builtin.assert:
+            that:
+              - item.stat.isreg | default(false)
+              - not (item.stat.islnk | default(false))
+              - item.stat.uid == 0
+              - item.stat.mode == '0444'
+              - item.stat.checksum == item.item.sha256
+            quiet: true
+          loop: "{{ web_mcp_operator_staged.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+          when: not ansible_check_mode
+
+        - name: Create the private root policy directory
+          ansible.builtin.file:
+            path: /etc/holonet-playlists
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Install the root management ceiling from the validated endpoint config
+          ansible.builtin.copy:
+            content: "{{ web_mcp_operator.policy | to_nice_json }}\n"
+            dest: /etc/holonet-playlists/policy.json
+            owner: root
+            group: root
+            mode: "0600"
+
+        - name: Declare the boot-time root:holonet socket parent
+          ansible.builtin.template:
+            src: holonet-playlists.tmpfiles.j2
+            dest: /etc/tmpfiles.d/holonet-playlists.conf
+            owner: root
+            group: root
+            mode: "0644"
+          register: web_mcp_operator_tmpfiles
+
+        - name: Install the hardened per-connection worker unit
+          ansible.builtin.template:
+            src: holonet-playlists-worker@.service.j2
+            dest: /etc/systemd/system/holonet-playlists-worker@.service
+            owner: root
+            group: root
+            mode: "0644"
+          register: web_mcp_operator_service
+
+        - name: Install the local operator socket unit
+          ansible.builtin.template:
+            src: holonet-playlists-worker.socket.j2
+            dest: /etc/systemd/system/holonet-playlists-worker.socket
+            owner: root
+            group: root
+            mode: "0644"
+          register: web_mcp_operator_socket
+
     - name: Install the root-owned hardened endpoint unit
       ansible.builtin.template:
         src: endpoint.service.j2
@@ -224,6 +379,37 @@
       ansible.builtin.systemd_service:
         daemon_reload: true
       when: web_mcp_unit is changed and not ansible_check_mode
+
+    - name: Reload when the playlist operator units changed
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: >-
+        web_mcp_operator.selected and not ansible_check_mode
+        and (web_mcp_operator_service is changed or web_mcp_operator_socket is changed)
+
+    - name: Create the declared socket parent before the first activation
+      ansible.builtin.command:
+        argv: [systemd-tmpfiles, --create, /etc/tmpfiles.d/holonet-playlists.conf]
+      when: >-
+        web_mcp_operator.selected and web_mcp_activate | bool and not ansible_check_mode
+        and (web_mcp_operator_tmpfiles is changed or not web_mcp_operator_state.runtime)
+
+    - name: Activate the playlist operator socket only with explicit activation
+      ansible.builtin.systemd_service:
+        name: holonet-playlists-worker.socket
+        enabled: true
+        state: "{{ 'restarted' if web_mcp_operator_socket is changed else 'started' }}"
+      when: web_mcp_operator.selected and web_mcp_activate | bool and not ansible_check_mode
+
+    # Rollback: release, policy, configs, journals and credential stay in place.
+    - name: Stop and disable an installed socket when management is not configured
+      ansible.builtin.systemd_service:
+        name: holonet-playlists-worker.socket
+        enabled: false
+        state: stopped
+      when: >-
+        web_mcp.service == 'holonet' and not web_mcp_operator.selected
+        and web_mcp_operator_state.installed | default(false)
 
     - name: Activate only the explicitly selected endpoint
       ansible.builtin.systemd_service:
