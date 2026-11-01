@@ -282,7 +282,8 @@ behavior: the catalog-only policy and `backend.json` alone.
 Playback is accepted only with a non-null `playlist_operator` and only from
 the reviewed build named by `HOLONET_PLAYBACK_SOURCE` and
 `HOLONET_PLAYBACK_CONTRACT` in `filter_plugins/web_mcp.py`. They pin Go
-`00f1834` and the compatible worker interface `cfea03b`. The final integration
+`6c13126` and the compatible worker interface `cfea03b`. This build accepts
+the numeric pagination echoes returned by the qualified Jellystat API. The final integration
 review and exact artifact SHA256 remain required before activation. Older builds refuse the unknown key, so even
 `playback: null` needs that build. The existing management and catalog pins
 stay admissible for rollback without playback.
