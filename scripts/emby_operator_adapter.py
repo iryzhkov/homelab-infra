@@ -13,7 +13,8 @@ import urllib.request
 
 from functools import wraps
 from emby_operator_recommendations import (MAX_LISTS, NotDispatched, Refused, require, movie_ids,
-                                           opaque, row_id, display_title, title_row, list_marker)
+                                           opaque, row_id, display_title, title_row, list_marker,
+                                           native_move_index)
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_BODY = 16 * 1024
@@ -564,6 +565,39 @@ class OperatorAdapter:
                 matches[0].get('SectionType') == 'playlist' and
                 matches[0].get('ParentId') == target['id'], 'Foreign saved row')
         self._post('/Users/' + recipient + '/HomeSections/Delete', body={'ids': [row]})
+
+    @mutation_dispatch
+    def move_row(self, recipient, args):
+        require(recipient == self._config['recipient'], 'Foreign row recipient')
+        _, current, marker, target, record = self._intent('move', args)
+        # Only the journal-owned saved row of the pending list; never a caller row ID.
+        position = args.get('position') if type(args) is dict else None
+        require(record is not None and record['row'] is not None and target is not None and
+                type(args) is dict and set(args) == {'row', 'position'} and
+                row_id(args['row']) == row_id(record['row']) and
+                type(position) is int and 0 <= position < len(current['home']),
+                'Foreign row move')
+        title_row(record, target, current['home'], recipient, marker)
+        index = [row_id(r['Id']) for r in current['home']].index(row_id(record['row']))
+        require(index != position, 'Row already at position')
+        # Recompute the native index from fresh views; args never carry one.
+        native = self._native_index(recipient, current['home'], record['row'], position)
+        require(native is not None, 'Row already at position')
+        # Saved row ID keeps its JSON type, as for delete_row.
+        self._post('/Users/' + recipient + '/HomeSections/Move',
+                   body={'ids': [record['row']], 'newIndex': native})
+
+    def _native_index(self, recipient, home, row, position):
+        """Fresh bounded edit view, then the shared normal-to-native translation."""
+        edit = normalize_home(self._http('GET', '/Users/' + recipient + '/HomeSections',
+                                         {'isEditMode': 'true'}))
+        return native_move_index(home, edit, row, position)
+
+    def move_index(self, recipient, home, row, position):
+        """Read-only translation preflight; core runs it before preview or a run."""
+        require(recipient == self._config['recipient'], 'Foreign row recipient')
+        self._state()
+        return self._native_index(recipient, home, row, position)
 
     @mutation_dispatch
     def delete_owned_playlist(self, playlist, marker, actor):
