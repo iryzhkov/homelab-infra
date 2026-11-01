@@ -1128,7 +1128,7 @@ class PackagingTest(unittest.TestCase):
                 self.rejected(value)
 
     def test_playback_is_default_off_and_requires_exact_build_pins(self):
-        self.assertEqual(contract.HOLONET_PLAYBACK_SOURCE, "a2620658b59baf93cd8500f21daec6f4f0c6a0da")
+        self.assertEqual(contract.HOLONET_PLAYBACK_SOURCE, "6c1312693a9d20432f46e6a33ac256698ee46f74")
         self.assertEqual(contract.HOLONET_PLAYBACK_CONTRACT, "cfea03b6e99e8b501ce5b6f1abbe0d32545ecd3e")
         self.rejected(playback_fixture())
         with operator_pins():

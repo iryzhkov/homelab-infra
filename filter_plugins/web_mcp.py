@@ -35,7 +35,7 @@ HOLONET_OPERATOR_CONTRACT = "2cd99eb967690de97e9be01b411f4df119283d4c"
 # passed independent review and CI; these packaging and worker pins require the
 # final integration review before activation. Older builds refuse playback.
 # The playback build also accepts playlist_operator.
-HOLONET_PLAYBACK_SOURCE = "a2620658b59baf93cd8500f21daec6f4f0c6a0da"
+HOLONET_PLAYBACK_SOURCE = "6c1312693a9d20432f46e6a33ac256698ee46f74"
 HOLONET_PLAYBACK_CONTRACT = "cfea03b6e99e8b501ce5b6f1abbe0d32545ecd3e"
 # Fixed runtime paths: the Jellystat key is its own credential file, never the
 # Emby backend file, and the only Jellystat URL besides an HTTPS origin is the
