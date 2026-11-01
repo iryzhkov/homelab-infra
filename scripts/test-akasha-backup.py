@@ -157,7 +157,11 @@ class PackagingTest(unittest.TestCase):
                 maintenance.health(self.state, "http://127.0.0.1/healthz")
                 observed.append(True)
             return original_connect(*args, **kwargs)
-        with mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener):
+        # Only the delete-first fallback leaves a gap: one byte short of the
+        # disk reserve for retention, while reclaiming the old copy fits.
+        delete_first = mock.patch.object(maintenance.shutil, "disk_usage", return_value=types.SimpleNamespace(
+            free=maintenance.DB_LIMIT + maintenance.RESERVE - 1))
+        with delete_first, mock.patch.object(maintenance.urllib.request, "build_opener", return_value=opener):
             with mock.patch.object(maintenance.sqlite3, "connect", side_effect=connect_during_gap):
                 maintenance.snapshot(self.state)
             self.assertTrue(observed)
