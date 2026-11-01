@@ -55,16 +55,25 @@ authentik_machine_services:
 # users and only catalog.read, in namespace movies-catalog.
 #
 # The homelab identity is the existing persistent reader. It must stay present
-# and unchanged, including its generation and its 2026-11-20 expiry; the
-# entrypoint refuses any change to it. The role refuses every run within one
-# day of that expiry, so extending it is a separate reviewed change.
+# and unchanged, including its generation and grant; the entrypoint refuses any
+# change to it except the explicit expiry-only renewal below. The role refuses
+# every run within one day of the declared expiry.
 #
 # The laptop identity is new and separate: the limited Chaldea Claude preset's
 # account, chaldea-laptop-holonet-movies-catalog-claude, with its own app
 # password at ~/.config/chaldea/authentik/holonet-movies-catalog-claude.app-password.
 # Its generation, expiry and state follow the role's lifecycle rules; its
-# expiry is a declared choice aligned with the homelab identity, which root
-# may change within the role's 1..180-day window before the first run.
+# expiry is a declared choice aligned with the homelab identity.
+#
+# Expiry-only renewal: every existing generation-1 app password (homelab,
+# laptop limited, ordinary interactive reader and the recommendation writer)
+# expires at holonet_catalog_identity_expires. The default keeps the original
+# 2026-11-20 date, so ordinary source never renews anything. An operator renews
+# by passing a later date, 1..180 days ahead, explicitly with all four accounts
+# opted in and a fresh public baseline (docs/authentik-machine-identities.md,
+# "Expiry-only renewal"). Generation, grant and token identifier stay the same;
+# the blueprint omits the key, so Authentik keeps the existing one.
+holonet_catalog_identity_expires: "2026-11-20T00:00:00Z"
 authentik_machine_identities:
   - host: homelab
     profile: holonet-movies-catalog
@@ -77,7 +86,7 @@ authentik_machine_identities:
     holonet_actions: [catalog.read]
     holonet_namespace: movies-catalog
     generation: 1
-    expires: "2026-11-20T00:00:00Z"
+    expires: "{{ holonet_catalog_identity_expires }}"
     state: present
   - host: laptop
     profile: holonet-movies-catalog-claude
@@ -90,7 +99,7 @@ authentik_machine_identities:
     holonet_actions: [catalog.read]
     holonet_namespace: movies-catalog
     generation: 1
-    expires: "2026-11-20T00:00:00Z"
+    expires: "{{ holonet_catalog_identity_expires }}"
     state: present
 
 # Optional ordinary T3 reader. Off by default and used only by this isolated
@@ -110,11 +119,18 @@ holonet_catalog_interactive_identity:
   holonet_actions: [catalog.read]
   holonet_namespace: movies-catalog
   generation: 1
-  expires: "2026-11-20T00:00:00Z"
+  expires: "{{ holonet_catalog_identity_expires }}"
   state: present
 
 # Source capability only. Enabling requires an explicit cohort and expiry in
 # protected operator inputs. Existing accounts never inherit these lifecycle values.
+# Under a renewal the writer's protected expiry must equal the renewal date.
+#
+# Scoped playback history is a second, separate opt-in for this writer only:
+# holonet_catalog_playback_enabled adds history.read and requires a nonempty
+# holonet_history_users subset of its target users in the protected input.
+# The readers above always keep empty history and catalog.read alone.
+holonet_catalog_playback_enabled: false
 holonet_catalog_recommendations_enabled: false
 holonet_catalog_recommendations_identity:
   host: laptop

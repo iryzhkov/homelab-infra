@@ -5,7 +5,8 @@ systemd starts one instance per connection (Accept=yes) and passes the
 connected AF_UNIX stream socket as fd 3. The worker checks SO_PEERCRED against
 the root-owned policy, reads exactly one newline-terminated JSON request,
 intersects it with the fixed root ceiling, runs it through the shared operator
-entry, writes one response and exits. It takes no arguments and adds no
+entry (or, for the read-only movie-metadata operation, the same adapter without
+the Operator), writes one response and exits. It takes no arguments and adds no
 listener, spool, subprocess, retry, journal or credential.
 
 The calling MCP service is the trusted JWT authenticator. The worker does not
@@ -25,10 +26,12 @@ import struct
 import sys
 import time
 
-from emby_operator_adapter import load_config, private_read, strict_json
+from emby_operator_adapter import (OperatorAdapter, load_config, load_credentials, private_read,
+                                   strict_json)
 from emby_operator_entry import invoke, operator_session
-from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, Refused, checked_title,
-                                           digest, movie_ids, opaque, row_position)
+from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT, Journal,
+                                           Refused, checked_title, digest, movie_ids, opaque,
+                                           row_position)
 
 VERSION = 1
 # Fixed root-owned policy. No argument, environment or request selects a path.
@@ -43,8 +46,11 @@ MAX_RECIPIENTS = 16
 MAX_ACTIONS = 32
 MAX_EPOCH_SECONDS = 10 ** 11
 MAX_EPOCH_MS = 10 ** 14
-# Warn while enough completed-key capacity remains to plan root retirement.
+# The warning means the next new request first retires the active completed
+# keys into the replay archive. It needs no operator action.
 CAPACITY_WARNING_FREE = 16
+if DONE_LIMIT - CAPACITY_WARNING_FREE != RETIRE_AT:
+    raise ImportError('Worker capacity warning differs from the core retirement watermark')
 BASE_ACTIONS = frozenset({'catalog.read', 'playlist.read', 'home.read'})
 # Every core list operation and the actions it needs beyond BASE_ACTIONS. Its
 # exact arguments are the core LIST_OPERATIONS table the shared entry uses.
@@ -62,12 +68,20 @@ LIST_ACTIONS = {
 }
 if set(LIST_ACTIONS) != set(LIST_OPERATIONS):
     raise ImportError('Worker list actions differ from the core list operations')
-WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply')
+# Read-only Movie metadata for the HoloNet playback tools. Its caller carries
+# exactly the fixed history actions and the verified history_users grant;
+# every other operation keeps the original caller shape.
+METADATA_OPERATION = 'movie-metadata'
+HISTORY_ACTIONS = ['catalog.read', 'playlist.read', 'home.read', 'history.read']
+WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply', METADATA_OPERATION)
 REQUEST_FIELDS = frozenset({'version', 'caller', 'recipient', 'deadline_unix_ms',
                             'operation', 'request'})
 PINNED_CALLER = ('issuer', 'subject', 'namespace', 'server', 'library', 'catalog_user')
 CALLER_FIELDS = frozenset(PINNED_CALLER + ('actions', 'expires_at'))
+HISTORY_CALLER_FIELDS = CALLER_FIELDS | {'history_users'}
 POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'})
+# Optional opt-in: without history_users the policy permits no history read.
+HISTORY_POLICY_FIELDS = POLICY_FIELDS | {'history_users'}
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
@@ -104,12 +118,24 @@ def bounded_int(value, limit):
     return type(value) is int and 0 <= value <= limit
 
 
+def hex_users(value):
+    """1..16 unique lowercase 32-hex user IDs."""
+    return (type(value) is list and 1 <= len(value) <= MAX_RECIPIENTS and
+            all(isinstance(u, str) and HEX32.fullmatch(u) for u in value) and
+            len(set(value)) == len(value))
+
+
 def validate_policy(value):
-    """Root ceiling: one peer, one exact caller and the fixed recipient config map."""
+    """Root ceiling: one peer, one exact caller and the fixed recipient config map.
+
+    Optional history_users opts those configured recipients into the read-only
+    movie-metadata operation; a policy without it permits no history read.
+    """
     def ok(condition):
         if not condition:
             raise Refused('Invalid management policy')
-    ok(type(value) is dict and set(value) == POLICY_FIELDS and value['version'] == 1 and
+    ok(type(value) is dict and set(value) in (POLICY_FIELDS, HISTORY_POLICY_FIELDS) and
+       value['version'] == 1 and
        type(value['version']) is int and type(value['enabled']) is bool)
     peer = value['peer']
     ok(type(peer) is dict and set(peer) == {'uid', 'gid'} and
@@ -129,6 +155,8 @@ def validate_policy(value):
            path.startswith('/') and '..' not in PurePosixPath(path).parts and
            len(PurePosixPath(path).parts) > 2)
     ok(len(set(recipients.values())) == len(recipients))
+    if 'history_users' in value:
+        ok(hex_users(value['history_users']) and set(value['history_users']) <= set(recipients))
     return copy.deepcopy(value)
 
 
@@ -205,12 +233,16 @@ def parse_request(frame):
     check(type(value['version']) is int and value['version'] == VERSION,
           'refused', 'Unsupported version')
     caller = value['caller']
-    check(type(caller) is dict and set(caller) == CALLER_FIELDS and
+    # Only the read operation carries history_users; its value is checked below.
+    metadata = value['operation'] == METADATA_OPERATION
+    check(type(caller) is dict and
+          set(caller) == (HISTORY_CALLER_FIELDS if metadata else CALLER_FIELDS) and
           all(bounded_text(caller[k], 512) for k in PINNED_CALLER) and
           bounded_int(caller['expires_at'], MAX_EPOCH_SECONDS) and
           type(caller['actions']) is list and len(caller['actions']) <= MAX_ACTIONS and
           all(isinstance(a, str) and ACTION.fullmatch(a) for a in caller['actions']) and
           len(set(caller['actions'])) == len(caller['actions']), 'refused', 'Invalid caller')
+    check(not metadata or hex_users(caller['history_users']), 'refused', 'Invalid caller')
     check(isinstance(value['recipient'], str) and HEX32.fullmatch(value['recipient']),
           'refused', 'Invalid recipient')
     check(bounded_int(value['deadline_unix_ms'], MAX_EPOCH_MS), 'refused', 'Invalid deadline')
@@ -224,6 +256,13 @@ def parse_request(frame):
 def typed_request(operation, request):
     check(type(request) is dict, 'refused', 'Invalid request fields')
     fields = set(request)
+    if operation == METADATA_OPERATION:
+        check(fields == {'ids'}, 'refused', 'Invalid request fields')
+        try:
+            movie_ids(request['ids'], 1)
+        except Refused as error:
+            raise WireError('refused', safe_message(error)) from None
+        return copy.deepcopy(request)
     if operation == 'show':
         check(fields in (set(), {'list'}), 'refused', 'Invalid request fields')
     elif operation == 'reconcile':
@@ -263,6 +302,17 @@ def authorize(call, policy):
           'refused', 'Caller outside management policy')
     check(call['recipient'] in policy['recipients'],
           'refused', 'Recipient outside management policy')
+    if call['operation'] == METADATA_OPERATION:
+        # Current policy must opt in; the recipient field alone proves nothing.
+        check('history_users' in policy, 'refused', 'History read not enabled by policy')
+        check(caller['actions'] == HISTORY_ACTIONS,
+              'refused', 'History read needs exactly the fixed actions')
+        check(set(caller['history_users']) <= set(policy['recipients']),
+              'refused', 'History users outside management policy')
+        check(call['recipient'] in caller['history_users'] and
+              call['recipient'] in policy['history_users'],
+              'refused', 'Recipient outside history policy')
+        return
     required = set(BASE_ACTIONS)
     if call['operation'] in ('preview', 'apply'):
         required |= LIST_ACTIONS[call['request']['operation']]
@@ -373,8 +423,34 @@ def dispatch(operator, call):
                                          intent_digest=request['intent_digest']))
 
 
+def movie_metadata(config, call, guard):
+    """Read-only metadata under the recipient's nonblocking journal lock.
+
+    Uses the same Journal, adapter, credential and guard as management, but no
+    Operator: no journal load or write, reconcile, init, adoption or preview.
+    """
+    journal = Journal(config['journal_directory'], root_safe=True)
+    api = None
+    try:
+        with journal.locked():
+            api = OperatorAdapter(config, journal, request_guard=guard)
+            credentials = load_credentials(config['credential_file'])
+            try:
+                api.authenticate(credentials)
+            finally:
+                credentials.clear()
+            return {'movies': api.movie_metadata(call['recipient'], config['library'],
+                                                 call['request']['ids'])}
+    finally:
+        if api is not None:
+            api.close()
+        journal.close()
+
+
 def execute(config, call, guard):
     try:
+        if call['operation'] == METADATA_OPERATION:
+            return movie_metadata(config, call, guard)
         with operator_session(config, request_guard=guard) as operator:
             try:
                 return dispatch(operator, call)

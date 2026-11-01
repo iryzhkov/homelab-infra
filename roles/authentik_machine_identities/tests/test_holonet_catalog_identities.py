@@ -49,6 +49,16 @@ HOSTS = {"homelab": {"ssh_user": "iryzhkov", "home": "/home/iryzhkov", "connecti
          "laptop": {"ssh_user": "igor", "home": "/home/igor", "connection": "local"}}
 # Fixed so the expiry window does not depend on the day the suite runs.
 NOW = "2026-10-26T00:00:00Z"
+TEMPLATED_EXPIRES = "{{ holonet_catalog_identity_expires }}"
+# A synthetic renewal date inside NOW's 180-day window; not a source default.
+RENEWED = "2027-02-15T00:00:00Z"
+HISTORIAN = WRITER | {"holonet_history_users": ["c" * 32],
+                      "holonet_actions": [*WRITER["holonet_actions"], "history.read"]}
+
+
+def renewal_date():
+    """A renewal 90 days from the real clock, for plays the role times itself."""
+    return (base.NOW + base.timedelta(days=90)).strftime("%Y-%m-%dT00:00:00Z")
 
 
 def spec(identities, services=None, hosts=HOSTS, now=NOW):
@@ -77,7 +87,11 @@ class DeclarationTest(unittest.TestCase):
     def test_source_declaration_is_exact_isolated_and_unbound(self):
         values = yaml.safe_load(VARS.read_text())
         self.assertEqual(values["authentik_machine_services"], {"holonet": HOLONET})
-        self.assertEqual(values["authentik_machine_identities"], COHORT)
+        # Every existing reader's expiry is the one maintained parameter, whose
+        # source default is the original date: ordinary source renews nothing.
+        self.assertEqual(values["holonet_catalog_identity_expires"], HOMELAB["expires"])
+        self.assertEqual(values["authentik_machine_identities"],
+                         [i | {"expires": TEMPLATED_EXPIRES} for i in COHORT])
         self.assertEqual(values["authentik_machine_identities_blueprint_name"], BLUEPRINT)
         self.assertIs(values["authentik_machine_identity_existing_owned_only"], True)
         self.assertEqual(values["authentik_machine_identity_max_days"], 180)
@@ -86,12 +100,14 @@ class DeclarationTest(unittest.TestCase):
         self.assertEqual(set(values), {
             "authentik_machine_identities_enabled", "authentik_machine_identity_existing_owned_only",
             "authentik_machine_identities_blueprint_name", "authentik_machine_identity_max_days",
-            "holonet_catalog_baseline_anchor",
+            "holonet_catalog_baseline_anchor", "holonet_catalog_identity_expires",
             "authentik_machine_services", "authentik_machine_identities",
             "holonet_catalog_interactive_enabled", "holonet_catalog_interactive_identity",
+            "holonet_catalog_playback_enabled",
             "holonet_catalog_recommendations_enabled", "holonet_catalog_recommendations_identity"})
         self.assertIs(values["holonet_catalog_interactive_enabled"], False)
-        self.assertEqual(values["holonet_catalog_interactive_identity"], INTERACTIVE)
+        self.assertEqual(values["holonet_catalog_interactive_identity"], INTERACTIVE | {"expires": TEMPLATED_EXPIRES})
+        self.assertIs(values["holonet_catalog_playback_enabled"], False)
         self.assertIs(values["holonet_catalog_recommendations_enabled"], False)
         self.assertEqual(values["holonet_catalog_recommendations_identity"], WRITER | {
             "holonet_target_users": [], "expires": ""})
@@ -168,6 +184,43 @@ class DeclarationTest(unittest.TestCase):
                          ("holonet_libraries", ["3", "4"])):
             with self.subTest(key=key), self.assertRaises(mi.AnsibleFilterError):
                 spec([HOMELAB, LAPTOP | {key: bad}])
+
+
+class RenewalAndHistorySpecTest(unittest.TestCase):
+    """The rendered declaration for an expiry-only renewal and scoped history."""
+
+    def test_expiry_only_renewal_changes_only_token_expiry(self):
+        writer_app = {"holonet": HOLONET | {"scope": "holonet.read holonet.curate holonet.home"}}
+        current = [*COHORT, INTERACTIVE, WRITER]
+        before = spec(current, writer_app)
+        after = spec([i | {"expires": RENEWED} for i in current], writer_app)
+        # Same accounts, generation-1 token identifiers, grants and ownership
+        # record: the stored blueprint changes only in each token's expires.
+        self.assertEqual((after["objects"], after["marker"]), (before["objects"], before["marker"]))
+        self.assertEqual(after["services"], before["services"])
+        for old, new in zip(before["identities"], after["identities"]):
+            self.assertEqual((new["token"], new["generation"], new["old_tokens"]), (old["token"], 1, []))
+            self.assertEqual(new | {"expires": old["expires"]}, old)
+            self.assertEqual(new["expires"], RENEWED)
+        # Beyond the role's 180-day window or inside its last day still refuses.
+        for expires in ("2027-04-25T00:00:00Z", "2026-10-26T12:00:00Z"):
+            with self.subTest(expires=expires), self.assertRaises(mi.AnsibleFilterError):
+                spec([HOMELAB | {"expires": expires}])
+
+    def test_history_changes_only_the_writer_grant(self):
+        writer_app = {"holonet": HOLONET | {"scope": "holonet.read holonet.curate holonet.home"}}
+        before = spec([*COHORT, INTERACTIVE, WRITER], writer_app)
+        after = spec([*COHORT, INTERACTIVE, HISTORIAN], writer_app)
+        self.assertEqual(after["identities"][:3], before["identities"][:3])
+        self.assertEqual(after["identities"][3]["grant"], {k: HISTORIAN[k] for k in mi.HOLONET_FIELDS})
+        self.assertEqual((after["objects"], after["marker"]), (before["objects"], before["marker"]))
+        for reader in after["identities"][:3]:
+            self.assertEqual(reader["grant"], GRANT)
+        # A reader can never be declared with history.
+        for key, value in (("holonet_history_users", ["c" * 32]),
+                           ("holonet_actions", ["catalog.read", "history.read"])):
+            with self.subTest(key=key), self.assertRaises(mi.AnsibleFilterError):
+                spec([*COHORT, INTERACTIVE | {key: value}, HISTORIAN], writer_app)
 
 
 class BaselineTest(unittest.TestCase):
@@ -701,6 +754,151 @@ class EntrypointTest(unittest.TestCase):
             name = "chaldea-" + identity["host"] + "-" + identity["profile"]
             self.assertEqual(evaluate(mapping, types.SimpleNamespace(**x.state.users[name]), HOLONET["group"]),
                              GRANT | {"aud": HOLONET["resource"]})
+
+    def renewal_options(self, expires, history=False):
+        full = self.holonet | {"scope": "holonet.read holonet.curate holonet.home"}
+        return {"holonet_catalog_identity_expires": expires,
+                "holonet_catalog_interactive_enabled": True,
+                "holonet_catalog_recommendations_enabled": True,
+                "holonet_catalog_playback_enabled": history,
+                "holonet_catalog_recommendations_identity": (HISTORIAN if history else WRITER) | {"expires": expires},
+                "authentik_machine_services": {"holonet": full}}
+
+    def test_renewal_and_history_refusals_precede_credential_loading(self):
+        x = self.x
+        renewed = renewal_date()
+        def nothing_loaded():
+            self.assertFalse(x.state.requests or (x.base / "sops-loaded").exists())
+        # Both explicit inputs together plan offline without touching anything.
+        for history in (False, True):
+            self.ok(check=True, **self.renewal_options(renewed, history))
+            nothing_loaded()
+        self.ok(check=True, **(self.renewal_options(HOMELAB["expires"], True)))
+        nothing_loaded()
+        too_far = (base.NOW + base.timedelta(days=181)).strftime("%Y-%m-%dT00:00:00Z")
+        renewal = self.renewal_options(renewed)
+        writer = renewal["holonet_catalog_recommendations_identity"]
+        cases = {
+            "not a string": renewal | {"holonet_catalog_identity_expires": 20270130},
+            "date only": renewal | {"holonet_catalog_identity_expires": renewed[:10]},
+            "offset": renewal | {"holonet_catalog_identity_expires": renewed[:-1] + "+00:00"},
+            "fraction": renewal | {"holonet_catalog_identity_expires": renewed[:-1] + ".5Z"},
+            "invalid date": renewal | {"holonet_catalog_identity_expires": "2027-02-30T00:00:00Z"},
+            "earlier": renewal | {"holonet_catalog_identity_expires": "2026-11-19T00:00:00Z"},
+            "beyond 180 days": self.renewal_options(too_far),
+            "without interactive": renewal | {"holonet_catalog_interactive_enabled": False},
+            "without writer": renewal | {"holonet_catalog_recommendations_enabled": False},
+            "writer expiry differs": renewal | {"holonet_catalog_recommendations_identity": writer | {
+                "expires": HOMELAB["expires"]}},
+            "writer generation": renewal | {"holonet_catalog_recommendations_identity": writer | {"generation": 2}},
+            "reader generation": renewal | {"holonet_catalog_interactive_identity": INTERACTIVE | {
+                "generation": 2, "expires": renewed}},
+            "reader expiry differs": renewal | {"holonet_catalog_interactive_identity": INTERACTIVE},
+            "homelab regenerated": renewal | {"authentik_machine_identities": [
+                HOMELAB | {"generation": 2, "expires": renewed}, LAPTOP | {"expires": renewed}]},
+            "homelab widened": renewal | {"authentik_machine_identities": [
+                HOMELAB | {"expires": renewed, "holonet_history_users": ["c" * 32]}, LAPTOP | {"expires": renewed}]},
+        }
+        history = self.renewal_options(HOMELAB["expires"], True)
+        historian = history["holonet_catalog_recommendations_identity"]
+        for name, users in (("empty", []), ("not a target", ["e" * 32]), ("duplicate", ["c" * 32] * 2),
+                            ("upper", ["C" * 32]), ("string", "c" * 32)):
+            cases["history " + name] = history | {"holonet_catalog_recommendations_identity": historian | {
+                "holonet_history_users": users}}
+        cases["history without opt-in"] = history | {"holonet_catalog_playback_enabled": False}
+        cases["history.read without opt-in"] = history | {
+            "holonet_catalog_playback_enabled": False,
+            "holonet_catalog_recommendations_identity": historian | {"holonet_history_users": []}}
+        cases["opt-in without writer"] = history | {"holonet_catalog_recommendations_enabled": False}
+        cases["history without history.read"] = history | {"holonet_catalog_recommendations_identity": WRITER | {
+            "holonet_history_users": ["c" * 32]}}
+        cases["userdata"] = history | {"holonet_catalog_recommendations_identity": historian | {
+            "holonet_actions": [*historian["holonet_actions"], "userdata.read"]}}
+        for profile in ("interactive", "limited"):
+            reader = INTERACTIVE if profile == "interactive" else LAPTOP
+            widened = reader | {"holonet_history_users": ["c" * 32]}
+            cases[profile + " reader history"] = history | (
+                {"holonet_catalog_interactive_identity": widened} if profile == "interactive"
+                else {"authentik_machine_identities": [HOMELAB, widened]})
+        for name, options in cases.items():
+            for mode in ({"check": True, "online": True}, {}):
+                with self.subTest(name, mode=sorted(mode)):
+                    code, output = self.play(self.baseline_stub(), **mode, **options)
+                    self.assertNotEqual(code, 0, output)
+                    nothing_loaded()
+        # Never through the historical or ordinary-reader baseline read.
+        for options in (renewal, history):
+            for checkpoint in ("historical", "ordinary-reader"):
+                self.refused("The baseline read runs alone", check=True, baseline_read=True,
+                             holonet_catalog_baseline_checkpoint=checkpoint,
+                             **(options | {"holonet_catalog_recommendations_enabled": False}))
+                nothing_loaded()
+            # An actual apply or online plan needs an explicit fresh baseline.
+            for mode in ({}, {"check": True, "online": True}):
+                self.refused("explicit fresh public baseline", **mode, **options)
+                nothing_loaded()
+
+    def baseline_stub(self):
+        return {"provider_pk": 1, "application_pk": "0b9d5f3e-1111-4c4c-8888-123456789abc",
+                "content_sha512": "0" * 128}
+
+    def test_expiry_only_renewal_then_writer_history_keep_every_key(self):
+        x = self.x
+        self.use_patched = True
+        code, output = x.run(COHORT + [INTERACTIVE], services={"holonet": self.holonet},
+                             extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
+        self.assertEqual(code, 0, output)
+        full = self.holonet | {"scope": "holonet.read holonet.curate holonet.home"}
+        self.ok(self.baseline(), holonet_catalog_recommendations_enabled=True,
+                holonet_catalog_recommendations_identity=WRITER, holonet_catalog_interactive_enabled=True,
+                authentik_machine_services={"holonet": full})
+        accounts = COHORT + [INTERACTIVE, WRITER]
+
+        def state():
+            result = {}
+            for identity in accounts:
+                username = "chaldea-" + identity["host"] + "-" + identity["profile"]
+                path = self.secret(identity["host"], identity)
+                token = x.state.tokens[username + "-g1"]
+                result[username] = (copy.deepcopy(x.state.users[username]), token["key"], token["expires"],
+                                    path.read_bytes(), path.stat().st_ino, path.stat().st_mode & 0o777)
+            return result
+
+        def mapping_lines():
+            return {name: m["expression"].splitlines() for name, m in x.state.mappings.items()}
+        before, lines_before = state(), mapping_lines()
+        renewed = renewal_date()
+        # Expiry-only: same users, grants, token keys and files; only expires moves.
+        self.ok(self.baseline(), **self.renewal_options(renewed))
+        renewed_state = state()
+        for username, values in before.items():
+            self.assertEqual(renewed_state[username][:2] + renewed_state[username][3:], values[:2] + values[3:])
+            self.assertTrue(mi._same_time(renewed_state[username][2], renewed))
+        self.assertEqual(mapping_lines(), lines_before)
+        self.assertFalse(any(t.endswith("-g2") for t in x.state.tokens))
+        self.assertEqual(x.changed(self.ok(self.baseline(), **self.renewal_options(renewed))), 0)
+
+        # Scoped history: only the writer's grant and each mapping's expected line change.
+        self.ok(self.baseline(), **self.renewal_options(renewed, history=True))
+        history_state = state()
+        writer = "chaldea-laptop-holonet-recommendations"
+        for username, values in renewed_state.items():
+            if username != writer:
+                self.assertEqual(history_state[username], values)
+        self.assertEqual(history_state[writer][1:], renewed_state[writer][1:])
+        self.assertEqual(x.state.users[writer]["attributes"]["chaldea_holonet"],
+                         {k: HISTORIAN[k] for k in mi.HOLONET_FIELDS})
+        for name, after in mapping_lines().items():
+            self.assertEqual([n for n, (a, b) in enumerate(zip(lines_before[name], after)) if a != b], [1])
+        self.assertEqual(x.changed(self.ok(self.baseline(), **self.renewal_options(renewed, history=True))), 0)
+        for scope, mapping in x.state.mappings.items():
+            requested = ["holonet.read", "holonet.curate", "holonet.home"]
+            for identity in COHORT + [INTERACTIVE]:
+                account = types.SimpleNamespace(**x.state.users["chaldea-" + identity["host"] + "-" + identity["profile"]])
+                self.assertEqual(evaluate(mapping["expression"], account, HOLONET["group"], requested), {})
+                if scope.endswith("holonet.read"):
+                    self.assertEqual(evaluate(mapping["expression"], account, HOLONET["group"]),
+                                     GRANT | {"aud": HOLONET["resource"]})
 
     def test_opted_in_reader_preserves_both_existing_accounts_and_has_scoped_inverse(self):
         x = self.x

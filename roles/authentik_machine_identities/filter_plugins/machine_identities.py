@@ -284,6 +284,9 @@ HOLONET_FIELDS = {"holonet_server", "holonet_libraries", "holonet_catalog_users"
 HOLONET_WRITER_SCOPES = ("holonet.read", "holonet.curate", "holonet.home")
 HOLONET_WRITER_ACTIONS = ("catalog.read", "playlist.read", "playlist.manage",
                           "object.share", "home.read", "home.manage")
+# Optional scoped playback read, appended to an exact writer tuple only. It needs
+# no new scope: the writer's three-scope request already selects its grant.
+HOLONET_HISTORY_ACTION = "history.read"
 
 
 def _holonet_grant(item, name):
@@ -297,19 +300,30 @@ def _holonet_grant(item, name):
         _refuse(name + " library ID exceeds int64")
     grant["holonet_catalog_users"] = _bounded_grants(grant["holonet_catalog_users"], name + " users",
                                                     re.compile(r"[0-9a-f]{32}\Z"), 1, 1)
-    if grant["holonet_history_users"] != []:
-        _refuse(name + " does not grant viewing history")
     if grant["holonet_actions"] == ["catalog.read"]:
+        # Catalog readers never carry history, targets or userdata.
+        if grant["holonet_history_users"] != []:
+            _refuse(name + " does not grant viewing history")
         if grant["holonet_target_users"] != []:
             _refuse(name + " catalog readers require empty target grants")
-    else:
-        actions = grant["holonet_actions"]
-        if actions not in (list(HOLONET_WRITER_ACTIONS),
-                            list(HOLONET_WRITER_ACTIONS) + ["object.delete"]):
-            _refuse(name + " requires the exact managed recommendation action tuple")
-        grant["holonet_target_users"] = _bounded_grants(
-            grant["holonet_target_users"], name + " targets",
+        return grant, {"chaldea_holonet": grant}
+    actions = grant["holonet_actions"]
+    writer = (list(HOLONET_WRITER_ACTIONS), list(HOLONET_WRITER_ACTIONS) + ["object.delete"])
+    if actions not in writer + tuple(a + [HOLONET_HISTORY_ACTION] for a in writer):
+        _refuse(name + " requires the exact managed recommendation action tuple")
+    grant["holonet_target_users"] = _bounded_grants(
+        grant["holonet_target_users"], name + " targets",
+        re.compile(r"[0-9a-f]{32}\Z"), 16, 1)
+    # Scoped playback history: only a writer that explicitly holds history.read,
+    # only for a nonempty subset of its own target recipients.
+    if HOLONET_HISTORY_ACTION in actions:
+        grant["holonet_history_users"] = _bounded_grants(
+            grant["holonet_history_users"], name + " history users",
             re.compile(r"[0-9a-f]{32}\Z"), 16, 1)
+        if not set(grant["holonet_history_users"]) <= set(grant["holonet_target_users"]):
+            _refuse(name + " history users must be among its target users")
+    elif grant["holonet_history_users"] != []:
+        _refuse(name + " does not grant viewing history without history.read")
     return grant, {"chaldea_holonet": grant}
 
 

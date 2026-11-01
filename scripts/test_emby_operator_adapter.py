@@ -1827,27 +1827,52 @@ class MultiListTests(unittest.TestCase):
                 self.operator.list_preview('set-members', 'a', movies=['m2'])
         self.assertEqual(self.bytes(), before)
 
-    def test_completed_key_ceiling_refuses_without_eviction(self):
+    def test_completed_key_ceiling_retires_into_archive_and_replays(self):
+        self.fresh_session()
+        init = self.operator.init_preview()['intent_digest']
+        self.fresh_session()
+        self.assertEqual(self.operator.init('init-key', init)['state'], 'initialized')
         self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
         with self.journal.locked():
             d = self.journal.load()
             # Synthetic completed history fixture filling the unchanged ceiling.
             d['done'].update({'history-%d' % n: {'operation': 'set-members', 'list': 'a',
-                                                 'movies': ['m1']} for n in range(63)})
+                                                 'movies': ['m1']} for n in range(62)})
             self.journal.save(d)
         done = self.stored()['done']
+        self.assertEqual(len(done), 64)
         intent = self.intent('set-members', 'a', movies=['m2'])
         self.fresh_session()
-        with self.assertRaisesRegex(Refused, 'Journal request limit reached'):
-            self.operator.set_members('new', 'a', ['m2'], intent)
+        # Admission at the active ceiling first retires every completed key
+        # except init, with no backend write, then runs the new request.
+        writes = len(self.backend.writes)
+        self.assertEqual(self.operator.set_members('new', 'a', ['m2'], intent),
+                         {'state': 'members-set', 'writes': 2})
+        self.assertEqual(len(self.backend.writes), writes + 2)
+        stored = self.stored()
+        self.assertEqual(stored['done'], {'init-key': {'operation': 'init'},
+                                          'new': {'operation': 'set-members', 'list': 'a',
+                                                  'movies': ['m2']}})
+        self.assertEqual(stored['replay_archive'], {'version': 1, 'count': 63})
+        self.assertEqual(len(os.listdir(self.directory / 'replay-archive')), 63)
+        before = self.bytes()
+        self.fresh_session()
         self.assertEqual(self.operator.set_members('history-0', 'a', ['m1']),
                          {'state': 'replayed', 'writes': 0})
+        self.fresh_session()
         self.assertEqual(self.operator.create_list('create-a', 'a', 'A', ['m1']),
                          {'state': 'replayed', 'writes': 0})
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Idempotency key reused'):
+            self.operator.set_members('history-0', 'a', ['m2'])
+        self.fresh_session()
+        self.assertEqual(self.operator.init('init-key', init), {'state': 'already-initialized',
+                                                                 'writes': 0})
+        self.fresh_session()
         shown = self.operator.show()
-        self.assertEqual((shown['done_count'], shown['done_limit'], shown['keys_exhausted']),
-                         (64, 64, True))
-        self.assertEqual(self.stored()['done'], done)
+        self.assertEqual((shown['done_count'], shown['done_limit'], shown['keys_exhausted'],
+                          shown['archived_count'], shown['completed_count']), (2, 64, False, 63, 65))
+        self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes + 2))
 
     def test_empty_membership_is_retained_and_noops_write_nothing(self):
         self.assertEqual(self.do('create-list', 'create-e', 'e', title='Empty',
@@ -2337,6 +2362,120 @@ class ListEntryTests(unittest.TestCase):
                     self.assertIn('Invalid operator request fields', errors.getvalue())
                     credentials.assert_not_called()
                     method.assert_not_called()
+
+
+def credit(n, role):
+    return {'Id': str(100 + n), 'Name': 'Synthetic %s %d' % (role, n), 'Type': role}
+
+
+class MovieMetadataTests(unittest.TestCase):
+    """Read-only visible-subset metadata over the recording loopback transport."""
+    def authenticated(self, http):
+        http.responses += [auth_response()] + identity_responses()
+        api = adapter.OperatorAdapter(config())
+        api._opener = http
+        api.authenticate({'username': 'synthetic-admin', 'password': 'synthetic-password'})
+        return api
+
+    def test_visible_subset_in_request_order_with_exact_fixed_query(self):
+        rows = [{'Id': 'm2', 'Type': 'Movie', 'Name': 'Two', 'ProductionYear': 2020,
+                 'Genres': ['Drama'], 'UserData': {'PlayCount': 3}, 'Path': '/private/two.mkv',
+                 'People': [{'Id': '71', 'Name': 'D', 'Type': 'Director', 'Role': 'private'},
+                            {'Id': '72', 'Name': 'private-actor', 'Type': 'Actor'},
+                            {'Id': '73', 'Name': 'M', 'Type': 'MusicDirector'}]},
+                {'Id': 'm1', 'Type': 'Movie', 'Name': 'One'}]
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            before = len(http.calls)
+            http.responses += identity_responses() + [{'Items': rows, 'TotalRecordCount': 2}]
+            result = api.movie_metadata(R, '7', ['m1', 'm3', 'm2'])
+            self.assertEqual(result, [
+                {'Id': 'm1', 'Type': 'Movie', 'LibraryId': '7', 'Name': 'One'},
+                {'Id': 'm2', 'Type': 'Movie', 'LibraryId': '7', 'Name': 'Two', 'ProductionYear': 2020,
+                 'Genres': ['Drama'], 'People': [{'Id': '71', 'Name': 'D', 'Type': 'Director'}]}])
+            from urllib.parse import urlsplit, parse_qs
+            calls = http.calls[before:]
+            self.assertEqual([c[0] for c in calls], ['GET'] * 6)
+            self.assertEqual(urlsplit(calls[-1][1]).path, '/emby/Users/' + R + '/Items')
+            self.assertEqual(parse_qs(urlsplit(calls[-1][1]).query), {
+                'Recursive': ['true'], 'IncludeItemTypes': ['Movie'], 'ParentId': ['7'],
+                'Ids': ['m1,m3,m2'], 'Fields': ['People,Genres'],
+                'StartIndex': ['0'], 'Limit': ['26'], 'EnableUserData': ['false']})
+            # The write validator still demands every requested ID.
+            http.responses += identity_responses() + [{'Items': rows, 'TotalRecordCount': 2}]
+            with self.assertRaises(Refused):
+                api.query_movies(R, '7', ['m1', 'm3', 'm2'])
+
+    def test_empty_visible_subset_and_refused_inconsistent_rows(self):
+        bad = [[{'Id': 'm9', 'Type': 'Movie', 'Name': 'Unrequested'}],
+               [{'Id': 'm1', 'Type': 'Movie', 'Name': 'One'}] * 2,
+               [{'Id': 'm1', 'Type': 'Episode', 'Name': 'Episode'}],
+               [{'Id': 'm1', 'Type': 'Movie'}]]
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            http.responses += identity_responses() + [{'Items': [], 'TotalRecordCount': 0}]
+            self.assertEqual(api.movie_metadata(R, '7', ['m1']), [])
+        for rows in bad:
+            with self.subTest(rows=rows), RecordingHTTP() as http:
+                api = self.authenticated(http)
+                http.responses += identity_responses() + [
+                    {'Items': rows, 'TotalRecordCount': len(rows)}]
+                with self.assertRaises(Refused):
+                    api.movie_metadata(R, '7', ['m1', 'm2'])
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            http.responses += identity_responses() + [{'Items': [], 'TotalRecordCount': 1}]
+            with self.assertRaisesRegex(Refused, 'Incomplete'):
+                api.movie_metadata(R, '7', ['m1'])
+
+    def test_scope_and_ids_refused_before_any_send(self):
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            before = len(http.calls)
+            for args in [('e' * 32, '7', ['m1']), (R, '8', ['m1']), (R, '7', []),
+                         (R, '7', ['m1', 'm1']), (R, '7', ['7&ParentId=8']),
+                         (R, '7', ['m%d' % n for n in range(26)])]:
+                with self.subTest(args=args), self.assertRaises(Refused):
+                    api.movie_metadata(*args)
+            self.assertEqual(len(http.calls), before)
+        unauthenticated = adapter.OperatorAdapter(config())
+        with self.assertRaises(Refused):
+            unauthenticated.movie_metadata(R, '7', ['m1'])
+        self.assertEqual(unauthenticated._requests, 0)
+
+    def test_projection_unknown_fields_and_bounds(self):
+        item = adapter.movie_metadata_item
+        base = {'Id': '8001', 'Type': 'Movie', 'Name': 'N'}
+        self.assertEqual(item(dict(base, ProductionYear=None, Genres=None, People=None), '7'),
+                         {'Id': '8001', 'Type': 'Movie', 'LibraryId': '7', 'Name': 'N'})
+        self.assertEqual(item(dict(base, Genres=[], People=[credit(1, 'Actor')]), '7'),
+                         dict(base, LibraryId='7', Genres=[], People=[]))
+        directors = [credit(n, 'Director') for n in range(8)] + [credit(n, 'Composer') for n in range(8)]
+        producers = [credit(n, 'Producer') for n in range(40)]
+        # Duplicates collapse; 16 Director/Composer plus 16 Producer project, later Producers skip.
+        people = directors + producers + directors[:2] + [credit(1, 'Actor')] * 400
+        projected = item(dict(base, People=people), '7')['People']
+        self.assertEqual(len(projected), 32)
+        self.assertEqual(projected, directors + producers[:16])
+        self.assertEqual(item(dict(base, People=directors + producers[:16]), '7')['People'],
+                         directors + producers[:16])
+        self.assertEqual(item(dict(base, Name='x' * 512, Genres=['g' * 128] * 16,
+                                   ProductionYear=9999), '7')['ProductionYear'], 9999)
+        refused = [dict(base, Type='Episode'), dict(base, Name=''), dict(base, Name='x' * 513),
+                   dict(base, Name='a\nb'), dict(base, Id='../x'), dict(base, ProductionYear='2020'),
+                   dict(base, ProductionYear=0), dict(base, ProductionYear=True),
+                   dict(base, ProductionYear=2020.0), dict(base, Genres=['g'] * 17),
+                   dict(base, Genres=['g' * 129]), dict(base, Genres=['é' * 65]),
+                   dict(base, Genres='Drama'), dict(base, People={}),
+                   dict(base, People=[credit(1, 'Actor')] * 513), dict(base, People=['Director']),
+                   dict(base, People=directors + [credit(9, 'Director')]),
+                   dict(base, People=[dict(credit(1, 'Director'), Id='07')]),
+                   dict(base, People=[dict(credit(1, 'Director'), Id='9' * 20)]),
+                   dict(base, People=[dict(credit(1, 'Producer'), Name='n' * 129)]),
+                   dict(base, People=producers + [dict(credit(99, 'Producer'), Id='x')])]
+        for row in refused:
+            with self.subTest(row=str(row)[:80]), self.assertRaisesRegex(Refused, 'Invalid'):
+                item(row, '7')
 
 
 if __name__ == '__main__':

@@ -91,7 +91,7 @@ Request fields, all required, no others:
 | `caller` | object below; supplied by the verifier, never by tool arguments |
 | `recipient` | lowercase 32-hex Emby user ID |
 | `deadline_unix_ms` | integer epoch milliseconds, the request context deadline |
-| `operation` | `show`, `reconcile`, `preview` or `apply` |
+| `operation` | `show`, `reconcile`, `preview`, `apply` or `movie-metadata` (see [Movie metadata read](#movie-metadata-read)) |
 | `request` | object below |
 
 `caller` has exactly `issuer`, `subject`, `namespace`, `server`, `library`,
@@ -141,6 +141,68 @@ Results: `preview` returns `{"request": {...}, "intent_digest": HEX64}`;
 `apply` returns `{"state": STATE, "writes": N}` with the apply state from the
 table above, or `replayed` for a completed key;
 `reconcile` returns the core reconcile object. `show` is described below.
+
+## Movie metadata read
+
+`movie-metadata` is the read-only worker operation behind the HoloNet
+`playback_statistics` and `recipient_movies` tools (`mcp-holonet/PLAYBACK.md`).
+It is off unless the current root policy opts in, and it never changes a user
+policy, history, playlist, Home row, media item or the journal.
+
+Request: exactly `{"ids": [ID, ...]}` with 1..25 unique IDs matching
+`[A-Za-z0-9_-]{1,128}`. No path, URL, query, field or filter is accepted.
+
+Caller: the existing fields plus `history_users`, 1..16 unique lowercase
+32-hex IDs, and `actions` exactly
+`["catalog.read", "playlist.read", "home.read", "history.read"]` in that order.
+Every other operation keeps the original caller and refuses `history_users`
+with `Invalid caller`.
+
+Policy: optional top-level `history_users`, 1..16 unique IDs that are all
+keys of `recipients`. Without it every metadata request is refused with
+`History read not enabled by policy`; an existing policy therefore stays
+default-off. The policy is read fresh on every call. A request is authorized
+only when the pinned caller fields match, the recipient is in `recipients`,
+the actions are exactly the fixed tuple, every caller history user is a
+configured recipient, and the recipient is in both the caller's and the
+policy's `history_users`. All of that, the deadline and the ID shape are
+checked before the recipient config, the credential or any backend request.
+
+Execution: the worker takes the recipient's existing nonblocking journal lock
+(`busy` if held), authenticates the same admin session with the same guard
+before every send, and then calls the adapter's `movie_metadata`. It does not
+load, migrate, reconcile, initialize or write the journal and needs no
+preview. The adapter re-verifies the admin identity and sends one fixed query:
+
+```text
+GET /emby/Users/<recipient>/Items?Recursive=true&IncludeItemTypes=Movie&ParentId=<library>
+    &Ids=<ids>&Fields=People,Genres&StartIndex=0&Limit=26&EnableUserData=false
+```
+
+The recipient-scoped query proves type, library and current visibility.
+Unlike `query_movies`, which requires every ID before a write, the read keeps
+only the visible subset.
+
+Result: exactly `{"movies": [...]}`, the visible requested Movies in request
+order; missing, hidden, Episode and off-library IDs are omitted without
+explanation. Each item has `Id`, `Type` (`Movie`), `LibraryId` (the configured
+library), `Name`, and only when Emby supplies them `ProductionYear`, `Genres`
+and `People` (`{Id, Name, Type}`). A missing or null field is unknown. User
+data, paths, media sources, overviews, actor and other credits and any other
+user's facts are dropped. Bounds follow the HoloNet catalog projection: names
+1..512 UTF-8 bytes, year 1..9999, at most 16 genres, at most 512 raw credits,
+credit IDs canonical decimal, credit names and genres at most 128 bytes.
+Director and Composer share a budget of 16 and a 17th distinct one refuses;
+Producer has its own budget of 16 and later valid Producer credits are
+skipped, so at most 32 credits are returned. No other role or alias is mapped.
+Any malformed known field, an unrequested or duplicate row, or a non-Movie row
+refuses the whole read with no facts.
+
+Bounds: the same 120-second and 512-request transport budget, signed expiry,
+caller deadline and cancellation as management, and the unchanged 262144-byte
+response cap (`Response too large` otherwise; a full page of 25 maximal Movies
+fits). Frozen request, refusal and result fixtures are under `movie_metadata`
+in the wire file.
 
 ## Deadline and cancellation
 
@@ -197,19 +259,33 @@ touch the journal or the CLI's output:
 - `run` is `null` or `{"operation", "list", "args"}` of the unfinished request,
   never its key. The worker reads it from the same journal under the lock and
   requires its digest to equal the shown `journal_digest`.
-- `capacity_warning` is true once `done_count >= done_limit - 16`.
+- `capacity_warning` is true once `done_count >= done_limit - 16`. That means
+  the next new request first retires the active completed keys into the
+  replay archive. It needs no operator action.
 
 `migrated_from` loses its key if present. A recipient without a version 2
 journal is refused with `Journal migration required`; initialize it with the
 protected CLI first.
 
-`done_limit` stays 64 with no eviction, and replay keeps working when the limit
-is reached. At `keys_exhausted` every new request refuses and needs protected
-maintenance. Plan root retirement before then, while enough keys remain to
-delete every owned list through its exact inverse. Confirm a clean run and
-pending state and the restored baseline, disable management, and archive the
-whole journal unchanged. A replacement journal is a separately reviewed
-provisioning epoch, never a reset of the live one.
+`done_limit` stays 64 active completed keys. Before a new run is admitted with
+48 or more active keys, the core moves them into the journal's replay archive
+under the same lock, with no backend send. Archived keys replay forever with zero
+writes, and a changed request under an archived key refuses. Nothing is pruned.
+The rules, crash safety and integrity checks are in
+[emby-operator-recommendations.md](emby-operator-recommendations.md#replay-archive).
+Show adds `archived_count` and `completed_count` (`done_count +
+archived_count`). A scheduled caller that derives keys from show uses
+`completed_count`, which only grows, never `done_count`, which drops at each
+retirement. A missing, unsafe or miscounted archive refuses show, preview and
+new requests with nothing changed. It needs protected manual inspection, never
+a new journal.
+
+Rollback: older worker modules refuse a journal that has a `replay_archive`
+manifest as `Foreign journal`, for show, replay and new requests alike, with no
+writes. Rolling the modules back therefore stops management of each recipient
+that has retired keys until the new modules return. It never lets an archived
+key look new. Never delete the archive directory or its records, and never
+downgrade such a journal to version 1; the core refuses that downgrade.
 
 ## Examples
 
@@ -243,12 +319,23 @@ are additive and the fixture keeps every earlier valid case.
 - Deploy the worker modules first, then the MCP build. Never run a worker that
   can complete a new operation behind a client that cannot read its apply
   state: such a client reports an unknown outcome for a completed write.
+- The replay archive adds `archived_count` and `completed_count` to the show
+  result; `done_count`, `done_limit`, `keys_exhausted` and `capacity_warning`
+  keep their names, types and bounds. A client that refuses unknown show fields
+  must be updated to accept both before a worker with the archive is activated.
+- `movie-metadata` is additive. An older worker refuses it with
+  `Invalid caller` before any backend access, so the HoloNet playback tools
+  fail closed. A new worker with a policy lacking `history_users` refuses it
+  too. Enabling it needs the worker modules, a policy with `history_users`
+  rendered by the installer, and a writer grant with `history.read`.
 
 ## Remaining limits
 
-`done_limit` stays 64 per recipient with no eviction, `MAX_LISTS` stays 4, a
-call stays bounded by 120 seconds and 512 backend requests, and the Home
-snapshot by 100 rows. A worst-case `create-list` (fourth list, separate
+`done_limit` stays 64 active keys per recipient, with older keys kept in the
+replay archive and never deleted, `MAX_LISTS` stays 4, a call stays bounded by
+120 seconds and 512 backend requests, and the Home snapshot by 100 rows. The
+archive grows by one small file per completed key; the filesystem is its only
+bound. A worst-case `create-list` (fourth list, separate
 recipient, 25 Movies) fits one call in the recorded synthetic model; a slow
 backend can still stop it at the deadline, and the identical request then
 resumes it. Recommendation history, scheduling, global sharing, episodes and
@@ -307,7 +394,10 @@ IDs, each mapped through the fixed seven-entry table above
 1 to 16 recipients; lowercase 32-hex IDs; absolute, distinct config paths. Each
 selected config must be enabled and match its map key as `recipient`, plus the
 policy `server` and `library`, or the request is `unavailable`. The policy's
-`enabled` is the worker kill switch.
+`enabled` is the worker kill switch. The optional `history_users` list (see
+[Movie metadata read](#movie-metadata-read)) is rendered by the installer only
+when playback is configured, using the explicit server history ceiling.
+Without playback it is omitted, so metadata reads remain disabled.
 
 Socket parent: `/run/holonet-playlists`, `root:holonet 0750`, declared by
 `/etc/tmpfiles.d/holonet-playlists.conf` so it is recreated at every boot.
@@ -367,7 +457,11 @@ They run the full create, detach, attach, move and delete lifecycle with replay,
 a lost create response resumed only by the identical request, a stop before a
 playlist delete resumed by the same request, every missing list action refused
 before any backend, and the worst-case fourth-list create within the unchanged
-request budget.
+request budget. For `movie-metadata` they check the frozen fixtures, the
+visible subset in request order with only allowlisted metadata, unchanged
+journal custody bytes and no write, refusals before config, credential or
+backend, a held lock as `busy`, cancellation and deadline before each later
+send, the request, time and response bounds, and the credit budgets.
 They drive the real shared entry, core and adapter against the loopback
 recording model from `test_emby_operator_adapter.py`, with synthetic IDs only.
 The test user stands in for root, and the policy and config loaders are

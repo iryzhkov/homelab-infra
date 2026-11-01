@@ -7,6 +7,13 @@ MAX_LISTS lists for the same recipient and library under the same lock, run,
 pending step and shared Home baseline. Only explicit migrate and downgrade
 convert between them, and only explicit init creates an empty version 2
 journal; reads never rewrite either version.
+
+A version 2 journal may also hold a replay_archive manifest. Before a new run
+is admitted with RETIRE_AT or more completed keys active, the core moves them
+from done into immutable per-key records in the journal-owned replay-archive
+directory, under the same lock. Archived keys replay forever and no record is
+ever pruned. Older code refuses the manifest field, so it cannot treat an
+archived key as new.
 """
 import copy
 import fcntl
@@ -16,13 +23,33 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 from contextlib import contextmanager
 from typing import Protocol
 
 # Derived from the unchanged 512-request adapter budget at the worst create path.
 MAX_LISTS = 4
-# Completed keys are never evicted. Reaching the ceiling refuses new requests.
+# Active completed keys never exceed this ceiling, which older code enforces.
+# A version 1 journal that reaches it refuses new requests.
 DONE_LIMIT = 64
+# A new version 2 run first retires active completed keys once this many exist.
+RETIRE_AT = 48
+# Journal.load refuses a larger file, so Journal.save never writes one.
+JOURNAL_MAX = 4 * 1024 * 1024
+ARCHIVE_DIR = "replay-archive"
+ARCHIVE_NAME = re.compile(r"[0-9a-f]{64}\.json")
+ARCHIVE_TEMP = re.compile(r"\.archive-[0-9a-f]{32}")
+ARCHIVE_FIELDS = frozenset("version scope key request".split())
+# A record holds the scope, a key of at most 128 characters and one request of
+# at most 25 Movie IDs and a 256-character title: under 8 KiB when escaped.
+ARCHIVE_RECORD_MAX = 16 * 1024
+# The whole archive listing must finish within this time or the call refuses.
+ARCHIVE_LIST_SECONDS = 10
+# Snapshot growth allowed during one run: one created playlist record, 25
+# occurrences of two 128-character IDs and one created Home row whose
+# server-added fields stay under 48 KiB. RUN_SLACK covers list records and keys.
+RUN_GROWTH = 64 * 1024
+RUN_SLACK = 4 * 1024
 LEGACY_SUBTITLE = "operator-provisioned"
 MARKER = re.compile(r"holonet-recommendations-[0-9a-f]{32}")
 # Arguments bound into each list-scoped request and its intent digest.
@@ -85,6 +112,23 @@ def movie_ids(values, minimum=1):
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def strict_load(raw, message):
+    """One JSON object with unique keys and finite numbers, else Refused(message)."""
+    def pairs(values):
+        result = {}
+        for k, v in values:
+            require(k not in result, "Duplicate journal key")
+            result[k] = v
+        return result
+    try:
+        loaded = json.loads(raw, object_pairs_hook=pairs,
+                            parse_constant=lambda _: require(False, "Nonfinite journal"))
+    except (ValueError, RecursionError):
+        raise Refused(message) from None
+    require(type(loaded) is dict, message)
+    return loaded
 
 
 def list_marker(scope, list_id):
@@ -269,7 +313,7 @@ class Journal:
         s = os.fstat(fd)
         require(stat.S_ISREG(s.st_mode) and s.st_uid == os.getuid() and
                 stat.S_IMODE(s.st_mode) == 0o600 and s.st_nlink == 1 and
-                s.st_size <= 4 * 1024 * 1024, "Unsafe journal file")
+                s.st_size <= JOURNAL_MAX, "Unsafe journal file")
 
     def load(self):
         require(self._locked, "Journal lock required")
@@ -278,32 +322,25 @@ class Journal:
                          dir_fd=self._fd)
         except FileNotFoundError:
             return None
-        with os.fdopen(fd) as stream:
+        with os.fdopen(fd, "rb") as stream:
             self._check(stream.fileno())
-            def pairs(values):
-                result = {}
-                for k, v in values:
-                    require(k not in result, "Duplicate journal key")
-                    result[k] = v
-                return result
-            try:
-                loaded = json.load(stream, object_pairs_hook=pairs,
-                                   parse_constant=lambda _: require(False, "Nonfinite journal"))
-                require(type(loaded) is dict, "Malformed journal")
-                return loaded
-            except (ValueError, RecursionError):
-                raise Refused("Malformed journal") from None
+            raw = stream.read(JOURNAL_MAX + 1)
+        require(len(raw) <= JOURNAL_MAX, "Unsafe journal file")
+        return strict_load(raw, "Malformed journal")
 
     def save(self, value):
         require(self._locked, "Journal lock required")
+        raw = json.dumps(value, sort_keys=True, allow_nan=False).encode()
+        # Never replace a readable journal with one that load would refuse.
+        require(len(raw) <= JOURNAL_MAX, "Journal size limit reached")
         # Validate existing custody before replacement as well.
         self.load()
         temporary = ".journal-" + os.urandom(16).hex()
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600, dir_fd=self._fd)
         try:
-            with os.fdopen(fd, "w") as stream:
-                json.dump(value, stream, sort_keys=True, allow_nan=False)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, "journal.json", src_dir_fd=self._fd, dst_dir_fd=self._fd)
@@ -313,6 +350,120 @@ class Journal:
                 os.unlink(temporary, dir_fd=self._fd)
             except FileNotFoundError:
                 pass
+
+    @contextmanager
+    def _archive(self, create=False):
+        """The replay archive directory under the held directory, never followed.
+
+        Yields None when it is absent and create is false. It must be a 0700
+        directory owned by this user, like the journal directory.
+        """
+        require(self._locked, "Journal lock required")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            try:
+                fd = os.open(ARCHIVE_DIR, flags, dir_fd=self._fd)
+            except FileNotFoundError:
+                fd = None
+                if create:
+                    os.mkdir(ARCHIVE_DIR, 0o700, dir_fd=self._fd)
+                    os.fsync(self._fd)
+                    fd = os.open(ARCHIVE_DIR, flags, dir_fd=self._fd)
+        except OSError:
+            raise Refused("Unsafe replay archive directory") from None
+        if fd is None:
+            yield None
+            return
+        try:
+            s = os.fstat(fd)
+            require(s.st_uid == os.getuid() and stat.S_IMODE(s.st_mode) == 0o700,
+                    "Unsafe replay archive directory")
+            yield fd
+        finally:
+            os.close(fd)
+
+    def archive_list(self):
+        """Record names in the replay archive, or None without its directory.
+
+        An interrupted write leaves only an .archive- temporary file, which
+        never held a named record. Any other entry, or a listing that outlasts
+        ARCHIVE_LIST_SECONDS, refuses.
+        """
+        with self._archive() as directory:
+            if directory is None:
+                return None
+            names, end = set(), time.monotonic() + ARCHIVE_LIST_SECONDS
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    require(time.monotonic() < end, "Replay archive listing deadline exceeded")
+                    record = ARCHIVE_NAME.fullmatch(entry.name)
+                    require(entry.is_file(follow_symlinks=False) and
+                            (record or ARCHIVE_TEMP.fullmatch(entry.name)),
+                            "Unexpected replay archive entry")
+                    if record:
+                        names.add(entry.name)
+            return names
+
+    def archive_read(self, name):
+        """One record by its exact name, or None when that name is absent."""
+        require(isinstance(name, str) and ARCHIVE_NAME.fullmatch(name),
+                "Invalid replay archive name")
+        with self._archive() as directory:
+            require(directory is not None, "Replay archive missing")
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            except FileNotFoundError:
+                return None
+            except OSError:
+                raise Refused("Unsafe replay archive record") from None
+            with os.fdopen(fd, "rb") as stream:
+                s = os.fstat(stream.fileno())
+                require(stat.S_ISREG(s.st_mode) and s.st_uid == os.getuid() and
+                        stat.S_IMODE(s.st_mode) == 0o600 and s.st_nlink == 1 and
+                        s.st_size <= ARCHIVE_RECORD_MAX, "Unsafe replay archive record")
+                raw = stream.read(ARCHIVE_RECORD_MAX + 1)
+            require(len(raw) <= ARCHIVE_RECORD_MAX, "Unsafe replay archive record")
+            return strict_load(raw, "Malformed replay archive record")
+
+    def archive_put(self, records):
+        """Durably add new immutable records, creating the directory if needed.
+
+        Each record is written to a temporary file, fsynced and renamed to its
+        name only while that name is absent. The directory is fsynced once at
+        the end, before the caller removes any key from done. An existing
+        record is never replaced. Temporary files from an interrupted write
+        are removed first.
+        """
+        with self._archive(create=True) as directory:
+            with os.scandir(directory) as entries:
+                stale = [e.name for e in entries if ARCHIVE_TEMP.fullmatch(e.name)]
+            for name in stale:
+                os.unlink(name, dir_fd=directory)
+            for name, value in records.items():
+                require(ARCHIVE_NAME.fullmatch(name), "Invalid replay archive name")
+                raw = json.dumps(value, sort_keys=True, allow_nan=False).encode()
+                require(len(raw) <= ARCHIVE_RECORD_MAX, "Replay archive record too large")
+                temporary = ".archive-" + os.urandom(16).hex()
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        os.fchmod(stream.fileno(), 0o600)
+                        stream.write(raw)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    try:
+                        os.stat(name, dir_fd=directory, follow_symlinks=False)
+                    except FileNotFoundError:
+                        os.rename(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+                    else:
+                        raise Refused("Replay archive record already exists")
+                finally:
+                    try:
+                        os.unlink(temporary, dir_fd=directory)
+                    except FileNotFoundError:
+                        pass
+            os.fsync(directory)
 
 
 class Operator:
@@ -398,9 +549,16 @@ class Operator:
             require(d.get("version") == 1 and d.get("scope") == self.scope, "Foreign journal")
             display_title(d, self.marker)
             return d
-        require(set(d) - {"migrated_from"} == V2_FIELDS and d["scope"] == self.base and
+        require(set(d) - {"migrated_from", "replay_archive"} == V2_FIELDS and
+                d["scope"] == self.base and
                 type(d["lists"]) is dict and len(d["lists"]) <= MAX_LISTS and
                 type(d["done"]) is dict, "Foreign journal")
+        if "replay_archive" in d:
+            archive = d["replay_archive"]
+            require(type(archive) is dict and set(archive) == {"version", "count"} and
+                    type(archive["version"]) is int and archive["version"] == 1 and
+                    type(archive["count"]) is int and archive["count"] >= 0,
+                    "Invalid replay archive manifest")
         for list_id, record in d["lists"].items():
             require(type(record) is dict and "row" in record and
                     set(record) <= {"row", "display_title"}, "Invalid list record")
@@ -556,6 +714,9 @@ class Operator:
             require(s == d["current"], "Manual drift")
             self._check(d, s, request)
             self._visible(request.get("movies") or [])
+            # Same archive gate as admission. Retirement at admission changes
+            # neither the snapshot nor the request, so this digest stays valid.
+            self._verify_archive(d)
             return self._intent(d, s, request)
 
     def _legacy(self, operation, **args):
@@ -660,6 +821,7 @@ class Operator:
                 state = "clean"
             require(isinstance(d["done"], dict) and len(d["done"]) <= DONE_LIMIT,
                     "Journal request limit reached")
+            self._verify_archive(d)
             status = dict(revision=digest(s), journal_digest=digest(d),
                           pending={k: p[k] for k in ("operation", "list") if k in p} if p else None,
                           run={"key": d["run"]["key"]} if d["run"] else None,
@@ -690,9 +852,13 @@ class Operator:
                                       row=self._row_view(d, s, record, playlist),
                                       position=position))
             require(list is None or len(lists) == 1, "Unknown list")
+            archived = d.get("replay_archive", {"count": 0})["count"]
+            # done_count stays the active count that older clients bound by
+            # done_limit. completed_count only grows: one per completed key.
             return dict(status, version=2, scope=copy.deepcopy(self.base),
                         legacy_list=self.scope["recipe"], lists=lists,
                         list_count=len(d["lists"]), list_limit=MAX_LISTS,
+                        archived_count=archived, completed_count=len(d["done"]) + archived,
                         migrated_from=copy.deepcopy(d.get("migrated_from")))
 
     def migrate_preview(self):
@@ -788,6 +954,8 @@ class Operator:
 
     def _downgraded(self, d):
         """Lossless only for the configured attached list or no list at all."""
+        # Version 1 has no archive, so downgrading would drop replay history.
+        require("replay_archive" not in d, "Replay archive prevents downgrade")
         lists = d["lists"]
         require(set(lists) <= {self.scope["recipe"]} and
                 all(r["row"] is not None for r in lists.values()),
@@ -808,20 +976,121 @@ class Operator:
             s = self._read(d)
             d = self._fresh(s, d, 1 if legacy is not None else 2)
             request = self._request(d, legacy, scoped)
-            if key in d["done"]:
-                require(d["done"][key] == request, "Idempotency key reused")
+            found, completed = key in d["done"], d["done"].get(key)
+            # The unfinished run's own key is never archived, so its exact
+            # recovery never depends on the archive.
+            if not found and not (d["run"] is not None and d["run"].get("key") == key):
+                completed = self._archived(d, key)
+                found = completed is not None
+            if found:
+                require(completed == request, "Idempotency key reused")
                 require(s == d["current"], "Manual drift")
                 return {"state": "replayed", "writes": 0}
             if d["run"] is None:
                 require(d["pending"] is None and s == d["current"], "Manual drift")
                 require(intent == self._intent(d, s, request), "Fresh preview digest required")
                 self._check(d, s, request)
-                require(len(d["done"]) < DONE_LIMIT, "Journal request limit reached")
                 self._visible(request.get("movies") or [])
+                # A key absent from done and archive is new only while the
+                # archive verifies: a lost record changes the count and refuses.
+                self._verify_archive(d)
+                if d["version"] == 2 and len(d["done"]) >= RETIRE_AT:
+                    self._retire(d)
+                require(len(d["done"]) < DONE_LIMIT, "Journal request limit reached")
                 d["run"] = dict(key=key, request=request)
+                self._reserve(d, s, request)
                 self.journal.save(d)
             require(d["run"] == dict(key=key, request=request), "Another request is unfinished")
             return self._steps(d, key, request)
+
+    @staticmethod
+    def _archive_name(key):
+        return hashlib.sha256(key.encode()).hexdigest() + ".json"
+
+    def _archived(self, d, key):
+        """The archived completed request under key, or None. Reads only."""
+        if "replay_archive" not in d:
+            return None
+        record = self.journal.archive_read(self._archive_name(key))
+        if record is None:
+            return None
+        require(set(record) == ARCHIVE_FIELDS and type(record["version"]) is int and
+                record["version"] == 1 and record["scope"] == self.base and
+                record["key"] == key and type(record["request"]) is dict,
+                "Malformed replay archive record")
+        return record["request"]
+
+    def _verify_archive(self, d):
+        """Refuse unless the archive directory, names and count match the manifest.
+
+        Without a manifest no record may exist. A record whose key is still in
+        done is the exact duplicate an interrupted retirement leaves, and is
+        not counted. Every other record is counted, so a lost or added record
+        refuses instead of letting an archived key look new. Reads only.
+        """
+        names = self.journal.archive_list()
+        if "replay_archive" not in d:
+            require(not names, "Replay archive without manifest")
+            return
+        require(names is not None, "Replay archive missing")
+        duplicates = set()
+        for key, request in d["done"].items():
+            name = self._archive_name(key)
+            if name in names:
+                require(self._archived(d, key) == request, "Conflicting replay archive record")
+                duplicates.add(name)
+        require(len(names - duplicates) == d["replay_archive"]["count"],
+                "Replay archive count mismatch")
+
+    def _retire(self, d):
+        """Move completed keys from done into the replay archive. Zero Emby writes.
+
+        Runs under the held lock with no run or pending step, after the archive
+        verified. The manifest is saved before the first record, so older code
+        refuses this journal from then on. Every record and the directory are
+        fsynced before the one save that removes those keys from done and adds
+        them to the count. An interrupted pass leaves exact duplicates, which
+        the next pass keeps without writing or counting them twice. The init
+        key stays in done because init replays only from there.
+        """
+        retired = {k: v for k, v in d["done"].items() if v != INIT_REQUEST}
+        for key, request in retired.items():
+            opaque(key)
+            require(type(request) is dict, "Invalid completed request")
+        if not retired:
+            return
+        if "replay_archive" not in d:
+            self.journal.archive_put({})
+            d["replay_archive"] = dict(version=1, count=0)
+            self.journal.save(d)
+        records = {}
+        for key, request in retired.items():
+            existing = self._archived(d, key)
+            if existing is None:
+                records[self._archive_name(key)] = dict(
+                    version=1, scope=copy.deepcopy(self.base), key=key, request=request)
+            else:
+                require(existing == request, "Conflicting replay archive record")
+        self.journal.archive_put(records)
+        for key in retired:
+            del d["done"][key]
+        d["replay_archive"]["count"] += len(retired)
+        self.journal.save(d)
+
+    @staticmethod
+    def _reserve(d, snapshot, request):
+        """Refuse a new run unless every later save of it stays under JOURNAL_MAX.
+
+        A later save holds this journal with its run, a current snapshot and at
+        most one pending step whose before snapshot and arguments are each no
+        larger than this snapshot grown by RUN_GROWTH, and finally the completed
+        request under its key. Resuming a run never repeats this check.
+        """
+        def size(value):
+            return len(json.dumps(value, sort_keys=True, allow_nan=False))
+        grown = size(snapshot) + RUN_GROWTH
+        bound = size(d) - size(d["current"]) + 3 * grown + size(request) + RUN_SLACK
+        require(bound <= JOURNAL_MAX, "Journal size limit reached")
 
     def _complete(self, d, pending, snapshot):
         """Record an exactly observed step. Returns whether it set a row title."""

@@ -71,6 +71,15 @@ def dedicated(service, uid, gid):
              if entry.pw_uid == uid or entry.pw_gid == gid))
 
 
+def credential_name_allowed(service, name):
+    """Exact runtime credential names; HoloNet's Jellystat key is its own file."""
+    if service == "ha-mcp":
+        return name == "backend-token"
+    if service == "holonet":
+        return name in ("backend.json", "jellystat.json")
+    return name.startswith("gatus-") and name.endswith(".json") and "/" not in name
+
+
 def endpoint(service, uid, gid, sha256, credential_names, journal=False):
     dedicated(service, uid, gid)
     inspect("/etc/ssl/certs/ca-certificates.crt", {0}, exact_mode=0o644, required=True)
@@ -89,8 +98,7 @@ def endpoint(service, uid, gid, sha256, credential_names, journal=False):
     inspect(unit, {0}, exact_mode=0o644)
     inspect(config / "config.json", {0, uid}, exact_mode=0o600)
     for name in credential_names:
-        need(name == "backend-token" if service == "ha-mcp" else
-             name == "backend.json" if service == "holonet" else name.startswith("gatus-") and name.endswith(".json") and "/" not in name)
+        need(credential_name_allowed(service, name))
         inspect(config / name, {0, uid}, exact_mode=0o600)
     inspect(root / "releases" / sha256 / service, {0}, exact_mode=0o555)
     if journal:

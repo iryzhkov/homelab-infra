@@ -1,13 +1,16 @@
 """Recording adapter tests. Run only in the documented Chaldea scratch HOME."""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 
-from emby_operator_recommendations import (Journal, NotDispatched, Operator, Refused, digest,
-                                           native_move_index)
+from emby_operator_recommendations import (DONE_LIMIT, RETIRE_AT, V2_FIELDS, Journal,
+                                           NotDispatched, Operator, Refused, digest,
+                                           native_move_index, require)
 
 SERVER, ACTOR, IGOR = "a" * 32, "b" * 32, "c" * 32
 SCOPE = dict(server=SERVER, actor=ACTOR, recipient=IGOR, library="10", recipe="igor-movies")
@@ -679,6 +682,370 @@ class OperatorTests(unittest.TestCase):
         # The end of both views is always a valid target.
         self.assertEqual(self.move("end", 3), {"state": "moved", "writes": 1})
         self.assertEqual([r["Id"] for r in self.api.home], [1, "m3", 4, 2])
+
+
+class Crash(Exception):
+    """Simulated process death at a durable boundary; never a refusal."""
+
+
+class OldCore(Operator):
+    """The strict version 2 field rule of origin/main 2c01ff1, which every
+    public operation applied first. Everything after it is unchanged code."""
+    def _journal(self):
+        d = self.journal.load()
+        if type(d) is dict and d.get("version") == 2:
+            require(set(d) - {"migrated_from"} == V2_FIELDS, "Foreign journal")
+        return super()._journal()
+
+
+HISTORY = dict(operation="set-members", list="igor-movies", movies=["101"])
+
+
+def record_name(key):
+    return hashlib.sha256(key.encode()).hexdigest() + ".json"
+
+
+class RetirementTests(unittest.TestCase):
+    """Replay archive retirement in the same journal directory, under the same lock."""
+    setUp = OperatorTests.setUp
+    apply = OperatorTests.apply
+
+    def journal_bytes(self):
+        return (self.directory / "journal.json").read_bytes()
+
+    def stored(self):
+        return json.loads(self.journal_bytes())
+
+    def archive(self):
+        return self.directory / "replay-archive"
+
+    def state(self):
+        """Journal bytes and every archive entry with its bytes."""
+        files = ({p.name: p.read_bytes() for p in self.archive().iterdir()}
+                 if self.archive().exists() else None)
+        return self.journal_bytes(), files
+
+    def migrated(self, total):
+        """Migrated legacy list with total completed keys, like Igor's 25."""
+        self.apply()
+        self.operator.migrate("migrate", self.operator.migrate_preview()["intent_digest"])
+        self.fill(total - 1)
+
+    def fill(self, count):
+        """Synthetic completed history fixture under fresh keys."""
+        with self.operator.journal.locked():
+            d = self.operator.journal.load()
+            start = len(d["done"]) + d.get("replay_archive", {"count": 0})["count"]
+            d["done"].update({"history-%d" % n: dict(HISTORY) for n in range(start, start + count)})
+            self.operator.journal.save(d)
+
+    def retired(self):
+        """The old 64-key ceiling, then one new run that retires all 64 keys."""
+        self.migrated(DONE_LIMIT)
+        self.assertEqual(self.apply("next", ["102"])["state"], "members-set")
+
+    def outcomes(self, keys):
+        """Replay result or refusal text of each key with the history request."""
+        result = {}
+        for key in keys:
+            try:
+                result[key] = self.operator.set_members(key, "igor-movies", ["101"])
+            except Refused as error:
+                result[key] = str(error)
+        return result
+
+    def counts(self):
+        shown = self.operator.show()
+        return tuple(shown[k] for k in ("done_count", "archived_count", "completed_count",
+                                        "keys_exhausted"))
+
+    def old(self):
+        journal = Journal(self.directory)
+        self.addCleanup(journal.close)
+        return OldCore(self.api, journal, **SCOPE)
+
+    def forged(self, movies):
+        """Exact new-request digest over the saved snapshot, bypassing preview gates."""
+        return digest(dict(version=2, scope=self.operator.base, snapshot=self.stored()["current"],
+                           request=dict(HISTORY, movies=movies)))
+
+    def test_old_history_replays_at_and_past_retirement(self):
+        self.migrated(DONE_LIMIT)
+        history = self.stored()["done"]
+        self.assertEqual(self.counts(), (64, 0, 64, True))
+        expected = self.outcomes(history)
+        self.assertEqual(expected["first"], "Idempotency key reused")
+        self.assertEqual(expected["history-1"], {"state": "replayed", "writes": 0})
+        self.assertFalse(self.archive().exists())
+        writes = len(self.api.writes)
+        # At the old ceiling the next request first retires every key, then runs.
+        self.assertEqual(self.apply("next", ["102"]), {"state": "members-set", "writes": 2})
+        self.assertEqual([op for op, _ in self.api.writes[writes:]], ["clear", "add"])
+        stored = self.stored()
+        self.assertEqual(stored["done"], {"next": dict(HISTORY, movies=["102"])})
+        self.assertEqual(stored["replay_archive"], {"version": 1, "count": 64})
+        self.assertEqual(stat.S_IMODE(self.archive().lstat().st_mode), 0o700)
+        names = {record_name(k): k for k in history}
+        self.assertEqual(set(os.listdir(self.archive())), set(names))
+        for name, key in names.items():
+            s = (self.archive() / name).lstat()
+            self.assertEqual((stat.S_ISREG(s.st_mode), stat.S_IMODE(s.st_mode), s.st_nlink),
+                             (True, 0o600, 1))
+            self.assertEqual(json.loads((self.archive() / name).read_bytes()), dict(
+                version=1, scope=self.operator.base, key=key, request=history[key]))
+        self.assertEqual(self.counts(), (1, 64, 65, False))
+        before, writes = self.state(), copy.deepcopy(self.api.writes)
+        self.assertEqual(self.outcomes(history), expected)
+        for key in history:
+            with self.assertRaisesRegex(Refused, "Idempotency key reused"):
+                self.operator.set_members(key, "igor-movies", ["102"])
+        self.assertEqual((self.state(), self.api.writes), (before, writes))
+        # A second retirement adds records and never rewrites an earlier one.
+        self.fill(RETIRE_AT - 1)
+        second = self.stored()["done"]
+        expected.update(self.outcomes(second))
+        self.assertEqual(self.apply("again", ["101"]), {"state": "members-set", "writes": 2})
+        self.assertEqual(self.counts(), (1, 64 + RETIRE_AT, 65 + RETIRE_AT, False))
+        files = self.state()[1]
+        self.assertEqual(len(files), 64 + RETIRE_AT)
+        self.assertEqual({k: files[k] for k in before[1]}, before[1])
+        self.assertEqual(self.outcomes(expected), expected)
+
+    def test_retirement_waits_for_watermark_then_fails_closed_for_old_code(self):
+        self.migrated(RETIRE_AT - 1)
+        self.apply("below", ["102"])
+        self.assertEqual(self.counts(), (RETIRE_AT, 0, RETIRE_AT, False))
+        self.assertNotIn("replay_archive", self.stored())
+        self.assertFalse(self.archive().exists())
+        old = self.old()
+        self.assertEqual(old.show()["done_count"], RETIRE_AT)
+        self.apply("at", ["101"])
+        self.assertEqual(self.counts(), (1, RETIRE_AT, RETIRE_AT + 1, False))
+        before, writes = self.state(), copy.deepcopy(self.api.writes)
+        for call in (old.show, old.reconcile, old.downgrade_preview,
+                     lambda: old.set_members("history-1", "igor-movies", ["101"]),
+                     lambda: old.list_preview("set-members", "igor-movies", movies=["102"]),
+                     lambda: old.set_members("old-new", "igor-movies", ["102"], self.forged(["102"]))):
+            with self.assertRaisesRegex(Refused, "Foreign journal"):
+                call()
+        self.assertEqual((self.state(), self.api.writes), (before, writes))
+
+    def crash(self, boundary):
+        """Run one new request that dies at boundary during retirement."""
+        journal = self.operator.journal
+        put, save = journal.archive_put, journal.save
+        def archive_put(records):
+            if boundary == "before-directory" or (boundary == "before-records" and records):
+                raise Crash(boundary)
+            if boundary == "partial-records" and records:
+                put(dict(list(records.items())[:len(records) // 2]))
+                raise Crash(boundary)
+            put(records)
+            if boundary == "after-directory":
+                raise Crash(boundary)
+        def save_value(value):
+            count = value.get("replay_archive", {}).get("count")
+            if (boundary == "manifest-save" and count == 0) or (boundary == "removal-save" and count):
+                raise Crash(boundary)
+            save(value)
+        journal.archive_put, journal.save = archive_put, save_value
+        try:
+            with self.assertRaises(Crash):
+                self.apply("next", ["102"])
+        finally:
+            del journal.archive_put, journal.save
+
+    def test_interrupted_retirement_at_every_durable_boundary(self):
+        manifests = {"before-directory": False, "after-directory": False, "manifest-save": False,
+                     "before-records": True, "partial-records": True, "removal-save": True}
+        for boundary, manifest in manifests.items():
+            with self.subTest(boundary=boundary):
+                self.setUp()
+                self.migrated(DONE_LIMIT)
+                history = self.stored()["done"]
+                expected = self.outcomes(history)
+                writes = copy.deepcopy(self.api.writes)
+                self.crash(boundary)
+                stored = self.stored()
+                # No run was admitted, nothing was sent and no key left done.
+                self.assertEqual((stored["run"], stored["pending"], stored["done"]),
+                                 (None, None, history))
+                self.assertEqual(self.api.writes, writes)
+                self.assertEqual("replay_archive" in stored, manifest)
+                # Duplicates from the interrupted pass are not counted twice.
+                self.assertEqual(self.counts(), (64, 0, 64, True))
+                self.assertEqual(self.outcomes(history), expected)
+                if manifest:
+                    with self.assertRaisesRegex(Refused, "Foreign journal"):
+                        self.old().show()
+                else:
+                    self.assertEqual(self.old().show()["done_count"], 64)
+                stray = self.archive() / (".archive-" + "0" * 32)
+                if boundary == "before-records":
+                    stray.write_bytes(b"{")
+                    stray.chmod(0o600)
+                    self.assertEqual(self.counts(), (64, 0, 64, True))
+                self.assertEqual(self.apply("next", ["102"]), {"state": "members-set", "writes": 2})
+                self.assertEqual(self.counts(), (1, 64, 65, False))
+                self.assertEqual(set(os.listdir(self.archive())), {record_name(k) for k in history})
+                self.assertEqual(self.outcomes(history), expected)
+
+    def test_unfinished_run_is_never_archived_and_recovers_without_archive(self):
+        self.migrated(DONE_LIMIT)
+        self.api.fail_after = "add"
+        with self.assertRaises(TimeoutError):
+            self.apply("lost", ["102"])
+        self.api.fail_after = None
+        stored = self.stored()
+        self.assertEqual((stored["run"]["key"], stored["pending"]["operation"]), ("lost", "add"))
+        self.assertEqual((stored["done"], stored["replay_archive"]["count"]), ({}, 64))
+        self.assertNotIn(record_name("lost"), os.listdir(self.archive()))
+        before, writes = self.state(), copy.deepcopy(self.api.writes)
+        with self.assertRaisesRegex(Refused, "Another request is unfinished"):
+            self.operator.set_members("other", "igor-movies", ["101"], self.forged(["101"]))
+        self.assertEqual((self.state(), self.api.writes), (before, writes))
+        # Exact recovery of the run never reads the archive.
+        self.archive().rename(self.directory / "moved")
+        self.assertEqual(self.operator.set_members("lost", "igor-movies", ["102"]),
+                         {"state": "members-set", "writes": 0})
+        (self.directory / "moved").rename(self.archive())
+        self.assertEqual(self.api.writes, writes)
+        self.assertEqual(self.stored()["done"], {"lost": dict(HISTORY, movies=["102"])})
+        self.assertEqual(self.counts(), (1, 64, 65, False))
+        self.assertNotIn(record_name("lost"), os.listdir(self.archive()))
+
+    def test_archive_custody_and_count_refuse_before_any_new_run(self):
+        def move(name, to):
+            (self.archive() / name).rename(self.directory / to)
+        def write(name, value):
+            path = self.archive() / name
+            path.write_bytes(value if type(value) is bytes else json.dumps(value).encode())
+            path.chmod(0o600)
+        def manifest(value):
+            with self.operator.journal.locked():
+                d = self.operator.journal.load()
+                if value is None:
+                    del d["replay_archive"]
+                else:
+                    d["replay_archive"] = value
+                self.operator.journal.save(d)
+        def symlinked_directory():
+            self.archive().rename(self.directory / "real")
+            self.archive().symlink_to(self.directory / "real")
+        def symlinked_record():
+            move(record_name("history-1"), "real.json")
+            (self.archive() / record_name("history-1")).symlink_to(self.directory / "real.json")
+        foreign = dict(version=1, scope=SCOPE, key="forged", request=HISTORY)
+        cases = [
+            (lambda: self.archive().rename(self.directory / "moved"), "Replay archive missing"),
+            (symlinked_directory, "Unsafe replay archive directory"),
+            (lambda: self.archive().chmod(0o755), "Unsafe replay archive directory"),
+            (lambda: write("notes.txt", b"{}"), "Unexpected replay archive entry"),
+            (symlinked_record, "Unexpected replay archive entry"),
+            (lambda: move(record_name("history-1"), "lost.json"), "Replay archive count mismatch"),
+            (lambda: write(record_name("forged"), foreign), "Replay archive count mismatch"),
+            (lambda: write(record_name("next"), dict(version=1, scope=self.operator.base, key="next",
+                                                     request=HISTORY)),
+             "Conflicting replay archive record"),
+            (lambda: write(record_name("next"), b"{"), "Malformed replay archive record"),
+            (lambda: manifest({"version": 1, "count": 63}), "Replay archive count mismatch"),
+            (lambda: manifest({"version": 1, "count": -1}), "Invalid replay archive manifest"),
+            (lambda: manifest({"version": 2, "count": 64}), "Invalid replay archive manifest"),
+            (lambda: manifest({"version": 1, "count": 64, "pruned": 0}),
+             "Invalid replay archive manifest"),
+            (lambda: manifest(None), "Replay archive without manifest"),
+        ]
+        for n, (damage, message) in enumerate(cases):
+            with self.subTest(case=n, message=message):
+                self.setUp()
+                self.retired()
+                intent = self.forged(["101"])
+                damage()
+                before, writes = self.state(), copy.deepcopy(self.api.writes)
+                for call in (self.operator.show, lambda: self.operator.preview(["101"]),
+                             lambda: self.operator.apply("new", ["101"], intent)):
+                    with self.assertRaisesRegex(Refused, message):
+                        call()
+                self.assertEqual((self.state(), self.api.writes), (before, writes))
+
+    def test_archived_replay_refuses_unsafe_or_mismatched_records(self):
+        name = record_name("history-1")
+        def hard_link():
+            os.link(self.archive() / name, self.directory / "second-link")
+        def swapped():
+            other = record_name("history-2")
+            (self.archive() / name).rename(self.directory / "swap")
+            (self.archive() / other).rename(self.archive() / name)
+            (self.directory / "swap").rename(self.archive() / other)
+        cases = [
+            (lambda: (self.archive() / name).write_bytes(b"{"), "Malformed replay archive record"),
+            (lambda: (self.archive() / name).write_bytes(b"[]"), "Malformed replay archive record"),
+            (lambda: (self.archive() / name).chmod(0o644), "Unsafe replay archive record"),
+            (hard_link, "Unsafe replay archive record"),
+            (swapped, "Malformed replay archive record"),
+            (lambda: self.archive().rename(self.directory / "moved"), "Replay archive missing"),
+        ]
+        for n, (damage, message) in enumerate(cases):
+            with self.subTest(case=n, message=message):
+                self.setUp()
+                self.retired()
+                damage()
+                before, writes = self.state(), copy.deepcopy(self.api.writes)
+                with self.assertRaisesRegex(Refused, message):
+                    self.operator.set_members("history-1", "igor-movies", ["101"])
+                self.assertEqual((self.state(), self.api.writes), (before, writes))
+
+    def test_journal_size_guard_never_replaces_and_admission_reserves_headroom(self):
+        self.apply()
+        before = self.journal_bytes()
+        with self.operator.journal.locked():
+            with self.assertRaisesRegex(Refused, "Journal size limit reached"):
+                self.operator.journal.save(dict(json.loads(before), padding="x" * (4 * 1024 * 1024)))
+        self.assertEqual(self.journal_bytes(), before)
+        self.assertEqual([p.name for p in self.directory.iterdir() if p.name.startswith(".")], [])
+        # A snapshot too large for the later saves of a run refuses before any write.
+        for size, admitted in ((1_400_000, False), (500_000, True)):
+            with self.subTest(size=size):
+                self.setUp()
+                self.api.home[0]["Unknown"] = {"preserve": ["x" * size]}
+                if admitted:
+                    self.assertEqual(self.apply()["writes"], 4)
+                    self.assertLess(len(self.journal_bytes()), 4 * 1024 * 1024)
+                else:
+                    with self.assertRaisesRegex(Refused, "Journal size limit reached"):
+                        self.apply()
+                    self.assertFalse((self.directory / "journal.json").exists())
+                    self.assertEqual(self.api.writes, [])
+
+    def test_archive_forbids_downgrade_and_reads_stay_read_only(self):
+        self.retired()
+        before, writes = self.state(), copy.deepcopy(self.api.writes)
+        for call in (self.operator.downgrade_preview,
+                     lambda: self.operator.downgrade("down", "0" * 64)):
+            with self.assertRaisesRegex(Refused, "Replay archive prevents downgrade"):
+                call()
+        first = self.operator.show()
+        self.assertEqual(self.operator.show(), first)
+        self.assertEqual(self.operator.reconcile(), {"state": "clean"})
+        self.operator.preview(["101"])
+        self.assertEqual((self.state(), self.api.writes), (before, writes))
+        # A no-op request still completes one key with zero writes.
+        self.assertEqual(self.apply("noop", ["102"]), {"state": "members-set", "writes": 0})
+        self.assertEqual(self.counts(), (2, 64, 66, False))
+
+    def test_version_1_ceiling_is_unchanged_and_never_archives(self):
+        self.apply()
+        with self.operator.journal.locked():
+            d = self.operator.journal.load()
+            d["done"].update({"history-%d" % n: dict(movies=["101"], remove=False)
+                              for n in range(1, DONE_LIMIT)})
+            self.operator.journal.save(d)
+        before = self.journal_bytes()
+        with self.assertRaisesRegex(Refused, "Journal request limit reached"):
+            self.apply("next", ["102"])
+        self.assertEqual(self.operator.apply("history-1", ["101"]), {"state": "replayed", "writes": 0})
+        self.assertEqual((self.journal_bytes(), len(self.api.writes)), (before, 4))
+        self.assertFalse(self.archive().exists())
 
 
 if __name__ == "__main__":

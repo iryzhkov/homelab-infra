@@ -707,10 +707,9 @@ for its own baseline include inputs `machine_identity_baseline_anchor` and
 inputs and these reserved facts only: extra vars can still override other
 internal facts, so run only the documented commands. The laptop account's
 generation, expiry and state follow the role's lifecycle rules. Its source
-expiry is aligned with the homelab account; root may change it within the
-role's 1..180-day window by a source change. The homelab expiry is never
-extended silently: the role refuses every run within one day of
-2026-11-20, and extending it is a separate reviewed change.
+expiry is aligned with the homelab account. The homelab expiry is never
+extended silently: the role refuses every run within one day of the declared
+expiry, and only the explicit expiry-only renewal below extends it.
 
 Destination bindings are required but not in source, because the homelab
 node name and UID are not repository facts. Root supplies
@@ -796,6 +795,49 @@ The three application scopes/mappings may remain; this inverse does not
 promise byte-identical restoration of an older blueprint. Flag false alone
 is not a retirement procedure. Native registration, public-policy retirement,
 service activation and live/client acceptance remain separate stages.
+
+### Expiry-only renewal
+
+`holonet_catalog_identity_expires` is the expiry of every existing
+generation-1 app password: homelab, laptop limited, ordinary interactive and
+the recommendation writer. Its source default stays `2026-11-20T00:00:00Z`,
+so an ordinary run renews nothing. To renew, pass a later whole-second UTC
+date explicitly, for example
+`-e holonet_catalog_identity_expires=2027-02-15T00:00:00Z`. Before loading
+any credential the entrypoint requires a date no earlier than 2026-11-20 and
+1..180 days ahead, both the interactive and writer opt-ins, exactly those four
+accounts at generation 1 and present, and the same date in the writer's
+protected identity. Grants, generations, token identifiers, the ownership
+record and the scope mappings stay unchanged; only each token's `expires`
+changes in the stored blueprint.
+
+The blueprint omits `key`, and Authentik updates an existing token by its
+stable identifier, so current source expects each key to survive. That is a
+source and fake-issuer fact. Byte equality of the live keys and delivered
+files after a reviewed expiry-only apply is still root's qualification step.
+A renewal refuses the historical and ordinary-reader baseline reads; supply a
+fresh public baseline of the current four-account content. After a renewal,
+update the endpoint's `playback.credential_expires_at` to the same date.
+
+### Scoped playback history
+
+`holonet_catalog_playback_enabled` (default false) adds `history.read` to the
+separate recommendation writer only. It needs the writer opt-in and a
+writer identity whose `holonet_history_users` lists 1..16 unique hex32
+recipients, all among its `holonet_target_users`; the writer's actions are
+then its seven existing actions plus `history.read`. Without the opt-in the
+writer keeps empty history and seven actions. The three readers always keep
+empty history and `catalog.read` alone, and `userdata.read` is never granted.
+No recipient, account, application, provider, scope or signing key is added:
+the writer's three-scope request already selects its grant, so only that
+account's attribute and the literal allowlist line of each mapping change.
+
+The role's validator enforces the same rule for any declaration: history only
+with `history.read` appended to an exact writer tuple, only for a subset of
+the writer's targets, never for a catalog reader. Like renewal, the opt-in
+refuses the baseline read modes and needs a fresh public baseline on an
+online check or apply. Keep `holonet_history_users` equal to the endpoint's
+`policy.HistoryUsers` (docs/web-mcp-endpoints.md, "HoloNet scoped playback").
 
 ### Confirmed ordinary-reader baseline read
 

@@ -1,4 +1,5 @@
 """Bounded packaging contracts. Service authorization remains in each binary."""
+from datetime import datetime
 import hashlib
 import ipaddress
 from pathlib import Path, PurePosixPath
@@ -30,14 +31,26 @@ HOLONET_SOURCE_REVISIONS = HOLONET_CATALOG_SOURCE_REVISIONS | {HOLONET_WRITER_SO
 HOLONET_OPERATOR_SOURCE = "49022d6fc1cccb6f76c225a760b401cce2b115f6"
 HOLONET_OPERATOR_CONTRACT = "2cd99eb967690de97e9be01b411f4df119283d4c"
 
+# Exact playback source and compatible worker/interface source. The Go build
+# passed independent review and CI; these packaging and worker pins require the
+# final integration review before activation. Older builds refuse playback.
+# The playback build also accepts playlist_operator.
+HOLONET_PLAYBACK_SOURCE = "00f183425569d859054b944703701f2976566965"
+HOLONET_PLAYBACK_CONTRACT = "cfea03b6e99e8b501ce5b6f1abbe0d32545ecd3e"
+# Fixed runtime paths: the Jellystat key is its own credential file, never the
+# Emby backend file, and the only Jellystat URL besides an HTTPS origin is the
+# existing host-local listener.
+HOLONET_PLAYBACK_CREDENTIAL = "jellystat.json"
+HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
+
 # Root playlist operator worker (docs/emby-operator-mcp.md). The four modules are
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_adapter.py": "face84c9a28a84431b211ed806dd2956a5897c79ccfd93dd7ed138249cc2e03f",
+    "emby_operator_adapter.py": "31b365e4ca9b9d3d3a027347e39ff26d4ec5e36c82ad2e771436dc1e92360f3f",
     "emby_operator_entry.py": "c37acc5c3b430d4874c1bae13b895c1ab78ef2f59ea7e76de830ea342f68007a",
-    "emby_operator_recommendations.py": "a71d0d3c40c02690a6bee83a14a29f21d47e61e9a568a389c4b3d0e8440cdccf",
-    "emby_operator_socket.py": "fe7f3c3fc01b7337cbf157f0dd74061a101b2348fe26dd4adb490c72f6d7cfcf",
+    "emby_operator_recommendations.py": "bd9e9ee03634bd55f014a64cd7ddb37fde404c8e0a2d51a817cef34acca58cae",
+    "emby_operator_socket.py": "747851bfe2456273de8c039221f75783bd95c8c5a37d99b62c94dd77ab1b6ee2",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
@@ -247,7 +260,7 @@ def observer_config(config):
 def holonet_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
                   "credential_file", "policy_revision", "policy", "library_guids"),
-         ("recommendations", "playlist_operator"))
+         ("recommendations", "playlist_operator", "playback"))
     require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
             "HoloNet resource is fixed")
     trust(config, "resource", "issuer", ha_canonical_url)
@@ -261,8 +274,11 @@ def holonet_config(config):
             "HoloNet runtime credential path is fixed")
     policy = config["policy"]
     keys(policy, ("Server", "Actions", "Libraries", "CatalogUsers", "HistoryUsers"))
-    require(policy["Server"] == config["server_id"] and policy["Actions"] == ["catalog.read"]
-            and policy["HistoryUsers"] == [], "initial HoloNet release is catalog-only")
+    playback = config.get("playback") is not None
+    require(policy["Server"] == config["server_id"], "policy server must be the configured server")
+    if not playback:
+        require(policy["Actions"] == ["catalog.read"] and policy["HistoryUsers"] == [],
+                "initial HoloNet release is catalog-only")
     libraries = records(policy["Libraries"], 1, 1)
     users = records(policy["CatalogUsers"], 1, 1)
     for library in libraries:
@@ -279,7 +295,43 @@ def holonet_config(config):
         holonet_recommendations(config["recommendations"], libraries, users)
     if config.get("playlist_operator") is not None:
         holonet_playlist_operator(config, libraries, users)
+    if playback:
+        holonet_playback(config)
+        return {"backend.json", HOLONET_PLAYBACK_CREDENTIAL}
     return {"backend.json"}
+
+
+def holonet_playback(config):
+    """The Go playback rules plus homelab's fixed paths and scoped history ceiling.
+
+    Only with management configured; only history.read added to the server
+    ceiling (never userdata.read); history users a subset of the fixed cohort.
+    """
+    value, operator = config["playback"], config.get("playlist_operator")
+    require(operator is not None, "playback requires playlist_operator")
+    keys(value, ("jellystat_url", "credential_file", "credential_expires_at"))
+    jellystat = value["jellystat_url"]
+    if jellystat != HOLONET_PLAYBACK_LOOPBACK:
+        p = ha_canonical_url(jellystat, origin=True)
+        require(p.scheme == "https" and "%" not in jellystat,
+                "Jellystat must be the host-local listener or an HTTPS origin")
+    require(value["credential_file"] == "/etc/holonet/" + HOLONET_PLAYBACK_CREDENTIAL
+            and value["credential_file"] != config["credential_file"],
+            "Jellystat runtime credential path is fixed and separate")
+    expires = value["credential_expires_at"]
+    match(expires, r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+    try:
+        datetime.strptime(expires, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        require(False, "credential expiry must be a valid UTC time")
+    policy = config["policy"]
+    require(policy["Actions"] == ["catalog.read", "history.read"],
+            "playback adds only history.read to the catalog ceiling")
+    history = records(policy["HistoryUsers"], 1, 16)
+    require(all(isinstance(u, str) for u in history), "invalid history user")
+    unique(history)
+    require(set(history) <= set(operator["recipients"]),
+            "history users must be configured management recipients")
 
 
 def holonet_playlist_operator(config, libraries, users):
@@ -354,9 +406,15 @@ def endpoint_contract(value):
     _, contract = SERVICES[service]
     if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
         contract = HOLONET_WRITER_CONTRACT
-    operator_build = (service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
-                      and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
-    if operator_build:
+    playback_build = (service == "holonet" and HOLONET_PLAYBACK_SOURCE is not None
+                      and HOLONET_PLAYBACK_CONTRACT is not None
+                      and artifact["source_revision"] == HOLONET_PLAYBACK_SOURCE)
+    operator_build = playback_build or (
+        service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
+        and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
+    if playback_build:
+        contract = HOLONET_PLAYBACK_CONTRACT
+    elif operator_build:
         contract = HOLONET_OPERATOR_CONTRACT
     require(artifact["contract_revision"] == contract, "unaccepted source interface")
     if "url" in artifact:
@@ -382,6 +440,8 @@ def endpoint_contract(value):
         # Older binaries refuse the unknown key, so even null needs the new build.
         require("playlist_operator" not in value["config"] or operator_build,
                 "playlist_operator requires its exact reviewed artifact")
+        require("playback" not in value["config"] or playback_build,
+                "playback requires its exact reviewed artifact")
         if value["config"].get("playlist_operator") is not None:
             require(value["uid"] == OPERATOR_UID and value["gid"] == OPERATOR_GID,
                     "management requires the homelab holonet identity")
@@ -397,6 +457,10 @@ def endpoint_contract(value):
         integer(credential["source_uid"], 0, 2147483647)
     unique(names)
     require(set(names) == expected, "credential sources must exactly match config references")
+    if service == "holonet":
+        # Each runtime file comes from its own protected source; the Emby key
+        # is never installed again as the Jellystat key.
+        unique([credential["source"] for credential in value["credentials"]])
     return value
 
 
@@ -438,6 +502,8 @@ def playlist_operator_plan(value):
                        "namespace": operator["namespace"], "server": config["server_id"],
                        "library": operator["library"], "catalog_user": operator["catalog_user"]},
             "recipients": {r: OPERATOR_RECIPIENTS[r] for r in selected},
+            **({"history_users": sorted(config["policy"]["HistoryUsers"])}
+               if config.get("playback") is not None else {}),
         },
     }
 

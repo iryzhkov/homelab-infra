@@ -291,10 +291,12 @@ complete a lost-response write by readback with zero additional writes.
 Preview validates current identity, Movies and snapshot, returning its digest.
 Apply requires that digest for a new key; replay of a completed identical key makes
 zero writes. A changed request under the same key refuses. At most 64 completion
-keys fit the journal. Completed keys are never evicted: a key's record is the
-only proof it was used, and record age does not prove nondispatch. When 64 keys
-exist, every new request refuses before any write, replays still work, and show
-reports `keys_exhausted`. No pruning or refresh protocol exists. Reconcile reads only, including no journal JSON changes; it
+keys are active in the journal. Completed keys are never deleted: a key's record is
+the only proof it was used, and record age does not prove nondispatch. A version 1
+journal keeps the old rule: when 64 keys exist, every new request refuses before
+any write, replays still work, and show reports `keys_exhausted`. A version 2
+journal moves completed keys into the replay archive below instead. No pruning,
+expiry or refresh protocol exists. Reconcile reads only, including no journal JSON changes; it
 reports clean/drift or observed-applied/unresolved pending intent. It never retries.
 Resume only the same unfinished key/request in a fresh authenticated invocation.
 Only exact postcondition readback lets the core continue remaining approved steps.
@@ -481,8 +483,61 @@ The version 2 show catalog contains `version`, recipient `scope`, `legacy_list`,
 playlist, the saved and observed row, and `position`, the observed index of the
 saved row or null), `list_count`, `list_limit`, `revision`,
 `journal_digest`, `pending`, `run`, `done_count`, `done_limit`, `keys_exhausted`,
-`migrated_from` and reconcile state. `{"list": id}` narrows `lists` to one list
-and refuses an unknown ID.
+`archived_count`, `completed_count`, `migrated_from` and reconcile state.
+`{"list": id}` narrows `lists` to one list and refuses an unknown ID.
+
+### Replay archive
+
+A version 2 journal retires completed keys instead of running out of them. When
+a new request is admitted while 48 (`RETIRE_AT`) or more keys are active, the
+core first moves every active key except an init key into the replay archive,
+then records the run. This happens under the same journal lock, only with no
+unfinished run or pending step, and sends nothing to Emby. The unfinished run's
+own key is never archived, so its exact recovery never reads the archive.
+
+The archive is the `replay-archive` subdirectory of the journal directory: mode
+0700, owned like the journal, opened without following links. Each completed key
+has one immutable record named by the SHA-256 of the key. The record holds the
+exact key, the full original request and the recipient scope, is mode 0600 with
+one link and at most 16 KiB, and is never rewritten or deleted. Lookup by an
+archived key replays with zero writes when the request is identical and refuses
+with `Idempotency key reused` otherwise, exactly like an active key.
+
+The journal records `replay_archive: {"version": 1, "count": N}`, where N counts
+the archived keys that left `done`. Retirement saves this manifest before writing
+the first record, so from then on older code refuses the journal as `Foreign
+journal`. Each record is written to a temporary file, fsynced and renamed into
+place only while its name is absent. The directory is fsynced, and only then does
+one journal save remove those keys from `done` and add them to N. A crash at any
+point leaves either no change, temporary files that never held a record, or
+records whose keys are still in `done`. The next retirement keeps such exact
+duplicates without writing or counting them twice, and removes the temporary
+files.
+
+Show, preview and every new request list the archive first. They refuse unless
+the directory is safe, every entry is a record or a temporary file, every record
+whose key is still in `done` is an exact duplicate, and the remaining records
+number exactly N. A record that goes missing therefore refuses new requests
+instead of letting its key look new. A record that fails custody or parsing
+refuses its own replay. Any such refusal changes nothing. The listing must finish
+within 10 seconds.
+
+`done_count` stays the active count, bounded by `done_limit` 64.
+`archived_count` is N and `completed_count` is `done_count + archived_count`,
+which only grows. A caller that derives keys from show must use
+`completed_count`, because `done_count` drops after each retirement. Downgrade
+to version 1 refuses once the manifest exists, because version 1 cannot hold the
+archive. Never delete or edit the archive.
+
+`Journal.save` serializes first and refuses with `Journal size limit reached`
+before touching the journal if the result exceeds the 4 MiB that load accepts.
+Admission of a new run also refuses unless its later saves fit: the bound is the
+journal without its current snapshot, plus three copies of the current snapshot
+each grown by 64 KiB (current, a pending before-state and pending arguments),
+plus the request and 4 KiB. The growth allowance covers one created playlist,
+25 occurrences and one created Home row with up to 48 KiB of server-added fields.
+Resuming a run never repeats this check; a server row larger than that allowance
+could still make a later save refuse, leaving the journal readable and unchanged.
 
 ### Legacy aliases
 

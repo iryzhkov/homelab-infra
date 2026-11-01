@@ -272,6 +272,52 @@ UID/GID/port, protected backend identity, Authentik enrollment, helper/trust,
 ingress/network/TLS and native renewal require separate concrete operator scope.
 Activation packet jocasta:722e6f93b96e74c6291c3e741eab4641 owns those remaining gates.
 
+## HoloNet scoped playback
+
+The optional `playback` object enables the writer's `playback_statistics` and
+`recipient_movies` tools (`mcp-holonet/PLAYBACK.md` in homelab-cli; contract
+`jocasta:fe4aa946d677bdf308348aac626b869c@2`). Absent or null keeps today's
+behavior: the catalog-only policy and `backend.json` alone.
+
+Playback is accepted only with a non-null `playlist_operator` and only from
+the reviewed build named by `HOLONET_PLAYBACK_SOURCE` and
+`HOLONET_PLAYBACK_CONTRACT` in `filter_plugins/web_mcp.py`. They pin Go
+`00f1834` and the compatible worker interface `cfea03b`. The final integration
+review and exact artifact SHA256 remain required before activation. Older builds refuse the unknown key, so even
+`playback: null` needs that build. The existing management and catalog pins
+stay admissible for rollback without playback.
+
+The object has exactly three fields:
+
+- `jellystat_url`: `http://127.0.0.1:3012`, or a canonical HTTPS origin with
+  no path, query, fragment, userinfo, default port or escape.
+- `credential_file`: fixed `/etc/holonet/jellystat.json`, separate from the
+  Emby `backend.json`.
+- `credential_expires_at`: the writer app password's declared expiry, RFC 3339
+  UTC with whole seconds. Keep it equal to the issuer declaration's
+  `holonet_catalog_identity_expires` after any renewal.
+
+With playback, `policy.Actions` is exactly `[catalog.read, history.read]` and
+`policy.HistoryUsers` is 1..16 unique configured management recipients. Keep
+it equal to the writer's `holonet_history_users` in the issuer declaration;
+source cannot compare the two playbooks. `userdata.read` is never added. The
+server, library, catalog user, subject, namespace, recipients and UID 940 stay
+the existing management ceiling. The worker policy receives this explicit
+history subset only when playback is configured. Existing policies omit it and
+keep metadata reads disabled.
+
+`credentials` then names exactly `backend.json` and `jellystat.json`, each
+from its own protected controller source; the same source for both is
+refused. The existing protected-source check, `no_log`/`diff: false` copy,
+owner and mode 0600 as the runtime identity, and the guard's exact name and
+mode checks apply to both. The Jellystat source is a minimal
+`{"api_key": "..."}` JSON that root stages privately on the controller from
+the existing nonadmin key `/srv/swarm/jellystat/janitorr-api-key` during
+deployment. Source never reads or copies that key and never stages an admin
+credential; the Emby backend stays the existing nonadmin key. The root worker
+plan and policy, the endpoint unit (read-only paths, no new writable path,
+empty capabilities, no new privileges) and the worker socket are unchanged.
+
 ## Service config and custody
 
 HA config has exactly `listen, resource_url, issuer_url, jwks_url, ha_url,

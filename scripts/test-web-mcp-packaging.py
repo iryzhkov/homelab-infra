@@ -157,6 +157,30 @@ def operator_fixture(recipients=None):
     return value
 
 
+# Synthetic stand-ins for the pending reviewed playback build pins.
+PLAYBACK_SOURCE, PLAYBACK_INTERFACE = "1" * 40, "2" * 40
+
+
+def playback_pins():
+    return mock.patch.multiple(contract, HOLONET_PLAYBACK_SOURCE=PLAYBACK_SOURCE,
+                               HOLONET_PLAYBACK_CONTRACT=PLAYBACK_INTERFACE)
+
+
+def playback_fixture(history=None):
+    """Management plus scoped playback, as the reviewed playback build accepts it."""
+    value = operator_fixture()
+    value["artifact"].update(source_revision=PLAYBACK_SOURCE, contract_revision=PLAYBACK_INTERFACE)
+    config = value["config"]
+    config["policy"].update(Actions=["catalog.read", "history.read"],
+                            HistoryUsers=[sorted(OPERATOR_COHORT)[0]] if history is None else history)
+    config["playback"] = {"jellystat_url": "http://127.0.0.1:3012",
+                          "credential_file": "/etc/holonet/jellystat.json",
+                          "credential_expires_at": "2027-02-15T00:00:00Z"}
+    value["credentials"].append({"name": "jellystat.json", "source": "/protected/holonet-jellystat",
+                                 "source_uid": 1000})
+    return value
+
+
 def directory(path, mode=0o755):
     path.mkdir()
     path.chmod(mode)  # The job umask must not change the intended fixture mode.
@@ -1102,6 +1126,141 @@ class PackagingTest(unittest.TestCase):
                 value = copy.deepcopy(managed)
                 value["artifact"]["contract_revision"] = interface
                 self.rejected(value)
+
+    def test_playback_is_default_off_and_requires_exact_build_pins(self):
+        self.assertEqual(contract.HOLONET_PLAYBACK_SOURCE, "00f183425569d859054b944703701f2976566965")
+        self.assertEqual(contract.HOLONET_PLAYBACK_CONTRACT, "cfea03b6e99e8b501ce5b6f1abbe0d32545ecd3e")
+        self.rejected(playback_fixture())
+        with operator_pins():
+            self.rejected(playback_fixture())
+            # The current management build refuses the key, even null.
+            value = operator_fixture()
+            value["config"]["playback"] = None
+            self.rejected(value)
+            value = playback_fixture()
+            value["artifact"].update(source_revision=OPERATOR_SOURCE, contract_revision=OPERATOR_INTERFACE)
+            self.rejected(value)
+        with operator_pins(), playback_pins():
+            value = playback_fixture()
+            before = copy.deepcopy(value)
+            self.assertEqual(contract.endpoint_contract(value), before)
+            # Interface pin is exact for the playback build.
+            value["artifact"]["contract_revision"] = OPERATOR_INTERFACE
+            self.rejected(value)
+            # Disabled: the playback build without playback keeps the catalog-only
+            # ceiling and the single Emby credential, exactly as before.
+            for null in (False, True):
+                off = operator_fixture()
+                off["artifact"].update(source_revision=PLAYBACK_SOURCE, contract_revision=PLAYBACK_INTERFACE)
+                if null:
+                    off["config"]["playback"] = None
+                before = copy.deepcopy(off)
+                self.assertEqual(contract.endpoint_contract(off), before)
+                widened = copy.deepcopy(off)
+                widened["config"]["policy"].update(Actions=["catalog.read", "history.read"],
+                                                   HistoryUsers=[sorted(OPERATOR_COHORT)[0]])
+                self.rejected(widened)
+                extra = copy.deepcopy(off)
+                extra["credentials"] = playback_fixture()["credentials"]
+                self.rejected(extra)
+            # Existing management pins keep working while playback is pending.
+            self.assertEqual(contract.endpoint_contract(operator_fixture()), operator_fixture())
+
+    def test_playback_config_credentials_and_scoped_history(self):
+        ids = sorted(OPERATOR_COHORT)
+        with operator_pins(), playback_pins():
+            for url in ("https://jellystat.example.invalid", "https://jellystat.example.invalid:8443"):
+                value = playback_fixture()
+                value["config"]["playback"]["jellystat_url"] = url
+                contract.endpoint_contract(value)
+            value = playback_fixture(ids)
+            contract.endpoint_contract(value)
+            cases = []
+            for url in ("http://127.0.0.1:3012/", "http://127.0.0.1:3013", "http://localhost:3012",
+                        "http://192.168.70.240:3012", "https://jellystat.example.invalid/",
+                        "https://jellystat.example.invalid/api", "https://u:p@jellystat.example.invalid",
+                        "https://jellystat.example.invalid?x=1", "https://jellystat.example.invalid#x",
+                        "https://jellystat.example.invalid:443", "https://JELLYSTAT.example.invalid",
+                        "https://jelly%73tat.example.invalid", "", None):
+                cases.append(("url " + str(url), lambda v, u=url: v["config"]["playback"].update(jellystat_url=u)))
+            for path in ("/etc/holonet/backend.json", "/etc/holonet/other.json", "jellystat.json",
+                         "/srv/swarm/jellystat/janitorr-api-key", "/etc/holonet/../holonet/jellystat.json"):
+                cases.append(("path " + path, lambda v, p=path: v["config"]["playback"].update(credential_file=p)))
+            for expires in ("2027-02-15", "2027-02-15T00:00:00+00:00", "2027-02-15T00:00:00.000Z",
+                            "2027-02-30T00:00:00Z", "2027-02-15T24:00:00Z", "2027-02-15T00:00:60Z",
+                            "2027-02-15t00:00:00z", 1893456000, None):
+                cases.append(("expiry " + str(expires),
+                              lambda v, e=expires: v["config"]["playback"].update(credential_expires_at=e)))
+            for actions in (["catalog.read"], ["history.read", "catalog.read"],
+                            ["catalog.read", "history.read", "userdata.read"], ["catalog.read", "userdata.read"],
+                            ["catalog.read", "history.read", "history.read"]):
+                cases.append(("actions " + str(actions),
+                              lambda v, a=actions: v["config"]["policy"].update(Actions=a)))
+            for history in ([], ["a" * 32], [ids[0], ids[0]], [ids[0].upper()], [1], ids[0],
+                            ["%032x" % i for i in range(17)]):
+                cases.append(("history " + str(history),
+                              lambda v, h=history: v["config"]["policy"].update(HistoryUsers=h)))
+            cases += [
+                ("history outside configured recipients",
+                 lambda v: v["config"]["playlist_operator"].update(recipients=[ids[1]])),
+                ("no management", lambda v: v["config"].pop("playlist_operator")),
+                ("null management", lambda v: v["config"].update(playlist_operator=None)),
+                ("unknown field", lambda v: v["config"]["playback"].update(api_key="x")),
+                ("url selector", lambda v: v["config"]["playback"].update(route="/api/getHistory")),
+                ("missing field", lambda v: v["config"]["playback"].pop("credential_expires_at")),
+                ("not an object", lambda v: v["config"].update(playback=[])),
+                ("no Jellystat credential", lambda v: v["credentials"].pop()),
+                ("renamed credential", lambda v: v["credentials"][-1].update(name="jellystat-admin.json")),
+                ("extra credential", lambda v: v["credentials"].append(
+                    {"name": "admin.json", "source": "/protected/admin", "source_uid": 1000})),
+                # The Emby backend file is never installed again as the Jellystat key.
+                ("copied Emby source", lambda v: v["credentials"][-1].update(source="/protected/holonet-backend")),
+                ("uid", lambda v: v.update(uid=941)),
+                ("subject", lambda v: v["config"]["playlist_operator"].update(subject="")),
+                ("library", lambda v: v["config"]["playlist_operator"].update(library="1")),
+                ("namespace", lambda v: v["config"]["playlist_operator"].update(namespace="movies-catalog")),
+                ("library ceiling", lambda v: v["config"]["policy"].update(Libraries=["3", "4"])),
+                ("catalog ceiling", lambda v: v["config"]["policy"].update(CatalogUsers=["c" * 32])),
+            ]
+            for name, mutate in cases:
+                value = playback_fixture()
+                mutate(value)
+                with self.subTest(name):
+                    self.rejected(value)
+
+    def test_playback_leaves_worker_plan_unit_and_guard_names_bounded(self):
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+        template = (ROOT / "roles/web_mcp_endpoint/templates/endpoint.service.j2").read_text()
+        # Compare plans over the current module bytes; the worker pins themselves
+        # are owned and checked by the operator tests above.
+        current = {name: hashlib.sha256((ROOT / "scripts" / name).read_bytes()).hexdigest()
+                   for name in contract.OPERATOR_MODULES}
+        with operator_pins(), playback_pins(), mock.patch.dict(contract.OPERATOR_MODULES, current):
+            value = playback_fixture()
+            off = copy.deepcopy(value)
+            off["config"].pop("playback")
+            off["config"]["policy"].update(Actions=["catalog.read"], HistoryUsers=[])
+            off["credentials"].pop()
+            plan, plan_off = contract.playlist_operator_plan(value), contract.playlist_operator_plan(off)
+        # The root worker receives only the explicit history ceiling.
+        self.assertEqual(plan["policy"].pop("history_users"),
+                         sorted(value["config"]["policy"]["HistoryUsers"]))
+        self.assertNotIn("history_users", plan_off["policy"])
+        self.assertEqual(plan, plan_off)
+        self.assertNotIn("jellystat", json.dumps(plan).lower())
+        # Same hardened unit: no new writable path, capability or socket.
+        self.assertEqual(env.from_string(template).render(web_mcp=value),
+                         env.from_string(template).render(web_mcp=off))
+        self.assertNotIn("ReadWritePaths", env.from_string(template).render(web_mcp=value))
+        # Two exact runtime credential names for HoloNet; others unchanged.
+        for service, name, allowed in (
+                ("holonet", "backend.json", True), ("holonet", "jellystat.json", True),
+                ("holonet", "jellystat-admin.json", False), ("holonet", "../jellystat.json", False),
+                ("holonet", "backend-token", False), ("ha-mcp", "jellystat.json", False),
+                ("ha-mcp", "backend-token", True), ("homelab-observer", "gatus-a.json", True),
+                ("homelab-observer", "jellystat.json", False)):
+            with self.subTest(service=service, name=name):
+                self.assertIs(guard.credential_name_allowed(service, name), allowed)
 
     def test_playlist_operator_contract_through_ansible_extra_vars(self):
         # Real extra vars are tagged by Ansible 2.19, unlike plain fixture dicts.

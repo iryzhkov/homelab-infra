@@ -225,10 +225,69 @@
   ],
   "show_result_fields": {
     "from_core_version_2": ["revision", "journal_digest", "pending", "run", "done_count", "done_limit", "keys_exhausted",
-                            "reconcile", "version", "scope", "legacy_list", "lists", "list_count", "list_limit", "migrated_from"],
+                            "reconcile", "version", "scope", "legacy_list", "lists", "list_count", "list_limit",
+                            "archived_count", "completed_count", "migrated_from"],
+    "archived_count": "integer >= 0: completed keys moved to the replay archive; consumers must accept it before activation",
+    "completed_count": "integer: done_count + archived_count; only grows; consumers must accept it before activation",
     "added_by_worker": ["capacity_warning"],
     "run": "null or {\"operation\": string, \"list\": string, \"args\": object}; never a key",
     "pending": "null or {\"operation\": step name, \"list\": string}",
     "migrated_from": "null or the core object without its key"
+  },
+  "movie_metadata": {
+    "operation": "movie-metadata",
+    "note": "read-only; refused unless the current policy has history_users; every other operation keeps the original caller without history_users; synthetic IDs only",
+    "policy_history_users": ["cccccccccccccccccccccccccccccccc"],
+    "caller_actions": ["catalog.read", "playlist.read", "home.read", "history.read"],
+    "caller_history_users": ["cccccccccccccccccccccccccccccccc"],
+    "frame_example": "{\"version\":1,\"caller\":{\"issuer\":\"https://issuer.invalid/application/o/synthetic/\",\"subject\":\"synthetic-writer-subject\",\"namespace\":\"managed-recommendations\",\"server\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"library\":\"7\",\"catalog_user\":\"99999999999999999999999999999999\",\"actions\":[\"catalog.read\",\"playlist.read\",\"home.read\",\"history.read\"],\"expires_at\":1793491200,\"history_users\":[\"cccccccccccccccccccccccccccccccc\"]},\"recipient\":\"cccccccccccccccccccccccccccccccc\",\"deadline_unix_ms\":1793491140000,\"operation\":\"movie-metadata\",\"request\":{\"ids\":[\"8001\",\"7\",\"9\"]}}\n",
+    "valid": [
+      {"name": "one-id", "request": {"ids": ["8001"]}},
+      {"name": "opaque-ids", "request": {"ids": ["m2", "m1"]}},
+      {"name": "twenty-five-ids", "request": {"ids": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"]}}
+    ],
+    "invalid": [
+      {"name": "missing-history-users", "caller_delete": ["history_users"], "code": "refused", "message": "Invalid caller"},
+      {"name": "empty-history-users", "caller_set": {"history_users": []}, "code": "refused", "message": "Invalid caller"},
+      {"name": "uppercase-history-user", "caller_set": {"history_users": ["CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"]}, "code": "refused", "message": "Invalid caller"},
+      {"name": "duplicate-history-user", "caller_set": {"history_users": ["cccccccccccccccccccccccccccccccc", "cccccccccccccccccccccccccccccccc"]}, "code": "refused", "message": "Invalid caller"},
+      {"name": "history-users-string", "caller_set": {"history_users": "cccccccccccccccccccccccccccccccc"}, "code": "refused", "message": "Invalid caller"},
+      {"name": "seventeen-history-users", "caller_set": {"history_users": ["00000000000000000000000000000001", "00000000000000000000000000000002", "00000000000000000000000000000003", "00000000000000000000000000000004", "00000000000000000000000000000005", "00000000000000000000000000000006", "00000000000000000000000000000007", "00000000000000000000000000000008", "00000000000000000000000000000009", "0000000000000000000000000000000a", "0000000000000000000000000000000b", "0000000000000000000000000000000c", "0000000000000000000000000000000d", "0000000000000000000000000000000e", "0000000000000000000000000000000f", "00000000000000000000000000000010", "00000000000000000000000000000011"]}, "code": "refused", "message": "Invalid caller"},
+      {"name": "show-with-history-users", "set": {"operation": "show", "request": {}}, "code": "refused", "message": "Invalid caller"},
+      {"name": "missing-ids", "set": {"request": {}}, "code": "refused", "message": "Invalid request fields"},
+      {"name": "extra-request-field", "set": {"request": {"ids": ["8001"], "fields": "Path,UserData"}}, "code": "refused", "message": "Invalid request fields"},
+      {"name": "request-url", "set": {"request": {"ids": ["8001"], "url": "/Users/x/Items"}}, "code": "refused", "message": "Invalid request fields"},
+      {"name": "empty-ids", "set": {"request": {"ids": []}}, "code": "refused", "message": "Expected 1..25 Movies"},
+      {"name": "ids-string", "set": {"request": {"ids": "8001"}}, "code": "refused", "message": "Expected 1..25 Movies"},
+      {"name": "twenty-six-ids", "set": {"request": {"ids": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26"]}}, "code": "refused", "message": "Expected 1..25 Movies"},
+      {"name": "duplicate-ids", "set": {"request": {"ids": ["8001", "8001"]}}, "code": "refused", "message": "Duplicate Movie IDs"},
+      {"name": "path-id", "set": {"request": {"ids": ["../Items"]}}, "code": "refused", "message": "Invalid opaque ID"},
+      {"name": "query-id", "set": {"request": {"ids": ["7&ParentId=8"]}}, "code": "refused", "message": "Invalid opaque ID"}
+    ],
+    "denied": [
+      {"name": "missing-history-action", "caller_set": {"actions": ["catalog.read", "playlist.read", "home.read"]}, "code": "refused", "message": "History read needs exactly the fixed actions"},
+      {"name": "management-actions-plus-history", "caller_set": {"actions": ["catalog.read", "playlist.read", "playlist.manage", "home.read", "history.read"]}, "code": "refused", "message": "History read needs exactly the fixed actions"},
+      {"name": "reordered-actions", "caller_set": {"actions": ["history.read", "catalog.read", "playlist.read", "home.read"]}, "code": "refused", "message": "History read needs exactly the fixed actions"},
+      {"name": "foreign-history-user", "caller_set": {"history_users": ["cccccccccccccccccccccccccccccccc", "88888888888888888888888888888888"]}, "code": "refused", "message": "History users outside management policy"},
+      {"name": "foreign-subject", "caller_set": {"subject": "synthetic-other-subject"}, "code": "refused", "message": "Caller outside management policy"},
+      {"name": "foreign-recipient", "set": {"recipient": "88888888888888888888888888888888"}, "code": "refused", "message": "Recipient outside management policy"}
+    ],
+    "backend_query": {
+      "method": "GET",
+      "path": "/emby/Users/<recipient>/Items",
+      "query": {"Recursive": "true", "IncludeItemTypes": "Movie", "ParentId": "<library>", "Ids": "<ids joined by comma>",
+                "Fields": "People,Genres", "StartIndex": "0", "Limit": "26", "EnableUserData": "false"}
+    },
+    "result_example": {"movies": [
+      {"Id": "8001", "Type": "Movie", "LibraryId": "7", "Name": "Synthetic Movie", "ProductionYear": 2020, "Genres": ["Drama"],
+       "People": [{"Id": "71", "Name": "Synthetic Director", "Type": "Director"}, {"Id": "72", "Name": "Synthetic Producer", "Type": "Producer"}]},
+      {"Id": "9", "Type": "Movie", "LibraryId": "7", "Name": "Synthetic Movie Without Metadata"}
+    ]},
+    "result_rules": "exactly {movies}; visible Movies of the fixed library among the requested IDs, in request order, at most 25, missing IDs silently omitted; each item has Id, Type, LibraryId, Name and only when known ProductionYear, Genres, People",
+    "credit_roles": ["Director", "Producer", "Composer"],
+    "bounds": {"ids": 25, "raw_credits": 512, "director_composer_credits": 16, "director_composer_overflow": "refuses",
+               "producer_credits": 16, "producer_overflow": "later valid Producer credits skipped", "projected_credits": 32,
+               "genres": 16, "credit_or_genre_name_bytes": 128,
+               "title_bytes": 512, "production_year": [1, 9999], "credit_id": "canonical decimal int64"}
   }
 }
