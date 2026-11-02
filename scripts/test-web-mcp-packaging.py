@@ -1332,13 +1332,17 @@ class PackagingTest(unittest.TestCase):
             with self.subTest(service=service, name=name):
                 self.assertIs(guard.credential_name_allowed(service, name), allowed)
 
-    def test_playlist_operator_contract_through_ansible_extra_vars(self):
+    def test_series_contract_through_ansible_extra_vars(self):
+        self.test_playlist_operator_contract_through_ansible_extra_vars(series=True)
+
+    def test_playlist_operator_contract_through_ansible_extra_vars(self, series=False):
         # Real extra vars are tagged by Ansible 2.19, unlike plain fixture dicts.
         with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
             base = Path(scratch)
-            value = operator_fixture()
-            value["artifact"].update(source_revision=contract.HOLONET_OPERATOR_SOURCE,
-                                     contract_revision=contract.HOLONET_OPERATOR_CONTRACT)
+            value = series_fixture() if series else operator_fixture()
+            value["artifact"].update(
+                source_revision=contract.HOLONET_SERIES_SOURCE if series else contract.HOLONET_OPERATOR_SOURCE,
+                contract_revision=contract.HOLONET_SERIES_CONTRACT if series else contract.HOLONET_OPERATOR_CONTRACT)
             play = base / "validate.yml"
             play.write_text(yaml.safe_dump([{
                 "hosts": "localhost", "connection": "local", "gather_facts": False,

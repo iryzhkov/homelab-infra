@@ -359,7 +359,7 @@ def holonet_playlist_operator(config, libraries, users):
     require(all(r in OPERATOR_RECIPIENTS for r in recipients),
             "recipient outside the fixed protected operator cohort")
     series = value.get("series_libraries")
-    require(series is None or (type(series) is dict and 1 <= len(series) <= 2),
+    require(series is None or (isinstance(series, dict) and 1 <= len(series) <= 2),
             "invalid bounded Series library map")
     series = series or {}
     require(not series or config.get("playback") is not None,
