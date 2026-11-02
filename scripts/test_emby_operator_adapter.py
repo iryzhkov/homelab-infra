@@ -3130,6 +3130,58 @@ class SeriesListTests(unittest.TestCase):
             with self.subTest(args=args), self.assertRaisesRegex(Refused, 'List limit reached'):
                 self.intent('create-list', 'e', **args)
 
+    def test_durable_unadded_items_are_reproved_on_each_snapshot(self):
+        original = self.backend.post
+
+        def hide_after_create(op, path, q, body, args):
+            result = original(op, path, q, body, args)
+            if op == 'create':
+                self.backend.hidden.add('31955')
+            return result
+        # fresh_session installs SeriesBackend before this wrapper is attached.
+        self.backend.post = hide_after_create
+        with self.assertRaisesRegex(Refused, 'Recipient Episode set incomplete'):
+            self.typed()
+        self.assertEqual([w[0] for w in self.backend.writes], ['create'])
+        self.assertEqual(self.stored()['run']['request']['items'], [HELL, TVITEM])
+        self.backend.post = original
+        self.backend.hidden.clear()
+        self.assertEqual(self.resume('create-list', 'create-series', 'rec-series',
+                                     title='TV and anime from your recent plays',
+                                     items=[HELL, TVITEM], intent_digest='0' * 64)['writes'], 4)
+        self.assertEqual([w[0] for w in self.backend.writes].count('create'), 1)
+
+    def full_typed_items(self, group):
+        members = []
+        for n in range(25):
+            episode_id, series_id = str(10000 + group * 100 + n), str(20000 + group * 100 + n)
+            library = (TV, ANIME)[n % 2]
+            name = 'Series ' + series_id
+            self.backend.series[series_id] = {'Id': series_id, 'Type': 'Series',
+                                               'Name': name, 'library': library}
+            self.backend.episodes[episode_id] = episode(episode_id, series_id, name, library, 1, 1)
+            members.append(item(episode_id, series_id, library))
+        return members
+
+    def test_fourth_movie_create_and_typed_replace_with_full_typed_siblings_fit_budget(self):
+        for n, list_id in enumerate('abc'):
+            self.do('create-list', 'create-' + list_id, list_id,
+                    title='Typed', items=self.full_typed_items(n))
+        movies = ['m%d' % n for n in range(1, 26)]
+        self.assertEqual(self.do('create-list', 'create-d', 'd', title='Fourth', movies=movies)['writes'], 5)
+        print('fourth Movie with 75 typed sibling items requests=%d' % self.api._requests)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+        self.assertEqual(self.do('set-members', 'replace-a', 'a', items=self.full_typed_items(4))['writes'], 2)
+        print('typed replacement beside full typed siblings requests=%d' % self.api._requests)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+
+    def test_fourth_typed_create_with_full_typed_siblings_fits_budget(self):
+        for n, list_id in enumerate('abcd'):
+            self.assertEqual(self.do('create-list', 'create-' + list_id, list_id,
+                                     title='Typed', items=self.full_typed_items(n))['writes'], 5)
+        print('fourth typed list with 100 total items requests=%d' % self.api._requests)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+
     def test_typed_record_refused_by_the_previous_record_rule(self):
         self.typed()
         record = self.stored()['lists']['rec-series']

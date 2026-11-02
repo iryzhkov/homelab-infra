@@ -536,17 +536,25 @@ class OperatorAdapter:
         used = sorted({i['library_id'] for i in items})
         require(all(x in granted for x in used), 'Item library outside Series grant')
         self.verified_identity(used)
-        for library in used:
+        self._prove_episode_bindings(recipient, items)
+        return items
+
+    def _prove_episode_bindings(self, recipient, items):
+        # Private proof after this invocation's identity check. A snapshot
+        # batches four lists plus the durable replacement request, without
+        # repeating identity or DTO reads. This does not change per-list limits.
+        require(1 <= len(items) <= (MAX_LISTS + 1) * 25, 'Too many Episode bindings')
+        for library in sorted({i['library_id'] for i in items}):
             group = [i for i in items if i['library_id'] == library]
-            episodes = self._scoped_episodes(recipient, library, [i['episode_id'] for i in group])
+            episodes = self._scoped_episodes(recipient, library,
+                                            sorted({i['episode_id'] for i in group}))
             require(set(episodes) == {i['episode_id'] for i in group} and
                     all(episodes[i['episode_id']][0] == i['series_id'] for i in group),
                     'Recipient Episode set incomplete or unauthorized')
-            series = self._scoped_series(recipient, library, [i['series_id'] for i in group])
+            series = self._scoped_series(recipient, library, sorted({i['series_id'] for i in group}))
             require(set(series) == {i['series_id'] for i in group} and
                     all(episodes[i['episode_id']][1] in (None, series[i['series_id']]['Name'])
                         for i in group), 'Recipient Series set incomplete or unauthorized')
-        return items
 
     def series_seeds(self, recipient, episode_ids, libraries):
         """Read-only: the visible parent Series of played Episodes, per granted library.
@@ -895,7 +903,10 @@ class OperatorAdapter:
         kinds = {m: EPISODE for m, r in records.items() if 'media_kind' in r}
         if 'items' in request:
             kinds[self._marker(request.get('list'))] = EPISODE
-        playlists = []
+        # Prove the durable request too, including before its first member
+        # exists. Thus every pre-dispatch and readback snapshot covers both
+        # current members and the exact pending replacement, in the same reads.
+        playlists, observed = [], list(request.get('items', []))
         for m in sorted(candidates):
             pid = self._discover(rows, m, saved.get(m), d, records)
             if pid is not None:
@@ -907,15 +918,13 @@ class OperatorAdapter:
                             prior = bindings.get(binding['episode_id'])
                             require(prior is None or prior == binding, 'Typed membership binding differs')
                             bindings[binding['episode_id']] = binding
-                    observed = []
                     for entry in playlist['entries']:
                         require(entry['episode'] in bindings,
                                 'Uncertain mutation; exact readback required, no retry')
                         observed.append(bindings[entry['episode']])
-                    if observed:
-                        require(self.query_episodes(recipient, sorted(series), observed) == observed,
-                                'Recipient Episode visibility or binding differs')
                 playlists.append(playlist)
+        if observed:
+            self._prove_episode_bindings(recipient, observed)
         return {'home': home, 'playlists': playlists}
 
     def _discover(self, rows, marker, saved, d, records):

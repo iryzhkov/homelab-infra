@@ -1404,9 +1404,9 @@ class Operator:
             require(s == d["current"], "Manual Home/playlist drift")
             if movies:
                 self._visible(movies)
-            if items:
-                # Before each write and after each readback: type, parent and library.
-                self._visible_items(items)
+            # Typed snapshot proofs include the durable request as well as
+            # observed members, before dispatch and on readback. Pre-journal
+            # admission still uses _visible_items; no duplicate lookup here.
             operation, args, playlist, marker = self._next(d, s, request, titled)
             if operation is None:
                 self._finish(d, s, name, request)

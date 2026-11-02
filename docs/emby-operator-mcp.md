@@ -233,8 +233,10 @@ library_id}` (create 1..25, set 0..25, unique Episodes and Series). They need
 (`Item library outside Series grant`). A recipient journal with typed state
 refuses every call whose current grant does not cover it, including Movie-only
 `show` and `reconcile` (`Typed list state needs current Series grants`). Every typed snapshot rechecks the live library identity, including empty lists,
-and proves observed Episode membership through recipient-scoped Episode and
-Series reads. This applies to show, reconcile, sibling Movie requests and row or
+and proves observed Episode membership and the durable typed request through
+recipient-scoped Episode and Series reads, before dispatch and on readback. All typed lists share one Episode read and one Series read per
+library per snapshot, at most four reads, without repeating that snapshot's
+identity check. Each list still has at most 25 members. This applies to show, reconcile, sibling Movie requests and row or
 title operations, including their final dispatch guard. Hidden, reparented or
 out-of-library Episodes refuse before facts or writes. Core
 rules are in
