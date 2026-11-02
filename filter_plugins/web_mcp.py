@@ -50,10 +50,10 @@ HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_adapter.py": "02db053e8d0c1f187244fdd435dcc671d6528dbd972af8f02ed29b7c2453899e",
+    "emby_operator_adapter.py": "694bc18d35e5aab77c10c3258df82f98a6ac0764bba12b4709f1510985823ad3",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "42969569034acde9ad26dff8db9472d8612122183d5bff4a2a79c1fbb59f053e",
-    "emby_operator_socket.py": "e4e39f1cd596d9b2f137313995112321896288769082e3b1255d1946c5fac0fb",
+    "emby_operator_socket.py": "6a9fa141addb9f80fbfde860c791bc3fa7faa2e6d168184c069390bb6fba8a17",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
