@@ -2984,6 +2984,60 @@ class SeriesListTests(unittest.TestCase):
         self.fresh_session()
         self.assertEqual([x['list'] for x in self.operator.show()['lists']], ['a'])
 
+    def test_existing_typed_lists_recheck_visibility_for_reads_and_row_operations(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.typed()
+        before, writes = self.bytes(), len(self.backend.writes)
+        original = copy.deepcopy((self.backend.episodes, self.backend.folders, self.backend.views))
+        operations = [
+            lambda: self.operator.show(),
+            lambda: self.operator.reconcile(),
+            lambda: self.operator.list_preview('set-title', 'rec-series', title='Changed'),
+            lambda: self.operator.list_preview('detach-row', 'rec-series'),
+            lambda: self.operator.list_preview('move-row', 'rec-series', position=0),
+            lambda: self.operator.list_preview('set-members', 'a', movies=['m2'])]
+        for drift in ('hidden-episode', 'hidden-series', 'parent', 'library', 'guid', 'view'):
+            self.backend.episodes, self.backend.folders, self.backend.views = copy.deepcopy(original)
+            self.backend.hidden = set()
+            if drift == 'hidden-episode':
+                self.backend.hidden.add('31955')
+            elif drift == 'hidden-series':
+                self.backend.hidden.add('31389')
+            elif drift == 'parent':
+                self.backend.episodes['31955']['SeriesId'] = '500'
+            elif drift == 'library':
+                self.backend.episodes['31955']['library'] = TV
+            elif drift == 'guid':
+                self.backend.folders[1]['Guid'] = '0' * 32
+            else:
+                self.backend.views.remove(ANIME)
+            for operation in operations:
+                with self.subTest(drift=drift, operation=operations.index(operation)):
+                    self.fresh_session()
+                    with self.assertRaises(Refused):
+                        operation()
+                    self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+
+    def test_typed_row_apply_rechecks_visibility_after_preview(self):
+        self.typed()
+        intent = self.intent('set-title', 'rec-series', title='Changed')
+        before, writes = self.bytes(), len(self.backend.writes)
+        self.backend.hidden.add('31955')
+        with self.assertRaises(Refused):
+            self.resume('set-title', 'title-after-hide', 'rec-series',
+                        title='Changed', intent_digest=intent)
+        self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+
+    def test_empty_typed_list_rechecks_live_library_identity(self):
+        self.typed()
+        self.do('set-members', 'clear-s', 'rec-series', items=[])
+        before, writes = self.bytes(), len(self.backend.writes)
+        self.backend.folders[1]['Guid'] = '0' * 32
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Series library identity drift'):
+            self.operator.show()
+        self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+
     def test_kind_library_parent_and_series_id_refusals_precede_writes(self):
         self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
         self.typed()

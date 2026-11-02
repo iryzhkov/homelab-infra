@@ -206,7 +206,7 @@ in the wire file.
 
 ## Series reads and typed Episode lists
 
-Contract `jocasta:c43c23446da086e5157fbca8a5f9977b@3`; frozen fixtures under
+Contract `jocasta:c43c23446da086e5157fbca8a5f9977b@4`; frozen fixtures under
 `series` in the wire file. Everything here is off unless the root policy and
 the recipient config both carry `series_libraries`.
 
@@ -232,7 +232,11 @@ library_id}` (create 1..25, set 0..25, unique Episodes and Series). They need
 `series_libraries` (`Series libraries required`) covering every item library
 (`Item library outside Series grant`). A recipient journal with typed state
 refuses every call whose current grant does not cover it, including Movie-only
-`show` and `reconcile` (`Typed list state needs current Series grants`). Core
+`show` and `reconcile` (`Typed list state needs current Series grants`). Every typed snapshot rechecks the live library identity, including empty lists,
+and proves observed Episode membership through recipient-scoped Episode and
+Series reads. This applies to show, reconcile, sibling Movie requests and row or
+title operations, including their final dispatch guard. Hidden, reparented or
+out-of-library Episodes refuse before facts or writes. Core
 rules are in
 [emby-operator-recommendations.md](emby-operator-recommendations.md#typed-episode-lists).
 Show adds `media_kind: "Episode"` to a typed list and gives its

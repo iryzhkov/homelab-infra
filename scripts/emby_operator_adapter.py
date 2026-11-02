@@ -860,7 +860,14 @@ class OperatorAdapter:
         c = self._config
         require(recipient == c['recipient'], 'Foreign recipient')
         d, legacy = self._state(marker)
-        self.verified_identity()
+        records = self._records(d)
+        request = ((d or {}).get('run') or {}).get('request') or {}
+        # Recheck identities even for empty or detached typed lists. Every
+        # snapshot, including the dispatch guard, uses current recipient views.
+        series = {library for record in records.values() if 'media_kind' in record
+                  for library in record['libraries']}
+        series.update(i['library_id'] for i in request.get('items', []))
+        self.verified_identity(sorted(series))
         home = normalize_home(self._http('GET', '/Users/' + recipient + '/HomeSections'))
         rows = complete(self._http('GET', '/Users/' + c['actor'] + '/Items', {
             'Recursive': 'true', 'IncludeItemTypes': 'Playlist', 'EnableUserData': 'false',
@@ -872,7 +879,6 @@ class OperatorAdapter:
                     'Invalid playlist discovery DTO')
         require(len(seen) == len(set(seen)), 'Duplicate discovered ID')
         pending = d.get('pending') if d else None
-        records = self._records(d)
         known = d['current']['playlists'] if d else []
         require(len(known) <= (MAX_LISTS if d and d['version'] == 2 else 1), 'Ambiguous saved ID')
         saved = {}
@@ -887,14 +893,29 @@ class OperatorAdapter:
             candidates.add(self._marker(pending.get('list')))
         # Typed Episode lists, from protected custody: saved records or a typed run.
         kinds = {m: EPISODE for m, r in records.items() if 'media_kind' in r}
-        request = ((d or {}).get('run') or {}).get('request') or {}
         if 'items' in request:
             kinds[self._marker(request.get('list'))] = EPISODE
         playlists = []
         for m in sorted(candidates):
             pid = self._discover(rows, m, saved.get(m), d, records)
             if pid is not None:
-                playlists.append(self._playlist(pid, m, kinds.get(m, 'Movie')))
+                playlist = self._playlist(pid, m, kinds.get(m, 'Movie'))
+                if kinds.get(m) == EPISODE:
+                    bindings = {i['episode_id']: i for i in records.get(m, {}).get('items', [])}
+                    if request.get('list') is not None and self._marker(request['list']) == m:
+                        for binding in request.get('items', []):
+                            prior = bindings.get(binding['episode_id'])
+                            require(prior is None or prior == binding, 'Typed membership binding differs')
+                            bindings[binding['episode_id']] = binding
+                    observed = []
+                    for entry in playlist['entries']:
+                        require(entry['episode'] in bindings,
+                                'Uncertain mutation; exact readback required, no retry')
+                        observed.append(bindings[entry['episode']])
+                    if observed:
+                        require(self.query_episodes(recipient, sorted(series), observed) == observed,
+                                'Recipient Episode visibility or binding differs')
+                playlists.append(playlist)
         return {'home': home, 'playlists': playlists}
 
     def _discover(self, rows, marker, saved, d, records):

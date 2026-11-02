@@ -50,7 +50,7 @@ HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_adapter.py": "7645c0eb296f6d5553f795e456e092bc19fdd4e08f1e6bfe69fe26cb0e819d98",
+    "emby_operator_adapter.py": "4d9f22c00f1b352033d81fed05c67faf8594b4406ee8a3db25e206a3cf77372f",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "38fa51341e959cd9c2446ef295f84794fc8566bd24cc96eee39cbbda3cef4d75",
     "emby_operator_socket.py": "e4e39f1cd596d9b2f137313995112321896288769082e3b1255d1946c5fac0fb",
