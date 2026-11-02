@@ -29,9 +29,12 @@ import time
 from emby_operator_adapter import (OperatorAdapter, load_config, load_credentials, private_read,
                                    strict_json)
 from emby_operator_entry import invoke, operator_session
-from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT, Journal,
-                                           Refused, checked_title, digest, movie_ids, opaque,
-                                           row_position)
+from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT,
+                                           TYPED_OPERATIONS, Journal, Refused, canonical_id,
+                                           catalog_ids, checked_title, digest, movie_ids, opaque,
+                                           row_position, series_library_ids, series_map,
+                                           typed_items)
+from emby_operator_adapter import CREDIT_ROLES, MAX_CATALOG_LIMIT, MAX_CATALOG_OFFSET
 
 VERSION = 1
 # Fixed root-owned policy. No argument, environment or request selects a path.
@@ -73,15 +76,25 @@ if set(LIST_ACTIONS) != set(LIST_OPERATIONS):
 # every other operation keeps the original caller shape.
 METADATA_OPERATION = 'movie-metadata'
 HISTORY_ACTIONS = ['catalog.read', 'playlist.read', 'home.read', 'history.read']
-WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply', METADATA_OPERATION)
+# Read-only Series facts for the HoloNet Series tools. Caller: the history
+# caller plus a nonempty series_libraries; management callers may carry an
+# optional series_libraries; movie-metadata keeps its exact original caller.
+SERIES_OPERATIONS = ('series-seeds', 'recipient-series', 'series-catalog')
+SERIES_REQUEST = {'series-seeds': {'episode_ids'}, 'recipient-series': {'ids'}}
+CATALOG_REQUIRED = frozenset({'library_id', 'limit'})
+CATALOG_OPTIONAL = frozenset({'offset', 'person_id', 'person_role'})
+WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply', METADATA_OPERATION,
+                     *SERIES_OPERATIONS)
 REQUEST_FIELDS = frozenset({'version', 'caller', 'recipient', 'deadline_unix_ms',
                             'operation', 'request'})
 PINNED_CALLER = ('issuer', 'subject', 'namespace', 'server', 'library', 'catalog_user')
 CALLER_FIELDS = frozenset(PINNED_CALLER + ('actions', 'expires_at'))
 HISTORY_CALLER_FIELDS = CALLER_FIELDS | {'history_users'}
+SERIES_CALLER_FIELDS = HISTORY_CALLER_FIELDS | {'series_libraries'}
 POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'})
-# Optional opt-in: without history_users the policy permits no history read.
-HISTORY_POLICY_FIELDS = POLICY_FIELDS | {'history_users'}
+# Optional opt-ins: without history_users the policy permits no history read;
+# without series_libraries it permits no Series read or typed list state.
+POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries'})
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
@@ -134,7 +147,7 @@ def validate_policy(value):
     def ok(condition):
         if not condition:
             raise Refused('Invalid management policy')
-    ok(type(value) is dict and set(value) in (POLICY_FIELDS, HISTORY_POLICY_FIELDS) and
+    ok(type(value) is dict and POLICY_FIELDS <= set(value) <= POLICY_FIELDS | POLICY_OPTIONAL and
        value['version'] == 1 and
        type(value['version']) is int and type(value['enabled']) is bool)
     peer = value['peer']
@@ -157,6 +170,13 @@ def validate_policy(value):
     ok(len(set(recipients.values())) == len(recipients))
     if 'history_users' in value:
         ok(hex_users(value['history_users']) and set(value['history_users']) <= set(recipients))
+    if 'series_libraries' in value:
+        # The dedicated Series ceiling, separate from the Movie catalog library.
+        try:
+            series = series_map(value['series_libraries'])
+        except Refused:
+            ok(False)
+        ok(caller['library'] not in series)
     return copy.deepcopy(value)
 
 
@@ -233,16 +253,25 @@ def parse_request(frame):
     check(type(value['version']) is int and value['version'] == VERSION,
           'refused', 'Unsupported version')
     caller = value['caller']
-    # Only the read operation carries history_users; its value is checked below.
+    # Only the read operations carry history_users; Series reads also carry a
+    # nonempty series_libraries, management may; movie-metadata never does.
     metadata = value['operation'] == METADATA_OPERATION
-    check(type(caller) is dict and
-          set(caller) == (HISTORY_CALLER_FIELDS if metadata else CALLER_FIELDS) and
+    series_read = value['operation'] in SERIES_OPERATIONS
+    allowed = ((HISTORY_CALLER_FIELDS,) if metadata else (SERIES_CALLER_FIELDS,) if series_read
+               else (CALLER_FIELDS, CALLER_FIELDS | {'series_libraries'}))
+    check(type(caller) is dict and set(caller) in allowed and
           all(bounded_text(caller[k], 512) for k in PINNED_CALLER) and
           bounded_int(caller['expires_at'], MAX_EPOCH_SECONDS) and
           type(caller['actions']) is list and len(caller['actions']) <= MAX_ACTIONS and
           all(isinstance(a, str) and ACTION.fullmatch(a) for a in caller['actions']) and
           len(set(caller['actions'])) == len(caller['actions']), 'refused', 'Invalid caller')
-    check(not metadata or hex_users(caller['history_users']), 'refused', 'Invalid caller')
+    check(not (metadata or series_read) or hex_users(caller['history_users']),
+          'refused', 'Invalid caller')
+    if 'series_libraries' in caller:
+        try:
+            series_library_ids(caller['series_libraries'])
+        except Refused:
+            raise WireError('refused', 'Invalid caller') from None
     check(isinstance(value['recipient'], str) and HEX32.fullmatch(value['recipient']),
           'refused', 'Invalid recipient')
     check(bounded_int(value['deadline_unix_ms'], MAX_EPOCH_MS), 'refused', 'Invalid deadline')
@@ -256,6 +285,8 @@ def parse_request(frame):
 def typed_request(operation, request):
     check(type(request) is dict, 'refused', 'Invalid request fields')
     fields = set(request)
+    if operation in SERIES_OPERATIONS:
+        return series_request(operation, request)
     if operation == METADATA_OPERATION:
         check(fields == {'ids'}, 'refused', 'Invalid request fields')
         try:
@@ -271,7 +302,10 @@ def typed_request(operation, request):
         target = request.get('operation')
         check(isinstance(target, str) and target in LIST_ACTIONS,
               'refused', 'Unsupported list operation')
-        expected = {'operation', 'list', *LIST_OPERATIONS[target]}
+        arguments = LIST_OPERATIONS[target]
+        if 'items' in fields and target in TYPED_OPERATIONS:
+            arguments = TYPED_OPERATIONS[target]
+        expected = {'operation', 'list', *arguments}
         if operation == 'apply':
             expected |= {'key', 'intent_digest'}
         check(fields == expected, 'refused', 'Invalid request fields')
@@ -280,6 +314,8 @@ def typed_request(operation, request):
             opaque(request['list'])
         if 'movies' in request:
             movie_ids(request['movies'], 0)
+        if 'items' in request:
+            typed_items(request['items'], 1 if request.get('operation') == 'create-list' else 0)
         if 'title' in request:
             checked_title(request['title'])
             check(bounded_text(request['title'], 256), 'refused', 'Invalid journal display title')
@@ -295,6 +331,35 @@ def typed_request(operation, request):
     return copy.deepcopy(request)
 
 
+def series_request(operation, request):
+    """Exact Series read request: canonical IDs, bounded page, optional exact credit."""
+    fields = set(request)
+    if operation in SERIES_REQUEST:
+        check(fields == SERIES_REQUEST[operation], 'refused', 'Invalid request fields')
+        (name,) = SERIES_REQUEST[operation]
+        try:
+            catalog_ids(request[name], 'Episode' if name == 'episode_ids' else 'Series')
+        except Refused as error:
+            raise WireError('refused', safe_message(error)) from None
+        return copy.deepcopy(request)
+    check(CATALOG_REQUIRED <= fields <= CATALOG_REQUIRED | CATALOG_OPTIONAL and
+          ('person_id' in fields) == ('person_role' in fields), 'refused', 'Invalid request fields')
+    try:
+        canonical_id(request['library_id'])
+    except Refused as error:
+        raise WireError('refused', safe_message(error)) from None
+    check(type(request['limit']) is int and 1 <= request['limit'] <= MAX_CATALOG_LIMIT,
+          'refused', 'Invalid limit')
+    check('offset' not in request or bounded_int(request['offset'], MAX_CATALOG_OFFSET),
+          'refused', 'Invalid offset')
+    if 'person_id' in request:
+        check(isinstance(request['person_id'], str) and
+              re.fullmatch('[1-9][0-9]{0,18}', request['person_id']) is not None and
+              int(request['person_id']) < 2 ** 63 and request['person_role'] in CREDIT_ROLES,
+              'refused', 'Invalid person filter')
+    return copy.deepcopy(request)
+
+
 def authorize(call, policy):
     """Intersect the verified caller with the root ceiling on every request."""
     caller = call['caller']
@@ -302,6 +367,25 @@ def authorize(call, policy):
           'refused', 'Caller outside management policy')
     check(call['recipient'] in policy['recipients'],
           'refused', 'Recipient outside management policy')
+    if 'series_libraries' in caller:
+        # Signed grants intersected by the service, intersected again with the
+        # current root Series ceiling. The Movie library never implies one.
+        check('series_libraries' in policy, 'refused', 'Series libraries not enabled by policy')
+        check(set(caller['series_libraries']) <= set(policy['series_libraries']),
+              'refused', 'Series libraries outside management policy')
+    if call['operation'] in SERIES_OPERATIONS:
+        check('history_users' in policy, 'refused', 'History read not enabled by policy')
+        check(caller['actions'] == HISTORY_ACTIONS,
+              'refused', 'History read needs exactly the fixed actions')
+        check(set(caller['history_users']) <= set(policy['recipients']),
+              'refused', 'History users outside management policy')
+        check(call['recipient'] in caller['history_users'] and
+              call['recipient'] in policy['history_users'],
+              'refused', 'Recipient outside history policy')
+        check(call['operation'] != 'series-catalog' or
+              call['request']['library_id'] in caller['series_libraries'],
+              'refused', 'Library outside Series grant')
+        return
     if call['operation'] == METADATA_OPERATION:
         # Current policy must opt in; the recipient field alone proves nothing.
         check('history_users' in policy, 'refused', 'History read not enabled by policy')
@@ -317,6 +401,11 @@ def authorize(call, policy):
     if call['operation'] in ('preview', 'apply'):
         required |= LIST_ACTIONS[call['request']['operation']]
     check(required <= set(caller['actions']), 'refused', 'Missing required action')
+    items = call['request'].get('items')
+    if items is not None:
+        check('series_libraries' in caller, 'refused', 'Series libraries required')
+        check(all(i['library_id'] in caller['series_libraries'] for i in items),
+              'refused', 'Item library outside Series grant')
 
 
 def remaining_seconds(call, now_ms):
@@ -357,6 +446,21 @@ def selected_config(policy, recipient):
           'unavailable', 'Recipient configuration does not match policy')
     check(config['enabled'] is True, 'unavailable', 'Recipient management disabled')
     return config
+
+
+def series_grant(policy, config, caller):
+    """Current Series grant: caller IDs whose root policy and recipient config agree.
+
+    None for a Movie-only caller. Any granted library missing from, or
+    different in, the recipient config refuses before credentials or network.
+    """
+    granted = caller.get('series_libraries')
+    if granted is None:
+        return None
+    configured = config.get('series_libraries') or {}
+    check(all(configured.get(x) == policy['series_libraries'][x] for x in granted),
+          'unavailable', 'Recipient configuration does not match policy')
+    return {x: copy.deepcopy(configured[x]) for x in granted}
 
 
 def safe_message(error):
@@ -415,7 +519,8 @@ def dispatch(operator, call):
         return invoke(operator, 'reconcile', {})
     # Every validated argument of the list operation, and nothing else.
     target = request['operation']
-    args = {name: request[name] for name in LIST_OPERATIONS[target]}
+    args = {k: v for k, v in request.items() if k not in ('operation', 'list', 'key',
+                                                          'intent_digest')}
     if operation == 'preview':
         return invoke(operator, 'list-preview', dict(args, operation=target, list=request['list']))
     key = internal_key(call['caller'], call['recipient'], request['key'])
@@ -423,11 +528,12 @@ def dispatch(operator, call):
                                          intent_digest=request['intent_digest']))
 
 
-def movie_metadata(config, call, guard):
+def movie_metadata(config, call, guard, series=None):
     """Read-only metadata under the recipient's nonblocking journal lock.
 
     Uses the same Journal, adapter, credential and guard as management, but no
     Operator: no journal load or write, reconcile, init, adoption or preview.
+    The Series reads take the same path with the current Series grant.
     """
     journal = Journal(config['journal_directory'], root_safe=True)
     api = None
@@ -439,19 +545,34 @@ def movie_metadata(config, call, guard):
                 api.authenticate(credentials)
             finally:
                 credentials.clear()
-            return {'movies': api.movie_metadata(call['recipient'], config['library'],
-                                                 call['request']['ids'])}
+            return read(api, config, call, series)
     finally:
         if api is not None:
             api.close()
         journal.close()
 
 
-def execute(config, call, guard):
+def read(api, config, call, series):
+    recipient, request = call['recipient'], call['request']
+    if call['operation'] == METADATA_OPERATION:
+        return {'movies': api.movie_metadata(recipient, config['library'], request['ids'])}
+    libraries = sorted(series)
+    if call['operation'] == 'series-seeds':
+        return {'series': api.series_seeds(recipient, request['episode_ids'], libraries)}
+    if call['operation'] == 'recipient-series':
+        return {'series': api.recipient_series(recipient, request['ids'], libraries)}
+    person = ((request['person_id'], request['person_role'])
+              if 'person_id' in request else None)
+    return api.series_catalog(recipient, request['library_id'], request['limit'],
+                              request.get('offset', 0), person, libraries)
+
+
+def execute(config, call, guard, series=None):
     try:
-        if call['operation'] == METADATA_OPERATION:
-            return movie_metadata(config, call, guard)
-        with operator_session(config, request_guard=guard) as operator:
+        if call['operation'] in (METADATA_OPERATION, *SERIES_OPERATIONS):
+            return movie_metadata(config, call, guard, series)
+        with operator_session(config, request_guard=guard,
+                              **({'series': series} if series is not None else {})) as operator:
             try:
                 return dispatch(operator, call)
             except Refused as error:
@@ -489,7 +610,10 @@ def handle(conn):
     guard = Guard(conn, time.monotonic() + remaining_seconds(call, int(time.time() * 1000)))
     check(peer_state(conn) == 'open', 'refused', 'Trailing data or early close')
     config = selected_config(policy, call['recipient'])
-    return execute(config, call, guard)
+    series = series_grant(policy, config, call['caller'])
+    if series is None:
+        return execute(config, call, guard)
+    return execute(config, call, guard, series)
 
 
 def envelope(result=None, error=None):

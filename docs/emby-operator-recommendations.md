@@ -82,6 +82,7 @@ Config has exactly these fields:
 | recipe | Immutable bounded opaque recipe ID. In version 2 it names the legacy list, whose marker is unchanged. |
 | credential_file | Explicit absolute root-protected staging file. |
 | journal_directory | Existing persistent protected directory. |
+| series_libraries | Optional. 1..2 entries `{library ID: {guid, name, category}}`: canonical decimal library ID (never `library`), lowercase 32-hex GUID unique and different from `library_guid`, printable name of 1..128 UTF-8 bytes, category `tv` or `anime` (categories may repeat). Absent means no typed Episode list or Series read, exactly as before. See "Typed Episode lists". |
 
 Credential JSON has only `username` and `password`, nonempty bounded strings.
 Each invocation creates a new adapter and authenticates once via
@@ -108,16 +109,45 @@ Protected request shapes:
 | init-preview | Empty object, or no request file |
 | init | `key`, `intent_digest` from a fresh init-preview |
 | list-preview | `operation`, `list` and exactly that operation's argument fields |
-| create-list | `key`, `list`, `title`, `movies` (0..25), `intent_digest` |
-| set-members | `key`, `list`, `movies` (0..25), `intent_digest` |
+| create-list | `key`, `list`, `title`, `movies` (0..25) or `items` (1..25 typed Episodes), `intent_digest` |
+| set-members | `key`, `list`, `movies` (0..25) or `items` (0..25 typed Episodes), `intent_digest` |
 | set-title | `key`, `list`, `title`, `intent_digest` |
 | detach-row, delete-list | `key`, `list`, `intent_digest` |
 | attach-row | `key`, `list`, `title`, `intent_digest` |
 | move-row | `key`, `list`, `position` (integer, not Boolean, 0 <= position < fresh Home row count), `intent_digest` |
+| recommendation-inventory | `recipient` (the configured recipient), optional `episode_id` (canonical positive decimal) |
 
 The first seven operations keep their request shapes. Their version 2 meaning
 is described under "Legacy aliases". List-scoped operations refuse on a version
 1 journal with "Journal migration required".
+
+### Recommendation inventory (read-only, root CLI only)
+
+`recommendation-inventory` is a local root-operator read. It is not one of the
+shared entry's `OPERATIONS`, so neither `invoke` nor the MCP socket worker
+admits it. The request is validated against the protected configuration before
+any credential load, journal open or network send. The CLI then uses the
+existing `operator_session` (fresh admin authentication and identity
+verification) and holds the recipient's nonblocking journal lock while the
+adapter reads; it never loads, saves, initializes, migrates or reconciles the
+journal, and sends no request other than the authentication POST and fixed GETs.
+
+The result has `recipient` and `libraries`: every current recipient view whose
+`Id` is exactly one `/Library/VirtualFolders` `ItemId`, projected to `Id`,
+`Guid`, `Name` and `CollectionType` only, at most 100 of each. Views that are
+not library folders, such as Playlists, are omitted. Duplicate folder IDs or
+GUIDs, a view whose name or collection type differs from its folder, or a
+missing configured Movie library refuse. Library purpose is never inferred
+beyond the explicit name and collection type.
+
+With `episode_id`, the adapter reads that one item and its `SeriesId` through
+the recipient's `/Items` with `EnableUserData=false` and no `Fields`, then
+proves which single visible library holds the Series and the Episode. The
+`episode` result is either `status: mapped` with `Id`, `Type`, `SeriesId`,
+`SeriesType`, `SeriesName` and `LibraryId`, or `status: insufficient-facts`
+when the recipient cannot see the Episode, its Series or a library holding it.
+A non-Episode item, mismatched Series name or type, or a Series in more than
+one library refuses. No history, playlist or other user is read.
 
 ## Identity, provenance and managed grant semantics
 
@@ -601,6 +631,64 @@ in place and refuse as reused keys under version 1.
 Code at or before 7180f726c368d9e5aae7a9209a42825127e4c1a9 refuses a version 2
 journal as foreign and touches no Emby object. Downgrade first, then redeploy the
 old code.
+
+## Typed Episode lists
+
+Contract: `jocasta:c43c23446da086e5157fbca8a5f9977b@3`. A version 2 journal may
+hold Episode lists beside Movie lists. They share the one journal, lock, run,
+pending step, replay archive, marker formula and `MAX_LISTS` (4 lists in total
+across Movies and Series libraries). There is no per-library journal or store.
+
+Requests. `create-list` and `set-members` accept `items` instead of `movies`,
+never both. Each item is exactly `{episode_id, series_id, library_id}` with
+canonical decimal IDs; Episode IDs and Series IDs are each unique, so a list
+holds at most one Episode per Series. A typed create needs 1..25 items; a typed
+`set-members` takes 0..25, and an explicit empty list clears it but keeps it an
+Episode list. The canonical request keeps the item fields, so the intent digest,
+the completed request and the archive record bind the Episode, its parent Series
+and its library. Key order inside an item does not matter. Movie request bytes,
+digests, keys and replay are unchanged.
+
+Grant. The Operator takes an optional `series` grant, `{library ID: {guid, name,
+category}}`. The socket worker builds it per call from the caller's
+`series_libraries` intersected with the root policy and this recipient config;
+the root CLI passes the whole configured map. Typed items must use granted
+libraries. Whenever the journal holds typed state (an Episode list record or a
+typed run), every operation, including `show`, `reconcile`, previews and Movie
+operations, refuses with `Typed list state needs current Series grants` unless
+the grant covers every library bound to that state. The Movie library and the
+journal namespace never imply a Series grant.
+
+Record. A typed list record is `{row, display_title?, media_kind: "Episode",
+libraries, items}`. `libraries` is the sorted grant at creation (1..2 IDs) and
+bounds later items; `items` is the exact typed membership, and it must equal the
+saved playlist's Episode IDs in order. The saved snapshot stores a typed list's
+occurrences as `{episode, entry}`; Movie occurrences keep `{movie, entry}`. Movie
+records are unchanged. Movie requests refuse on Episode lists and typed requests
+on Movie lists (`List media kind differs`); the legacy list stays a Movie list.
+
+Writes. Before preview, before a run is recorded and on every step, including
+after each readback, the adapter proves each item: the configured Series library
+is the exact folder (ID, GUID, name, `tvshows`) and a current recipient view, the
+Episode is a recipient-visible `Episode` inside that library whose `SeriesId` is
+the item's Series, and that Series is visible in the same library with a matching
+name. Membership is written by `add-episodes`, whose pending arguments are the
+full typed items, and whose only POST body is the validated Episode IDs. A Series
+ID is never posted. Readback accepts only `Episode` occurrences equal to the
+requested Episode IDs in order, so a server-side Series expansion stays an
+uncertain write that only exact readback can complete; there is no retry.
+
+Show. A typed list adds `media_kind: "Episode"`, and its `playlist.entries` are
+`{episode_id, series_id, library_id, entry}`, bound from the record or, for an
+observed unfinished write, from the run's typed request. Movie lists keep their
+shape and gain no field.
+
+Compatibility and rollback. Code at or before d8be71d refuses a journal with a
+typed record (`Invalid list record`) for every operation and writes nothing.
+Roll back only to this code with Series grants removed: Movie operations then
+refuse while typed state exists, and work again after the typed list is deleted
+with a grant. Never edit a journal by hand to drop typed state. Downgrade to
+version 1 refuses while a typed list exists. Series reads change no journal.
 
 ## Qualification boundaries
 

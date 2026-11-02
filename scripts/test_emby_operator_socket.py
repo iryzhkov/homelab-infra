@@ -371,6 +371,145 @@ class WireFixtureTests(WorkerCase):
             self.assertEqual(caught.exception.code, 'deadline')
 
 
+SERIES = FIXTURES['series']
+READ_CALLER = {'actions': list(worker.HISTORY_ACTIONS), 'history_users': [base.R]}
+
+
+def series_frame(case, libraries):
+    """A management or read frame with series_libraries, then the case's changes."""
+    read = case['base'] == 'read'
+    caller = dict(READ_CALLER if read else {}, series_libraries=list(libraries))
+    value = frame('series-seeds' if read else 'show',
+                  {'episode_ids': ['31955', '501']} if read else {}, caller=caller)
+    if 'operation' in case:
+        value.update(operation=case['operation'], request=copy.deepcopy(case['request']))
+    value.update(copy.deepcopy(case.get('set', {})))
+    for name in case.get('caller_delete', []):
+        del value['caller'][name]
+    value['caller'].update(copy.deepcopy(case.get('caller_set', {})))
+    return value
+
+
+class SeriesWorkerTests(WorkerCase):
+    """Series reads and typed Episode lists through the real worker; synthetic model only."""
+    def setUp(self):
+        series_config = base.series_config()
+        with patch.object(base, 'config', lambda: copy.deepcopy(series_config)), \
+             patch.object(base, 'MultiBackend', base.SeriesBackend):
+            super().setUp()
+        self.policy.update(series_libraries=copy.deepcopy(base.SERIES_CONFIG),
+                           history_users=[base.R])
+        self.policy = worker.validate_policy(self.policy)
+        self.manage = {'series_libraries': list(base.GRANTED)}
+        self.read = dict(READ_CALLER, series_libraries=list(base.GRANTED))
+
+    def fixture_policy(self, series=True):
+        value = copy.deepcopy(FIXTURES['policy'])
+        value['history_users'] = SERIES['policy_history_users']
+        if series:
+            value['series_libraries'] = SERIES['policy_series_libraries']
+        return worker.validate_policy(value)
+
+    def test_series_fixtures_parse_or_refuse_with_exact_codes(self):
+        fixture_policy = self.fixture_policy()
+        for name in ('management_frame_example', 'read_frame_example'):
+            example = SERIES[name].encode()
+            call = worker.parse_request(example[:-1])
+            worker.authorize(call, fixture_policy)
+            self.assertEqual(json.dumps(call, separators=(',', ':')).encode() + b'\n', example)
+            self.assertEqual([k for k in call['caller']],
+                             [k for k in SERIES['caller_field_order'] if k in call['caller']])
+        libraries = SERIES['management_series_libraries']
+        self.assertEqual(libraries, sorted(libraries))
+        self.assertNotEqual(libraries, sorted(libraries, key=int))
+        for case in SERIES['valid']:
+            with self.subTest(case=case['name']):
+                call = worker.parse_request(encode(series_frame(case, libraries))[:-1])
+                worker.authorize(call, fixture_policy)
+                self.assertEqual(call['request'], case['request'])
+        for policy_value, cases in ((fixture_policy, SERIES['invalid'] + SERIES['denied']),
+                                    (self.fixture_policy(False), SERIES['policy_without_series_denied'])):
+            for case in cases:
+                with self.subTest(case=case['name']), self.assertRaises(worker.WireError) as caught:
+                    call = worker.parse_request(encode(series_frame(case, libraries))[:-1])
+                    worker.authorize(call, policy_value)
+                self.assertEqual((caught.exception.code, caught.exception.message),
+                                 (case['code'], case['message']))
+        # Every earlier fixture keeps its meaning under a policy with Series enabled.
+        for case in FIXTURES['valid']:
+            call = worker.parse_request(encode(frame(case['operation'], case['request']))[:-1])
+            worker.authorize(call, fixture_policy)
+
+    def typed_create(self):
+        request = {'operation': 'create-list', 'list': 'rec-series',
+                   'title': 'TV and anime from your recent plays', 'items': [base.HELL, base.TVITEM]}
+        preview = self.ok('preview', request, caller=self.manage)
+        self.assertEqual(preview['request'], request)
+        applied = dict(request, key='series-1', intent_digest=preview['intent_digest'])
+        self.reset()
+        self.assertEqual(self.ok('apply', applied, caller=self.manage), {'state': 'created', 'writes': 5})
+        self.assertEqual(self.writes(), ['create', 'share', 'row', 'display-title', 'add-episodes'])
+        return applied
+
+    def test_typed_list_through_worker_and_movie_only_callers_fail_closed(self):
+        typed = {'operation': 'set-members', 'list': 'rec-series', 'items': [base.OTHER]}
+        self.reset()
+        self.error(frame('preview', typed), 'refused', 'Series libraries required')
+        self.assert_untouched()
+        applied = self.typed_create()
+        self.assertEqual(self.stored()['done'][expected_key('series-1')],
+                         {k: v for k, v in applied.items() if k not in ('key', 'intent_digest')})
+        shown = {x['list']: x for x in self.ok('show', caller=self.manage)['lists']}
+        self.assertEqual(shown['rec-series']['media_kind'], 'Episode')
+        self.assertEqual([[k for k in e] for e in shown['rec-series']['playlist']['entries']],
+                         [['episode_id', 'series_id', 'library_id', 'entry']] * 2)
+        self.assertNotIn('media_kind', shown['a'])
+        before = self.journal_bytes()
+        for operation, request in (('show', {}), ('reconcile', {}), ('preview', MEMBERS)):
+            with self.subTest(operation=operation):
+                self.reset()
+                self.error(frame(operation, request), 'refused',
+                           SERIES['movie_only_typed_state_error']['message'])
+                self.assertEqual(self.mutation_posts(), [])
+        partial = {'series_libraries': [base.TV]}
+        self.error(frame('show', caller=partial), 'refused', 'Typed list state needs current Series grants')
+        self.assertEqual(self.journal_bytes(), before)
+        # The Movie list keeps working beside its typed sibling for an opted-in writer.
+        preview = self.ok('preview', MEMBERS, caller=self.manage)
+        self.assertEqual(self.ok('apply', dict(preview['request'], key='movies-1',
+                                               intent_digest=preview['intent_digest']),
+                                 caller=self.manage), {'state': 'members-set', 'writes': 2})
+        self.assertEqual(self.ok('apply', applied, caller=self.manage), {'state': 'replayed', 'writes': 0})
+
+    def test_series_reads_through_worker_change_nothing(self):
+        before = self.journal_bytes()
+        self.reset()
+        seeds = self.ok('series-seeds', {'episode_ids': ['31955', '501']}, caller=self.read)
+        self.assertEqual([(s['Id'], s['Category'], s['EpisodeIds']) for s in seeds['series']],
+                         [('31389', 'anime', ['31955']), ('500', 'tv', ['501'])])
+        result_keys = set(SERIES['results']['series-seeds']['series'][0])
+        self.assertEqual(set(seeds['series'][0]), result_keys)
+        series = self.ok('recipient-series', {'ids': ['500']}, caller=self.read)['series']
+        self.assertEqual(set(series[0]['Representative']),
+                         set(SERIES['results']['recipient-series']['series'][0]['Representative']))
+        page = self.ok('series-catalog', {'library_id': base.TV, 'limit': 1}, caller=self.read)
+        self.assertEqual((set(page), page['next_offset']), ({'series', 'next_offset'}, 1))
+        self.assertEqual(self.mutation_posts(), [])
+        self.assertEqual(self.journal_bytes(), before)
+        self.error(frame('series-catalog', {'library_id': base.TV, 'limit': 1},
+                         caller=dict(self.read, series_libraries=[base.ANIME])),
+                   'refused', 'Library outside Series grant')
+
+    def test_recipient_series_config_must_match_policy_before_credentials(self):
+        self.config['series_libraries'][base.TV]['name'] = 'Renamed'
+        self.reset()
+        self.error(frame('show', caller=self.manage), 'unavailable',
+                   'Recipient configuration does not match policy')
+        self.assertEqual((self.backend_calls(), self.credential_reads), ([], 0))
+        # A Movie-only caller of the same recipient keeps the old path.
+        self.assertEqual(self.ok('show')['list_count'], 1)
+
+
 class SocketBoundaryTests(WorkerCase):
     def test_invalid_and_denied_requests_refuse_before_any_backend_or_file(self):
         for case in FIXTURES['invalid'] + FIXTURES['denied']:

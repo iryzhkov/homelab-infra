@@ -4,7 +4,8 @@ import argparse
 import json
 import sys
 
-from emby_operator_adapter import load_config, private_read, strict_json
+from emby_operator_adapter import (INVENTORY_OPERATION, inventory_request, load_config,
+                                   private_read, strict_json)
 from emby_operator_entry import OPERATIONS, invoke, operator_session, request_fields
 from emby_operator_recommendations import Refused, require
 
@@ -12,7 +13,7 @@ from emby_operator_recommendations import Refused, require
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, help='Protected root-owned configuration path')
-    parser.add_argument('operation', choices=OPERATIONS)
+    parser.add_argument('operation', choices=(*OPERATIONS, INVENTORY_OPERATION))
     parser.add_argument('--request-file', help='Protected JSON request, never credentials in argv')
     args = parser.parse_args(argv)
     try:
@@ -20,9 +21,20 @@ def main(argv=None):
         require(config['enabled'], 'Operator disabled')
         request = strict_json(private_read(args.request_file)) if args.request_file else {}
         require(type(request) is dict, 'Invalid operator request')
+        if args.operation == INVENTORY_OPERATION:
+            # Read-only adapter inventory under the held journal lock; no Operator
+            # method, journal load or write. Validated before credentials or network.
+            recipient, episode = inventory_request(config, request)
+            with operator_session(config) as operator, operator.journal.locked():
+                result = operator.api.recommendation_inventory(recipient, episode)
+                print(json.dumps(result, allow_nan=False))
+            return 0
         require(set(request) in request_fields(args.operation, request),
                 'Invalid operator request fields')
-        with operator_session(config) as operator:
+        # The root operator holds the whole configured Series map; without one
+        # the session is Movie-only and refuses typed list state.
+        with operator_session(config, **({'series': config['series_libraries']}
+                                         if 'series_libraries' in config else {})) as operator:
             # Output contains private scope/Movie IDs; operator stdout is not a public receipt.
             result = invoke(operator, args.operation, request)
             print(json.dumps(result, allow_nan=False))

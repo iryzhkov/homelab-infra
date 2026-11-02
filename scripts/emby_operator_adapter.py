@@ -14,7 +14,8 @@ import urllib.request
 from functools import wraps
 from emby_operator_recommendations import (MAX_LISTS, NotDispatched, Refused, require, movie_ids,
                                            opaque, row_id, display_title, title_row, list_marker,
-                                           native_move_index)
+                                           native_move_index, EPISODE, canonical_id, catalog_ids,
+                                           series_library_ids, series_map, typed_items)
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_BODY = 16 * 1024
@@ -32,6 +33,15 @@ MAX_GENRES = 16
 MAX_NAME_BYTES = 128
 MAX_TITLE_BYTES = 512
 METADATA_FIELDS = 'People,Genres'
+# Root-operator CLI only; neither the shared entry nor the MCP socket admits it.
+INVENTORY_OPERATION = 'recommendation-inventory'
+MAX_LIBRARIES = 100
+# Series reads: fixed recipient-scoped queries under one configured Series library.
+SERIES_LIBRARY_TYPE = 'tvshows'
+MAX_CATALOG_LIMIT = 10
+MAX_CATALOG_OFFSET = 1000
+REPRESENTATIVE_PAGE = 25
+REPRESENTATIVE_SORT = 'ParentIndexNumber,IndexNumber,SortName'
 
 
 def strict_json(raw):
@@ -91,7 +101,9 @@ def private_read(path, limit=MAX_BODY):
 
 
 def validate_config(c):
-    require(type(c) is dict and set(c) == {
+    # Optional series_libraries opts this recipient into typed Episode lists and
+    # Series reads; without it the configuration and behavior are unchanged.
+    require(type(c) is dict and set(c) - {'series_libraries'} == {
         'enabled', 'origin', 'server', 'actor', 'recipient', 'library',
         'library_guid', 'recipe', 'credential_file', 'journal_directory'},
         "Invalid protected configuration")
@@ -116,6 +128,11 @@ def validate_config(c):
     for k in ('credential_file', 'journal_directory'):
         require(isinstance(c[k], str) and c[k].startswith('/') and
                 '..' not in PurePosixPath(c[k]).parts, "Invalid protected path")
+    if 'series_libraries' in c:
+        series = series_map(c['series_libraries'])
+        require(c['library'] not in series and
+                all(v['guid'] != c['library_guid'] for v in series.values()),
+                "Invalid Series libraries")
     return copy.deepcopy(c)
 
 
@@ -182,6 +199,29 @@ def catalog_id(value):
             and int(value) < 2 ** 63)
 
 
+def collection_type(value):
+    """Explicit CollectionType token, or None for a mixed library. Never inferred."""
+    require(value is None or (isinstance(value, str) and
+                              re.fullmatch('[a-z]{1,32}', value) is not None),
+            'Invalid library type')
+    return value
+
+
+def inventory_request(config, request):
+    """Validate an inventory request before any credential load or network send.
+
+    Exactly the configured recipient, plus at most one canonical decimal
+    episode_id. Returns (recipient, episode_id or None).
+    """
+    require(type(request) is dict and
+            set(request) in ({'recipient'}, {'recipient', 'episode_id'}),
+            'Invalid operator request fields')
+    require(request['recipient'] == config['recipient'], 'Foreign recipient')
+    episode = request.get('episode_id')
+    require('episode_id' not in request or catalog_id(episode), 'Invalid episode ID')
+    return request['recipient'], episode
+
+
 def movie_metadata_item(row, library):
     """Allowlisted Movie facts; a missing or null field stays unknown.
 
@@ -194,25 +234,42 @@ def movie_metadata_item(row, library):
             'Invalid Movie metadata')
     item = {'Id': opaque(row.get('Id')), 'Type': 'Movie', 'LibraryId': library,
             'Name': row['Name']}
+    return metadata_fields(row, item, 'Invalid Movie metadata')
+
+
+def series_item(row, library, category):
+    """Allowlisted Series facts with the same bounded metadata as Movies.
+
+    Category is the configured category of the exact library, never inferred.
+    """
+    require(row.get('Type') == 'Series' and printable(row.get('Name'), MAX_TITLE_BYTES) and
+            catalog_id(row.get('Id')), 'Invalid Series metadata')
+    item = {'Id': row['Id'], 'Type': 'Series', 'Name': row['Name'], 'LibraryId': library,
+            'Category': category}
+    return metadata_fields(row, item, 'Invalid Series metadata')
+
+
+def metadata_fields(row, item, message):
+    """Add known ProductionYear, Genres and People to item, else refuse with message."""
     year = row.get('ProductionYear')
     if year is not None:
-        require(type(year) is int and 1 <= year <= 9999, 'Invalid Movie metadata')
+        require(type(year) is int and 1 <= year <= 9999, message)
         item['ProductionYear'] = year
     genres = row.get('Genres')
     if genres is not None:
         require(type(genres) is list and len(genres) <= MAX_GENRES and
-                all(printable(g, MAX_NAME_BYTES) for g in genres), 'Invalid Movie metadata')
+                all(printable(g, MAX_NAME_BYTES) for g in genres), message)
         item['Genres'] = list(genres)
     people = row.get('People')
     if people is not None:
         require(type(people) is list and len(people) <= MAX_RAW_CREDITS and
-                all(type(p) is dict for p in people), 'Invalid Movie metadata')
+                all(type(p) is dict for p in people), message)
         credits, seen, producers, others = [], set(), 0, 0
         for p in people:
             if p.get('Type') not in CREDIT_ROLES:
                 continue
             require(catalog_id(p.get('Id')) and printable(p.get('Name'), MAX_NAME_BYTES),
-                    'Invalid Movie metadata')
+                    message)
             if (p['Id'], p['Type']) in seen:
                 continue
             seen.add((p['Id'], p['Type']))
@@ -221,7 +278,7 @@ def movie_metadata_item(row, library):
                     continue
                 producers += 1
             else:
-                require(others < MAX_CREDITS, 'Invalid Movie metadata')
+                require(others < MAX_CREDITS, message)
                 others += 1
             credits.append({'Id': p['Id'], 'Name': p['Name'], 'Type': p['Type']})
         item['People'] = credits
@@ -364,8 +421,15 @@ class OperatorAdapter:
         self._auth = (c['server'], c['actor'], self.session_binding)
         self.verified_identity()
 
-    def verified_identity(self):
+    def verified_identity(self, series=()):
+        """Admin, principals and Movie library; plus each named Series library.
+
+        A Series library must be the exact configured folder (ID, GUID, name,
+        tvshows) and a current recipient view. The same two reads serve both
+        checks, so the request count is unchanged.
+        """
         c = self._config
+        series = self._series_libraries(series) if series else {}
         require(self._auth == (c['server'], c['actor'], self.session_binding),
                 "Missing session-bound authentication evidence")
         users = self._http('GET', '/Users')
@@ -388,9 +452,17 @@ class OperatorAdapter:
         matches = [f for f in folders if f.get('ItemId') == c['library']]
         require(len(matches) == 1 and matches[0].get('Guid') == c['library_guid'] and
                 matches[0].get('CollectionType') == 'movies', "Library identity drift")
+        for library, expected in series.items():
+            found = [f for f in folders if f.get('ItemId') == library]
+            require(len(found) == 1 and found[0].get('Guid') == expected['guid'] and
+                    found[0].get('Name') == expected['name'] and
+                    found[0].get('CollectionType') == SERIES_LIBRARY_TYPE,
+                    "Series library identity drift")
         views = complete(self._http('GET', '/Users/' + c['recipient'] + '/Views'), 100)
         require(sum(v.get('Id') == c['library'] for v in views) == 1,
                 "Recipient library view unavailable")
+        require(all(sum(v.get('Id') == library for v in views) == 1 for library in series),
+                "Recipient Series library view unavailable")
         return {k: c[k] for k in ('server', 'actor', 'recipient', 'library')} | {
             'verified': True, 'is_admin': True,
             'auth_mode': 'authenticated-admin-session', 'session_binding': self.session_binding}
@@ -408,6 +480,228 @@ class OperatorAdapter:
                 set(got) == set(ids) and all(x.get('Type') == 'Movie' for x in result),
                 "Recipient Movie set incomplete or unauthorized")
         return [{'Id': x, 'Type': 'Movie', 'LibraryId': library} for x in ids]
+
+    def _series_libraries(self, libraries):
+        """The configured identities of 1..2 sorted granted Series library IDs."""
+        configured = self._config.get('series_libraries') or {}
+        libraries = series_library_ids(list(libraries))
+        require(all(x in configured for x in libraries), 'Series library outside configuration')
+        return {x: configured[x] for x in libraries}
+
+    def _items(self, recipient, query, cap):
+        """One fixed recipient-scoped Items GET without user data; complete page only."""
+        query = dict(query, EnableUserData='false')
+        return complete(self._http('GET', '/Users/' + recipient + '/Items', query), cap)
+
+    def _scoped_episodes(self, recipient, library, ids):
+        """Visible Episodes among ids inside one library: {id: (SeriesId, SeriesName)}."""
+        rows = self._items(recipient, {
+            'Recursive': 'true', 'IncludeItemTypes': 'Episode', 'ParentId': library,
+            'Ids': ','.join(ids), 'StartIndex': 0, 'Limit': len(ids) + 1}, len(ids))
+        found = {}
+        for r in rows:
+            require(r.get('Type') == 'Episode' and r.get('Id') in ids and r['Id'] not in found,
+                    'Unrequested, duplicate or non-Episode item')
+            series = r.get('SeriesId')
+            require(catalog_id(series) and series != r['Id'] and
+                    (r.get('SeriesName') is None or printable(r.get('SeriesName'), MAX_TITLE_BYTES)),
+                    'Episode and Series differ')
+            found[r['Id']] = (series, r.get('SeriesName'))
+        return found
+
+    def _scoped_series(self, recipient, library, ids, fields=False):
+        """Visible Series among ids inside one library, by ID, in returned order."""
+        query = {'Recursive': 'true', 'IncludeItemTypes': 'Series', 'ParentId': library,
+                 'Ids': ','.join(ids), 'StartIndex': 0, 'Limit': len(ids) + 1}
+        if fields:
+            query['Fields'] = METADATA_FIELDS
+        found = {}
+        for r in self._items(recipient, query, len(ids)):
+            require(r.get('Type') == 'Series' and r.get('Id') in ids and r['Id'] not in found and
+                    printable(r.get('Name'), MAX_TITLE_BYTES), 'Unrequested, duplicate or non-Series item')
+            found[r['Id']] = r
+        return found
+
+    def query_episodes(self, recipient, libraries, items):
+        """Write proof for typed items: every item, in order, or refuse.
+
+        Each Episode is a current recipient-visible Episode inside its library
+        whose SeriesId is the item's Series, and that Series is visible in the
+        same library. A Series ID is never accepted where an Episode is needed.
+        """
+        c = self._config
+        require(recipient == c['recipient'], 'Foreign query scope')
+        items = typed_items(items, 1)
+        granted = self._series_libraries(libraries)
+        used = sorted({i['library_id'] for i in items})
+        require(all(x in granted for x in used), 'Item library outside Series grant')
+        self.verified_identity(used)
+        self._prove_episode_bindings(recipient, items)
+        return items
+
+    def _prove_episode_bindings(self, recipient, items):
+        # Private proof after this invocation's identity check. A snapshot
+        # batches four lists plus the durable replacement request, without
+        # repeating identity or DTO reads. This does not change per-list limits.
+        require(1 <= len(items) <= (MAX_LISTS + 1) * 25, 'Too many Episode bindings')
+        for library in sorted({i['library_id'] for i in items}):
+            group = [i for i in items if i['library_id'] == library]
+            episodes = self._scoped_episodes(recipient, library,
+                                            sorted({i['episode_id'] for i in group}))
+            require(set(episodes) == {i['episode_id'] for i in group} and
+                    all(episodes[i['episode_id']][0] == i['series_id'] for i in group),
+                    'Recipient Episode set incomplete or unauthorized')
+            series = self._scoped_series(recipient, library, sorted({i['series_id'] for i in group}))
+            require(set(series) == {i['series_id'] for i in group} and
+                    all(episodes[i['episode_id']][1] in (None, series[i['series_id']]['Name'])
+                        for i in group), 'Recipient Series set incomplete or unauthorized')
+
+    def series_seeds(self, recipient, episode_ids, libraries):
+        """Read-only: the visible parent Series of played Episodes, per granted library.
+
+        Episodes resolve through recipient-scoped Episode.SeriesId inside each
+        granted library; invisible or unparented Episodes are skipped. An
+        Episode in two libraries, or a SeriesName contradiction, refuses. Series
+        are returned in first submitted-Episode order with their EpisodeIds.
+        """
+        c = self._config
+        require(recipient == c['recipient'], 'Foreign query scope')
+        episode_ids = catalog_ids(episode_ids, 'Episode')
+        granted = self._series_libraries(libraries)
+        self.verified_identity(list(granted))
+        homes = {}
+        for library in granted:
+            for episode, parent in self._scoped_episodes(recipient, library, episode_ids).items():
+                require(episode not in homes, 'Episode in several libraries')
+                homes[episode] = (library,) + parent
+        rows = {}
+        for library in granted:
+            wanted = sorted({h[1] for h in homes.values() if h[0] == library})
+            if wanted:
+                for sid, row in self._scoped_series(recipient, library, wanted, True).items():
+                    require(sid not in rows, 'Series in several libraries')
+                    rows[sid] = (library, row)
+        result, index = [], {}
+        for episode in episode_ids:
+            if episode not in homes:
+                continue
+            library, sid, name = homes[episode]
+            if sid not in rows or rows[sid][0] != library:
+                continue  # Parent not visible in the same library: insufficient, skipped.
+            row = rows[sid][1]
+            require(name in (None, row['Name']), 'Episode and Series differ')
+            if sid not in index:
+                item = series_item(row, library, granted[library]['category'])
+                item['EpisodeIds'] = []
+                index[sid] = item
+                result.append(item)
+            index[sid]['EpisodeIds'].append(episode)
+        return result
+
+    def recipient_series(self, recipient, ids, libraries):
+        """Read-only visible Series by ID in request order, with optional Representative."""
+        c = self._config
+        require(recipient == c['recipient'], 'Foreign query scope')
+        ids = catalog_ids(ids, 'Series')
+        granted = self._series_libraries(libraries)
+        self.verified_identity(list(granted))
+        found = {}
+        for library in granted:
+            for sid, row in self._scoped_series(recipient, library, ids, True).items():
+                require(sid not in found, 'Series in several libraries')
+                found[sid] = series_item(row, library, granted[library]['category'])
+        result = [found[x] for x in ids if x in found]
+        self._attach_representatives(recipient, result)
+        return result
+
+    def series_catalog(self, recipient, library, limit, offset=0, person=None, libraries=()):
+        """Read-only bounded page of visible Series in one granted library.
+
+        next_offset is offset + limit while more rows exist and that offset stays
+        within MAX_CATALOG_OFFSET, else null. Null at the bound is not a claim
+        that the catalog is exhausted. With a person filter every returned
+        Series must carry that exact credit after projection, or the read refuses.
+        """
+        c = self._config
+        require(recipient == c['recipient'], 'Foreign query scope')
+        granted = self._series_libraries(libraries)
+        require(library in granted, 'Library outside Series grant')
+        require(type(limit) is int and 1 <= limit <= MAX_CATALOG_LIMIT, 'Invalid limit')
+        require(type(offset) is int and 0 <= offset <= MAX_CATALOG_OFFSET, 'Invalid offset')
+        require(person is None or (type(person) is tuple and len(person) == 2 and
+                                   catalog_id(person[0]) and person[1] in CREDIT_ROLES),
+                'Invalid person filter')
+        self.verified_identity([library])
+        query = {'Recursive': 'true', 'IncludeItemTypes': 'Series', 'ParentId': library,
+                 'Fields': METADATA_FIELDS, 'SortBy': 'SortName', 'SortOrder': 'Ascending',
+                 'StartIndex': offset, 'Limit': limit, 'EnableUserData': 'false'}
+        if person is not None:
+            query.update(PersonIds=person[0], PersonTypes=person[1])
+        dto = self._http('GET', '/Users/' + recipient + '/Items', query)
+        require(type(dto) is dict and type(dto.get('Items')) is list and
+                type(dto.get('TotalRecordCount')) is int and dto['TotalRecordCount'] >= 0 and
+                all(type(x) is dict for x in dto['Items']), 'Incomplete or unbounded result')
+        rows, total = dto['Items'], dto['TotalRecordCount']
+        require(len(rows) == max(0, min(limit, total - offset)), 'Incomplete or unbounded result')
+        result, seen = [], set()
+        for row in rows:
+            item = series_item(row, library, granted[library]['category'])
+            require(item['Id'] not in seen, 'Duplicate Series')
+            seen.add(item['Id'])
+            if person is not None:
+                require(any(p['Id'] == person[0] and p['Type'] == person[1]
+                            for p in item.get('People', [])), 'Series lacks the filtered credit')
+            result.append(item)
+        self._attach_representatives(recipient, result)
+        following = offset + limit
+        return {'series': result, 'next_offset': following
+                if total > following and following <= MAX_CATALOG_OFFSET else None}
+
+    def _attach_representatives(self, recipient, series):
+        """Optional first normal Episode per Series from one bounded sorted page.
+
+        The choice is the least (season, episode, ID) among positive-indexed
+        Episodes in the page. A Series without one keeps no Representative; no
+        further page and no watched state is read. Chosen Episodes are then
+        proven inside each Series library with one batched query.
+        """
+        chosen = {}
+        for item in series:
+            dto = self._http('GET', '/Users/' + recipient + '/Items', {
+                'Recursive': 'true', 'IncludeItemTypes': 'Episode', 'ParentId': item['Id'],
+                'SortBy': REPRESENTATIVE_SORT, 'SortOrder': 'Ascending', 'StartIndex': 0,
+                'Limit': REPRESENTATIVE_PAGE, 'EnableUserData': 'false'})
+            require(type(dto) is dict and type(dto.get('Items')) is list and
+                    len(dto['Items']) <= REPRESENTATIVE_PAGE and
+                    type(dto.get('TotalRecordCount')) is int and
+                    dto['TotalRecordCount'] >= len(dto['Items']) and
+                    all(type(r) is dict for r in dto['Items']), 'Incomplete or unbounded result')
+            normal, seen = [], set()
+            for r in dto['Items']:
+                require(r.get('Type') == 'Episode' and catalog_id(r.get('Id')) and
+                        r['Id'] not in seen and r.get('SeriesId') == item['Id'] and
+                        r.get('SeriesName') in (None, item['Name']), 'Representative differs from Series')
+                seen.add(r['Id'])
+                season, number = r.get('ParentIndexNumber'), r.get('IndexNumber')
+                if (type(season) is int and type(number) is int and season > 0 and number > 0
+                        and r.get('LocationType') != 'Virtual'):
+                    normal.append((season, number, int(r['Id']), r['Id']))
+            if normal:
+                season, number, _, episode = min(normal)
+                chosen[item['Id']] = {'Id': episode, 'Type': EPISODE, 'SeriesId': item['Id'],
+                                      'SeriesName': item['Name'], 'ParentIndexNumber': season,
+                                      'IndexNumber': number}
+        for library in sorted({s['LibraryId'] for s in series if s['Id'] in chosen}):
+            wanted = [chosen[s['Id']]['Id'] for s in series
+                      if s['Id'] in chosen and s['LibraryId'] == library]
+            found = self._scoped_episodes(recipient, library, wanted)
+            require(set(found) == set(wanted) and
+                    all(found[chosen[s['Id']]['Id']][0] == s['Id'] for s in series
+                        if s['Id'] in chosen and s['LibraryId'] == library),
+                    'Representative outside Series library')
+        for item in series:
+            if item['Id'] in chosen:
+                item['Representative'] = chosen[item['Id']]
 
     def movie_metadata(self, recipient, library, ids):
         """Read-only metadata of the requested Movies this recipient can see.
@@ -432,6 +726,102 @@ class OperatorAdapter:
                     'Unrequested or duplicate Movie')
             found[item['Id']] = item
         return [found[x] for x in ids if x in found]
+
+    def recommendation_inventory(self, recipient, episode_id=None):
+        """Read-only recipient library inventory and one optional Episode-to-Series map.
+
+        Root operator CLI only. After the unchanged identity verification it
+        returns the recipient's current views that are exactly one virtual
+        folder, as Id/Guid/Name/CollectionType only, and at most one Episode
+        mapping. Every request is a fixed recipient-scoped GET without user
+        data or Fields. Unmappable or invisible items are insufficient facts.
+        """
+        request = {'recipient': recipient}
+        if episode_id is not None:
+            request['episode_id'] = episode_id
+        inventory_request(self._config, request)
+        self.verified_identity()
+        libraries = self._visible_libraries(recipient)
+        result = {'recipient': recipient, 'libraries': libraries}
+        if episode_id is not None:
+            result['episode'] = self._episode_series(recipient, episode_id, libraries)
+        return result
+
+    def _visible_libraries(self, recipient):
+        c = self._config
+        folders = self._http('GET', '/Library/VirtualFolders')
+        require(type(folders) is list and len(folders) <= MAX_LIBRARIES and
+                all(type(f) is dict for f in folders), 'Invalid library response')
+        ids = [opaque(f.get('ItemId')) for f in folders]
+        guids = [f.get('Guid') for f in folders]
+        require(len(ids) == len(set(ids)) and len(guids) == len(set(guids)) and
+                all(isinstance(g, str) and re.fullmatch('[0-9a-f]{32}', g) for g in guids),
+                'Ambiguous library identity')
+        by_id = dict(zip(ids, folders))
+        views = complete(self._http('GET', '/Users/' + recipient + '/Views'), MAX_LIBRARIES)
+        view_ids = [opaque(v.get('Id')) for v in views]
+        require(len(view_ids) == len(set(view_ids)), 'Duplicate recipient view')
+        libraries = []
+        for view_id, view in zip(view_ids, views):
+            folder = by_id.get(view_id)
+            if folder is None:
+                continue  # Not a library folder, for example the Playlists view.
+            name, kind = folder.get('Name'), collection_type(folder.get('CollectionType'))
+            require(printable(name, MAX_TITLE_BYTES) and view.get('Name') == name and
+                    collection_type(view.get('CollectionType')) == kind,
+                    'Recipient view and library folder differ')
+            libraries.append({'Id': view_id, 'Guid': folder['Guid'], 'Name': name,
+                              'CollectionType': kind})
+        require(sum(x['Id'] == c['library'] and x['Guid'] == c['library_guid']
+                    for x in libraries) == 1, 'Recipient library view unavailable')
+        return libraries
+
+    def _visible_items(self, recipient, item_id, parent=None, kind=None):
+        """At most one recipient-visible item by exact ID, optionally inside one library."""
+        query = {'Ids': item_id, 'EnableUserData': 'false', 'StartIndex': 0, 'Limit': 2}
+        if parent is not None:
+            query.update(Recursive='true', ParentId=parent, IncludeItemTypes=kind)
+        rows = complete(self._http('GET', '/Users/' + recipient + '/Items', query), 1)
+        require(all(r.get('Id') == item_id for r in rows), 'Unrequested inventory item')
+        require(kind is None or all(r.get('Type') == kind for r in rows),
+                'Inventory item type differs')
+        return rows
+
+    def _episode_series(self, recipient, episode_id, libraries):
+        insufficient = {'Id': episode_id, 'status': 'insufficient-facts'}
+        rows = self._visible_items(recipient, episode_id)
+        if not rows:
+            return insufficient
+        episode = rows[0]
+        require(episode.get('Type') == 'Episode', 'Requested item is not an Episode')
+        series_id = episode.get('SeriesId')
+        if series_id is None:
+            return insufficient
+        require(catalog_id(series_id) and series_id != episode_id, 'Invalid Series ID')
+        rows = self._visible_items(recipient, series_id)
+        if not rows:
+            return insufficient
+        series = rows[0]
+        require(series.get('Type') == 'Series' and
+                printable(series.get('Name'), MAX_TITLE_BYTES) and
+                episode.get('SeriesName') in (None, series['Name']), 'Episode and Series differ')
+        homes = []
+        for library in libraries:
+            scoped = self._visible_items(recipient, series_id, library['Id'], 'Series')
+            require(not scoped or scoped[0].get('Name') == series['Name'],
+                    'Scoped Series differs')
+            if scoped:
+                homes.append(library)
+        require(len(homes) <= 1, 'Ambiguous Series library')
+        if not homes:
+            return insufficient
+        scoped = self._visible_items(recipient, episode_id, homes[0]['Id'], 'Episode')
+        require(scoped and scoped[0].get('SeriesId') == series_id and
+                scoped[0].get('SeriesName') in (None, series['Name']),
+                'Episode outside its Series library or mapping differs')
+        return {'Id': episode_id, 'Type': 'Episode', 'SeriesId': series_id,
+                'SeriesType': 'Series', 'SeriesName': series['Name'],
+                'LibraryId': homes[0]['Id'], 'status': 'mapped'}
 
     def _marker(self, list_id):
         return self._legacy if list_id is None else list_marker(self._base, list_id)
@@ -478,7 +868,14 @@ class OperatorAdapter:
         c = self._config
         require(recipient == c['recipient'], 'Foreign recipient')
         d, legacy = self._state(marker)
-        self.verified_identity()
+        records = self._records(d)
+        request = ((d or {}).get('run') or {}).get('request') or {}
+        # Recheck identities even for empty or detached typed lists. Every
+        # snapshot, including the dispatch guard, uses current recipient views.
+        series = {library for record in records.values() if 'media_kind' in record
+                  for library in record['libraries']}
+        series.update(i['library_id'] for i in request.get('items', []))
+        self.verified_identity(sorted(series))
         home = normalize_home(self._http('GET', '/Users/' + recipient + '/HomeSections'))
         rows = complete(self._http('GET', '/Users/' + c['actor'] + '/Items', {
             'Recursive': 'true', 'IncludeItemTypes': 'Playlist', 'EnableUserData': 'false',
@@ -490,7 +887,6 @@ class OperatorAdapter:
                     'Invalid playlist discovery DTO')
         require(len(seen) == len(set(seen)), 'Duplicate discovered ID')
         pending = d.get('pending') if d else None
-        records = self._records(d)
         known = d['current']['playlists'] if d else []
         require(len(known) <= (MAX_LISTS if d and d['version'] == 2 else 1), 'Ambiguous saved ID')
         saved = {}
@@ -503,11 +899,32 @@ class OperatorAdapter:
         candidates = {legacy} | set(saved)
         if pending and pending['operation'] == 'create':
             candidates.add(self._marker(pending.get('list')))
-        playlists = []
+        # Typed Episode lists, from protected custody: saved records or a typed run.
+        kinds = {m: EPISODE for m, r in records.items() if 'media_kind' in r}
+        if 'items' in request:
+            kinds[self._marker(request.get('list'))] = EPISODE
+        # Prove the durable request too, including before its first member
+        # exists. Thus every pre-dispatch and readback snapshot covers both
+        # current members and the exact pending replacement, in the same reads.
+        playlists, observed = [], list(request.get('items', []))
         for m in sorted(candidates):
             pid = self._discover(rows, m, saved.get(m), d, records)
             if pid is not None:
-                playlists.append(self._playlist(pid, m))
+                playlist = self._playlist(pid, m, kinds.get(m, 'Movie'))
+                if kinds.get(m) == EPISODE:
+                    bindings = {i['episode_id']: i for i in records.get(m, {}).get('items', [])}
+                    if request.get('list') is not None and self._marker(request['list']) == m:
+                        for binding in request.get('items', []):
+                            prior = bindings.get(binding['episode_id'])
+                            require(prior is None or prior == binding, 'Typed membership binding differs')
+                            bindings[binding['episode_id']] = binding
+                    for entry in playlist['entries']:
+                        require(entry['episode'] in bindings,
+                                'Uncertain mutation; exact readback required, no retry')
+                        observed.append(bindings[entry['episode']])
+                playlists.append(playlist)
+        if observed:
+            self._prove_episode_bindings(recipient, observed)
         return {'home': home, 'playlists': playlists}
 
     def _discover(self, rows, marker, saved, d, records):
@@ -537,7 +954,7 @@ class OperatorAdapter:
                 d.get('run'), 'Unexplained existing marker playlist')
         return opaque(matches[0]['Id'])
 
-    def _playlist(self, pid, marker):
+    def _playlist(self, pid, marker, kind='Movie'):
         c = self._config
         recipient = c['recipient']
         path = '/Users/' + c['actor'] + '/Items/' + pid
@@ -568,11 +985,14 @@ class OperatorAdapter:
             'UserId': c['actor'], 'StartIndex': 0, 'Limit': 26,
             'EnableUserData': 'false'}), 25)
         normalized, occurrence_ids = [], []
+        # Exact member type per list: an Episode list never accepts a Series or
+        # Movie occurrence (Series expansion is caught by the exact readback).
+        key = 'episode' if kind == EPISODE else 'movie'
         for e in entries:
-            require(e.get('Type') == 'Movie', 'Non-Movie playlist occurrence')
+            require(e.get('Type') == kind, 'Non-%s playlist occurrence' % kind)
             occurrence = opaque(e.get('PlaylistItemId'))
             occurrence_ids.append(occurrence)
-            normalized.append({'movie': opaque(e.get('Id')), 'entry': occurrence})
+            normalized.append({key: opaque(e.get('Id')), 'entry': occurrence})
         require(len(occurrence_ids) == len(set(occurrence_ids)), 'Duplicate occurrence ID')
         return {'id': pid, 'marker': marker, 'owner': c['actor'], 'access': managed_access,
                 'entries': normalized}
@@ -658,11 +1078,33 @@ class OperatorAdapter:
     def add_movies(self, playlist, actor, movies):
         require(actor == self._config['actor'], 'Foreign membership actor')
         movies = movie_ids(movies)
-        target = self._owned('add', movies, playlist)[3]
+        intent = self._owned('add', movies, playlist)
+        target = intent[3]
+        require('media_kind' not in (intent[4] or {}), 'List media kind differs')
         require(not target['entries'], 'Membership no longer empty')
         self.query_movies(self._config['recipient'], self._config['library'], movies)
         self._post('/Playlists/' + playlist + '/Items', body={
             'Ids': ','.join(movies), 'userId': actor, 'SkipDuplicates': False})
+
+    @mutation_dispatch
+    def add_episodes(self, playlist, actor, items):
+        """Append validated Episode IDs only; never a Series ID.
+
+        The journal-owned list record must be a typed Episode list bound to
+        every item's library, and each item is re-proven just before the POST.
+        """
+        require(actor == self._config['actor'], 'Foreign membership actor')
+        items = typed_items(items, 1)
+        intent = self._owned('add-episodes', items, playlist)
+        target, record = intent[3], intent[4]
+        require(record is not None and record.get('media_kind') == EPISODE and
+                all(i['library_id'] in record['libraries'] for i in items),
+                'List media kind differs')
+        require(not target['entries'], 'Membership no longer empty')
+        self.query_episodes(self._config['recipient'], record['libraries'], items)
+        self._post('/Playlists/' + playlist + '/Items', body={
+            'Ids': ','.join(i['episode_id'] for i in items), 'userId': actor,
+            'SkipDuplicates': False})
 
     @mutation_dispatch
     def delete_row(self, recipient, row):

@@ -91,7 +91,7 @@ Request fields, all required, no others:
 | `caller` | object below; supplied by the verifier, never by tool arguments |
 | `recipient` | lowercase 32-hex Emby user ID |
 | `deadline_unix_ms` | integer epoch milliseconds, the request context deadline |
-| `operation` | `show`, `reconcile`, `preview`, `apply` or `movie-metadata` (see [Movie metadata read](#movie-metadata-read)) |
+| `operation` | `show`, `reconcile`, `preview`, `apply`, `movie-metadata` (see [Movie metadata read](#movie-metadata-read)) or `series-seeds`, `recipient-series`, `series-catalog` (see [Series reads and typed Episode lists](#series-reads-and-typed-episode-lists)) |
 | `request` | object below |
 
 `caller` has exactly `issuer`, `subject`, `namespace`, `server`, `library`,
@@ -203,6 +203,78 @@ caller deadline and cancellation as management, and the unchanged 262144-byte
 response cap (`Response too large` otherwise; a full page of 25 maximal Movies
 fits). Frozen request, refusal and result fixtures are under `movie_metadata`
 in the wire file.
+
+## Series reads and typed Episode lists
+
+Contract `jocasta:c43c23446da086e5157fbca8a5f9977b@4`; frozen fixtures under
+`series` in the wire file. Everything here is off unless the root policy and
+the recipient config both carry `series_libraries`.
+
+Policy: optional `series_libraries`, `{library ID: {guid, name, category}}` with
+1..2 entries, never the Movie `caller.library`. It is the dedicated Series
+ceiling, separate from the Movie catalog library. The recipient config must hold
+the identical entry for every library a call uses, or the call is `unavailable`
+(`Recipient configuration does not match policy`) before credentials or network.
+
+Caller: optional `series_libraries`, 1..2 unique canonical decimal IDs in Go
+`sort.Strings` byte order (`["1132","615"]`, not numeric order), placed after
+`expires_at` and `history_users`. Management callers (all of `show`,
+`reconcile`, `preview`, `apply`) may carry it and must when the writer is opted
+in; the field is omitted when the intersection is empty. The three Series reads
+require it together with `history_users` and the fixed history action tuple.
+`movie-metadata` refuses it (`Invalid caller`). A caller with the field needs a
+policy with `series_libraries` (`Series libraries not enabled by policy`) and
+every ID in it (`Series libraries outside management policy`).
+
+Typed management: `preview` and `apply` of `create-list` and `set-members` may
+carry `items` instead of `movies`, each item exactly `{episode_id, series_id,
+library_id}` (create 1..25, set 0..25, unique Episodes and Series). They need
+`series_libraries` (`Series libraries required`) covering every item library
+(`Item library outside Series grant`). A recipient journal with typed state
+refuses every call whose current grant does not cover it, including Movie-only
+`show` and `reconcile` (`Typed list state needs current Series grants`). Every typed snapshot rechecks the live library identity, including empty lists,
+and proves observed Episode membership and the durable typed request through
+recipient-scoped Episode and Series reads, before dispatch and on readback. All typed lists share one Episode read and one Series read per
+library per snapshot, at most four reads, without repeating that snapshot's
+identity check. Each list still has at most 25 members. This applies to show, reconcile, sibling Movie requests and row or
+title operations, including their final dispatch guard. Hidden, reparented or
+out-of-library Episodes refuse before facts or writes. Core
+rules are in
+[emby-operator-recommendations.md](emby-operator-recommendations.md#typed-episode-lists).
+Show adds `media_kind: "Episode"` to a typed list and gives its
+`playlist.entries` as `{episode_id, series_id, library_id, entry}`; a pending
+typed membership step is named `add-episodes`, and `run.args` may hold `items`.
+
+Reads, under the recipient's nonblocking journal lock without loading it:
+
+```text
+series-seeds      {"episode_ids": [ID, ...]}              -> {"series": [...]}
+recipient-series  {"ids": [SERIES_ID, ...]}               -> {"series": [...]}
+series-catalog    {"library_id": ID, "limit": 1..10, ["offset": 0..1000],
+                   ["person_id": ID, "person_role": "Director"|"Producer"|"Composer"]}
+                                                          -> {"series": [...], "next_offset": N|null}
+```
+
+IDs are 1..25 unique canonical decimal strings. A Series has `Id`, `Type`
+(`Series`), `Name`, `LibraryId`, `Category` (the configured category of that
+exact library), optional `ProductionYear`, `Genres`, `People` bounded as in
+`movie-metadata`; seeds add `EpisodeIds`, the others an optional
+`Representative` `{Id, Type: "Episode", SeriesId, SeriesName, ParentIndexNumber,
+IndexNumber}`. Seeds resolve each Episode through a recipient-scoped Episode
+query inside each granted library and its `SeriesId`; invisible or unparented
+Episodes are omitted, an Episode in two libraries or a Series name contradiction
+refuses. The Representative is the least (season, episode, ID) positive-indexed
+non-virtual Episode in one sorted page of 25, proven inside the Series library;
+none is guessed beyond that page and no watched state is read. `series-catalog`
+returns `next_offset` `offset + limit` while more rows exist and that value is
+at most 1000, else null; null at the bound is not a claim of exhaustion. With a
+person filter each Series must carry that exact credit after projection, or the
+read refuses. The live behavior of `SortBy`, `ParentIndexNumber`, `IndexNumber`,
+`PersonIds` and `PersonTypes` is unqualified until root acceptance.
+
+Bounds: the unchanged 120-second and 512-request budget, deadline and
+cancellation; a seeds read uses at most 9 requests, a `recipient-series` read at
+most 34 and a catalog page at most 17.
 
 ## Deadline and cancellation
 
@@ -328,6 +400,15 @@ are additive and the fixture keeps every earlier valid case.
   fail closed. A new worker with a policy lacking `history_users` refuses it
   too. Enabling it needs the worker modules, a policy with `history_users`
   rendered by the installer, and a writer grant with `history.read`.
+- Series reads, typed items and the caller `series_libraries` field are
+  additive. An older worker refuses the field (`Invalid caller`) and the new
+  operations (`Unsupported operation`) before any backend access. A new worker
+  without `series_libraries` in its policy keeps the old behavior and refuses
+  them. Deploy the worker first, then the Series config and policy, then the
+  richer writer grant. Once a recipient journal holds a typed list, roll back
+  only to a Series-capable worker (Series grants may be removed): older modules
+  refuse that journal entirely, and a Movie-only caller refuses it too, both
+  without writes.
 
 ## Remaining limits
 
@@ -338,8 +419,9 @@ archive grows by one small file per completed key; the filesystem is its only
 bound. A worst-case `create-list` (fourth list, separate
 recipient, 25 Movies) fits one call in the recorded synthetic model; a slow
 backend can still stop it at the deadline, and the identical request then
-resumes it. Recommendation history, scheduling, global sharing, episodes and
-duplicate Movies stay out of scope. This contract makes no claim about Emby
+resumes it. Recommendation history, scheduling, global sharing, Series IDs as
+members and duplicate Movies stay out of scope; Episodes enter only as typed
+items. This contract makes no claim about Emby
 access control beyond the one managed recipient grant.
 
 ## Deployed layout

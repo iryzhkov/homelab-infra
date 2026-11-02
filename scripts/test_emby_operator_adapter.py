@@ -2321,6 +2321,10 @@ class ListEntryTests(unittest.TestCase):
                 ('delete-list', {'key': 'k', 'list': 'a', 'intent_digest': 'd'}),
                 ('list-preview', {'operation': 'move-row', 'list': 'a', 'position': 2}),
                 ('move-row', {'key': 'k', 'list': 'a', 'position': 2, 'intent_digest': 'd'}),
+                ('list-preview', {'operation': 'set-members', 'list': 's', 'items': []}),
+                ('create-list', {'key': 'k', 'list': 's', 'title': 'T', 'intent_digest': 'd',
+                                 'items': [{'episode_id': '2', 'series_id': '1', 'library_id': '9'}]}),
+                ('set-members', {'key': 'k', 'list': 's', 'items': [], 'intent_digest': 'd'}),
                 ('show', {'list': 'a'}), ('migrate-preview', {}), ('downgrade-preview', {}),
                 ('migrate', {'key': 'k', 'intent_digest': 'd'}),
                 ('downgrade', {'key': 'k', 'intent_digest': 'd'})]
@@ -2330,6 +2334,11 @@ class ListEntryTests(unittest.TestCase):
                ('create-list', {'key': 'k', 'list': 'a', 'title': 'T', 'movies': [],
                                 'baseline_digest': 'd'}),
                ('set-members', {'key': 'k', 'list': 'a', 'movies': ['m1']}),
+               ('set-members', {'key': 'k', 'list': 'a', 'movies': [], 'items': [],
+                                'intent_digest': 'd'}),
+               ('set-title', {'key': 'k', 'list': 'a', 'title': 'T', 'items': [],
+                              'intent_digest': 'd'}),
+               ('list-preview', {'operation': 'attach-row', 'list': 'a', 'items': []}),
                ('show', {'list': 'a', 'key': 'k'}),
                ('migrate', {'key': 'k', 'baseline_digest': 'd'}),
                ('list-preview', {'operation': 'move-row', 'list': 'a'}),
@@ -2476,6 +2485,816 @@ class MovieMetadataTests(unittest.TestCase):
         for row in refused:
             with self.subTest(row=str(row)[:80]), self.assertRaisesRegex(Refused, 'Invalid'):
                 item(row, '7')
+
+
+ANIME_GUID = 'f' * 32
+
+
+def inventory_folders():
+    return [{'ItemId': '7', 'Guid': G, 'Name': 'Movies', 'CollectionType': 'movies',
+             'Locations': ['/private/movies'], 'LibraryOptions': {'PathInfos': ['/private']}},
+            {'ItemId': '9', 'Guid': ANIME_GUID, 'Name': 'Anime', 'CollectionType': 'tvshows',
+             'Locations': ['/private/anime']},
+            {'ItemId': '11', 'Guid': 'e' * 32, 'Name': 'Hidden', 'CollectionType': 'tvshows'}]
+
+
+def inventory_views():
+    rows = [{'Id': '9', 'Name': 'Anime', 'CollectionType': 'tvshows',
+             'UserData': {'PlayCount': 4}, 'Policy': {'PIN': '1234'}},
+            {'Id': '7', 'Name': 'Movies', 'CollectionType': 'movies'},
+            {'Id': 'pl', 'Name': 'Playlists', 'CollectionType': 'playlists'}]
+    return {'Items': rows, 'TotalRecordCount': len(rows)}
+
+
+def items(*rows):
+    return {'Items': list(rows), 'TotalRecordCount': len(rows)}
+
+
+EPISODE = {'Id': '31955', 'Type': 'Episode', 'SeriesId': '31389', 'SeriesName': 'Show',
+           'UserData': {'Played': True}, 'Path': '/private/show/e1.mkv'}
+SERIES = {'Id': '31389', 'Type': 'Series', 'Name': 'Show', 'Path': '/private/show'}
+LIBRARIES = [{'Id': '9', 'Guid': ANIME_GUID, 'Name': 'Anime', 'CollectionType': 'tvshows'},
+             {'Id': '7', 'Guid': G, 'Name': 'Movies', 'CollectionType': 'movies'}]
+
+
+def mapping_responses(series_in=('9',)):
+    """Episode, Series, per-library Series membership (view order 9, 7), Episode membership."""
+    return ([items(EPISODE), items(SERIES)] +
+            [items(SERIES) if x in series_in else items() for x in ('9', '7')] +
+            [items(EPISODE)])
+
+
+class InventoryTests(unittest.TestCase):
+    """Root-operator recommendation inventory over the recording loopback transport."""
+    def authenticated(self, http):
+        http.responses += [auth_response()] + identity_responses()
+        api = adapter.OperatorAdapter(config())
+        api._opener = http
+        api.authenticate({'username': 'synthetic-admin', 'password': 'synthetic-password'})
+        return api
+
+    def test_projection_mapping_and_fixed_recipient_gets(self):
+        from urllib.parse import urlsplit, parse_qs
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            before = len(http.calls)
+            http.responses += (identity_responses() + [inventory_folders(), inventory_views()] +
+                               mapping_responses())
+            result = api.recommendation_inventory(R, '31955')
+            self.assertEqual(result, {'recipient': R, 'libraries': LIBRARIES, 'episode': {
+                'Id': '31955', 'Type': 'Episode', 'SeriesId': '31389', 'SeriesType': 'Series',
+                'SeriesName': 'Show', 'LibraryId': '9', 'status': 'mapped'}})
+            text = json.dumps(result)
+            for private in ('Locations', 'LibraryOptions', 'Policy', 'PIN', 'UserData', 'Path',
+                            '/private', 'Hidden', 'Playlists', 'synthetic-session-token',
+                            'synthetic-password', 'synthetic-admin'):
+                self.assertNotIn(private, text)
+            calls = http.calls[before:]
+            self.assertEqual({c[0] for c in calls}, {'GET'})
+            self.assertTrue(all(c[3] is None for c in calls))
+            paths = [urlsplit(c[1]).path for c in calls]
+            self.assertEqual(paths, [
+                '/emby/Users', '/emby/Users/' + A, '/emby/Users/' + R,
+                '/emby/Library/VirtualFolders', '/emby/Users/' + R + '/Views',
+                '/emby/Library/VirtualFolders', '/emby/Users/' + R + '/Views'] +
+                ['/emby/Users/' + R + '/Items'] * 5)
+            queries = [parse_qs(urlsplit(c[1]).query) for c in calls[7:]]
+            plain = {'EnableUserData': ['false'], 'StartIndex': ['0'], 'Limit': ['2']}
+            scoped = dict(plain, Recursive=['true'])
+            self.assertEqual(queries, [
+                dict(plain, Ids=['31955']), dict(plain, Ids=['31389']),
+                dict(scoped, Ids=['31389'], ParentId=['9'], IncludeItemTypes=['Series']),
+                dict(scoped, Ids=['31389'], ParentId=['7'], IncludeItemTypes=['Series']),
+                dict(scoped, Ids=['31955'], ParentId=['9'], IncludeItemTypes=['Episode'])])
+            self.assertFalse(any('Fields' in q for q in queries))
+            # Inventory without an episode sends no Items request.
+            before = len(http.calls)
+            http.responses += identity_responses() + [inventory_folders(), inventory_views()]
+            self.assertEqual(api.recommendation_inventory(R),
+                             {'recipient': R, 'libraries': LIBRARIES})
+            self.assertEqual(len(http.calls) - before, 7)
+
+    def test_missing_mapping_is_insufficient_facts(self):
+        insufficient = {'Id': '31955', 'status': 'insufficient-facts'}
+        no_series = dict(EPISODE)
+        del no_series['SeriesId']
+        cases = [[items()], [items(no_series)], [items(EPISODE), items()],
+                 mapping_responses(series_in=())[:4]]
+        for responses in cases:
+            with self.subTest(count=len(responses)), RecordingHTTP() as http:
+                api = self.authenticated(http)
+                http.responses += (identity_responses() +
+                                   [inventory_folders(), inventory_views()] + responses)
+                result = api.recommendation_inventory(R, '31955')
+                self.assertEqual(result['episode'], insufficient)
+                self.assertEqual(http.responses, [])
+
+    def test_hidden_mismatched_duplicate_libraries_fail_closed(self):
+        def folders(change):
+            value = inventory_folders()
+            change(value)
+            return value
+        def views(change):
+            value = inventory_views()
+            change(value['Items'])
+            return value
+        cases = [
+            (folders(lambda f: f[1].update(ItemId='7')), inventory_views()),
+            (folders(lambda f: f[1].update(Guid=G)), inventory_views()),
+            (folders(lambda f: f[2].update(Guid='E' * 32)), inventory_views()),
+            (folders(lambda f: f[1].update(ItemId='9&ParentId=7')), inventory_views()),
+            (folders(lambda f: f[1].update(CollectionType='Anime TV')), inventory_views()),
+            (folders(lambda f: f[1].update(Name='a\nb')), inventory_views()),
+            ([{'ItemId': str(n), 'Guid': '%032x' % n} for n in range(101)], inventory_views()),
+            (inventory_folders(), views(lambda v: v[0].update(Name='Anime (renamed)'))),
+            (inventory_folders(), views(lambda v: v[0].update(CollectionType='movies'))),
+            (inventory_folders(), views(lambda v: v.append(dict(v[0])))),
+            (inventory_folders(), views(lambda v: v.pop(1))),
+            (folders(lambda f: f[0].update(Guid='e' * 31 + '0')), inventory_views()),
+            (inventory_folders(), {'Items': inventory_views()['Items'], 'TotalRecordCount': 4})]
+        for folder_dto, view_dto in cases:
+            with self.subTest(folders=str(folder_dto)[:60], views=str(view_dto)[:60]), \
+                 RecordingHTTP() as http:
+                api = self.authenticated(http)
+                http.responses += identity_responses() + [folder_dto, view_dto]
+                with self.assertRaises(Refused):
+                    api.recommendation_inventory(R, '31955')
+                self.assertFalse(any('/Items' in c[1] for c in http.calls))
+
+    def test_mismatched_series_and_episode_fail_closed(self):
+        cases = [[items(dict(EPISODE, Type='Series'))],
+                 [items(dict(EPISODE, Type='Movie'))],
+                 [items(dict(EPISODE, Id='31956'))],
+                 [items(EPISODE, EPISODE)],
+                 [items(dict(EPISODE, SeriesId='031389'))],
+                 [items(dict(EPISODE, SeriesId='31955'))],
+                 [items(EPISODE), items(dict(SERIES, Type='Season'))],
+                 [items(EPISODE), items(dict(SERIES, Name='Other'))],
+                 [items(EPISODE), items(dict(SERIES, Id='31390'))],
+                 [items(EPISODE), items(dict(SERIES, Name=''))],
+                 mapping_responses(series_in=('9', '7'))[:4],
+                 mapping_responses()[:4] + [items()],
+                 mapping_responses()[:2] + [items(dict(SERIES, Type='Movie'))],
+                 mapping_responses()[:2] + [items(dict(SERIES, Name='Other'))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, Type='Movie'))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, SeriesId='31390'))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, SeriesId=None))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, SeriesName='Other'))]]
+        for responses in cases:
+            with self.subTest(responses=str(responses)[:80]), RecordingHTTP() as http:
+                api = self.authenticated(http)
+                http.responses += (identity_responses() +
+                                   [inventory_folders(), inventory_views()] + responses)
+                with self.assertRaises(Refused):
+                    api.recommendation_inventory(R, '31955')
+
+    def test_existing_identity_verification_still_gates_inventory(self):
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            responses = identity_responses()
+            responses[1]['Policy']['IsAdministrator'] = False
+            http.responses += responses
+            with self.assertRaisesRegex(Refused, 'Admin policy drift'):
+                api.recommendation_inventory(R, '31955')
+            self.assertFalse(any('/Items' in c[1] for c in http.calls))
+
+    def test_bad_inputs_refused_before_any_send(self):
+        bad = [{}, {'recipient': 'e' * 32}, {'recipient': R, 'extra': 1},
+               {'recipient': R, 'episode_id': None}, {'recipient': R, 'episode_id': 31955},
+               {'recipient': R, 'episode_id': '031955'}, {'recipient': R, 'episode_id': 'x'},
+               {'recipient': R, 'episode_id': '31955&ParentId=7'},
+               {'recipient': R, 'episode_id': '9' * 20}, ['recipient']]
+        for request in bad:
+            with self.subTest(request=request), self.assertRaises(Refused):
+                adapter.inventory_request(config(), request)
+        self.assertEqual(adapter.inventory_request(config(), {'recipient': R}), (R, None))
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            before = len(http.calls)
+            for args in [('e' * 32,), (R, '031955'), (R, 'x'), (R, 31955)]:
+                with self.subTest(args=args), self.assertRaises(Refused):
+                    api.recommendation_inventory(*args)
+            self.assertEqual(len(http.calls), before)
+        unauthenticated = adapter.OperatorAdapter(config())
+        with self.assertRaises(Refused):
+            unauthenticated.recommendation_inventory(R, '31955')
+        self.assertEqual(unauthenticated._requests, 0)
+
+    def test_not_admitted_by_shared_entry_or_mcp_socket(self):
+        import emby_operator_socket as worker
+        self.assertNotIn(adapter.INVENTORY_OPERATION, lifecycle.OPERATIONS)
+        self.assertNotIn(adapter.INVENTORY_OPERATION, worker.WORKER_OPERATIONS)
+        self.assertEqual(lifecycle.request_fields(adapter.INVENTORY_OPERATION, {}), [])
+        with self.assertRaises(Refused):
+            lifecycle.invoke(object(), adapter.INVENTORY_OPERATION, {'recipient': R})
+
+
+class InventoryEntryTests(unittest.TestCase):
+    def setUp(self):
+        home = Path(__file__).resolve().parents[1] / '.cache/holonet-operator-tests/home'
+        self.assertEqual(os.environ['HOME'], str(home))
+        self.assertEqual(os.environ['TMPDIR'], str(home / 'tmp'))
+        self.temp = tempfile.TemporaryDirectory(dir=home / 'tmp')
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.directory.chmod(0o700)
+        self.entry = EntryTests().entry()
+
+    def run_entry(self, request, **patches):
+        with patch.object(self.entry, 'load_config', return_value=config()), \
+             patch.object(self.entry, 'private_read', return_value=json.dumps(request)), \
+             contextlib.ExitStack() as stack, \
+             contextlib.redirect_stdout(io.StringIO()) as output, \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            mocks = {name: stack.enter_context(patch.object(lifecycle, name, **value))
+                     for name, value in patches.items()}
+            code = self.entry.main(['--config', '/synthetic/config', adapter.INVENTORY_OPERATION,
+                                    '--request-file', '/synthetic/request'])
+        return code, output.getvalue(), errors.getvalue(), mocks
+
+    def test_bad_requests_refused_before_credentials_journal_or_network(self):
+        for request in [{}, {'recipient': 'e' * 32}, {'recipient': R, 'episode_id': '0'},
+                        {'recipient': R, 'episode_id': '31955', 'Fields': 'Path'}]:
+            with self.subTest(request=request), \
+                 patch.object(adapter.urllib.request, 'build_opener') as network:
+                code, output, errors, mocks = self.run_entry(
+                    request, load_credentials={}, Journal={})
+                self.assertEqual(code, 2)
+                self.assertEqual(output, '')
+                mocks['load_credentials'].assert_not_called()
+                mocks['Journal'].assert_not_called()
+                network.assert_not_called()
+
+    def test_nonroot_refused_before_any_read(self):
+        entry = self.entry
+        with patch.object(adapter.os, 'geteuid', return_value=1000), \
+             patch.object(adapter.os, 'getuid', return_value=1000), \
+             patch.object(adapter, 'private_read') as read, \
+             patch.object(lifecycle, 'load_credentials') as credentials, \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(entry.main(['--config', '/synthetic/config',
+                                         adapter.INVENTORY_OPERATION]), 2)
+        read.assert_not_called()
+        credentials.assert_not_called()
+        self.assertIn('Root operator required', errors.getvalue())
+
+    def test_real_adapter_under_held_lock_without_journal_writes(self):
+        journal = Journal(self.directory)
+        self.addCleanup(journal.close)
+        made, locked = [], []
+        with RecordingHTTP() as http:
+            http.responses += ([auth_response()] + identity_responses() * 2 +
+                               [inventory_folders(), inventory_views()] + mapping_responses())
+            def make_api(c, j):
+                self.assertIs(j, journal)
+                api = adapter.OperatorAdapter(c, j)
+                api._opener = http
+                inner = api.recommendation_inventory
+                def spy(*args):
+                    locked.append(journal._locked)
+                    return inner(*args)
+                api.recommendation_inventory = spy
+                made.append(api)
+                return api
+            with patch.object(journal, 'load', side_effect=AssertionError('load')), \
+                 patch.object(journal, 'save', side_effect=AssertionError('save')):
+                code, output, errors, _ = self.run_entry(
+                    {'recipient': R, 'episode_id': '31955'},
+                    load_credentials={'return_value': {'username': 'synthetic',
+                                                       'password': 'synthetic'}},
+                    Journal={'return_value': journal},
+                    OperatorAdapter={'side_effect': make_api})
+            self.assertEqual((code, errors), (0, ''))
+            self.assertEqual(json.loads(output)['episode']['SeriesId'], '31389')
+            self.assertEqual(locked, [True])
+            self.assertFalse(journal._locked)
+            self.assertIsNone(made[0]._token)
+            self.assertEqual([c[1] for c in http.calls if c[0] != 'GET'],
+                             ['/emby/Users/AuthenticateByName'])
+            self.assertEqual(http.responses, [])
+        # Only the existing lock file; no journal was created, migrated or saved.
+        self.assertEqual(sorted(p.name for p in self.directory.iterdir()), ['lock'])
+
+
+# Synthetic copies of the root-proven identities (jocasta:20a0e052@1); test data only.
+TV, ANIME = '1132', '615'
+SERIES_CONFIG = {TV: {'guid': 'c1b8f08fe9054f8899b6179e7bffb2e0', 'name': 'TV shows',
+                      'category': 'tv'},
+                 ANIME: {'guid': 'c423189f0ca04f568a152eaeebd60d89', 'name': 'Anime',
+                         'category': 'anime'}}
+# Go sort.Strings order, not numeric order.
+GRANTED = [TV, ANIME]
+
+
+def series_config():
+    return dict(config(), series_libraries=copy.deepcopy(SERIES_CONFIG))
+
+
+def episode(eid, sid, name, library, season, number, **extra):
+    return dict({'Id': eid, 'Type': 'Episode', 'SeriesId': sid, 'SeriesName': name,
+                 'ParentIndexNumber': season, 'IndexNumber': number, 'library': library,
+                 'UserData': {'Played': True}, 'Path': '/private/' + eid}, **extra)
+
+
+def item(eid, sid, library):
+    return {'episode_id': eid, 'series_id': sid, 'library_id': library}
+
+
+HELL = item('31955', '31389', ANIME)
+TVITEM = item('501', '500', TV)
+OTHER = item('601', '600', TV)
+
+
+class SeriesBackend(MultiBackend):
+    """MultiBackend plus recipient-scoped Series and Episode DTOs; not live evidence."""
+    def __init__(self):
+        super().__init__()
+        self.folders = [{'ItemId': '7', 'Guid': G, 'Name': 'Movies', 'CollectionType': 'movies'},
+                        {'ItemId': ANIME, 'Guid': SERIES_CONFIG[ANIME]['guid'], 'Name': 'Anime',
+                         'CollectionType': 'tvshows', 'Locations': ['/private/anime']},
+                        {'ItemId': TV, 'Guid': SERIES_CONFIG[TV]['guid'], 'Name': 'TV shows',
+                         'CollectionType': 'tvshows'}]
+        self.views = ['7', ANIME, TV]
+        people = ([{'Id': '71', 'Name': 'Synthetic Director', 'Type': 'Director'},
+                   {'Id': '72', 'Name': 'private-actor', 'Type': 'Actor'}] +
+                  [{'Id': str(200 + n), 'Name': 'P%d' % n, 'Type': 'Producer'} for n in range(20)])
+        self.series = {
+            '31389': {'Id': '31389', 'Type': 'Series', 'Name': "Hell's Paradise", 'library': ANIME,
+                      'ProductionYear': 2023, 'Genres': ['Animation'], 'People': people,
+                      'UserData': {'PlayCount': 9}},
+            '500': {'Id': '500', 'Type': 'Series', 'Name': 'Synthetic TV', 'library': TV},
+            '600': {'Id': '600', 'Type': 'Series', 'Name': 'Other TV', 'library': TV}}
+        self.episodes = {e['Id']: e for e in [
+            episode('31956', '31389', "Hell's Paradise", ANIME, 1, 2),
+            episode('31955', '31389', "Hell's Paradise", ANIME, 1, 1),
+            episode('502', '500', 'Synthetic TV', TV, 0, 1),
+            episode('503', '500', 'Synthetic TV', TV, 1, 2, LocationType='Virtual'),
+            episode('501', '500', 'Synthetic TV', TV, 1, 3),
+            episode('601', '600', 'Other TV', TV, 1, 1)]}
+        self.hidden = set()
+        # Models a server that expands members: the add adds one extra Episode.
+        self.series_expansion = False
+        self.item_queries = []
+
+    def get(self, path, q):
+        if path == '/Library/VirtualFolders':
+            return copy.deepcopy(self.folders)
+        if path == '/Users/' + R + '/Views':
+            return self.envelope([{'Id': v} for v in self.views])
+        if path == '/Users/' + R + '/Items' and q.get('IncludeItemTypes') in (['Episode'], ['Series']):
+            self.item_queries.append(q)
+            return self.series_items(q)
+        return super().get(path, q)
+
+    def series_items(self, q):
+        kind = q['IncludeItemTypes'][0]
+        assert q['EnableUserData'] == ['false'] and q['Recursive'] == ['true']
+        assert q.get('Fields', ['People,Genres']) == ['People,Genres']
+        parent = q['ParentId'][0]
+        pool = self.episodes if kind == 'Episode' else self.series
+        rows = [r for r in pool.values() if r['Id'] not in self.hidden and
+                parent in (r['library'], r.get('SeriesId'))]
+        if 'Ids' in q:
+            ids = q['Ids'][0].split(',')
+            rows = [r for r in rows if r['Id'] in ids]
+        if 'PersonIds' in q:
+            rows = [r for r in rows if any(p['Id'] == q['PersonIds'][0] and
+                                           p['Type'] == q['PersonTypes'][0]
+                                           for p in r.get('People', []))]
+        if 'SortBy' in q:
+            rows.sort(key=lambda r: (r['Name'],) if kind == 'Series' else
+                      (r['ParentIndexNumber'], r['IndexNumber'], r['Id']))
+        start, limit = int(q['StartIndex'][0]), int(q['Limit'][0])
+        page = [{k: v for k, v in r.items() if k != 'library'} for r in rows[start:start + limit]]
+        return {'Items': copy.deepcopy(page), 'TotalRecordCount': len(rows)}
+
+    def post(self, op, path, q, body, args):
+        if op != 'add-episodes':
+            return super().post(op, path, q, body, args)
+        ids = [i['episode_id'] for i in args]
+        assert path.endswith('/Items') and body == {
+            'Ids': ','.join(ids), 'userId': A, 'SkipDuplicates': False}
+        assert not set(ids) & set(self.series), 'A Series ID was posted'
+        if self.series_expansion:
+            ids = ids + ['31956']
+        self.serial += 1
+        self.items[path.split('/')[2]]['entries'] = [
+            {'Id': e, 'Type': 'Episode', 'PlaylistItemId': 'e%d_%d' % (self.serial, n)}
+            for n, e in enumerate(ids)]
+
+
+class SeriesListTests(unittest.TestCase):
+    """Typed Episode lists beside Movie lists in the one version 2 journal."""
+    setUp = MultiListTests.setUp
+    bytes, stored, intent, do, resume = (MultiListTests.bytes, MultiListTests.stored,
+                                         MultiListTests.intent, MultiListTests.do,
+                                         MultiListTests.resume)
+    grant = SERIES_CONFIG
+
+    def fresh_session(self):
+        if not isinstance(self.backend, SeriesBackend):
+            backend = SeriesBackend()
+            backend.journal = self.journal
+            self.backend = backend
+            self.http.responder = backend.respond
+        c = series_config()
+        self.api = adapter.OperatorAdapter(c, self.journal)
+        self.api._opener = self.http
+        self.api.authenticate({'username': 'synthetic', 'password': 'synthetic'})
+        scope = {k: c[k] for k in ('server', 'actor', 'recipient', 'library', 'recipe')}
+        if self.grant is not None:
+            scope['series'] = copy.deepcopy(self.grant)
+        self.operator = Operator(self.api, self.journal, **scope)
+
+    def posts(self, offset=0):
+        return [(c[1], c[3]) for c in self.http.calls[offset:]
+                if c[0] == 'POST' and not c[1].endswith('/AuthenticateByName')]
+
+    def typed(self, key='create-series', items=(HELL, TVITEM)):
+        return self.do('create-list', key, 'rec-series', title='TV and anime from your recent plays',
+                       items=[dict(i) for i in items])
+
+    def test_typed_create_posts_only_episode_ids_and_coexists_with_movie_lists(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        offset = len(self.http.calls)
+        self.assertEqual(self.typed(), {'state': 'created', 'writes': 5})
+        self.assertEqual([w[0] for w in self.backend.writes[-5:]],
+                         ['create', 'share', 'row', 'display-title', 'add-episodes'])
+        added = [b for p, b in self.posts(offset) if p.endswith('/Items') and '/Playlists/' in p]
+        self.assertEqual(added, [{'Ids': '31955,501', 'userId': A, 'SkipDuplicates': False}])
+        record = self.stored()['lists']['rec-series']
+        self.assertEqual((record['media_kind'], record['libraries'], record['items']),
+                         ('Episode', GRANTED, [HELL, TVITEM]))
+        self.assertEqual(self.stored()['lists']['a'].keys(), {'row', 'display_title'})
+        self.fresh_session()
+        shown = {x['list']: x for x in self.operator.show()['lists']}
+        typed, movie = shown['rec-series'], shown['a']
+        self.assertEqual(typed['media_kind'], 'Episode')
+        self.assertEqual([{k: v for k, v in e.items() if k != 'entry'}
+                          for e in typed['playlist']['entries']], [HELL, TVITEM])
+        self.assertEqual([list(e) for e in typed['playlist']['entries']],
+                         [['episode_id', 'series_id', 'library_id', 'entry']] * 2)
+        self.assertNotIn('media_kind', movie)
+        self.assertEqual([set(e) for e in movie['playlist']['entries']], [{'movie', 'entry'}])
+        # Movie operations on the Movie list continue beside the typed sibling.
+        self.assertEqual(self.do('set-members', 'members-a', 'a', movies=['m2'])['state'], 'members-set')
+        self.assertEqual(self.resume('set-members', 'members-a', 'a', movies=['m2'],
+                                     intent_digest='0' * 64), {'state': 'replayed', 'writes': 0})
+        self.assertEqual(self.stored()['done']['members-a'],
+                         {'operation': 'set-members', 'list': 'a', 'movies': ['m2']})
+        # Typed replacement: clear then add, Episode IDs only; then exact replay.
+        writes = len(self.backend.writes)
+        self.assertEqual(self.do('set-members', 'members-s', 'rec-series', items=[OTHER]),
+                         {'state': 'members-set', 'writes': 2})
+        self.assertEqual([w[0] for w in self.backend.writes[writes:]], ['clear', 'add-episodes'])
+        self.assertEqual(self.stored()['lists']['rec-series']['items'], [OTHER])
+        self.assertEqual(self.resume('set-members', 'members-s', 'rec-series', items=[OTHER],
+                                     intent_digest='0' * 64), {'state': 'replayed', 'writes': 0})
+        self.assertEqual(self.do('set-members', 'members-s2', 'rec-series', items=[OTHER]),
+                         {'state': 'members-set', 'writes': 0})
+        # Explicit typed clear stays an Episode list.
+        self.assertEqual(self.do('set-members', 'clear-s', 'rec-series', items=[])['writes'], 1)
+        self.assertEqual(self.stored()['lists']['rec-series']['items'], [])
+        self.assertEqual(self.stored()['lists']['rec-series']['media_kind'], 'Episode')
+
+    def test_typed_request_digest_ignores_item_key_order(self):
+        reordered = {'library_id': ANIME, 'series_id': '31389', 'episode_id': '31955'}
+        args = dict(title='T', items=[HELL])
+        self.assertEqual(self.intent('create-list', 'rec-series', **args),
+                         self.intent('create-list', 'rec-series', title='T', items=[reordered]))
+
+    def test_movie_only_and_partial_grants_fail_closed_on_typed_state(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.typed()
+        before, writes = self.bytes(), len(self.backend.writes)
+        for grant in (None, {TV: SERIES_CONFIG[TV]}, {ANIME: SERIES_CONFIG[ANIME]}):
+            with self.subTest(grant=grant):
+                self.grant = grant
+                for call in (lambda: self.operator.show(), lambda: self.operator.reconcile(),
+                             lambda: self.operator.list_preview('set-members', 'a', movies=['m2']),
+                             lambda: self.operator.set_members('k', 'a', ['m2'], '0' * 64)):
+                    self.fresh_session()
+                    with self.assertRaisesRegex(Refused, 'Typed list state needs current Series grants'):
+                        call()
+        self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+        # Deleting the typed list (with grants) restores Movie-only management.
+        self.grant = SERIES_CONFIG
+        self.do('delete-list', 'delete-s', 'rec-series')
+        self.grant = None
+        self.fresh_session()
+        self.assertEqual([x['list'] for x in self.operator.show()['lists']], ['a'])
+
+    def test_existing_typed_lists_recheck_visibility_for_reads_and_row_operations(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.typed()
+        before, writes = self.bytes(), len(self.backend.writes)
+        original = copy.deepcopy((self.backend.episodes, self.backend.folders, self.backend.views))
+        operations = [
+            lambda: self.operator.show(),
+            lambda: self.operator.reconcile(),
+            lambda: self.operator.list_preview('set-title', 'rec-series', title='Changed'),
+            lambda: self.operator.list_preview('detach-row', 'rec-series'),
+            lambda: self.operator.list_preview('move-row', 'rec-series', position=0),
+            lambda: self.operator.list_preview('set-members', 'a', movies=['m2'])]
+        for drift in ('hidden-episode', 'hidden-series', 'parent', 'library', 'guid', 'view'):
+            self.backend.episodes, self.backend.folders, self.backend.views = copy.deepcopy(original)
+            self.backend.hidden = set()
+            if drift == 'hidden-episode':
+                self.backend.hidden.add('31955')
+            elif drift == 'hidden-series':
+                self.backend.hidden.add('31389')
+            elif drift == 'parent':
+                self.backend.episodes['31955']['SeriesId'] = '500'
+            elif drift == 'library':
+                self.backend.episodes['31955']['library'] = TV
+            elif drift == 'guid':
+                self.backend.folders[1]['Guid'] = '0' * 32
+            else:
+                self.backend.views.remove(ANIME)
+            for operation in operations:
+                with self.subTest(drift=drift, operation=operations.index(operation)):
+                    self.fresh_session()
+                    with self.assertRaises(Refused):
+                        operation()
+                    self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+
+    def test_typed_row_apply_rechecks_visibility_after_preview(self):
+        self.typed()
+        intent = self.intent('set-title', 'rec-series', title='Changed')
+        before, writes = self.bytes(), len(self.backend.writes)
+        self.backend.hidden.add('31955')
+        with self.assertRaises(Refused):
+            self.resume('set-title', 'title-after-hide', 'rec-series',
+                        title='Changed', intent_digest=intent)
+        self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+
+    def test_empty_typed_list_rechecks_live_library_identity(self):
+        self.typed()
+        self.do('set-members', 'clear-s', 'rec-series', items=[])
+        before, writes = self.bytes(), len(self.backend.writes)
+        self.backend.folders[1]['Guid'] = '0' * 32
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Series library identity drift'):
+            self.operator.show()
+        self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+
+    def test_kind_library_parent_and_series_id_refusals_precede_writes(self):
+        self.do('create-list', 'create-a', 'a', title='A', movies=['m1'])
+        self.typed()
+        before, writes = self.bytes(), len(self.backend.writes)
+        self.backend.hidden.add('601')
+        cases = [
+            (('set-members', 'rec-series'), dict(movies=['m1']), 'List media kind differs'),
+            (('set-members', 'a'), dict(items=[HELL]), 'List media kind differs'),
+            (('create-list', 'igor-movies'), dict(title='T', items=[HELL]), 'Legacy list must stay'),
+            (('set-members', 'rec-series'), dict(items=[item('31389', '31390', ANIME)]),
+             'Recipient Episode set incomplete'),
+            (('set-members', 'rec-series'), dict(items=[item('31955', '500', ANIME)]),
+             'Recipient Episode set incomplete'),
+            (('set-members', 'rec-series'), dict(items=[item('31955', '31389', TV)]),
+             'Recipient Episode set incomplete'),
+            (('set-members', 'rec-series'), dict(items=[OTHER]), 'Recipient Episode set incomplete'),
+            (('set-members', 'rec-series'), dict(items=[item('31955', '31389', '9')]),
+             'Item library outside Series grant'),
+            (('set-members', 'rec-series'), dict(items=[HELL, item('31956', '31389', ANIME)]),
+             'Duplicate Series IDs'),
+            (('create-list', 'b'), dict(title='T', items=[]), 'Expected 1..25 Episodes'),
+            (('set-members', 'rec-series'), dict(items=[dict(HELL, extra='x')]), 'Invalid Episode item'),
+            (('set-members', 'rec-series'), dict(items=[dict(HELL, episode_id='031955')]),
+             'Invalid Episode item')]
+        for (operation, list_id), args, message in cases:
+            with self.subTest(operation=operation, args=args):
+                self.fresh_session()
+                with self.assertRaisesRegex(Refused, message):
+                    self.operator.list_preview(operation, list_id, **args)
+        self.assertEqual((self.bytes(), len(self.backend.writes)), (before, writes))
+        self.grant = {TV: SERIES_CONFIG[TV], ANIME: SERIES_CONFIG[ANIME]}
+        self.backend.folders[1]['Name'] = 'Anime (renamed)'
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Series library identity drift'):
+            self.operator.list_preview('set-members', 'rec-series', items=[HELL])
+
+    def test_series_expansion_on_readback_is_uncertain_and_never_retried(self):
+        self.backend.series_expansion = True
+        with self.assertRaisesRegex(Refused, 'exact readback required'):
+            self.typed()
+        stored = self.stored()
+        self.assertEqual(stored['pending']['operation'], 'add-episodes')
+        self.assertEqual(stored['pending']['args'], [HELL, TVITEM])
+        self.assertEqual([w[0] for w in self.backend.writes].count('add-episodes'), 1)
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'exact readback required'):
+            self.resume('create-list', 'create-series', 'rec-series',
+                        title='TV and anime from your recent plays', items=[HELL, TVITEM])
+        self.assertEqual([w[0] for w in self.backend.writes].count('add-episodes'), 1)
+
+    def test_lost_typed_add_recovers_by_exact_readback_and_binds_request(self):
+        self.backend.lose = 'add-episodes'
+        with self.assertRaises(Refused):
+            self.typed()
+        self.backend.lose = None
+        stored = self.stored()
+        self.assertEqual(stored['run']['request']['items'], [HELL, TVITEM])
+        self.assertEqual(stored['pending']['operation'], 'add-episodes')
+        # Show of the unfinished typed list labels observed occurrences from the run.
+        self.fresh_session()
+        entries = self.operator.show(list='rec-series')['lists'][0]['playlist']['entries']
+        self.assertEqual([e['episode_id'] for e in entries], ['31955', '501'])
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Another request is unfinished'):
+            self.operator.create_list('create-series', 'rec-series', 'TV and anime from your recent plays',
+                                      intent_digest='0' * 64, items=[HELL])
+        self.assertEqual(self.resume('create-list', 'create-series', 'rec-series',
+                                     title='TV and anime from your recent plays',
+                                     items=[HELL, TVITEM], intent_digest='0' * 64),
+                         {'state': 'created', 'writes': 0})
+        self.assertEqual([w[0] for w in self.backend.writes].count('add-episodes'), 1)
+        self.assertEqual(self.stored()['lists']['rec-series']['items'], [HELL, TVITEM])
+
+    def test_cap_four_lists_across_media_and_worst_typed_budget(self):
+        for list_id in 'abc':
+            self.do('create-list', 'create-' + list_id, list_id, title='M', movies=['m1'])
+        items = [item(str(1000 + n), str(2000 + n), (TV, ANIME)[n % 2]) for n in range(25)]
+        for n, i in enumerate(items):
+            self.backend.series[i['series_id']] = {'Id': i['series_id'], 'Type': 'Series',
+                                                   'Name': 'S%d' % n, 'library': i['library_id']}
+            self.backend.episodes[i['episode_id']] = episode(
+                i['episode_id'], i['series_id'], 'S%d' % n, i['library_id'], 1, 1)
+        intent = self.intent('create-list', 'rec-series', title='Fourth', items=items)
+        self.fresh_session()
+        self.assertEqual(self.operator.create_list('create-s', 'rec-series', 'Fourth',
+                                                   intent_digest=intent, items=items)['writes'], 5)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+        self.assertEqual(adapter.MAX_REQUESTS, 512)
+        for args in (dict(title='T', movies=['m1']), dict(title='T', items=[OTHER])):
+            with self.subTest(args=args), self.assertRaisesRegex(Refused, 'List limit reached'):
+                self.intent('create-list', 'e', **args)
+
+    def test_durable_unadded_items_are_reproved_on_each_snapshot(self):
+        original = self.backend.post
+
+        def hide_after_create(op, path, q, body, args):
+            result = original(op, path, q, body, args)
+            if op == 'create':
+                self.backend.hidden.add('31955')
+            return result
+        # fresh_session installs SeriesBackend before this wrapper is attached.
+        self.backend.post = hide_after_create
+        with self.assertRaisesRegex(Refused, 'Recipient Episode set incomplete'):
+            self.typed()
+        self.assertEqual([w[0] for w in self.backend.writes], ['create'])
+        self.assertEqual(self.stored()['run']['request']['items'], [HELL, TVITEM])
+        self.backend.post = original
+        self.backend.hidden.clear()
+        self.assertEqual(self.resume('create-list', 'create-series', 'rec-series',
+                                     title='TV and anime from your recent plays',
+                                     items=[HELL, TVITEM], intent_digest='0' * 64)['writes'], 4)
+        self.assertEqual([w[0] for w in self.backend.writes].count('create'), 1)
+
+    def full_typed_items(self, group):
+        members = []
+        for n in range(25):
+            episode_id, series_id = str(10000 + group * 100 + n), str(20000 + group * 100 + n)
+            library = (TV, ANIME)[n % 2]
+            name = 'Series ' + series_id
+            self.backend.series[series_id] = {'Id': series_id, 'Type': 'Series',
+                                               'Name': name, 'library': library}
+            self.backend.episodes[episode_id] = episode(episode_id, series_id, name, library, 1, 1)
+            members.append(item(episode_id, series_id, library))
+        return members
+
+    def test_fourth_movie_create_and_typed_replace_with_full_typed_siblings_fit_budget(self):
+        for n, list_id in enumerate('abc'):
+            self.do('create-list', 'create-' + list_id, list_id,
+                    title='Typed', items=self.full_typed_items(n))
+        movies = ['m%d' % n for n in range(1, 26)]
+        self.assertEqual(self.do('create-list', 'create-d', 'd', title='Fourth', movies=movies)['writes'], 5)
+        print('fourth Movie with 75 typed sibling items requests=%d' % self.api._requests)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+        self.assertEqual(self.do('set-members', 'replace-a', 'a', items=self.full_typed_items(4))['writes'], 2)
+        print('typed replacement beside full typed siblings requests=%d' % self.api._requests)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+
+    def test_fourth_typed_create_with_full_typed_siblings_fits_budget(self):
+        for n, list_id in enumerate('abcd'):
+            self.assertEqual(self.do('create-list', 'create-' + list_id, list_id,
+                                     title='Typed', items=self.full_typed_items(n))['writes'], 5)
+        print('fourth typed list with 100 total items requests=%d' % self.api._requests)
+        self.assertLess(self.api._requests, adapter.MAX_REQUESTS)
+
+    def test_typed_record_refused_by_the_previous_record_rule(self):
+        self.typed()
+        record = self.stored()['lists']['rec-series']
+        # d8be71d core accepted only these record fields, so it refuses this journal.
+        self.assertFalse(set(record) <= {'row', 'display_title'})
+        self.assertEqual(self.stored()['done']['create-series']['items'], [HELL, TVITEM])
+        # A malformed typed record refuses instead of being reinterpreted.
+        broken = self.stored()
+        broken['lists']['rec-series']['media_kind'] = 'Movie'
+        with self.journal.locked():
+            self.journal.save(broken)
+        self.fresh_session()
+        with self.assertRaisesRegex(Refused, 'Invalid list record'):
+            self.operator.show()
+
+
+class SeriesReadTests(unittest.TestCase):
+    """Read-only Series facts over the recording loopback transport."""
+    def setUp(self):
+        self.backend = SeriesBackend()
+        self.http = RecordingHTTP()
+        self.http.responder = self.backend.respond
+        self.http.__enter__()
+        self.addCleanup(self.http.__exit__, None, None, None)
+        self.api = adapter.OperatorAdapter(series_config())
+        self.api._opener = self.http
+        self.api.authenticate({'username': 'synthetic', 'password': 'synthetic'})
+
+    def test_seeds_resolve_episodes_to_visible_series_per_library(self):
+        offset = len(self.http.calls)
+        result = self.api.series_seeds(R, ['31956', '404', '501', '31955', '31389'], GRANTED)
+        self.assertEqual([(s['Id'], s['LibraryId'], s['Category'], s['EpisodeIds']) for s in result],
+                         [('31389', ANIME, 'anime', ['31956', '31955']), ('500', TV, 'tv', ['501'])])
+        hell = result[0]
+        self.assertEqual(set(hell), {'Id', 'Type', 'Name', 'LibraryId', 'Category', 'EpisodeIds',
+                                     'ProductionYear', 'Genres', 'People'})
+        self.assertEqual([p['Type'] for p in hell['People']], ['Director'] + ['Producer'] * 16)
+        text = json.dumps(result)
+        for private in ('UserData', 'Path', '/private', 'private-actor', 'Representative'):
+            self.assertNotIn(private, text)
+        calls = self.http.calls[offset:]
+        self.assertEqual({c[0] for c in calls}, {'GET'})
+        self.assertLessEqual(len(calls), 9)
+        self.assertTrue(all(q['EnableUserData'] == ['false'] for q in self.backend.item_queries))
+
+    def test_seeds_skip_invisible_and_refuse_contradictions(self):
+        self.backend.hidden.add('31389')
+        self.assertEqual([s['Id'] for s in self.api.series_seeds(R, ['31955', '501'], GRANTED)], ['500'])
+        self.backend.hidden.clear()
+        self.backend.episodes['31955']['SeriesName'] = 'Other'
+        with self.assertRaisesRegex(Refused, 'Episode and Series differ'):
+            self.api.series_seeds(R, ['31955'], GRANTED)
+        self.backend.episodes['31955']['SeriesName'] = "Hell's Paradise"
+        self.backend.episodes['31955']['library'] = TV  # Same Episode visible in two libraries
+        self.backend.episodes['x'] = dict(self.backend.episodes['31955'], library=ANIME)
+        with self.assertRaises(Refused):
+            self.api.series_seeds(R, ['31955'], GRANTED)
+
+    def test_recipient_series_representative_is_first_normal_episode(self):
+        result = self.api.recipient_series(R, ['500', '404', '31389'], GRANTED)
+        self.assertEqual([s['Id'] for s in result], ['500', '31389'])
+        self.assertEqual(result[0]['Representative'], {
+            'Id': '501', 'Type': 'Episode', 'SeriesId': '500', 'SeriesName': 'Synthetic TV',
+            'ParentIndexNumber': 1, 'IndexNumber': 3})
+        self.assertEqual(result[1]['Representative']['Id'], '31955')
+        self.assertNotIn('EpisodeIds', result[0])
+        self.backend.hidden.update({'501', '502', '503'})
+        self.assertNotIn('Representative', self.api.recipient_series(R, ['500'], GRANTED)[0])
+
+    def test_catalog_paging_bound_and_exact_person_filter(self):
+        page = self.api.series_catalog(R, TV, 1, 0, None, GRANTED)
+        self.assertEqual(([s['Id'] for s in page['series']], page['next_offset']), (['600'], 1))
+        self.assertEqual(self.api.series_catalog(R, TV, 1, 1, None, GRANTED)['next_offset'], None)
+        many = {str(4000 + n): {'Id': str(4000 + n), 'Type': 'Series', 'Name': 'Z%04d' % n,
+                                'library': TV} for n in range(1010)}
+        self.backend.series.update(many)
+        self.assertIsNone(self.api.series_catalog(R, TV, 10, 995, None, GRANTED)['next_offset'])
+        self.assertEqual(self.api.series_catalog(R, TV, 10, 990, None, GRANTED)['next_offset'], 1000)
+        person = self.api.series_catalog(R, ANIME, 10, 0, ('71', 'Director'), GRANTED)
+        self.assertEqual([s['Id'] for s in person['series']], ['31389'])
+        query = self.backend.item_queries[-3]
+        self.assertEqual((query['PersonIds'], query['PersonTypes']), (['71'], ['Director']))
+        # A Producer beyond the projection cap cannot satisfy the filter.
+        with self.assertRaisesRegex(Refused, 'filtered credit'):
+            self.api.series_catalog(R, ANIME, 10, 0, ('219', 'Producer'), GRANTED)
+        for args in ((R, '9', 1, 0, None, GRANTED), (R, TV, 11, 0, None, GRANTED),
+                     (R, TV, 1, 1001, None, GRANTED), (R, TV, 1, 0, ('71', 'Actor'), GRANTED),
+                     (R, TV, 1, 0, None, [ANIME, TV])):
+            with self.subTest(args=args), self.assertRaises(Refused):
+                self.api.series_catalog(*args)
+
+    def test_series_library_identity_and_configuration_bounds(self):
+        self.backend.views.remove(TV)
+        with self.assertRaisesRegex(Refused, 'Recipient Series library view unavailable'):
+            self.api.series_seeds(R, ['501'], GRANTED)
+        self.backend.views.append(TV)
+        self.backend.folders[2]['CollectionType'] = 'movies'
+        with self.assertRaisesRegex(Refused, 'Series library identity drift'):
+            self.api.recipient_series(R, ['500'], GRANTED)
+        good = series_config()
+        self.assertEqual(adapter.validate_config(good), good)
+        bad = [dict(SERIES_CONFIG, **{'7': SERIES_CONFIG[TV]}),
+               {TV: dict(SERIES_CONFIG[TV], guid=G)}, {TV: dict(SERIES_CONFIG[TV], category='kids')},
+               {TV: dict(SERIES_CONFIG[TV], name='')}, {TV: dict(SERIES_CONFIG[TV], name='n' * 129)},
+               {'01132': SERIES_CONFIG[TV]}, {}, {TV: SERIES_CONFIG[TV], ANIME: SERIES_CONFIG[TV]},
+               {TV: dict(SERIES_CONFIG[TV], extra=1)}]
+        for value in bad:
+            with self.subTest(value=value), self.assertRaises(Refused):
+                adapter.validate_config(dict(config(), series_libraries=value))
+        self.assertEqual(adapter.validate_config(dict(config(), series_libraries={
+            TV: SERIES_CONFIG[TV], ANIME: dict(SERIES_CONFIG[ANIME], category='tv')}))['library'], '7')
+        with self.assertRaises(Refused):
+            adapter.OperatorAdapter(config()).series_seeds(R, ['501'], GRANTED)
 
 
 if __name__ == '__main__':

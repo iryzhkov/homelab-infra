@@ -9,7 +9,8 @@ state, a queue, a subprocess or a second journal.
 from contextlib import contextmanager
 
 from emby_operator_adapter import OperatorAdapter, load_credentials
-from emby_operator_recommendations import LIST_OPERATIONS, Journal, Operator, require
+from emby_operator_recommendations import (LIST_OPERATIONS, TYPED_OPERATIONS, Journal, Operator,
+                                           require)
 
 LEGACY_FIELDS = {'preview': {'movies'}, 'apply': {'key', 'movies', 'baseline_digest'},
                  'display-title-preview': {'title'},
@@ -22,6 +23,12 @@ OPERATIONS = (*LEGACY_FIELDS, 'show', 'list-preview', *LIST_OPERATIONS)
 SCOPE = ('server', 'actor', 'recipient', 'library', 'recipe')
 
 
+def list_arguments(operation):
+    """Movie arguments, plus the typed Episode alternative where one exists."""
+    return [LIST_OPERATIONS[operation]] + (
+        [TYPED_OPERATIONS[operation]] if operation in TYPED_OPERATIONS else [])
+
+
 def request_fields(operation, request):
     """Exact allowed field sets; list-preview binds its named operation's arguments."""
     if operation in LEGACY_FIELDS:
@@ -29,19 +36,21 @@ def request_fields(operation, request):
     if operation == 'show':
         return [set(), {'list'}]
     if operation in LIST_OPERATIONS:
-        return [{'key', 'list', 'intent_digest', *LIST_OPERATIONS[operation]}]
+        return [{'key', 'list', 'intent_digest', *a} for a in list_arguments(operation)]
     target = request.get('operation')
     if operation == 'list-preview' and isinstance(target, str) and target in LIST_OPERATIONS:
-        return [{'operation', 'list', *LIST_OPERATIONS[target]}]
+        return [{'operation', 'list', *a} for a in list_arguments(target)]
     return []
 
 
 @contextmanager
-def operator_session(config, *, request_guard=None):
+def operator_session(config, *, request_guard=None, series=None):
     """Yield the Operator for one validated, enabled protected config.
 
     request_guard is the optional trusted adapter callback that the socket
-    worker uses for its deadline and cancellation; the CLI passes none. The
+    worker uses for its deadline and cancellation; the CLI passes none. series
+    is the current Series grant ({id: {guid, name, category}}) or None for a
+    Movie-only caller; the Operator refuses typed list state without it. The
     adapter and journal are closed on every exit path.
     """
     require(config['enabled'], 'Operator disabled')
@@ -57,7 +66,10 @@ def operator_session(config, *, request_guard=None):
             api.authenticate(credentials)
         finally:
             credentials.clear()
-        yield Operator(api, journal, **{k: config[k] for k in SCOPE})
+        scope = {k: config[k] for k in SCOPE}
+        if series is not None:
+            scope['series'] = series
+        yield Operator(api, journal, **scope)
     finally:
         if api is not None:
             api.close()

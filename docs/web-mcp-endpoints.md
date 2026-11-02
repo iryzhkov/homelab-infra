@@ -288,7 +288,25 @@ review and exact artifact SHA256 remain required before activation. Older builds
 `playback: null` needs that build. The existing management and catalog pins
 stay admissible for rollback without playback.
 
-The object has exactly three fields:
+The Series build pins Go `9efca79` and worker/interface `748e89d` through
+`HOLONET_SERIES_SOURCE` and `HOLONET_SERIES_CONTRACT`. Optional
+`playlist_operator.series_libraries` has one or two explicit ID/GUID/name/category
+entries, or null to keep it off; an empty map is refused. The generic catalog
+policy and library GUID map remain Movies-only. Only the recommendation writer's
+signed libraries and protected worker/recipient configuration gain TV and Anime.
+The installer projects that map into the root worker policy. Recipient configs
+must use the same map and existing journal paths, with no journal migration.
+
+Deploy the compatible worker before enabling the new Go configuration and writer
+grant. Series IDs are never playlist members. Typed items carry an Episode,
+its Series and its authorized library, with one Episode per Series. All media
+share the existing four-list and 25-member limits. Once typed state exists,
+removing its Series grant makes management refuse, including Movie show and
+reconcile. Keep a compatible worker for recovery, pause the job if necessary,
+and never downgrade to an older worker or reset journal state. See the typed
+contract `jocasta:c43c23446da086e5157fbca8a5f9977b@4` and the Go `SERIES.md`.
+
+The playback object has exactly three fields:
 
 - `jellystat_url`: `http://127.0.0.1:3012`, or a canonical HTTPS origin with
   no path, query, fragment, userinfo, default port or escape.

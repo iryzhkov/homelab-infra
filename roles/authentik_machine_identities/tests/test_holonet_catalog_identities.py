@@ -103,11 +103,12 @@ class DeclarationTest(unittest.TestCase):
             "holonet_catalog_baseline_anchor", "holonet_catalog_identity_expires",
             "authentik_machine_services", "authentik_machine_identities",
             "holonet_catalog_interactive_enabled", "holonet_catalog_interactive_identity",
-            "holonet_catalog_playback_enabled",
+            "holonet_catalog_playback_enabled", "holonet_catalog_series_enabled",
             "holonet_catalog_recommendations_enabled", "holonet_catalog_recommendations_identity"})
         self.assertIs(values["holonet_catalog_interactive_enabled"], False)
         self.assertEqual(values["holonet_catalog_interactive_identity"], INTERACTIVE | {"expires": TEMPLATED_EXPIRES})
         self.assertIs(values["holonet_catalog_playback_enabled"], False)
+        self.assertIs(values["holonet_catalog_series_enabled"], False)
         self.assertIs(values["holonet_catalog_recommendations_enabled"], False)
         self.assertEqual(values["holonet_catalog_recommendations_identity"], WRITER | {
             "holonet_target_users": [], "expires": ""})
@@ -128,6 +129,25 @@ class DeclarationTest(unittest.TestCase):
                          "/home/igor/.config/chaldea/authentik/holonet-movies-catalog-claude.app-password")
         self.assertNotEqual(laptop["token"], homelab["token"])
         self.assertEqual(laptop["grant"], homelab["grant"])
+
+    def test_series_writer_libraries_preserve_all_reader_grants(self):
+        services = {"holonet": HOLONET | {"scope": "holonet.read holonet.curate holonet.home"}}
+        initial = spec(COHORT + [INTERACTIVE, HISTORIAN], services)
+        rich = HISTORIAN | {"holonet_libraries": ["3", "615", "1132"]}
+        expanded = spec(COHORT + [INTERACTIVE, rich], services)
+        self.assertEqual(expanded["identities"][:3], initial["identities"][:3])
+        self.assertEqual(expanded["identities"][-1]["grant"]["holonet_libraries"], ["3", "615", "1132"])
+        self.assertEqual(expanded["identities"][-1]["token"], initial["identities"][-1]["token"])
+        invalid = [HISTORIAN | {"holonet_libraries": ids} for ids in (
+            [], ["615", "1132"], ["3", "615", "1132", "99"], ["3", "615", "615"],
+            ["3", "0615"], ["3", 615], ["3", "9223372036854775808"])]
+        invalid += [identity | {"holonet_libraries": ["3", "615"]}
+                    for identity in (HOMELAB, LAPTOP, INTERACTIVE, WRITER)]
+        invalid.append(rich | {"holonet_namespace": "movies-catalog"})
+        for identity in invalid:
+            with self.subTest(identity=identity):
+                with self.assertRaises(mi.AnsibleFilterError):
+                    spec([identity], services)
 
     def test_homelab_identity_and_mapping_match_the_live_matched_baseline(self):
         historical = spec([HOMELAB])
@@ -763,6 +783,28 @@ class EntrypointTest(unittest.TestCase):
                 "holonet_catalog_playback_enabled": history,
                 "holonet_catalog_recommendations_identity": (HISTORIAN if history else WRITER) | {"expires": expires},
                 "authentik_machine_services": {"holonet": full}}
+
+    def test_series_opt_in_is_writer_only_and_precedes_credentials(self):
+        options = self.renewal_options(HOMELAB["expires"], True)
+        rich = options["holonet_catalog_recommendations_identity"] | {
+            "holonet_libraries": ["3", "615", "1132"]}
+        options |= {"holonet_catalog_series_enabled": True,
+                    "holonet_catalog_recommendations_identity": rich}
+        self.ok(check=True, **options)
+        self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+        cases = [options | {"holonet_catalog_series_enabled": False},
+                 options | {"holonet_catalog_series_enabled": "true"},
+                 options | {"holonet_catalog_recommendations_enabled": False},
+                 options | {"holonet_catalog_playback_enabled": False},
+                 options | {"holonet_catalog_recommendations_identity": rich | {
+                     "holonet_libraries": ["3", "615"]}},
+                 options | {"holonet_catalog_interactive_identity": INTERACTIVE | {
+                     "holonet_libraries": ["3", "615", "1132"]}}]
+        for bad in cases:
+            with self.subTest(options=bad):
+                code, output = self.play(check=True, **bad)
+                self.assertNotEqual(code, 0, output)
+                self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
 
     def test_renewal_and_history_refusals_precede_credential_loading(self):
         x = self.x
