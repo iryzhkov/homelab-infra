@@ -845,8 +845,8 @@ For the independently confirmed three-reader checkpoint, use the same read-only
 producer with `holonet_catalog_baseline_checkpoint=ordinary-reader` and
 `holonet_catalog_interactive_enabled=true`, in check mode with
 `holonet_catalog_baseline_read=true`. Writer selection, apply and online
-preflight must remain off. The selector accepts only `historical` (default)
-or `ordinary-reader`; it accepts no arbitrary anchor.
+preflight must remain off. The selector also accepts the fixed current Series checkpoint below; it accepts
+no arbitrary anchor.
 
 The ordinary-reader selector pins blueprint
 `2514696c-15e3-494e-8df6-eb0c098a9efb` and successful content SHA256
@@ -858,6 +858,42 @@ GETs and allowlisted output. This is a drift check against prior evidence,
 not permission to adopt unknown current bytes. Any mismatch refuses; do not
 replace the anchor from a response or replay the old enrollment window.
 No password, OAuth detail, token, key, media or history reads are added.
+
+### Current Series writer baseline read
+
+The fixed `series-writer-20261102` checkpoint names the successful four-account
+Series deployment recorded in `jocasta:4f5b196b88482022d663d25cd3517967@2`.
+It pins the same owned blueprint UUID `2514696c-15e3-494e-8df6-eb0c098a9efb`
+and retained successful request SHA-256
+`f0bd05fefcead26e2f3827fbc95b7b067871ae40828b33c73432d895aad5d2e7`.
+The maintained REAL verification matched stored content to that request.
+
+Run the maintained read with the public four-account declaration used for
+that deployment. The public input file supplies the exact seven writer target
+and history users, the three writer libraries, all four opt-ins and the
+common expiry. It contains no credential or baseline hash.
+
+```sh
+ansible-playbook -i <operator-inventory> playbooks/authentik-holonet-catalog.yml --check \
+  -e @<public-writer-series.json> \
+  -e holonet_catalog_baseline_read=true \
+  -e holonet_catalog_baseline_checkpoint=series-writer-20261102 \
+  -e '{"holonet_catalog_apply":false,"holonet_catalog_online_check":false}'
+```
+
+Before loading the existing controller credential, this mode requires interactive,
+recommendation, playback and Series selection, exactly four present generation-1
+accounts expiring `2027-02-15T00:00:00Z`, and the successful deployment's exact
+grants and seven-user cohort. The three ordinary readers remain Movies-only,
+catalog.read only, with empty history. No destination binding is needed.
+
+Only `tasks/baseline.yml` runs. Its four discovery GETs must independently
+match the actual stored instance UUID and content SHA-256, exact owned objects,
+and existing provider/application ownership before computing the actual SHA-512.
+Only the existing allowlisted public IDs, hashes and booleans are emitted.
+No enrollment or credential delivery runs. Unknown bytes refuse; neither a
+planned hash nor the superseded pre-Series SHA-512 is a current baseline.
+Historical and ordinary-reader checkpoints retain their original restrictions.
 
 ### Existing-only baseline read
 

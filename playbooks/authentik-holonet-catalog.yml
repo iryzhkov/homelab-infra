@@ -66,11 +66,21 @@
           - ansible_check_mode
           - not (holonet_catalog_apply | default(false) | bool)
           - not (holonet_catalog_online_check | default(false) | bool)
-          - not (holonet_catalog_recommendations_enabled | bool)
-          - not (holonet_catalog_playback_enabled | bool)
-          - not (holonet_catalog_series_enabled | bool)
-          - holonet_catalog_identity_expires == '2026-11-20T00:00:00Z'
-          - holonet_catalog_baseline_checkpoint | default('historical') in ['historical', 'ordinary-reader']
+          - holonet_catalog_baseline_checkpoint | default('historical') in ['historical', 'ordinary-reader', 'series-writer-20261102']
+          - >-
+            (holonet_catalog_recommendations_enabled | bool) ==
+            (holonet_catalog_baseline_checkpoint | default('historical') == 'series-writer-20261102')
+          - >-
+            (holonet_catalog_playback_enabled | bool) ==
+            (holonet_catalog_baseline_checkpoint | default('historical') == 'series-writer-20261102')
+          - >-
+            (holonet_catalog_series_enabled | bool) ==
+            (holonet_catalog_baseline_checkpoint | default('historical') == 'series-writer-20261102')
+          - >-
+            holonet_catalog_identity_expires ==
+            ('2027-02-15T00:00:00Z' if holonet_catalog_baseline_checkpoint | default('historical') == 'series-writer-20261102'
+             else '2026-11-20T00:00:00Z')
+          - holonet_catalog_baseline_checkpoint | default('historical') != 'series-writer-20261102' or holonet_catalog_interactive_enabled | bool
           - holonet_catalog_baseline_checkpoint | default('historical') != 'ordinary-reader' or holonet_catalog_interactive_enabled | bool
         fail_msg: The baseline read runs alone, in check mode, without apply or the online preflight.
         quiet: true
@@ -247,6 +257,26 @@
           recommendation writer. Each keeps its exact grant and its own credential.
         quiet: true
 
+    # Fixed checkpoint of the successful REAL recorded in
+    # jocasta:4f5b196b88482022d663d25cd3517967@2. These public inputs
+    # describe that deployment only; the stored bytes still need a fresh read.
+    - name: Pin the current Series checkpoint cohort before credential loading
+      ansible.builtin.assert:
+        that:
+          - authentik_machine_identities | length == 4
+          - authentik_machine_identities | map(attribute='generation') | list == [1, 1, 1, 1]
+          - authentik_machine_identities | map(attribute='state') | list == ['present'] * 4
+          - authentik_machine_identities | map(attribute='expires') | list == ['2027-02-15T00:00:00Z'] * 4
+          - >-
+            holonet_catalog_recommendations_identity.holonet_target_users ==
+            ["545014d1c9d1416b8e0b5a445d6ff9ec","b8f4f6de49b443f1948cf0118679e863","db2f3bfb1f84438ebcde94f228183011","313e39bb4d8c4b92b81d4b170c3f1b8e","c06c7d2c3e224d8ba2e466efa5bcb97b","22703968ab0b48eebb4faf7c1d16262c","e05efa68303043b893b0f5c2e200ccd7"]
+          - holonet_catalog_recommendations_identity.holonet_history_users == holonet_catalog_recommendations_identity.holonet_target_users
+        fail_msg: The Series baseline checkpoint requires the exact successful four-account cohort.
+        quiet: true
+      when: >-
+        holonet_catalog_baseline_mode | bool and
+        holonet_catalog_baseline_checkpoint | default('historical') == 'series-writer-20261102'
+
     # The historical and ordinary-reader anchors predate the writer; never
     # derive this change's baseline from them.
     - name: Require a fresh public baseline for renewal or scoped playback
@@ -319,8 +349,11 @@
           {{ {'blueprint_pk': '2514696c-15e3-494e-8df6-eb0c098a9efb',
               'content_sha256': '7bfb4856b2a0af4ef437182c944b30a4b88dcabd8cc1e00143f14633ce804c9a'}
              if holonet_catalog_baseline_checkpoint | default('historical') == 'ordinary-reader'
+             else {'blueprint_pk': '2514696c-15e3-494e-8df6-eb0c098a9efb',
+                   'content_sha256': 'f0bd05fefcead26e2f3827fbc95b7b067871ae40828b33c73432d895aad5d2e7'}
+             if holonet_catalog_baseline_checkpoint | default('historical') == 'series-writer-20261102'
              else holonet_catalog_baseline_anchor }}
         machine_identity_baseline_identities: >-
-          {{ authentik_machine_identities if holonet_catalog_baseline_checkpoint | default('historical') == 'ordinary-reader'
+          {{ authentik_machine_identities if holonet_catalog_baseline_checkpoint | default('historical') in ['ordinary-reader', 'series-writer-20261102']
              else authentik_machine_identities[:1] }}
       when: holonet_catalog_baseline_mode | bool

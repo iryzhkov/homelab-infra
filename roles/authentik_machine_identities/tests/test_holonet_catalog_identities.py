@@ -45,6 +45,8 @@ ANCHOR = {"blueprint_pk": "2514696c-15e3-494e-8df6-eb0c098a9efb",
 # scope_expression_sha256 from the 2026-10-22 read-only issuer receipt, which
 # matched the stored mapping against the homelab-only declaration.
 HISTORICAL_EXPRESSION_SHA256 = "8874e2d192e9a64a36c9a9725edc508be269fb6aa1694a25725ede5080f7521a"
+SERIES_SHA256 = "f0bd05fefcead26e2f3827fbc95b7b067871ae40828b33c73432d895aad5d2e7"
+SERIES_USERS = ["545014d1c9d1416b8e0b5a445d6ff9ec","b8f4f6de49b443f1948cf0118679e863","db2f3bfb1f84438ebcde94f228183011","313e39bb4d8c4b92b81d4b170c3f1b8e","c06c7d2c3e224d8ba2e466efa5bcb97b","22703968ab0b48eebb4faf7c1d16262c","e05efa68303043b893b0f5c2e200ccd7"]
 HOSTS = {"homelab": {"ssh_user": "iryzhkov", "home": "/home/iryzhkov", "connection": "ssh"},
          "laptop": {"ssh_user": "igor", "home": "/home/igor", "connection": "local"}}
 # Fixed so the expiry window does not depend on the day the suite runs.
@@ -461,6 +463,90 @@ class EntrypointTest(unittest.TestCase):
         self.assertEqual((self.x.writes(), self.x.key_reads(), self.private_reads()), ([], [], []))
         self.assertEqual(self.homelab_snapshot(), before)
         self.assertFalse(self.secret("laptop", LAPTOP).exists())
+
+
+    def series_checkpoint_options(self):
+        writer = HISTORIAN | {"expires": RENEWED, "holonet_libraries": ["3", "615", "1132"],
+                              "holonet_target_users": SERIES_USERS, "holonet_history_users": SERIES_USERS}
+        return self.renewal_options(RENEWED, True) | {
+            "check": True, "baseline_read": True, "apply": False,
+            "holonet_catalog_baseline_checkpoint": "series-writer-20261102",
+            "holonet_catalog_series_enabled": True,
+            "holonet_catalog_recommendations_identity": writer}
+
+    def test_series_checkpoint_refuses_wrong_inputs_before_credentials(self):
+        options = self.series_checkpoint_options()
+        writer = options["holonet_catalog_recommendations_identity"]
+        cases = [
+            {"holonet_catalog_baseline_checkpoint": "unknown"},
+            {"check": False}, {"online": True}, {"holonet_catalog_apply": True},
+            {"holonet_catalog_interactive_enabled": False},
+            {"holonet_catalog_recommendations_enabled": False},
+            {"holonet_catalog_playback_enabled": False},
+            {"holonet_catalog_series_enabled": False},
+            {"holonet_catalog_identity_expires": HOMELAB["expires"]},
+            {"holonet_catalog_baseline_anchor": ANCHOR | {"content_sha256": "0" * 64}},
+            {"machine_identity_baseline_anchor": ANCHOR},
+            {"holonet_catalog_interactive_identity": INTERACTIVE | {"expires": RENEWED, "generation": 2}},
+            {"authentik_machine_identities": [HOMELAB | {"expires": RENEWED}]},
+        ]
+        for field, value in (("holonet_target_users", ["c" * 32]),
+                             ("holonet_history_users", SERIES_USERS[:-1]),
+                             ("holonet_libraries", ["3"]),
+                             ("holonet_actions", WRITER["holonet_actions"])):
+            cases.append({"holonet_catalog_recommendations_identity": writer | {field: value}})
+        for changed in cases:
+            with self.subTest(changed=changed):
+                code, output = self.play(**(options | changed))
+                self.assertNotEqual(code, 0, output)
+                self.assertFalse(self.x.state.requests or (self.x.base / "sops-loaded").exists())
+
+    def test_series_checkpoint_reads_exact_current_four_accounts_without_delivery(self):
+        x = self.x
+        options = self.series_checkpoint_options()
+        cohort = [item | {"expires": RENEWED} for item in COHORT + [INTERACTIVE]]
+        cohort.append(options["holonet_catalog_recommendations_identity"])
+        code, output = x.run(cohort, services=options["authentik_machine_services"],
+                             extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
+        self.assertEqual(code, 0, output)
+        before = copy.deepcopy((x.state.users, x.state.tokens))
+        files = {str(path): (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+                 for path in x.homes.values() for path in path.rglob("*.app-password")}
+        self.assertEqual(len(files), 4)
+        baseline = self.baseline()
+        # Production anchor must refuse these independently generated fixture bytes.
+        self.refused("Derive the baseline only from content matching the anchor", patched=True, **options)
+        self.assertEqual((x.writes(), x.key_reads(), self.private_reads()), ([], [], []))
+        self.assertNotIn(baseline["content_sha512"], output)
+        entrypoint = self.entrypoint
+        blueprint = next(iter(x.state.blueprints.values()))
+        fixture_hash = hashlib.sha256(blueprint["content"].encode()).hexdigest()
+
+        def fixture_entrypoint(patched):
+            path = entrypoint(True)
+            text = path.read_text()
+            literal = ("else {'blueprint_pk': '2514696c-15e3-494e-8df6-eb0c098a9efb',\n"
+                       "                   'content_sha256': '" + SERIES_SHA256 + "'}")
+            self.assertEqual(text.count(literal), 1)
+            # Test-only transport and independent fixture anchor, as for ordinary-reader.
+            path.write_text(text.replace(literal, "else " + repr({
+                "blueprint_pk": next(iter(x.state.blueprints)), "content_sha256": fixture_hash})))
+            return path
+
+        self.entrypoint = fixture_entrypoint
+        output = self.ok(**options)
+        self.assertIn(baseline["content_sha512"], output)
+        self.assertEqual(len(x.state.requests), 4)
+        self.assertTrue(all(method == "GET" for method, _, _ in x.state.requests))
+        self.assertEqual((x.writes(), x.key_reads(), self.private_reads()), ([], [], []))
+        self.assertEqual((x.state.users, x.state.tokens), before)
+        self.assertEqual({str(path): (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+                          for path in x.homes.values() for path in path.rglob("*.app-password")}, files)
+        for leaked in ("homelab-infra-owned", "expected =", "client_secret", blueprint["content"]):
+            self.assertNotIn(leaked, output)
+        blueprint["content"] += "\n# foreign drift"
+        self.refused("Derive the baseline only from content matching the anchor", **options)
+        self.assertEqual((x.writes(), x.key_reads(), self.private_reads()), ([], [], []))
 
     def test_ordinary_reader_checkpoint_is_pinned_read_only_and_requires_exact_cohort(self):
         x = self.x
