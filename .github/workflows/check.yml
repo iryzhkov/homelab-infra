@@ -219,7 +219,7 @@ jobs:
   machine-profiles:
     # Keep the long real-role coexistence/cleanup matrix separate from legacy tests.
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
     container:
