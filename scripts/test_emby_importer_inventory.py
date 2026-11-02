@@ -91,12 +91,26 @@ class ImporterXMLTests(unittest.TestCase):
         self.assertEqual(os.environ['TMPDIR'], str(home / 'tmp'))
         self.temp = tempfile.TemporaryDirectory(dir=home / 'tmp')
         self.addCleanup(self.temp.cleanup)
-        self.path = Path(self.temp.name) / 'config.xml'
+        app = Path(self.temp.name) / 'app'
+        app.mkdir(mode=0o700)
+        self.path = app / 'config.xml'
+        # Keep real FD/symlink/permission checks inside an isolated synthetic
+        # root; CI checkout ancestors may intentionally be group-writable.
+        real_open = os.open
+
+        def fixture_open(path, flags, *args, **kwargs):
+            if path == '/' and 'dir_fd' not in kwargs:
+                return real_open(self.temp.name, flags, *args, **kwargs)
+            return real_open(path, flags, *args, **kwargs)
+
+        opened = patch.object(adapter.os, 'open', side_effect=fixture_open)
+        opened.start()
+        self.addCleanup(opened.stop)
 
     def read(self, body):
         self.path.write_text(body)
         self.path.chmod(0o600)
-        return adapter.existing_importer_key(str(self.path), os.getuid())
+        return adapter.existing_importer_key('/app/config.xml', os.getuid())
 
     def test_existing_xml_only_and_no_copy(self):
         body = '<Config><ApiKey>' + KEY + '</ApiKey><UrlBase></UrlBase><Other>private</Other></Config>'
@@ -115,14 +129,17 @@ class ImporterXMLTests(unittest.TestCase):
         self.read('<Config><ApiKey>' + KEY + '</ApiKey></Config>')
         self.path.chmod(0o644)
         with self.assertRaises(Refused):
-            adapter.existing_importer_key(str(self.path), os.getuid())
+            adapter.existing_importer_key('/app/config.xml', os.getuid())
         self.path.chmod(0o600)
         link = self.path.parent / 'link.xml'
         link.symlink_to(self.path)
         with self.assertRaises(Refused):
-            adapter.existing_importer_key(str(link), os.getuid())
+            adapter.existing_importer_key('/app/link.xml', os.getuid())
         with self.assertRaises(Refused):
-            adapter.existing_importer_key(str(self.path), os.getuid() + 1)
+            adapter.existing_importer_key('/app/config.xml', os.getuid() + 1)
+        self.path.parent.chmod(0o770)
+        with self.assertRaisesRegex(Refused, 'Unsafe importer config ancestor'):
+            adapter.existing_importer_key('/app/config.xml', os.getuid())
 
 
 class ImporterTransportTests(unittest.TestCase):
