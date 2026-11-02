@@ -181,6 +181,25 @@ def playback_fixture(history=None):
     return value
 
 
+SERIES_SOURCE, SERIES_INTERFACE = "7" * 40, "8" * 40
+SERIES_LIBRARIES = {
+    "615": {"guid": "c423189f0ca04f568a152eaeebd60d89", "name": "Anime", "category": "anime"},
+    "1132": {"guid": "c1b8f08fe9054f8899b6179e7bffb2e0", "name": "TV shows", "category": "tv"},
+}
+
+
+def series_pins():
+    return mock.patch.multiple(contract, HOLONET_SERIES_SOURCE=SERIES_SOURCE,
+                               HOLONET_SERIES_CONTRACT=SERIES_INTERFACE)
+
+
+def series_fixture():
+    value = playback_fixture()
+    value["artifact"].update(source_revision=SERIES_SOURCE, contract_revision=SERIES_INTERFACE)
+    value["config"]["playlist_operator"]["series_libraries"] = copy.deepcopy(SERIES_LIBRARIES)
+    return value
+
+
 def directory(path, mode=0o755):
     path.mkdir()
     path.chmod(mode)  # The job umask must not change the intended fixture mode.
@@ -1126,6 +1145,57 @@ class PackagingTest(unittest.TestCase):
                 value = copy.deepcopy(managed)
                 value["artifact"]["contract_revision"] = interface
                 self.rejected(value)
+
+    def test_series_config_requires_its_build_and_preserves_catalog_scope(self):
+        self.assertEqual(contract.HOLONET_SERIES_SOURCE, "9efca7904b6b142c765bda4574185615fd374518")
+        self.assertEqual(contract.HOLONET_SERIES_CONTRACT, "748e89df0c765ba82133d9b45b8be00e76925128")
+        actual = series_fixture()
+        actual["artifact"].update(source_revision=contract.HOLONET_SERIES_SOURCE,
+                                  contract_revision=contract.HOLONET_SERIES_CONTRACT)
+        self.assertEqual(contract.endpoint_contract(actual), actual)
+        self.assertEqual(contract.playlist_operator_plan(actual)["policy"]["series_libraries"], SERIES_LIBRARIES)
+        self.rejected(series_fixture())  # Synthetic mismatched pins still refuse.
+        with operator_pins(), playback_pins(), series_pins():
+            value = series_fixture()
+            self.assertEqual(contract.endpoint_contract(value), value)
+            self.assertEqual(value["config"]["policy"]["Libraries"], ["3"])
+            self.assertEqual(value["config"]["library_guids"], {"3": "d" * 32})
+            old = copy.deepcopy(value)
+            old["artifact"].update(source_revision=PLAYBACK_SOURCE, contract_revision=PLAYBACK_INTERFACE)
+            self.rejected(old)
+            old["config"]["playlist_operator"]["series_libraries"] = {}
+            self.rejected(old)
+            # Isolate policy projection from the separately tested frozen-module pins.
+            with mock.patch.object(contract, "OPERATOR_MODULES", {}):
+                policy = contract.playlist_operator_plan(value)["policy"]
+                self.assertEqual(policy["series_libraries"], SERIES_LIBRARIES)
+                default_policy = contract.playlist_operator_plan(playback_fixture())["policy"]
+                self.assertNotIn("series_libraries", default_policy)
+            off = copy.deepcopy(value)
+            off["config"]["playlist_operator"]["series_libraries"] = None
+            self.assertEqual(contract.endpoint_contract(off), off)
+            for mapping in ({}, [], {"0615": SERIES_LIBRARIES["615"]},
+                            {"3": SERIES_LIBRARIES["615"]},
+                            {"615": SERIES_LIBRARIES["615"] | {"category": "Animation"}},
+                            {"615": SERIES_LIBRARIES["615"] | {"guid": "d" * 32}},
+                            {"615": SERIES_LIBRARIES["615"] | {"name": ""}},
+                            {"615": SERIES_LIBRARIES["615"] | {"extra": True}},
+                            dict(SERIES_LIBRARIES, **{"99": SERIES_LIBRARIES["615"]}),
+                            {"615": SERIES_LIBRARIES["615"],
+                             "1132": SERIES_LIBRARIES["1132"] | {"guid": SERIES_LIBRARIES["615"]["guid"]}}):
+                bad = copy.deepcopy(value)
+                bad["config"]["playlist_operator"]["series_libraries"] = mapping
+                with self.subTest(mapping=mapping):
+                    self.rejected(bad)
+            widened = copy.deepcopy(value)
+            widened["config"]["policy"]["Libraries"].append("615")
+            widened["config"]["library_guids"]["615"] = SERIES_LIBRARIES["615"]["guid"]
+            self.rejected(widened)
+            missing = copy.deepcopy(value)
+            missing["config"].pop("playback")
+            missing["config"]["policy"].update(Actions=["catalog.read"], HistoryUsers=[])
+            missing["credentials"] = [c for c in missing["credentials"] if c["name"] != "jellystat.json"]
+            self.rejected(missing)
 
     def test_playback_is_default_off_and_requires_exact_build_pins(self):
         self.assertEqual(contract.HOLONET_PLAYBACK_SOURCE, "6c1312693a9d20432f46e6a33ac256698ee46f74")

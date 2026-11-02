@@ -294,10 +294,16 @@ def _holonet_grant(item, name):
     grant = {key: item[key] for key in sorted(HOLONET_FIELDS)}
     _match(re.compile(r"[0-9a-f]{32}\Z"), grant["holonet_server"], name + " server")
     _match(re.compile(r"[a-z][a-z0-9-]{0,31}\Z"), grant["holonet_namespace"], name + " namespace")
+    series_writer = (grant["holonet_namespace"] == "managed-recommendations" and
+                     isinstance(grant["holonet_actions"], list) and
+                     HOLONET_HISTORY_ACTION in grant["holonet_actions"])
     grant["holonet_libraries"] = _bounded_grants(grant["holonet_libraries"], name + " libraries",
-                                                re.compile(r"[1-9][0-9]{0,18}\Z"), 1, 1)
-    if int(grant["holonet_libraries"][0]) > 9223372036854775807:
+                                                re.compile(r"[1-9][0-9]{0,18}\Z"),
+                                                3 if series_writer else 1, 1)
+    if any(int(value) > 9223372036854775807 for value in grant["holonet_libraries"]):
         _refuse(name + " library ID exceeds int64")
+    if len(grant["holonet_libraries"]) > 1 and "3" not in grant["holonet_libraries"]:
+        _refuse(name + " Series writer requires the existing Movies library")
     grant["holonet_catalog_users"] = _bounded_grants(grant["holonet_catalog_users"], name + " users",
                                                     re.compile(r"[0-9a-f]{32}\Z"), 1, 1)
     if grant["holonet_actions"] == ["catalog.read"]:

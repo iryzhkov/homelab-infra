@@ -130,6 +130,8 @@ holonet_catalog_interactive_identity:
 # holonet_catalog_playback_enabled adds history.read and requires a nonempty
 # holonet_history_users subset of its target users in the protected input.
 # The readers above always keep empty history and catalog.read alone.
+# Separate writer-only TV/Anime opt-in. Readers remain Movies-only.
+holonet_catalog_series_enabled: false
 holonet_catalog_playback_enabled: false
 holonet_catalog_recommendations_enabled: false
 holonet_catalog_recommendations_identity:

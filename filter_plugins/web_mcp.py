@@ -37,6 +37,9 @@ HOLONET_OPERATOR_CONTRACT = "2cd99eb967690de97e9be01b411f4df119283d4c"
 # The playback build also accepts playlist_operator.
 HOLONET_PLAYBACK_SOURCE = "6c1312693a9d20432f46e6a33ac256698ee46f74"
 HOLONET_PLAYBACK_CONTRACT = "cfea03b6e99e8b501ce5b6f1abbe0d32545ecd3e"
+# Frozen Series source and compatible worker fixture for integration review.
+HOLONET_SERIES_SOURCE = "9efca7904b6b142c765bda4574185615fd374518"
+HOLONET_SERIES_CONTRACT = "748e89df0c765ba82133d9b45b8be00e76925128"
 # Fixed runtime paths: the Jellystat key is its own credential file, never the
 # Emby backend file, and the only Jellystat URL besides an HTTPS origin is the
 # existing host-local listener.
@@ -47,10 +50,10 @@ HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_adapter.py": "31b365e4ca9b9d3d3a027347e39ff26d4ec5e36c82ad2e771436dc1e92360f3f",
-    "emby_operator_entry.py": "c37acc5c3b430d4874c1bae13b895c1ab78ef2f59ea7e76de830ea342f68007a",
-    "emby_operator_recommendations.py": "bd9e9ee03634bd55f014a64cd7ddb37fde404c8e0a2d51a817cef34acca58cae",
-    "emby_operator_socket.py": "747851bfe2456273de8c039221f75783bd95c8c5a37d99b62c94dd77ab1b6ee2",
+    "emby_operator_adapter.py": "7645c0eb296f6d5553f795e456e092bc19fdd4e08f1e6bfe69fe26cb0e819d98",
+    "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
+    "emby_operator_recommendations.py": "38fa51341e959cd9c2446ef295f84794fc8566bd24cc96eee39cbbda3cef4d75",
+    "emby_operator_socket.py": "e4e39f1cd596d9b2f137313995112321896288769082e3b1255d1946c5fac0fb",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
@@ -338,7 +341,8 @@ def holonet_playlist_operator(config, libraries, users):
     """The Go playlist_operator rules plus homelab's fixed ceiling and cohort."""
     value = config["playlist_operator"]
     require("recommendations" not in config, "playlist_operator excludes legacy recommendations")
-    keys(value, ("wire_version", "subject", "namespace", "library", "catalog_user", "recipients"))
+    keys(value, ("wire_version", "subject", "namespace", "library", "catalog_user", "recipients"),
+         ("series_libraries",))
     integer(value["wire_version"], 1, 1)
     subject = value["subject"]
     require(isinstance(subject, str) and 1 <= len(subject) <= 128
@@ -354,6 +358,25 @@ def holonet_playlist_operator(config, libraries, users):
     unique(recipients)
     require(all(r in OPERATOR_RECIPIENTS for r in recipients),
             "recipient outside the fixed protected operator cohort")
+    series = value.get("series_libraries")
+    require(series is None or (type(series) is dict and 1 <= len(series) <= 2),
+            "invalid bounded Series library map")
+    series = series or {}
+    require(not series or config.get("playback") is not None,
+            "Series libraries require scoped playback")
+    guids = []
+    for library, metadata in series.items():
+        match(library, r"[1-9][0-9]{0,18}")
+        require(int(library) <= 9223372036854775807 and library not in libraries
+                and library != value["library"], "Series libraries must not widen the catalog ceiling")
+        keys(metadata, ("guid", "name", "category"))
+        match(metadata["guid"], r"[0-9a-f]{32}")
+        require(metadata["guid"] not in config["library_guids"].values(),
+                "Series GUID must differ from catalog libraries")
+        label(metadata["name"], 128)
+        require(metadata["category"] in ("tv", "anime"), "invalid Series category")
+        guids.append(metadata["guid"])
+    unique(guids)
 
 
 def holonet_recommendations(value, libraries, users):
@@ -406,13 +429,18 @@ def endpoint_contract(value):
     _, contract = SERVICES[service]
     if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
         contract = HOLONET_WRITER_CONTRACT
-    playback_build = (service == "holonet" and HOLONET_PLAYBACK_SOURCE is not None
+    series_build = (service == "holonet" and HOLONET_SERIES_SOURCE is not None
+                    and HOLONET_SERIES_CONTRACT is not None
+                    and artifact["source_revision"] == HOLONET_SERIES_SOURCE)
+    playback_build = series_build or (service == "holonet" and HOLONET_PLAYBACK_SOURCE is not None
                       and HOLONET_PLAYBACK_CONTRACT is not None
                       and artifact["source_revision"] == HOLONET_PLAYBACK_SOURCE)
     operator_build = playback_build or (
         service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
         and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
-    if playback_build:
+    if series_build:
+        contract = HOLONET_SERIES_CONTRACT
+    elif playback_build:
         contract = HOLONET_PLAYBACK_CONTRACT
     elif operator_build:
         contract = HOLONET_OPERATOR_CONTRACT
@@ -443,6 +471,8 @@ def endpoint_contract(value):
         require("playback" not in value["config"] or playback_build,
                 "playback requires its exact reviewed artifact")
         if value["config"].get("playlist_operator") is not None:
+            require("series_libraries" not in value["config"]["playlist_operator"] or series_build,
+                    "Series configuration requires its exact reviewed artifact")
             require(value["uid"] == OPERATOR_UID and value["gid"] == OPERATOR_GID,
                     "management requires the homelab holonet identity")
     else:
@@ -504,6 +534,9 @@ def playlist_operator_plan(value):
             "recipients": {r: OPERATOR_RECIPIENTS[r] for r in selected},
             **({"history_users": sorted(config["policy"]["HistoryUsers"])}
                if config.get("playback") is not None else {}),
+            **({"series_libraries": {key: dict(metadata) for key, metadata in
+                                     operator["series_libraries"].items()}}
+               if operator.get("series_libraries") else {}),
         },
     }
 

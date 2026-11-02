@@ -68,6 +68,7 @@
           - not (holonet_catalog_online_check | default(false) | bool)
           - not (holonet_catalog_recommendations_enabled | bool)
           - not (holonet_catalog_playback_enabled | bool)
+          - not (holonet_catalog_series_enabled | bool)
           - holonet_catalog_identity_expires == '2026-11-20T00:00:00Z'
           - holonet_catalog_baseline_checkpoint | default('historical') in ['historical', 'ordinary-reader']
           - holonet_catalog_baseline_checkpoint | default('historical') != 'ordinary-reader' or holonet_catalog_interactive_enabled | bool
@@ -118,6 +119,18 @@
         fail_msg: Scoped playback needs the writer opt-in and 1..16 history users, all among its target users.
         quiet: true
       when: holonet_catalog_playback_enabled | bool
+
+    - name: Require an explicit writer-only TV and Anime library opt-in
+      ansible.builtin.assert:
+        that:
+          - holonet_catalog_series_enabled is boolean
+          - not holonet_catalog_series_enabled or (holonet_catalog_recommendations_enabled | bool)
+          - not holonet_catalog_series_enabled or (holonet_catalog_playback_enabled | bool)
+          - >-
+            not holonet_catalog_series_enabled or
+            holonet_catalog_recommendations_identity.holonet_libraries == ['3', '615', '1132']
+        fail_msg: Series access requires the separate history writer and exactly Movies, Anime and TV libraries.
+        quiet: true
 
     - name: Select only the separate HoloNet recommendation identity and full scope tuple
       ansible.builtin.set_fact:
@@ -218,7 +231,8 @@
             (authentik_machine_identities[-1] | dict2items
             | rejectattr('key', 'in', ['generation', 'expires', 'state']) | items2dict) ==
             {'host': 'laptop', 'profile': 'holonet-recommendations', 'service': 'holonet',
-             'holonet_server': '3c86e6d7ff6c4a3296522cdf03d22bb0', 'holonet_libraries': ['3'],
+             'holonet_server': '3c86e6d7ff6c4a3296522cdf03d22bb0',
+             'holonet_libraries': (['3', '615', '1132'] if holonet_catalog_series_enabled else ['3']),
              'holonet_catalog_users': ['54b7d36cef804d3c8478474553ed3a82'],
              'holonet_history_users': (holonet_catalog_recommendations_identity.holonet_history_users
                                        if holonet_catalog_playback_enabled | bool else []),
