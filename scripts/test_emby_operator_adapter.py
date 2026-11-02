@@ -2624,7 +2624,13 @@ class InventoryTests(unittest.TestCase):
                  [items(EPISODE), items(dict(SERIES, Id='31390'))],
                  [items(EPISODE), items(dict(SERIES, Name=''))],
                  mapping_responses(series_in=('9', '7'))[:4],
-                 mapping_responses()[:4] + [items()]]
+                 mapping_responses()[:4] + [items()],
+                 mapping_responses()[:2] + [items(dict(SERIES, Type='Movie'))],
+                 mapping_responses()[:2] + [items(dict(SERIES, Name='Other'))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, Type='Movie'))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, SeriesId='31390'))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, SeriesId=None))],
+                 mapping_responses()[:4] + [items(dict(EPISODE, SeriesName='Other'))]]
         for responses in cases:
             with self.subTest(responses=str(responses)[:80]), RecordingHTTP() as http:
                 api = self.authenticated(http)

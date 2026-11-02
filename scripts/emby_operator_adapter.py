@@ -515,6 +515,8 @@ class OperatorAdapter:
             query.update(Recursive='true', ParentId=parent, IncludeItemTypes=kind)
         rows = complete(self._http('GET', '/Users/' + recipient + '/Items', query), 1)
         require(all(r.get('Id') == item_id for r in rows), 'Unrequested inventory item')
+        require(kind is None or all(r.get('Type') == kind for r in rows),
+                'Inventory item type differs')
         return rows
 
     def _episode_series(self, recipient, episode_id, libraries):
@@ -535,13 +537,20 @@ class OperatorAdapter:
         require(series.get('Type') == 'Series' and
                 printable(series.get('Name'), MAX_TITLE_BYTES) and
                 episode.get('SeriesName') in (None, series['Name']), 'Episode and Series differ')
-        homes = [x for x in libraries
-                 if self._visible_items(recipient, series_id, x['Id'], 'Series')]
+        homes = []
+        for library in libraries:
+            scoped = self._visible_items(recipient, series_id, library['Id'], 'Series')
+            require(not scoped or scoped[0].get('Name') == series['Name'],
+                    'Scoped Series differs')
+            if scoped:
+                homes.append(library)
         require(len(homes) <= 1, 'Ambiguous Series library')
         if not homes:
             return insufficient
-        require(self._visible_items(recipient, episode_id, homes[0]['Id'], 'Episode'),
-                'Episode outside its Series library')
+        scoped = self._visible_items(recipient, episode_id, homes[0]['Id'], 'Episode')
+        require(scoped and scoped[0].get('SeriesId') == series_id and
+                scoped[0].get('SeriesName') in (None, series['Name']),
+                'Episode outside its Series library or mapping differs')
         return {'Id': episode_id, 'Type': 'Episode', 'SeriesId': series_id,
                 'SeriesType': 'Series', 'SeriesName': series['Name'],
                 'LibraryId': homes[0]['Id'], 'status': 'mapped'}
