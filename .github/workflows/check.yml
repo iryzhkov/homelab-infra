@@ -63,6 +63,7 @@ jobs:
           python3 scripts/test_emby_operator_viewers.py
           python3 scripts/test_emby_operator_socket.py
           python3 scripts/test_emby_janitor_protections.py
+          python3 scripts/test_emby_importer_inventory.py
           ansible-playbook playbooks/emby-operator-viewers.yml --syntax-check
       - name: Test opt-in Jocasta MCP stack configuration
         run: |

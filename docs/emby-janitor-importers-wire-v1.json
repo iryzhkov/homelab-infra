@@ -1,0 +1,78 @@
+{
+  "contract": "jocasta:265b119ea72710eb08d72ec118883eb6@2; synthetic read-only importer inventory",
+  "frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "7",
+      "actions": [
+        "janitor.importers.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "janitor-importers-inventory",
+    "request": {
+      "backend": "radarr"
+    }
+  },
+  "policy": {
+    "target_library": "7",
+    "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "backends": {
+      "radarr": "/synthetic/radarr.json",
+      "sonarr": "/synthetic/sonarr.json"
+    }
+  },
+  "responses": {
+    "radarr": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "qualification": "arr_importer_inventory_v1",
+        "backend": "radarr",
+        "resource_id": "radarr-primary",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "7",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "lists": [
+          {
+            "id": 1,
+            "name": "Synthetic radarr list",
+            "implementation": "SyntheticImport",
+            "enabled": false,
+            "automatic_add": true,
+            "search_on_add": false
+          }
+        ]
+      }
+    },
+    "sonarr": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "qualification": "arr_importer_inventory_v1",
+        "backend": "sonarr",
+        "resource_id": "sonarr-primary",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "7",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "lists": [
+          {
+            "id": 1,
+            "name": "Synthetic sonarr list",
+            "implementation": "SyntheticImport",
+            "enabled": null,
+            "automatic_add": true,
+            "search_on_add": false
+          }
+        ]
+      }
+    }
+  }
+}

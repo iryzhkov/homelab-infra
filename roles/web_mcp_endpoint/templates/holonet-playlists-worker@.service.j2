@@ -38,7 +38,7 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-# AF_UNIX for the inherited connection; INET for the pinned Emby origin.
+# AF_UNIX for the inherited connection; INET for pinned Emby and optional fixed-GET importer origins.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 # Only the selected recipients' existing journals are writable. Source, policy,
 # configs and the shared credential stay read-only through ProtectSystem=strict.
