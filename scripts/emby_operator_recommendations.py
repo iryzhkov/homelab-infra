@@ -14,6 +14,14 @@ from done into immutable per-key records in the journal-owned replay-archive
 directory, under the same lock. Archived keys replay forever and no record is
 ever pruned. Older code refuses the manifest field, so it cannot treat an
 archived key as new.
+
+A version 2 list record may instead be a typed Episode list: media_kind
+"Episode", the Series libraries it is bound to and its typed membership
+(Episode, parent Series and library per entry). It shares the journal, lock,
+run, pending step, list limit and marker formula with Movie lists. Older code
+refuses the extra record fields, so it fails closed once typed state exists.
+Every read or write of a journal holding typed state needs a current Series
+grant covering every bound library; the Movie library never implies one.
 """
 import copy
 import fcntl
@@ -56,6 +64,13 @@ MARKER = re.compile(r"holonet-recommendations-[0-9a-f]{32}")
 LIST_OPERATIONS = {"create-list": ("title", "movies"), "set-members": ("movies",),
                    "set-title": ("title",), "detach-row": (), "attach-row": ("title",),
                    "delete-list": (), "move-row": ("position",)}
+# Typed Episode alternatives: "items" replaces "movies" for these operations only.
+TYPED_OPERATIONS = {"create-list": ("title", "items"), "set-members": ("items",)}
+EPISODE = "Episode"
+ITEM_FIELDS = ("episode_id", "series_id", "library_id")
+TYPED_RECORD = frozenset("row media_kind libraries items".split())
+MAX_SERIES_LIBRARIES = 2
+SERIES_CATEGORIES = ("tv", "anime")
 # Ordered mutation phases. apply, remove and set-display-title keep their
 # version 1 request shapes. Rows are always created with the marker title.
 PHASES = {"apply": ("create", "share", "row", "members"), "remove": ("unrow", "delete"),
@@ -107,6 +122,73 @@ def movie_ids(values, minimum=1):
             "Expected %d..25 Movies" % minimum)
     result = [opaque(v) for v in values]
     require(len(set(result)) == len(result), "Duplicate Movie IDs")
+    return result
+
+
+def canonical_id(value, message="Invalid catalog ID"):
+    """Canonical positive decimal int64 string, as HoloNet ValidCatalogID."""
+    require(isinstance(value, str) and re.fullmatch("[1-9][0-9]{0,18}", value) is not None
+            and int(value) < 2 ** 63, message)
+    return value
+
+
+def catalog_ids(values, noun):
+    """1..25 unique canonical catalog IDs in caller order."""
+    require(isinstance(values, (list, tuple)) and 1 <= len(values) <= 25,
+            "Expected 1..25 %s IDs" % noun)
+    result = [canonical_id(v) for v in values]
+    require(len(set(result)) == len(result), "Duplicate %s IDs" % noun)
+    return result
+
+
+def series_library_ids(values):
+    """1..2 unique canonical library IDs in Go sort.Strings (byte) order."""
+    require(isinstance(values, (list, tuple)) and 1 <= len(values) <= MAX_SERIES_LIBRARIES,
+            "Invalid Series libraries")
+    result = [canonical_id(v, "Invalid Series libraries") for v in values]
+    require(result == sorted(set(result)), "Invalid Series libraries")
+    return result
+
+
+def series_map(value):
+    """Configured Series libraries: {id: {guid, name, category}}, 1..2 entries.
+
+    Categories may repeat; GUIDs are unique. Classification is the configured
+    category of an exact library, never inferred from item names.
+    """
+    require(type(value) is dict and 1 <= len(value) <= MAX_SERIES_LIBRARIES,
+            "Invalid Series libraries")
+    for key, entry in value.items():
+        canonical_id(key, "Invalid Series libraries")
+        require(type(entry) is dict and set(entry) == {"guid", "name", "category"} and
+                isinstance(entry["guid"], str) and re.fullmatch("[0-9a-f]{32}", entry["guid"]) and
+                entry["category"] in SERIES_CATEGORIES and isinstance(entry["name"], str) and
+                1 <= len(entry["name"].encode("utf-8", "surrogatepass")) <= 128 and
+                all(32 <= ord(c) != 127 and not 0xD800 <= ord(c) <= 0xDFFF
+                    for c in entry["name"]), "Invalid Series libraries")
+    guids = [e["guid"] for e in value.values()]
+    require(len(set(guids)) == len(guids), "Invalid Series libraries")
+    return copy.deepcopy(value)
+
+
+def typed_items(values, minimum=0):
+    """Typed Episode membership: exact {episode_id, series_id, library_id} items.
+
+    Episode and Series IDs are canonical and unique across the list, so a list
+    holds at most one representative Episode per Series. Key order is not
+    significant; the canonical digest sorts keys.
+    """
+    require(isinstance(values, (list, tuple)) and minimum <= len(values) <= 25,
+            "Expected %d..25 Episodes" % minimum)
+    result = []
+    for value in values:
+        require(type(value) is dict and set(value) == set(ITEM_FIELDS), "Invalid Episode item")
+        item = {k: canonical_id(value[k], "Invalid Episode item") for k in ITEM_FIELDS}
+        require(item["episode_id"] != item["series_id"], "Invalid Episode item")
+        result.append(item)
+    for key, noun in (("episode_id", "Episode"), ("series_id", "Series")):
+        ids = [i[key] for i in result]
+        require(len(set(ids)) == len(ids), "Duplicate %s IDs" % noun)
     return result
 
 
@@ -164,12 +246,17 @@ def checked_title(title):
 def list_request(operation, list_id, args):
     """Canonical list-scoped request; the digest binds operation, list and args."""
     require(isinstance(operation, str) and operation in LIST_OPERATIONS and
-            set(args) == set(LIST_OPERATIONS[operation]), "Invalid list operation")
+            set(args) in (set(LIST_OPERATIONS[operation]),
+                          set(TYPED_OPERATIONS.get(operation, LIST_OPERATIONS[operation]))),
+            "Invalid list operation")
     request = dict(operation=operation, list=opaque(list_id))
     if "title" in args:
         request["title"] = checked_title(args["title"])
     if "movies" in args:
         request["movies"] = movie_ids(args["movies"], 0)
+    if "items" in args:
+        # A typed create needs at least one Episode; set-members may clear.
+        request["items"] = typed_items(args["items"], 1 if operation == "create-list" else 0)
     if "position" in args:
         request["position"] = row_position(args["position"])
     return request
@@ -248,12 +335,15 @@ class ProtectedAPI(Protocol):
     def verified_identity(self) -> dict: ...
     def snapshot(self, recipient: str, marker: str) -> dict: ...
     def query_movies(self, recipient: str, library: str, ids: list) -> list: ...
+    def query_episodes(self, recipient: str, libraries: list, items: list) -> list: ...
+    def check_create_absent(self, list_id: str): ...
     def create_playlist(self, actor: str, marker: str): ...
     def share_read(self, playlist: str, recipient: str): ...
     def create_row(self, recipient: str, body: dict): ...
     def set_row_display_title(self, recipient: str, body: dict): ...
     def delete_entries(self, playlist: str, actor: str, entries: list): ...
     def add_movies(self, playlist: str, actor: str, movies: list): ...
+    def add_episodes(self, playlist: str, actor: str, items: list): ...
     def delete_row(self, recipient: str, row): ...
     def move_index(self, recipient: str, home: list, row, position: int): ...
     def move_row(self, recipient: str, args: dict): ...
@@ -468,7 +558,7 @@ class Journal:
 
 class Operator:
     def __init__(self, api: ProtectedAPI, journal: Journal, *, server, actor,
-                 recipient, library, recipe):
+                 recipient, library, recipe, series=None):
         for value in (server, actor, recipient):
             require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value),
                     "Expected exact server/user ID")
@@ -480,6 +570,13 @@ class Operator:
         # Version 2 is recipient-scoped; recipe names the legacy list.
         self.base = {k: v for k, v in self.scope.items() if k != "recipe"}
         self.marker = list_marker(self.base, recipe)
+        # Current Series grant: the caller's intersected Series libraries with
+        # their configured identities, or None for a Movie-only caller. It is
+        # never derived from the Movie library or the journal namespace.
+        self.series = None
+        if series is not None:
+            self.series = series_map(series)
+            require(library not in self.series, "Invalid Series libraries")
 
     def marker_for(self, list_id):
         return self.marker if list_id is None else list_marker(self.base, list_id)
@@ -512,6 +609,7 @@ class Operator:
         rows = [row_id(r.get("Id")) for r in s["home"]]
         require(len(rows) == len(set(rows)), "Duplicate Home row IDs")
         markers, limit = self._markers(d)
+        kinds = self._kinds(d)
         require(isinstance(s["playlists"], list) and len(s["playlists"]) <= limit,
                 "Ambiguous owned marker")
         for p in s["playlists"]:
@@ -521,10 +619,13 @@ class Operator:
                     p["owner"] == self.scope["actor"], "Foreign playlist")
             require(p["access"] in ([], [self.scope["recipient"]]), "Unexpected playlist access")
             require(isinstance(p["entries"], list) and len(p["entries"]) <= 25, "Too many occurrences")
+            # Snapshot compatibility encoding: a typed list's occurrences hold
+            # the Episode ID under "episode"; Movie occurrences keep "movie".
+            key = "episode" if kinds.get(p["marker"]) == EPISODE else "movie"
             entries = []
             for entry in p["entries"]:
-                require(isinstance(entry, dict) and set(entry) == {"movie", "entry"}, "Invalid occurrence")
-                opaque(entry["movie"])
+                require(isinstance(entry, dict) and set(entry) == {key, "entry"}, "Invalid occurrence")
+                opaque(entry[key])
                 entries.append(opaque(entry["entry"]))
             require(len(set(entries)) == len(entries), "Duplicate occurrence IDs")
         found = [p["marker"] for p in s["playlists"]]
@@ -532,12 +633,51 @@ class Operator:
                 len({p["id"] for p in s["playlists"]}) == len(found), "Ambiguous owned marker")
         return s
 
+    def _kinds(self, d):
+        """Markers of typed Episode lists, including a typed create in progress."""
+        if d is None or d["version"] == 1:
+            return {}
+        kinds = {self.marker_for(k): EPISODE for k, r in d["lists"].items() if "media_kind" in r}
+        request = (d["run"] or {}).get("request") or {}
+        if "items" in request:
+            kinds[self.marker_for(request["list"])] = EPISODE
+        return kinds
+
     def _visible(self, movies):
         if not movies:
             return
         result = self.api.query_movies(self.scope["recipient"], self.scope["library"], movies)
         require(result == [{"Id": m, "Type": "Movie", "LibraryId": self.scope["library"]}
                            for m in movies], "Recipient Movie visibility/order mismatch")
+
+    def _visible_items(self, items):
+        """Every typed item is a current recipient-visible Episode of its Series in its library."""
+        if not items:
+            return
+        require(self.series is not None and
+                all(i["library_id"] in self.series for i in items), "Item library outside Series grant")
+        libraries = sorted({i["library_id"] for i in items})
+        result = self.api.query_episodes(self.scope["recipient"], libraries, copy.deepcopy(items))
+        require(result == items, "Recipient Episode visibility/order mismatch")
+
+    def _typed_gate(self, d):
+        """Typed sibling state needs a current Series grant covering every bound library.
+
+        A Movie-only caller, or one granted fewer libraries, refuses before any
+        snapshot, so it neither reads nor changes a journal it cannot authorize.
+        """
+        bound, typed = set(), False
+        for record in d["lists"].values():
+            if "media_kind" in record:
+                typed = True
+                bound |= set(record["libraries"])
+        request = (d["run"] or {}).get("request")
+        if type(request) is dict and "items" in request:
+            typed = True
+            bound |= {i["library_id"] for i in request["items"]}
+        if typed:
+            require(self.series is not None and bound <= set(self.series),
+                    "Typed list state needs current Series grants")
 
     def _journal(self):
         """Validate custody before any snapshot. Never migrates or saves."""
@@ -559,13 +699,28 @@ class Operator:
                     type(archive["version"]) is int and archive["version"] == 1 and
                     type(archive["count"]) is int and archive["count"] >= 0,
                     "Invalid replay archive manifest")
+        saved = {p["marker"]: p for p in d["current"]["playlists"]}
         for list_id, record in d["lists"].items():
-            require(type(record) is dict and "row" in record and
-                    set(record) <= {"row", "display_title"}, "Invalid list record")
+            require(type(record) is dict and "row" in record, "Invalid list record")
+            if "media_kind" in record:
+                require(set(record) - {"display_title"} == TYPED_RECORD and
+                        record["media_kind"] == EPISODE and list_id != self.scope["recipe"],
+                        "Invalid list record")
+                libraries = series_library_ids(record["libraries"])
+                items = typed_items(record["items"])
+                require(items == record["items"] and
+                        all(i["library_id"] in libraries for i in items), "Invalid list record")
+                playlist = saved.get(self.marker_for(list_id))
+                require(playlist is not None and type(playlist.get("entries")) is list and
+                        [type(e) is dict and e.get("episode") for e in playlist["entries"]] ==
+                        [i["episode_id"] for i in items], "Typed membership binding differs")
+            else:
+                require(set(record) <= {"row", "display_title"}, "Invalid list record")
             display_title(record, self.marker_for(list_id))
-        require(sorted(p["marker"] for p in d["current"]["playlists"]) ==
-                sorted(self.marker_for(i) for i in d["lists"]),
+        require(sorted(saved) == sorted(self.marker_for(i) for i in d["lists"]) and
+                len(saved) == len(d["current"]["playlists"]),
                 "Journal list records disagree with saved playlists")
+        self._typed_gate(d)
         return d
 
     def _fresh(self, snapshot, d, version):
@@ -610,7 +765,7 @@ class Operator:
         owned = [p for p in expected["playlists"] if p["marker"] == marker]
         target = owned[0] if owned else None
         new = [p for p in after["playlists"] if p["marker"] == marker]
-        if operation in ("share", "clear", "add", "delete") and target is None:
+        if operation in ("share", "clear", "add", "add-episodes", "delete") and target is None:
             return False
         if operation == "create":
             if target is not None or len(new) != 1:
@@ -641,8 +796,11 @@ class Operator:
             target["access"] = [self.scope["recipient"]]
         elif operation == "clear":
             target["entries"] = []
-        elif operation == "add":
-            if len(new) != 1 or [e["movie"] for e in new[0]["entries"]] != args:
+        elif operation in ("add", "add-episodes"):
+            # Exact members only: an expanded Series or any extra item never matches.
+            key, wanted = (("movie", args) if operation == "add" else
+                           ("episode", [i["episode_id"] for i in args]))
+            if len(new) != 1 or [e.get(key) for e in new[0]["entries"]] != wanted:
                 return False
             target["entries"] = new[0]["entries"]
         elif operation == "unrow":
@@ -686,12 +844,25 @@ class Operator:
         title = request.get("title")
         require(title is None or title == marker or not MARKER.fullmatch(title),
                 "Marker-shaped title")
+        typed = "items" in request
+        if typed:
+            require(self.series is not None, "Series libraries required")
+            require(all(i["library_id"] in self.series for i in request["items"]),
+                    "Item library outside Series grant")
         if name == "create-list":
+            # The legacy list stays a Movie list, so downgrade stays lossless.
+            require(not typed or request["list"] != self.scope["recipe"],
+                    "Legacy list must stay a Movie list")
             require(record is None, "List already exists")
             require(len(d["lists"]) < MAX_LISTS, "List limit reached")
             self.api.check_create_absent(request["list"])
             return
         require(record is not None, "Unknown list")
+        if name == "set-members":
+            # No coercion: Movie requests never touch Episode lists, nor the reverse.
+            require(typed == ("media_kind" in record), "List media kind differs")
+            require(not typed or all(i["library_id"] in record["libraries"]
+                                     for i in request["items"]), "Item library outside list binding")
         require(name != "detach-row" or record["row"] is not None, "List already detached")
         require(name != "attach-row" or record["row"] is None, "List already attached")
         if name == "move-row":
@@ -714,6 +885,7 @@ class Operator:
             require(s == d["current"], "Manual drift")
             self._check(d, s, request)
             self._visible(request.get("movies") or [])
+            self._visible_items(request.get("items") or [])
             # Same archive gate as admission. Retirement at admission changes
             # neither the snapshot nor the request, so this digest stays valid.
             self._verify_archive(d)
@@ -754,11 +926,18 @@ class Operator:
         return self._execute(key, baseline_digest, dict(movies=[], remove=True),
                              self._legacy("delete-list"))
 
-    def create_list(self, key, list, title, movies, intent_digest=None):
-        return self._scoped(key, intent_digest, "create-list", list, title=title, movies=movies)
+    def create_list(self, key, list, title, movies=None, intent_digest=None, items=None):
+        return self._scoped(key, intent_digest, "create-list", list, title=title,
+                            **self._members(movies, items))
 
-    def set_members(self, key, list, movies, intent_digest=None):
-        return self._scoped(key, intent_digest, "set-members", list, movies=movies)
+    def set_members(self, key, list, movies=None, intent_digest=None, items=None):
+        return self._scoped(key, intent_digest, "set-members", list, **self._members(movies, items))
+
+    @staticmethod
+    def _members(movies, items):
+        """Exactly one of the Movie IDs or the typed Episode items."""
+        require((movies is None) != (items is None), "Expected movies or items")
+        return {"movies": movies} if items is None else {"items": items}
 
     def set_title(self, key, list, title, intent_digest=None):
         return self._scoped(key, intent_digest, "set-title", list, title=title)
@@ -845,12 +1024,16 @@ class Operator:
                 position = next((n for n, r in enumerate(s["home"]) if record["row"] is not None
                                  and row_id(r["Id"]) == row_id(record["row"])), None)
                 if list is None or list == list_id:
-                    lists.append(dict(list=list_id, marker=marker,
-                                      legacy=list_id == self.scope["recipe"],
-                                      display_title=display_title(record, marker),
-                                      playlist=copy.deepcopy(playlist),
-                                      row=self._row_view(d, s, record, playlist),
-                                      position=position))
+                    item = dict(list=list_id, marker=marker,
+                                legacy=list_id == self.scope["recipe"],
+                                display_title=display_title(record, marker),
+                                playlist=copy.deepcopy(playlist),
+                                row=self._row_view(d, s, record, playlist),
+                                position=position)
+                    if "media_kind" in record:
+                        item["media_kind"] = EPISODE
+                        item["playlist"] = self._typed_playlist(d, list_id, record, playlist)
+                    lists.append(item)
             require(list is None or len(lists) == 1, "Unknown list")
             archived = d.get("replay_archive", {"count": 0})["count"]
             # done_count stays the active count that older clients bound by
@@ -860,6 +1043,27 @@ class Operator:
                         list_count=len(d["lists"]), list_limit=MAX_LISTS,
                         archived_count=archived, completed_count=len(d["done"]) + archived,
                         migrated_from=copy.deepcopy(d.get("migrated_from")))
+
+    @staticmethod
+    def _typed_playlist(d, list_id, record, playlist):
+        """Public Episode entries {episode_id, series_id, library_id, entry}.
+
+        Bindings come from the saved list and, for an observed unfinished write,
+        from the run's typed request. An unbound occurrence refuses.
+        """
+        if playlist is None:
+            return None
+        bindings = {i["episode_id"]: i for i in record["items"]}
+        request = (d["run"] or {}).get("request") or {}
+        if request.get("list") == list_id:
+            bindings.update({i["episode_id"]: i for i in request.get("items", [])})
+        entries = []
+        for e in playlist["entries"]:
+            require(e["episode"] in bindings, "Typed membership binding missing")
+            b = bindings[e["episode"]]
+            entries.append(dict(episode_id=b["episode_id"], series_id=b["series_id"],
+                                library_id=b["library_id"], entry=e["entry"]))
+        return dict(copy.deepcopy(playlist), entries=entries)
 
     def migrate_preview(self):
         return self._convert("migrate", None, None)
@@ -991,6 +1195,7 @@ class Operator:
                 require(intent == self._intent(d, s, request), "Fresh preview digest required")
                 self._check(d, s, request)
                 self._visible(request.get("movies") or [])
+                self._visible_items(request.get("items") or [])
                 # A key absent from done and archive is new only while the
                 # archive verifies: a lost record changes the count and refuses.
                 self._verify_archive(d)
@@ -1092,14 +1297,22 @@ class Operator:
         bound = size(d) - size(d["current"]) + 3 * grown + size(request) + RUN_SLACK
         require(bound <= JOURNAL_MAX, "Journal size limit reached")
 
-    def _complete(self, d, pending, snapshot):
+    def _complete(self, d, pending, snapshot, request):
         """Record an exactly observed step. Returns whether it set a row title."""
         operation, list_id = pending["operation"], pending.get("list")
         if d["version"] == 2 and operation == "create":
             d["lists"][list_id] = {"row": None}
+            if "items" in request:
+                # Bound to the current grant, which the gate proved covers every item.
+                d["lists"][list_id].update(media_kind=EPISODE, libraries=sorted(self.series),
+                                           items=[])
         if d["version"] == 2 and operation == "delete":
             del d["lists"][list_id]
         record = list_record(d, list_id)
+        if operation == "add-episodes":
+            record["items"] = copy.deepcopy(pending["args"])
+        if operation == "clear" and "media_kind" in record:
+            record["items"] = []
         if operation == "row":
             record["row"] = snapshot["home"][-1]["Id"]
             if d["version"] == 2:
@@ -1112,7 +1325,7 @@ class Operator:
 
     def _next(self, d, snapshot, request, titled):
         record, marker, p = self._target(d, snapshot, request.get("list"))
-        title, movies = request.get("title"), request.get("movies")
+        title, movies, items = request.get("title"), request.get("movies"), request.get("items")
         actor, recipient = self.scope["actor"], self.scope["recipient"]
         for phase in PHASES[self._name(request)]:
             step = None
@@ -1132,6 +1345,11 @@ class Operator:
                     if row.get("Subtitle") == LEGACY_SUBTITLE:
                         row["Subtitle"] = ""
                     step = ("display-title", row)
+            elif phase == "members" and items is not None:
+                # Only validated Episode IDs are ever sent; a Series ID never is.
+                if [e["episode"] for e in p["entries"]] != [i["episode_id"] for i in items]:
+                    step = (("clear", [e["entry"] for e in p["entries"]]) if p["entries"]
+                            else ("add-episodes", copy.deepcopy(items)))
             elif phase == "members" and [e["movie"] for e in p["entries"]] != movies:
                 step = (("clear", [e["entry"] for e in p["entries"]]) if p["entries"]
                         else ("add", movies))
@@ -1149,7 +1367,10 @@ class Operator:
                 return step + (p, marker)
         return None, None, p, marker
 
-    def _finish(self, d, snapshot, name):
+    def _finish(self, d, snapshot, name, request):
+        if "items" in request:
+            # Exact final typed binding, verified visible in this invocation.
+            list_record(d, request["list"])["items"] = copy.deepcopy(request["items"])
         if d["version"] == 1:
             require(name != "remove" or snapshot == d["baseline"], "Removal did not restore baseline")
             if name == "remove":
@@ -1160,7 +1381,7 @@ class Operator:
                     d["baseline"]["home"], "Removal did not restore baseline")
 
     def _steps(self, d, key, request):
-        name, movies = self._name(request), request.get("movies")
+        name, movies, items = self._name(request), request.get("movies"), request.get("items")
         # Every request uses at most six steps; this bound is unchanged.
         writes = 0
         titled = False
@@ -1173,7 +1394,7 @@ class Operator:
                         "Uncertain mutation; exact readback required, no retry")
                 # Completing a historical pending title write must not dispatch
                 # a second write to clean up its retained old subtitle.
-                titled = self._complete(d, p, s) or titled
+                titled = self._complete(d, p, s, request) or titled
                 d["current"], d["pending"] = s, None
                 # Title completion and done must share one journal save. A
                 # crash between them could otherwise dispatch a second write
@@ -1183,9 +1404,12 @@ class Operator:
             require(s == d["current"], "Manual Home/playlist drift")
             if movies:
                 self._visible(movies)
+            if items:
+                # Before each write and after each readback: type, parent and library.
+                self._visible_items(items)
             operation, args, playlist, marker = self._next(d, s, request, titled)
             if operation is None:
-                self._finish(d, s, name)
+                self._finish(d, s, name, request)
                 d["done"][key], d["run"] = request, None
                 self.journal.save(d)
                 return {"state": RESULT[name], "writes": writes}
@@ -1218,6 +1442,8 @@ class Operator:
             self.api.delete_entries(playlist["id"], a, list(args))
         elif operation == "add":
             self.api.add_movies(playlist["id"], a, list(args))
+        elif operation == "add-episodes":
+            self.api.add_episodes(playlist["id"], a, copy.deepcopy(args))
         elif operation == "unrow":
             self.api.delete_row(u, args)
         elif operation == "move":

@@ -31,7 +31,10 @@ def main(argv=None):
             return 0
         require(set(request) in request_fields(args.operation, request),
                 'Invalid operator request fields')
-        with operator_session(config) as operator:
+        # The root operator holds the whole configured Series map; without one
+        # the session is Movie-only and refuses typed list state.
+        with operator_session(config, **({'series': config['series_libraries']}
+                                         if 'series_libraries' in config else {})) as operator:
             # Output contains private scope/Movie IDs; operator stdout is not a public receipt.
             result = invoke(operator, args.operation, request)
             print(json.dumps(result, allow_nan=False))
