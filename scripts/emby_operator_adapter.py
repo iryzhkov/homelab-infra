@@ -1321,8 +1321,22 @@ class ImporterInventoryAdapter:
             try:
                 with opener.open(request, timeout=remaining) as response:
                     require(response.status == 200, 'Importer inventory unavailable')
+                    lengths = response.headers.get_all('Content-Length', [])
+                    transfers = response.headers.get_all('Transfer-Encoding', [])
+                    require(len(lengths) <= 1 and len(transfers) <= 1 and
+                            not (lengths and transfers) and
+                            (not transfers or transfers[0].strip().lower() == 'chunked'),
+                            'Invalid importer response framing')
+                    declared = None
+                    if lengths:
+                        require(re.fullmatch('[0-9]{1,9}', lengths[0]) is not None,
+                                'Invalid importer response framing')
+                        declared = int(lengths[0])
+                        require(declared <= IMPORTER_MAX_BODY, 'Importer response too large')
                     raw = response.read(IMPORTER_MAX_BODY + 1)
                     require(len(raw) <= IMPORTER_MAX_BODY, 'Importer response too large')
+                    require(declared is None or len(raw) == declared,
+                            'Incomplete importer response')
                 completed.put((raw, False))
             except Exception:
                 completed.put((None, True))

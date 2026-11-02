@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import tempfile
 import threading
 import time
@@ -149,6 +150,51 @@ class ImporterTransportTests(unittest.TestCase):
                 self.assertTrue(all(x[2]['X-Api-Key'] == KEY for x in http.calls))
                 with self.assertRaises(Refused):
                     api._get('/api/v3/movie/1')
+
+    def test_truncated_and_ambiguous_http_framing_never_become_empty(self):
+        cases = [
+            ([('Content-Length', '100')], True),
+            ([('Content-Length', '2'), ('Content-Length', '2')], True),
+            ([('Content-Length', '2'), ('Transfer-Encoding', 'chunked')], True),
+            ([('Content-Length', str(adapter.IMPORTER_MAX_BODY + 1))], True),
+            ([('Content-Length', '2')], False),
+        ]
+        for headers, refused in cases:
+            with self.subTest(headers=headers):
+                class Handler(BaseHTTPRequestHandler):
+                    def log_message(self, *args):
+                        pass
+                    def do_GET(self):
+                        self.send_response(200)
+                        if self.path == '/api/v3/system/status':
+                            body = json.dumps(dict(appName='Radarr',
+                                version=config()['expected_version'])).encode()
+                            self.send_header('Content-Length', str(len(body)))
+                        else:
+                            body = b'[]'
+                            for name, value in headers:
+                                self.send_header(name, value)
+                        self.end_headers()
+                        self.wfile.write(body)
+                        self.close_connection = True
+                server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    c = dict(config(), origin='http://127.0.0.1:' + str(server.server_port))
+                    api = adapter.ImporterInventoryAdapter(c, request_guard=lambda: 10)
+                    with patch.object(adapter, 'existing_importer_key', return_value=KEY):
+                        if refused:
+                            with self.assertRaises(Refused):
+                                api.inventory()
+                        else:
+                            self.assertEqual(api.inventory(), [])
+                    self.assertIsNone(api._key)
+                    self.assertEqual(api._calls, 2)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join()
 
     def test_streaming_or_hung_read_cannot_extend_aggregate_budget(self):
         release = threading.Event()
