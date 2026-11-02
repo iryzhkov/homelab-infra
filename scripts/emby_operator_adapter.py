@@ -703,6 +703,31 @@ class OperatorAdapter:
             if item['Id'] in chosen:
                 item['Representative'] = chosen[item['Id']]
 
+    def janitor_protections(self, recipient, library, target):
+        """Positive-only Movie protections. Absence never means not liked."""
+        c = self._config
+        require(recipient == c['recipient'] and library == c['library'] and
+                catalog_id(target) and catalog_id(library), 'Foreign janitor query scope')
+        self.verified_identity()
+        rows = complete(self._http('GET', '/Users/' + recipient + '/Items', {
+            'Recursive': 'true', 'IncludeItemTypes': 'Movie', 'ParentId': library,
+            'Ids': target, 'StartIndex': 0, 'Limit': 2, 'EnableUserData': 'true'}), 1)
+        result = []
+        for row in rows:
+            require(row.get('Id') == target and row.get('Type') == 'Movie',
+                    'Invalid janitor Movie')
+            require('LibraryId' not in row or row['LibraryId'] == library,
+                    'Foreign janitor Movie')
+            data = row.get('UserData')
+            protection = 'unknown'
+            if type(data) is dict:
+                require('ItemId' not in data or data['ItemId'] == target,
+                        'Foreign janitor user data')
+                if data.get('IsFavorite') is True or data.get('Likes') is True:
+                    protection = 'liked'
+            result.append({'id': target, 'kind': 'Movie', 'protection': protection})
+        return result
+
     def movie_metadata(self, recipient, library, ids):
         """Read-only metadata of the requested Movies this recipient can see.
 

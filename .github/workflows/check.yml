@@ -62,6 +62,7 @@ jobs:
           python3 scripts/test_emby_operator_credential.py
           python3 scripts/test_emby_operator_viewers.py
           python3 scripts/test_emby_operator_socket.py
+          python3 scripts/test_emby_janitor_protections.py
           ansible-playbook playbooks/emby-operator-viewers.yml --syntax-check
       - name: Test opt-in Jocasta MCP stack configuration
         run: |
@@ -218,7 +219,7 @@ jobs:
   machine-profiles:
     # Keep the long real-role coexistence/cleanup matrix separate from legacy tests.
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
     container:

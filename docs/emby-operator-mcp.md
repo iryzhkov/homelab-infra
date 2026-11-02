@@ -142,6 +142,20 @@ Results: `preview` returns `{"request": {...}, "intent_digest": HEX64}`;
 table above, or `replayed` for a completed key;
 `reconcile` returns the core reconcile object. `show` is described below.
 
+## Janitor positive protection read
+
+Contract jocasta:4b3d20ee617b7b0f07bffbe17251e428@2 adds only the private read operation janitor-protections. Its exact synthetic wire fixture is docs/emby-janitor-protections-wire-v1.json, copied byte-for-byte to the HoloNet client tests. Existing caller grammars and management namespace checks remain unchanged.
+
+This operation has its own exact caller fields: issuer, subject, namespace, server, target_library, actions, expires_at, history_users and policy_revision. Namespace must be managed-janitor. Issuer, subject and server match the existing root caller pins. The actions are exactly janitor.read, history.read and userdata.read in that order. No catalog_user, catalog.read or signed base catalog claims are required. The request contains only one canonical decimal Movie target.
+
+Presence of an optional root policy janitor block is the sole opt-in. Its exact fields are protected_users, target_library and revision. The cohort must equal the existing recipients and history_users; the scalar target library must equal the existing Movie library; revision is 40 through 64 lowercase hex characters. Validate the whole policy before deployment. Malformed blocks refuse the whole policy; no new block is rendered by default. Missing blocks refuse before recipient configuration, credentials or backend calls. The new caller cannot invoke preview/apply or any playlist operation.
+
+The read reuses the existing peer, socket, deadline, root per-recipient config, credential custody, backend identity preflight and nonblocking journal lock. It never invokes the Operator or saves journal state. Its fixed recipient Items query enables UserData for this method alone, limits to one Movie in the configured library and requests Limit two. The response projects only exact scope and id/kind/protection facts. Boolean true in IsFavorite or Likes yields liked; every nonpositive or unsupported UserData shape yields unknown. A mismatching item, type or optional UserData ItemId refuses. No UserData.UserId is assumed. Empty visibility never proves not-liked. No dates, names, paths, played counters or raw UserData are returned.
+
+The client must retain all incomplete-evidence flags, cap validity by caller expiry and one overall deadline, omit only busy/unavailable members, abort protocol/scope errors and never infer eligibility. Series is deferred until a separate signed Series contract. This slice cannot qualify six-month playback, two-month admission, real notice or removal. It adds no account, signed recipient grant, schedule or live configuration.
+
+Roll out compatible worker source before enabling the optional policy and service evidence_source; verify the complete policy before replacement. For rollback, remove the optional block and service source setting before an old parser, retaining journals. Passing synthetic tests is source evidence, not live native qualification.
+
 ## Movie metadata read
 
 `movie-metadata` is the read-only worker operation behind the HoloNet
