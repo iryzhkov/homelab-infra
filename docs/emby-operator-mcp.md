@@ -56,10 +56,10 @@ intersects the caller fields the service supplies with its own root-owned
 ceiling: exact issuer, single subject, namespace, server, library and catalog
 user, the fixed recipient-to-config map, and the list operations and actions
 in source. A compromised MCP service can act only inside that ceiling;
-it cannot read the admin credential or reach other Emby routes.
+it cannot read the admin credentials or reach other Emby routes. The separately opted-in importer inventory can only invoke its two fixed *arr GET routes; the instance-wide admin key stays inside the root worker.
 
 The worker adds no listener beyond the socket unit, no spool, subprocess,
-retry, queue, store or second journal. The existing per-recipient journal lock
+retry, durable queue, store or second journal. Importer reads use a bounded in-process daemon I/O thread so a slow HTTP stream cannot extend the overall read budget; this one-request worker exits after its response. The existing per-recipient journal lock
 serializes MCP and manual CLI writes.
 
 ## Version 1 wire contract
@@ -91,7 +91,7 @@ Request fields, all required, no others:
 | `caller` | object below; supplied by the verifier, never by tool arguments |
 | `recipient` | lowercase 32-hex Emby user ID |
 | `deadline_unix_ms` | integer epoch milliseconds, the request context deadline |
-| `operation` | `show`, `reconcile`, `preview`, `apply`, `movie-metadata` (see [Movie metadata read](#movie-metadata-read)) or `series-seeds`, `recipient-series`, `series-catalog` (see [Series reads and typed Episode lists](#series-reads-and-typed-episode-lists)) |
+| `operation` | `show`, `reconcile`, `preview`, `apply`, `movie-metadata`, `series-seeds`, `recipient-series`, `series-catalog`, `janitor-protections` or `janitor-importers-inventory`; read operations have separate exact callers described below |
 | `request` | object below |
 
 `caller` has exactly `issuer`, `subject`, `namespace`, `server`, `library`,
@@ -141,6 +141,20 @@ Results: `preview` returns `{"request": {...}, "intent_digest": HEX64}`;
 `apply` returns `{"state": STATE, "writes": N}` with the apply state from the
 table above, or `replayed` for a completed key;
 `reconcile` returns the core reconcile object. `show` is described below.
+
+## Janitor importer inventory
+
+Contract jocasta:265b119ea72710eb08d72ec118883eb6@2 adds a default-off read-only operation janitor-importers-inventory. Shared synthetic fixture docs/emby-janitor-importers-wire-v1.json is copied byte-for-byte to HoloNet testdata. The request contains only backend, exactly radarr or sonarr. No write, raw route, caller URL/path/key or media/monitoring/search mutation exists.
+
+Root policy uses its independent optional top-level janitor_importers block with target_library, revision and backends. It does not require or enable janitor/history_users/protected_users. Backends maps only radarr/sonarr to private root config paths. No default key is rendered. The caller has exactly issuer, subject, namespace, server, target_library, actions, expires_at and policy_revision, action only janitor.importers.read. Namespace is actual managed-janitor and root issuer/subject/server/library/revision pins still intersect. The existing recipient field is a routing membership pin only; no recipient Emby config, credentials, history or journal is loaded.
+
+Private backend config has version1, backend, root-asserted resource_id, inventory-derived origin, expected_version, app_config_file and app_config_owner_uid. Origin must be HTTPS with system CA, or loopback-only HTTP; no URL base, redirects, ambient proxies or caller configuration. Credentials are the existing instance-wide full-admin ApiKey in private config.xml, read in place with bounded directory-FD custody checks and strict XML, no copy/helper. Fixed two-route GET code provides read-only least privilege; the key itself is not read-only. App owner and private mode must be verified before activation. Unknown custody refuses; no relaxed secret-file path.
+
+Only GET /api/v3/system/status and GET /api/v3/importlist run, within one remaining budget of at most ten seconds and no retry. Status appName and version must match the pinned app, not package/image suffixes. Nonempty UrlBase refuses. Response cap256KiB and32 lists, duplicate/malformed/truncated data refuses rather than empty. Provider selectOptions may exceed this cap, a known safe refusal. No raw provider settings or keys are returned.
+
+Projection returns id, name, implementation and nullable enabled/automatic_add/search_on_add. Radarr maps enabled/enableAuto/searchOnAdd; Sonarr maps absent enabled to null and enableAutomaticAdd/searchForMissingEpisodes. Nonboolean source values remain null. Disabled Radarr plus enableAuto=true is not classified as active. resource_id is root-asserted; server/library are authority pins, and Sonarr reads confer no Series evidence grant. The public random snapshot ID is informational and cannot authorize a later change.
+
+Future removal must re-read current lists and GET /api/v3/config/importlist, qualify listSyncLevel/clean-library effects, preserve records, prevent independent re-download and prove a safe inverse. None is claimed by this inventory. Deployment/installer/profile custody remains unqualified and default off; rendering an origin must reuse inventory addresses. Remove optional config before rollback to old parsers, preserve journals and issuer boundaries. Source vocabulary adds one action, total15 within the existing16-action cap, with no live grant changes.
 
 ## Janitor positive protection read
 

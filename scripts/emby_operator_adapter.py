@@ -1,5 +1,10 @@
 """Bounded protected operator transport. Managed grant and journal provenance only."""
 import copy
+import ipaddress
+import queue
+import threading
+import ssl
+from xml.etree import ElementTree
 import json
 import os
 from pathlib import PurePosixPath
@@ -1184,3 +1189,182 @@ class OperatorAdapter:
                 not any(r.get('ParentId') == playlist or r.get('CustomName') == marker
                         for r in current['home']), 'Playlist still referenced')
         self._post('/Items/Delete', query={'Ids': playlist})
+
+
+# Importer inventory is a separate fixed-GET transport. It never uses Emby
+# credentials, history, the recipient journal or the mutation adapter.
+IMPORTER_BACKENDS = frozenset({'radarr', 'sonarr'})
+IMPORTER_MAX_BODY = 256 * 1024
+IMPORTER_MAX_LISTS = 32
+
+
+def validate_importer_config(value):
+    require(type(value) is dict and set(value) == {
+        'version', 'backend', 'resource_id', 'origin', 'expected_version',
+        'app_config_file', 'app_config_owner_uid'}, 'Invalid importer configuration')
+    require(type(value['version']) is int and value['version'] == 1 and
+            isinstance(value['backend'], str) and value['backend'] in IMPORTER_BACKENDS and
+            type(value['app_config_owner_uid']) is int and
+            0 <= value['app_config_owner_uid'] < 2 ** 31,
+            'Invalid importer configuration')
+    opaque(value['resource_id'])
+    require(isinstance(value['expected_version'], str) and
+            re.fullmatch(r'[0-9]{1,6}(?:\.[0-9]{1,8}){3}', value['expected_version']),
+            'Invalid importer version')
+    require(isinstance(value['app_config_file'], str), 'Invalid importer config path')
+    p = PurePosixPath(value['app_config_file'])
+    require(p.is_absolute() and
+            str(p) == value['app_config_file'] and '..' not in p.parts and
+            len(p.parts) > 2 and len(str(p)) <= 4096, 'Invalid importer config path')
+    origin = value['origin']
+    require(isinstance(origin, str) and printable(origin, 1024), 'Invalid importer origin')
+    try:
+        url = urllib.parse.urlsplit(origin)
+        port = url.port
+        loopback = url.hostname == 'localhost'
+        if not loopback:
+            try:
+                loopback = ipaddress.ip_address(url.hostname or '').is_loopback
+            except ValueError:
+                loopback = False
+        require(url.scheme in ('http', 'https') and url.hostname and
+                url.username is None and url.password is None and
+                not url.query and not url.fragment and '?' not in origin and '#' not in origin and
+                url.path in ('', '/') and
+                (port is None or 1 <= port <= 65535) and
+                (url.scheme == 'https' or loopback), 'Invalid importer origin')
+    except (TypeError, ValueError):
+        raise Refused('Invalid importer origin') from None
+    return copy.deepcopy(value)
+
+
+def existing_importer_key(path, owner_uid):
+    """Read the app's existing private config.xml by directory FDs, no copy.
+
+    The instance API key has admin power. Fixed GET routes, not key privileges,
+    enforce this operation's read-only boundary.
+    """
+    fd = None
+    try:
+        p = PurePosixPath(path)
+        require(p.is_absolute() and str(p) == path and '..' not in p.parts and
+                len(p.parts) > 2, 'Invalid importer config path')
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in p.parts[1:-1]:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            info = os.fstat(fd)
+            require(info.st_uid in (0, owner_uid) and not info.st_mode & 0o022,
+                    'Unsafe importer config ancestor')
+        leaf = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        try:
+            info = os.fstat(leaf)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == owner_uid and
+                    stat.S_IMODE(info.st_mode) in (0o400, 0o600) and info.st_nlink == 1 and
+                    info.st_size <= IMPORTER_MAX_BODY, 'Unsafe importer config file')
+            with os.fdopen(leaf, 'rb', closefd=False) as stream:
+                raw = stream.read(IMPORTER_MAX_BODY + 1)
+            require(len(raw) <= IMPORTER_MAX_BODY and
+                    b'<!DOCTYPE' not in raw.upper() and b'<!ENTITY' not in raw.upper(),
+                    'Unsafe importer XML')
+            # Reject UTF-16/32 and NUL-obfuscated declarations before XML parsing.
+            text = raw.decode('utf-8')
+            require('\x00' not in text, 'Unsafe importer XML')
+            tree = ElementTree.fromstring(text)
+            keys = tree.findall('ApiKey')
+            bases = tree.findall('UrlBase')
+            require(tree.tag == 'Config' and len(keys) == 1 and not keys[0].attrib and
+                    len(list(keys[0])) == 0 and
+                    re.fullmatch('[0-9a-fA-F]{32}', keys[0].text or '') and
+                    len(bases) <= 1 and all(not (base.text or '').strip() for base in bases),
+                    'Invalid importer XML binding')
+            return keys[0].text
+        finally:
+            os.close(leaf)
+    except (OSError, ValueError, TypeError, UnicodeError, ElementTree.ParseError):
+        raise Refused('Importer config unavailable or unsafe') from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+class ImporterInventoryAdapter:
+    """Two fixed GETs, one ten-second budget, no retry and no write method."""
+    def __init__(self, config, *, request_guard):
+        self._config = validate_importer_config(config)
+        require(callable(request_guard), 'Importer deadline required')
+        self._guard = request_guard
+        self._deadline = time.monotonic() + min(10, request_guard())
+        self._key = None
+        self._calls = 0
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), NoRedirect(),
+            urllib.request.HTTPSHandler(context=ssl.create_default_context(
+                cafile='/etc/ssl/certs/ca-certificates.crt')))
+
+    def _get(self, path):
+        require(path in ('/api/v3/system/status', '/api/v3/importlist') and
+                self._calls < 2 and self._key is not None, 'Importer route refused')
+        remaining = min(self._deadline - time.monotonic(), self._guard())
+        require(remaining > 0, 'Importer deadline reached')
+        self._calls += 1
+        request = urllib.request.Request(self._config['origin'].rstrip('/') + path,
+            headers={'Accept': 'application/json', 'X-Api-Key': self._key}, method='GET')
+        # urllib timeouts are per blocking read, so a slowly streaming header
+        # or body must not extend the overall budget. One daemon I/O thread
+        # belongs to this single-request worker process, which exits after its
+        # response. A late GET cannot cause a retry, another send, or a write.
+        completed = queue.Queue(maxsize=1)
+        opener = self._opener
+        def read_response():
+            try:
+                with opener.open(request, timeout=remaining) as response:
+                    require(response.status == 200, 'Importer inventory unavailable')
+                    raw = response.read(IMPORTER_MAX_BODY + 1)
+                    require(len(raw) <= IMPORTER_MAX_BODY, 'Importer response too large')
+                completed.put((raw, False))
+            except Exception:
+                completed.put((None, True))
+        threading.Thread(target=read_response, daemon=True).start()
+        try:
+            raw, failed = completed.get(timeout=remaining)
+        except queue.Empty:
+            raise Refused('Importer deadline reached') from None
+        require(not failed, 'Importer inventory unavailable')
+        require(time.monotonic() < self._deadline and self._guard() > 0,
+                'Importer deadline reached')
+        return strict_json(raw)
+
+    def inventory(self):
+        try:
+            require(time.monotonic() < self._deadline and self._guard() > 0,
+                    'Importer deadline reached')
+            self._key = existing_importer_key(self._config['app_config_file'],
+                                             self._config['app_config_owner_uid'])
+            status = self._get('/api/v3/system/status')
+            require(type(status) is dict and
+                    status.get('appName') == self._config['backend'].capitalize() and
+                    status.get('version') == self._config['expected_version'] and
+                    status.get('urlBase') in (None, ''), 'Importer identity mismatch')
+            rows = self._get('/api/v3/importlist')
+            require(type(rows) is list and len(rows) <= IMPORTER_MAX_LISTS,
+                    'Incomplete importer inventory')
+            found = {}
+            def boolean(row, key):
+                value = row.get(key)
+                return value if type(value) is bool else None
+            for row in rows:
+                require(type(row) is dict and type(row.get('id')) is int and
+                        1 <= row['id'] <= 2 ** 31 - 1 and row['id'] not in found and
+                        printable(row.get('name'), 256) and
+                        printable(row.get('implementation'), 64), 'Invalid importer list')
+                radarr = self._config['backend'] == 'radarr'
+                found[row['id']] = {
+                    'id': row['id'], 'name': row['name'], 'implementation': row['implementation'],
+                    'enabled': boolean(row, 'enabled') if radarr else None,
+                    'automatic_add': boolean(row, 'enableAuto' if radarr else 'enableAutomaticAdd'),
+                    'search_on_add': boolean(row, 'searchOnAdd' if radarr else 'searchForMissingEpisodes')}
+            return [found[key] for key in sorted(found)]
+        finally:
+            self._key = None
