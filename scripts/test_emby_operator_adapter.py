@@ -2478,5 +2478,288 @@ class MovieMetadataTests(unittest.TestCase):
                 item(row, '7')
 
 
+ANIME_GUID = 'f' * 32
+
+
+def inventory_folders():
+    return [{'ItemId': '7', 'Guid': G, 'Name': 'Movies', 'CollectionType': 'movies',
+             'Locations': ['/private/movies'], 'LibraryOptions': {'PathInfos': ['/private']}},
+            {'ItemId': '9', 'Guid': ANIME_GUID, 'Name': 'Anime', 'CollectionType': 'tvshows',
+             'Locations': ['/private/anime']},
+            {'ItemId': '11', 'Guid': 'e' * 32, 'Name': 'Hidden', 'CollectionType': 'tvshows'}]
+
+
+def inventory_views():
+    rows = [{'Id': '9', 'Name': 'Anime', 'CollectionType': 'tvshows',
+             'UserData': {'PlayCount': 4}, 'Policy': {'PIN': '1234'}},
+            {'Id': '7', 'Name': 'Movies', 'CollectionType': 'movies'},
+            {'Id': 'pl', 'Name': 'Playlists', 'CollectionType': 'playlists'}]
+    return {'Items': rows, 'TotalRecordCount': len(rows)}
+
+
+def items(*rows):
+    return {'Items': list(rows), 'TotalRecordCount': len(rows)}
+
+
+EPISODE = {'Id': '31955', 'Type': 'Episode', 'SeriesId': '31389', 'SeriesName': 'Show',
+           'UserData': {'Played': True}, 'Path': '/private/show/e1.mkv'}
+SERIES = {'Id': '31389', 'Type': 'Series', 'Name': 'Show', 'Path': '/private/show'}
+LIBRARIES = [{'Id': '9', 'Guid': ANIME_GUID, 'Name': 'Anime', 'CollectionType': 'tvshows'},
+             {'Id': '7', 'Guid': G, 'Name': 'Movies', 'CollectionType': 'movies'}]
+
+
+def mapping_responses(series_in=('9',)):
+    """Episode, Series, per-library Series membership (view order 9, 7), Episode membership."""
+    return ([items(EPISODE), items(SERIES)] +
+            [items(SERIES) if x in series_in else items() for x in ('9', '7')] +
+            [items(EPISODE)])
+
+
+class InventoryTests(unittest.TestCase):
+    """Root-operator recommendation inventory over the recording loopback transport."""
+    def authenticated(self, http):
+        http.responses += [auth_response()] + identity_responses()
+        api = adapter.OperatorAdapter(config())
+        api._opener = http
+        api.authenticate({'username': 'synthetic-admin', 'password': 'synthetic-password'})
+        return api
+
+    def test_projection_mapping_and_fixed_recipient_gets(self):
+        from urllib.parse import urlsplit, parse_qs
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            before = len(http.calls)
+            http.responses += (identity_responses() + [inventory_folders(), inventory_views()] +
+                               mapping_responses())
+            result = api.recommendation_inventory(R, '31955')
+            self.assertEqual(result, {'recipient': R, 'libraries': LIBRARIES, 'episode': {
+                'Id': '31955', 'Type': 'Episode', 'SeriesId': '31389', 'SeriesType': 'Series',
+                'SeriesName': 'Show', 'LibraryId': '9', 'status': 'mapped'}})
+            text = json.dumps(result)
+            for private in ('Locations', 'LibraryOptions', 'Policy', 'PIN', 'UserData', 'Path',
+                            '/private', 'Hidden', 'Playlists', 'synthetic-session-token',
+                            'synthetic-password', 'synthetic-admin'):
+                self.assertNotIn(private, text)
+            calls = http.calls[before:]
+            self.assertEqual({c[0] for c in calls}, {'GET'})
+            self.assertTrue(all(c[3] is None for c in calls))
+            paths = [urlsplit(c[1]).path for c in calls]
+            self.assertEqual(paths, [
+                '/emby/Users', '/emby/Users/' + A, '/emby/Users/' + R,
+                '/emby/Library/VirtualFolders', '/emby/Users/' + R + '/Views',
+                '/emby/Library/VirtualFolders', '/emby/Users/' + R + '/Views'] +
+                ['/emby/Users/' + R + '/Items'] * 5)
+            queries = [parse_qs(urlsplit(c[1]).query) for c in calls[7:]]
+            plain = {'EnableUserData': ['false'], 'StartIndex': ['0'], 'Limit': ['2']}
+            scoped = dict(plain, Recursive=['true'])
+            self.assertEqual(queries, [
+                dict(plain, Ids=['31955']), dict(plain, Ids=['31389']),
+                dict(scoped, Ids=['31389'], ParentId=['9'], IncludeItemTypes=['Series']),
+                dict(scoped, Ids=['31389'], ParentId=['7'], IncludeItemTypes=['Series']),
+                dict(scoped, Ids=['31955'], ParentId=['9'], IncludeItemTypes=['Episode'])])
+            self.assertFalse(any('Fields' in q for q in queries))
+            # Inventory without an episode sends no Items request.
+            before = len(http.calls)
+            http.responses += identity_responses() + [inventory_folders(), inventory_views()]
+            self.assertEqual(api.recommendation_inventory(R),
+                             {'recipient': R, 'libraries': LIBRARIES})
+            self.assertEqual(len(http.calls) - before, 7)
+
+    def test_missing_mapping_is_insufficient_facts(self):
+        insufficient = {'Id': '31955', 'status': 'insufficient-facts'}
+        no_series = dict(EPISODE)
+        del no_series['SeriesId']
+        cases = [[items()], [items(no_series)], [items(EPISODE), items()],
+                 mapping_responses(series_in=())[:4]]
+        for responses in cases:
+            with self.subTest(count=len(responses)), RecordingHTTP() as http:
+                api = self.authenticated(http)
+                http.responses += (identity_responses() +
+                                   [inventory_folders(), inventory_views()] + responses)
+                result = api.recommendation_inventory(R, '31955')
+                self.assertEqual(result['episode'], insufficient)
+                self.assertEqual(http.responses, [])
+
+    def test_hidden_mismatched_duplicate_libraries_fail_closed(self):
+        def folders(change):
+            value = inventory_folders()
+            change(value)
+            return value
+        def views(change):
+            value = inventory_views()
+            change(value['Items'])
+            return value
+        cases = [
+            (folders(lambda f: f[1].update(ItemId='7')), inventory_views()),
+            (folders(lambda f: f[1].update(Guid=G)), inventory_views()),
+            (folders(lambda f: f[2].update(Guid='E' * 32)), inventory_views()),
+            (folders(lambda f: f[1].update(ItemId='9&ParentId=7')), inventory_views()),
+            (folders(lambda f: f[1].update(CollectionType='Anime TV')), inventory_views()),
+            (folders(lambda f: f[1].update(Name='a\nb')), inventory_views()),
+            ([{'ItemId': str(n), 'Guid': '%032x' % n} for n in range(101)], inventory_views()),
+            (inventory_folders(), views(lambda v: v[0].update(Name='Anime (renamed)'))),
+            (inventory_folders(), views(lambda v: v[0].update(CollectionType='movies'))),
+            (inventory_folders(), views(lambda v: v.append(dict(v[0])))),
+            (inventory_folders(), views(lambda v: v.pop(1))),
+            (folders(lambda f: f[0].update(Guid='e' * 31 + '0')), inventory_views()),
+            (inventory_folders(), {'Items': inventory_views()['Items'], 'TotalRecordCount': 4})]
+        for folder_dto, view_dto in cases:
+            with self.subTest(folders=str(folder_dto)[:60], views=str(view_dto)[:60]), \
+                 RecordingHTTP() as http:
+                api = self.authenticated(http)
+                http.responses += identity_responses() + [folder_dto, view_dto]
+                with self.assertRaises(Refused):
+                    api.recommendation_inventory(R, '31955')
+                self.assertFalse(any('/Items' in c[1] for c in http.calls))
+
+    def test_mismatched_series_and_episode_fail_closed(self):
+        cases = [[items(dict(EPISODE, Type='Series'))],
+                 [items(dict(EPISODE, Type='Movie'))],
+                 [items(dict(EPISODE, Id='31956'))],
+                 [items(EPISODE, EPISODE)],
+                 [items(dict(EPISODE, SeriesId='031389'))],
+                 [items(dict(EPISODE, SeriesId='31955'))],
+                 [items(EPISODE), items(dict(SERIES, Type='Season'))],
+                 [items(EPISODE), items(dict(SERIES, Name='Other'))],
+                 [items(EPISODE), items(dict(SERIES, Id='31390'))],
+                 [items(EPISODE), items(dict(SERIES, Name=''))],
+                 mapping_responses(series_in=('9', '7'))[:4],
+                 mapping_responses()[:4] + [items()]]
+        for responses in cases:
+            with self.subTest(responses=str(responses)[:80]), RecordingHTTP() as http:
+                api = self.authenticated(http)
+                http.responses += (identity_responses() +
+                                   [inventory_folders(), inventory_views()] + responses)
+                with self.assertRaises(Refused):
+                    api.recommendation_inventory(R, '31955')
+
+    def test_existing_identity_verification_still_gates_inventory(self):
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            responses = identity_responses()
+            responses[1]['Policy']['IsAdministrator'] = False
+            http.responses += responses
+            with self.assertRaisesRegex(Refused, 'Admin policy drift'):
+                api.recommendation_inventory(R, '31955')
+            self.assertFalse(any('/Items' in c[1] for c in http.calls))
+
+    def test_bad_inputs_refused_before_any_send(self):
+        bad = [{}, {'recipient': 'e' * 32}, {'recipient': R, 'extra': 1},
+               {'recipient': R, 'episode_id': None}, {'recipient': R, 'episode_id': 31955},
+               {'recipient': R, 'episode_id': '031955'}, {'recipient': R, 'episode_id': 'x'},
+               {'recipient': R, 'episode_id': '31955&ParentId=7'},
+               {'recipient': R, 'episode_id': '9' * 20}, ['recipient']]
+        for request in bad:
+            with self.subTest(request=request), self.assertRaises(Refused):
+                adapter.inventory_request(config(), request)
+        self.assertEqual(adapter.inventory_request(config(), {'recipient': R}), (R, None))
+        with RecordingHTTP() as http:
+            api = self.authenticated(http)
+            before = len(http.calls)
+            for args in [('e' * 32,), (R, '031955'), (R, 'x'), (R, 31955)]:
+                with self.subTest(args=args), self.assertRaises(Refused):
+                    api.recommendation_inventory(*args)
+            self.assertEqual(len(http.calls), before)
+        unauthenticated = adapter.OperatorAdapter(config())
+        with self.assertRaises(Refused):
+            unauthenticated.recommendation_inventory(R, '31955')
+        self.assertEqual(unauthenticated._requests, 0)
+
+    def test_not_admitted_by_shared_entry_or_mcp_socket(self):
+        import emby_operator_socket as worker
+        self.assertNotIn(adapter.INVENTORY_OPERATION, lifecycle.OPERATIONS)
+        self.assertNotIn(adapter.INVENTORY_OPERATION, worker.WORKER_OPERATIONS)
+        self.assertEqual(lifecycle.request_fields(adapter.INVENTORY_OPERATION, {}), [])
+        with self.assertRaises(Refused):
+            lifecycle.invoke(object(), adapter.INVENTORY_OPERATION, {'recipient': R})
+
+
+class InventoryEntryTests(unittest.TestCase):
+    def setUp(self):
+        home = Path(__file__).resolve().parents[1] / '.cache/holonet-operator-tests/home'
+        self.assertEqual(os.environ['HOME'], str(home))
+        self.assertEqual(os.environ['TMPDIR'], str(home / 'tmp'))
+        self.temp = tempfile.TemporaryDirectory(dir=home / 'tmp')
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.directory.chmod(0o700)
+        self.entry = EntryTests().entry()
+
+    def run_entry(self, request, **patches):
+        with patch.object(self.entry, 'load_config', return_value=config()), \
+             patch.object(self.entry, 'private_read', return_value=json.dumps(request)), \
+             contextlib.ExitStack() as stack, \
+             contextlib.redirect_stdout(io.StringIO()) as output, \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            mocks = {name: stack.enter_context(patch.object(lifecycle, name, **value))
+                     for name, value in patches.items()}
+            code = self.entry.main(['--config', '/synthetic/config', adapter.INVENTORY_OPERATION,
+                                    '--request-file', '/synthetic/request'])
+        return code, output.getvalue(), errors.getvalue(), mocks
+
+    def test_bad_requests_refused_before_credentials_journal_or_network(self):
+        for request in [{}, {'recipient': 'e' * 32}, {'recipient': R, 'episode_id': '0'},
+                        {'recipient': R, 'episode_id': '31955', 'Fields': 'Path'}]:
+            with self.subTest(request=request), \
+                 patch.object(adapter.urllib.request, 'build_opener') as network:
+                code, output, errors, mocks = self.run_entry(
+                    request, load_credentials={}, Journal={})
+                self.assertEqual(code, 2)
+                self.assertEqual(output, '')
+                mocks['load_credentials'].assert_not_called()
+                mocks['Journal'].assert_not_called()
+                network.assert_not_called()
+
+    def test_nonroot_refused_before_any_read(self):
+        entry = self.entry
+        with patch.object(adapter.os, 'geteuid', return_value=1000), \
+             patch.object(adapter.os, 'getuid', return_value=1000), \
+             patch.object(adapter, 'private_read') as read, \
+             patch.object(lifecycle, 'load_credentials') as credentials, \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(entry.main(['--config', '/synthetic/config',
+                                         adapter.INVENTORY_OPERATION]), 2)
+        read.assert_not_called()
+        credentials.assert_not_called()
+        self.assertIn('Root operator required', errors.getvalue())
+
+    def test_real_adapter_under_held_lock_without_journal_writes(self):
+        journal = Journal(self.directory)
+        self.addCleanup(journal.close)
+        made, locked = [], []
+        with RecordingHTTP() as http:
+            http.responses += ([auth_response()] + identity_responses() * 2 +
+                               [inventory_folders(), inventory_views()] + mapping_responses())
+            def make_api(c, j):
+                self.assertIs(j, journal)
+                api = adapter.OperatorAdapter(c, j)
+                api._opener = http
+                inner = api.recommendation_inventory
+                def spy(*args):
+                    locked.append(journal._locked)
+                    return inner(*args)
+                api.recommendation_inventory = spy
+                made.append(api)
+                return api
+            with patch.object(journal, 'load', side_effect=AssertionError('load')), \
+                 patch.object(journal, 'save', side_effect=AssertionError('save')):
+                code, output, errors, _ = self.run_entry(
+                    {'recipient': R, 'episode_id': '31955'},
+                    load_credentials={'return_value': {'username': 'synthetic',
+                                                       'password': 'synthetic'}},
+                    Journal={'return_value': journal},
+                    OperatorAdapter={'side_effect': make_api})
+            self.assertEqual((code, errors), (0, ''))
+            self.assertEqual(json.loads(output)['episode']['SeriesId'], '31389')
+            self.assertEqual(locked, [True])
+            self.assertFalse(journal._locked)
+            self.assertIsNone(made[0]._token)
+            self.assertEqual([c[1] for c in http.calls if c[0] != 'GET'],
+                             ['/emby/Users/AuthenticateByName'])
+            self.assertEqual(http.responses, [])
+        # Only the existing lock file; no journal was created, migrated or saved.
+        self.assertEqual(sorted(p.name for p in self.directory.iterdir()), ['lock'])
+
+
 if __name__ == '__main__':
     unittest.main()

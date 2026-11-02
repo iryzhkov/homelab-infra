@@ -32,6 +32,9 @@ MAX_GENRES = 16
 MAX_NAME_BYTES = 128
 MAX_TITLE_BYTES = 512
 METADATA_FIELDS = 'People,Genres'
+# Root-operator CLI only; neither the shared entry nor the MCP socket admits it.
+INVENTORY_OPERATION = 'recommendation-inventory'
+MAX_LIBRARIES = 100
 
 
 def strict_json(raw):
@@ -180,6 +183,29 @@ def catalog_id(value):
     """Canonical positive decimal int64, as HoloNet ValidCatalogID."""
     return (isinstance(value, str) and re.fullmatch('[1-9][0-9]{0,18}', value) is not None
             and int(value) < 2 ** 63)
+
+
+def collection_type(value):
+    """Explicit CollectionType token, or None for a mixed library. Never inferred."""
+    require(value is None or (isinstance(value, str) and
+                              re.fullmatch('[a-z]{1,32}', value) is not None),
+            'Invalid library type')
+    return value
+
+
+def inventory_request(config, request):
+    """Validate an inventory request before any credential load or network send.
+
+    Exactly the configured recipient, plus at most one canonical decimal
+    episode_id. Returns (recipient, episode_id or None).
+    """
+    require(type(request) is dict and
+            set(request) in ({'recipient'}, {'recipient', 'episode_id'}),
+            'Invalid operator request fields')
+    require(request['recipient'] == config['recipient'], 'Foreign recipient')
+    episode = request.get('episode_id')
+    require('episode_id' not in request or catalog_id(episode), 'Invalid episode ID')
+    return request['recipient'], episode
 
 
 def movie_metadata_item(row, library):
@@ -432,6 +458,93 @@ class OperatorAdapter:
                     'Unrequested or duplicate Movie')
             found[item['Id']] = item
         return [found[x] for x in ids if x in found]
+
+    def recommendation_inventory(self, recipient, episode_id=None):
+        """Read-only recipient library inventory and one optional Episode-to-Series map.
+
+        Root operator CLI only. After the unchanged identity verification it
+        returns the recipient's current views that are exactly one virtual
+        folder, as Id/Guid/Name/CollectionType only, and at most one Episode
+        mapping. Every request is a fixed recipient-scoped GET without user
+        data or Fields. Unmappable or invisible items are insufficient facts.
+        """
+        request = {'recipient': recipient}
+        if episode_id is not None:
+            request['episode_id'] = episode_id
+        inventory_request(self._config, request)
+        self.verified_identity()
+        libraries = self._visible_libraries(recipient)
+        result = {'recipient': recipient, 'libraries': libraries}
+        if episode_id is not None:
+            result['episode'] = self._episode_series(recipient, episode_id, libraries)
+        return result
+
+    def _visible_libraries(self, recipient):
+        c = self._config
+        folders = self._http('GET', '/Library/VirtualFolders')
+        require(type(folders) is list and len(folders) <= MAX_LIBRARIES and
+                all(type(f) is dict for f in folders), 'Invalid library response')
+        ids = [opaque(f.get('ItemId')) for f in folders]
+        guids = [f.get('Guid') for f in folders]
+        require(len(ids) == len(set(ids)) and len(guids) == len(set(guids)) and
+                all(isinstance(g, str) and re.fullmatch('[0-9a-f]{32}', g) for g in guids),
+                'Ambiguous library identity')
+        by_id = dict(zip(ids, folders))
+        views = complete(self._http('GET', '/Users/' + recipient + '/Views'), MAX_LIBRARIES)
+        view_ids = [opaque(v.get('Id')) for v in views]
+        require(len(view_ids) == len(set(view_ids)), 'Duplicate recipient view')
+        libraries = []
+        for view_id, view in zip(view_ids, views):
+            folder = by_id.get(view_id)
+            if folder is None:
+                continue  # Not a library folder, for example the Playlists view.
+            name, kind = folder.get('Name'), collection_type(folder.get('CollectionType'))
+            require(printable(name, MAX_TITLE_BYTES) and view.get('Name') == name and
+                    collection_type(view.get('CollectionType')) == kind,
+                    'Recipient view and library folder differ')
+            libraries.append({'Id': view_id, 'Guid': folder['Guid'], 'Name': name,
+                              'CollectionType': kind})
+        require(sum(x['Id'] == c['library'] and x['Guid'] == c['library_guid']
+                    for x in libraries) == 1, 'Recipient library view unavailable')
+        return libraries
+
+    def _visible_items(self, recipient, item_id, parent=None, kind=None):
+        """At most one recipient-visible item by exact ID, optionally inside one library."""
+        query = {'Ids': item_id, 'EnableUserData': 'false', 'StartIndex': 0, 'Limit': 2}
+        if parent is not None:
+            query.update(Recursive='true', ParentId=parent, IncludeItemTypes=kind)
+        rows = complete(self._http('GET', '/Users/' + recipient + '/Items', query), 1)
+        require(all(r.get('Id') == item_id for r in rows), 'Unrequested inventory item')
+        return rows
+
+    def _episode_series(self, recipient, episode_id, libraries):
+        insufficient = {'Id': episode_id, 'status': 'insufficient-facts'}
+        rows = self._visible_items(recipient, episode_id)
+        if not rows:
+            return insufficient
+        episode = rows[0]
+        require(episode.get('Type') == 'Episode', 'Requested item is not an Episode')
+        series_id = episode.get('SeriesId')
+        if series_id is None:
+            return insufficient
+        require(catalog_id(series_id) and series_id != episode_id, 'Invalid Series ID')
+        rows = self._visible_items(recipient, series_id)
+        if not rows:
+            return insufficient
+        series = rows[0]
+        require(series.get('Type') == 'Series' and
+                printable(series.get('Name'), MAX_TITLE_BYTES) and
+                episode.get('SeriesName') in (None, series['Name']), 'Episode and Series differ')
+        homes = [x for x in libraries
+                 if self._visible_items(recipient, series_id, x['Id'], 'Series')]
+        require(len(homes) <= 1, 'Ambiguous Series library')
+        if not homes:
+            return insufficient
+        require(self._visible_items(recipient, episode_id, homes[0]['Id'], 'Episode'),
+                'Episode outside its Series library')
+        return {'Id': episode_id, 'Type': 'Episode', 'SeriesId': series_id,
+                'SeriesType': 'Series', 'SeriesName': series['Name'],
+                'LibraryId': homes[0]['Id'], 'status': 'mapped'}
 
     def _marker(self, list_id):
         return self._legacy if list_id is None else list_marker(self._base, list_id)

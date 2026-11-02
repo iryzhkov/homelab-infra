@@ -114,10 +114,39 @@ Protected request shapes:
 | detach-row, delete-list | `key`, `list`, `intent_digest` |
 | attach-row | `key`, `list`, `title`, `intent_digest` |
 | move-row | `key`, `list`, `position` (integer, not Boolean, 0 <= position < fresh Home row count), `intent_digest` |
+| recommendation-inventory | `recipient` (the configured recipient), optional `episode_id` (canonical positive decimal) |
 
 The first seven operations keep their request shapes. Their version 2 meaning
 is described under "Legacy aliases". List-scoped operations refuse on a version
 1 journal with "Journal migration required".
+
+### Recommendation inventory (read-only, root CLI only)
+
+`recommendation-inventory` is a local root-operator read. It is not one of the
+shared entry's `OPERATIONS`, so neither `invoke` nor the MCP socket worker
+admits it. The request is validated against the protected configuration before
+any credential load, journal open or network send. The CLI then uses the
+existing `operator_session` (fresh admin authentication and identity
+verification) and holds the recipient's nonblocking journal lock while the
+adapter reads; it never loads, saves, initializes, migrates or reconciles the
+journal, and sends no request other than the authentication POST and fixed GETs.
+
+The result has `recipient` and `libraries`: every current recipient view whose
+`Id` is exactly one `/Library/VirtualFolders` `ItemId`, projected to `Id`,
+`Guid`, `Name` and `CollectionType` only, at most 100 of each. Views that are
+not library folders, such as Playlists, are omitted. Duplicate folder IDs or
+GUIDs, a view whose name or collection type differs from its folder, or a
+missing configured Movie library refuse. Library purpose is never inferred
+beyond the explicit name and collection type.
+
+With `episode_id`, the adapter reads that one item and its `SeriesId` through
+the recipient's `/Items` with `EnableUserData=false` and no `Fields`, then
+proves which single visible library holds the Series and the Episode. The
+`episode` result is either `status: mapped` with `Id`, `Type`, `SeriesId`,
+`SeriesType`, `SeriesName` and `LibraryId`, or `status: insufficient-facts`
+when the recipient cannot see the Episode, its Series or a library holding it.
+A non-Episode item, mismatched Series name or type, or a Series in more than
+one library refuses. No history, playlist or other user is read.
 
 ## Identity, provenance and managed grant semantics
 
