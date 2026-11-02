@@ -27,7 +27,7 @@ import sys
 import time
 
 from emby_operator_adapter import (OperatorAdapter, load_config, load_credentials, private_read,
-                                   strict_json)
+                                   strict_json, catalog_id)
 from emby_operator_entry import invoke, operator_session
 from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT,
                                            TYPED_OPERATIONS, Journal, Refused, canonical_id,
@@ -74,6 +74,10 @@ if set(LIST_ACTIONS) != set(LIST_OPERATIONS):
 # Read-only Movie metadata for the HoloNet playback tools. Its caller carries
 # exactly the fixed history actions and the verified history_users grant;
 # every other operation keeps the original caller shape.
+JANITOR_OPERATION = 'janitor-protections'
+JANITOR_ACTIONS = ['janitor.read', 'history.read', 'userdata.read']
+JANITOR_CALLER_FIELDS = frozenset({'issuer', 'subject', 'namespace', 'server',
+    'target_library', 'actions', 'expires_at', 'history_users', 'policy_revision'})
 METADATA_OPERATION = 'movie-metadata'
 HISTORY_ACTIONS = ['catalog.read', 'playlist.read', 'home.read', 'history.read']
 # Read-only Series facts for the HoloNet Series tools. Caller: the history
@@ -84,7 +88,7 @@ SERIES_REQUEST = {'series-seeds': {'episode_ids'}, 'recipient-series': {'ids'}}
 CATALOG_REQUIRED = frozenset({'library_id', 'limit'})
 CATALOG_OPTIONAL = frozenset({'offset', 'person_id', 'person_role'})
 WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply', METADATA_OPERATION,
-                     *SERIES_OPERATIONS)
+                     *SERIES_OPERATIONS, JANITOR_OPERATION)
 REQUEST_FIELDS = frozenset({'version', 'caller', 'recipient', 'deadline_unix_ms',
                             'operation', 'request'})
 PINNED_CALLER = ('issuer', 'subject', 'namespace', 'server', 'library', 'catalog_user')
@@ -94,7 +98,7 @@ SERIES_CALLER_FIELDS = HISTORY_CALLER_FIELDS | {'series_libraries'}
 POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'})
 # Optional opt-ins: without history_users the policy permits no history read;
 # without series_libraries it permits no Series read or typed list state.
-POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries'})
+POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries', 'janitor'})
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
@@ -177,6 +181,17 @@ def validate_policy(value):
         except Refused:
             ok(False)
         ok(caller['library'] not in series)
+    if 'janitor' in value:
+        janitor = value['janitor']
+        ok(type(janitor) is dict and set(janitor) ==
+           {'protected_users', 'target_library', 'revision'})
+        ok(hex_users(janitor['protected_users']) and
+           set(janitor['protected_users']) == set(recipients) ==
+           set(value.get('history_users', [])) and
+           catalog_id(janitor['target_library']) and
+           janitor['target_library'] == caller['library'] and
+           isinstance(janitor['revision'], str) and
+           re.fullmatch('[0-9a-f]{40,64}', janitor['revision']))
     return copy.deepcopy(value)
 
 
@@ -257,15 +272,18 @@ def parse_request(frame):
     # nonempty series_libraries, management may; movie-metadata never does.
     metadata = value['operation'] == METADATA_OPERATION
     series_read = value['operation'] in SERIES_OPERATIONS
-    allowed = ((HISTORY_CALLER_FIELDS,) if metadata else (SERIES_CALLER_FIELDS,) if series_read
+    janitor = value['operation'] == JANITOR_OPERATION
+    allowed = ((JANITOR_CALLER_FIELDS,) if janitor else
+               (HISTORY_CALLER_FIELDS,) if metadata else (SERIES_CALLER_FIELDS,) if series_read
                else (CALLER_FIELDS, CALLER_FIELDS | {'series_libraries'}))
+    pins = ('issuer', 'subject', 'namespace', 'server', 'target_library', 'policy_revision') if janitor else PINNED_CALLER
     check(type(caller) is dict and set(caller) in allowed and
-          all(bounded_text(caller[k], 512) for k in PINNED_CALLER) and
+          all(bounded_text(caller[k], 512) for k in pins) and
           bounded_int(caller['expires_at'], MAX_EPOCH_SECONDS) and
           type(caller['actions']) is list and len(caller['actions']) <= MAX_ACTIONS and
           all(isinstance(a, str) and ACTION.fullmatch(a) for a in caller['actions']) and
           len(set(caller['actions'])) == len(caller['actions']), 'refused', 'Invalid caller')
-    check(not (metadata or series_read) or hex_users(caller['history_users']),
+    check(not (metadata or series_read or janitor) or hex_users(caller['history_users']),
           'refused', 'Invalid caller')
     if 'series_libraries' in caller:
         try:
@@ -285,6 +303,10 @@ def parse_request(frame):
 def typed_request(operation, request):
     check(type(request) is dict, 'refused', 'Invalid request fields')
     fields = set(request)
+    if operation == JANITOR_OPERATION:
+        check(fields == {'target'} and catalog_id(request['target']),
+              'refused', 'Invalid janitor target')
+        return copy.deepcopy(request)
     if operation in SERIES_OPERATIONS:
         return series_request(operation, request)
     if operation == METADATA_OPERATION:
@@ -363,6 +385,19 @@ def series_request(operation, request):
 def authorize(call, policy):
     """Intersect the verified caller with the root ceiling on every request."""
     caller = call['caller']
+    if call['operation'] == JANITOR_OPERATION:
+        ceiling = policy.get('janitor')
+        check(ceiling is not None, 'refused', 'Janitor read not enabled by policy')
+        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+              caller['namespace'] == 'managed-janitor' and
+              caller['target_library'] == ceiling['target_library'] and
+              caller['policy_revision'] == ceiling['revision'],
+              'refused', 'Caller outside janitor policy')
+        check(caller['actions'] == JANITOR_ACTIONS and
+              set(caller['history_users']) == set(ceiling['protected_users']) and
+              call['recipient'] in ceiling['protected_users'],
+              'refused', 'Recipient outside janitor policy')
+        return
     check(all(caller[k] == policy['caller'][k] for k in PINNED_CALLER),
           'refused', 'Caller outside management policy')
     check(call['recipient'] in policy['recipients'],
@@ -554,6 +589,10 @@ def movie_metadata(config, call, guard, series=None):
 
 def read(api, config, call, series):
     recipient, request = call['recipient'], call['request']
+    if call['operation'] == JANITOR_OPERATION:
+        return {'qualification': 'emby_positive_protections_v1', 'server': config['server'],
+                'library': config['library'], 'recipient': recipient, 'target': request['target'],
+                'items': api.janitor_protections(recipient, config['library'], request['target'])}
     if call['operation'] == METADATA_OPERATION:
         return {'movies': api.movie_metadata(recipient, config['library'], request['ids'])}
     libraries = sorted(series)
@@ -569,7 +608,7 @@ def read(api, config, call, series):
 
 def execute(config, call, guard, series=None):
     try:
-        if call['operation'] in (METADATA_OPERATION, *SERIES_OPERATIONS):
+        if call['operation'] in (METADATA_OPERATION, *SERIES_OPERATIONS, JANITOR_OPERATION):
             return movie_metadata(config, call, guard, series)
         with operator_session(config, request_guard=guard,
                               **({'series': series} if series is not None else {})) as operator:

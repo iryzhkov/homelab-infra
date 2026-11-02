@@ -1,0 +1,54 @@
+{
+  "contract": "jocasta:4b3d20ee617b7b0f07bffbe17251e428@2; synthetic only; Movie positive protections, never eligibility",
+  "frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "7",
+      "actions": [
+        "janitor.read",
+        "history.read",
+        "userdata.read"
+      ],
+      "expires_at": 2000000300,
+      "history_users": [
+        "cccccccccccccccccccccccccccccccc"
+      ],
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "janitor-protections",
+    "request": {
+      "target": "8001"
+    }
+  },
+  "policy": {
+    "protected_users": [
+      "cccccccccccccccccccccccccccccccc"
+    ],
+    "target_library": "7",
+    "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "response": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "emby_positive_protections_v1",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "7",
+      "recipient": "cccccccccccccccccccccccccccccccc",
+      "target": "8001",
+      "items": [
+        {
+          "id": "8001",
+          "kind": "Movie",
+          "protection": "liked"
+        }
+      ]
+    }
+  }
+}
