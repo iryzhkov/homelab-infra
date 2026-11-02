@@ -75,6 +75,8 @@ if set(LIST_ACTIONS) != set(LIST_OPERATIONS):
 # exactly the fixed history actions and the verified history_users grant;
 # every other operation keeps the original caller shape.
 IMPORTER_OPERATION = 'janitor-importers-inventory'
+IMPORTER_ASSESSMENT = 'janitor-importers-assessment'
+IMPORTER_OPERATIONS = (IMPORTER_OPERATION, IMPORTER_ASSESSMENT)
 IMPORTER_ACTIONS = ['janitor.importers.read']
 IMPORTER_CALLER_FIELDS = frozenset({'issuer', 'subject', 'namespace', 'server',
     'target_library', 'actions', 'expires_at', 'policy_revision'})
@@ -92,7 +94,7 @@ SERIES_REQUEST = {'series-seeds': {'episode_ids'}, 'recipient-series': {'ids'}}
 CATALOG_REQUIRED = frozenset({'library_id', 'limit'})
 CATALOG_OPTIONAL = frozenset({'offset', 'person_id', 'person_role'})
 WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply', METADATA_OPERATION,
-                     *SERIES_OPERATIONS, JANITOR_OPERATION, IMPORTER_OPERATION)
+                     *SERIES_OPERATIONS, JANITOR_OPERATION, *IMPORTER_OPERATIONS)
 REQUEST_FIELDS = frozenset({'version', 'caller', 'recipient', 'deadline_unix_ms',
                             'operation', 'request'})
 PINNED_CALLER = ('issuer', 'subject', 'namespace', 'server', 'library', 'catalog_user')
@@ -289,7 +291,7 @@ def parse_request(frame):
     metadata = value['operation'] == METADATA_OPERATION
     series_read = value['operation'] in SERIES_OPERATIONS
     janitor = value['operation'] == JANITOR_OPERATION
-    importer = value['operation'] == IMPORTER_OPERATION
+    importer = value['operation'] in IMPORTER_OPERATIONS
     allowed = ((IMPORTER_CALLER_FIELDS,) if importer else (JANITOR_CALLER_FIELDS,) if janitor else
                (HISTORY_CALLER_FIELDS,) if metadata else (SERIES_CALLER_FIELDS,) if series_read
                else (CALLER_FIELDS, CALLER_FIELDS | {'series_libraries'}))
@@ -320,7 +322,7 @@ def parse_request(frame):
 def typed_request(operation, request):
     check(type(request) is dict, 'refused', 'Invalid request fields')
     fields = set(request)
-    if operation == IMPORTER_OPERATION:
+    if operation in IMPORTER_OPERATIONS:
         check(fields == {'backend'} and isinstance(request['backend'], str) and
               request['backend'] in IMPORTER_BACKENDS, 'refused', 'Invalid importer backend')
         return copy.deepcopy(request)
@@ -406,7 +408,7 @@ def series_request(operation, request):
 def authorize(call, policy):
     """Intersect the verified caller with the root ceiling on every request."""
     caller = call['caller']
-    if call['operation'] == IMPORTER_OPERATION:
+    if call['operation'] in IMPORTER_OPERATIONS:
         ceiling = policy.get('janitor_importers')
         check(ceiling is not None and call['request']['backend'] in ceiling['backends'],
               'refused', 'Importer read not enabled by policy')
@@ -674,11 +676,15 @@ def importer_inventory(policy, call, guard):
         check(type(config) is dict and config.get('backend') == backend,
               'unavailable', 'Importer configuration mismatch')
         adapter = ImporterInventoryAdapter(config, request_guard=guard)
-        lists = adapter.inventory()
-        return {'qualification': 'arr_importer_inventory_v1', 'backend': backend,
+        assessment = call['operation'] == IMPORTER_ASSESSMENT
+        observed = adapter.assessment() if assessment else {'lists': adapter.inventory()}
+        result = {'qualification': 'arr_importer_inventory_v2' if assessment else 'arr_importer_inventory_v1', 'backend': backend,
                 'resource_id': config['resource_id'], 'server': call['caller']['server'],
                 'library': call['caller']['target_library'],
-                'policy_revision': call['caller']['policy_revision'], 'lists': lists}
+                'policy_revision': call['caller']['policy_revision'], 'lists': observed['lists']}
+        if assessment:
+            result['cleanup_level'] = observed['cleanup_level']
+        return result
     except WireError:
         raise
     except Exception:
@@ -702,7 +708,7 @@ def handle(conn):
     authorize(call, policy)
     guard = Guard(conn, time.monotonic() + remaining_seconds(call, int(time.time() * 1000)))
     check(peer_state(conn) == 'open', 'refused', 'Trailing data or early close')
-    if call['operation'] == IMPORTER_OPERATION:
+    if call['operation'] in IMPORTER_OPERATIONS:
         return importer_inventory(policy, call, guard)
     config = selected_config(policy, call['recipient'])
     series = series_grant(policy, config, call['caller'])

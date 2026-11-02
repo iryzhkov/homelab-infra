@@ -143,6 +143,60 @@ class ImporterXMLTests(unittest.TestCase):
 
 
 class ImporterTransportTests(unittest.TestCase):
+
+    def test_cleanup_assessment_levels_unknown_and_fixed_routes(self):
+        for backend in ('radarr', 'sonarr'):
+            known = {'disabled', 'logOnly', 'keepAndUnmonitor'}
+            known |= {'keepAndTag'} if backend == 'sonarr' else {'removeAndKeep', 'removeAndDelete'}
+            for level in sorted(known) + [None, 'Disabled', 'future-level', 0, True, [], {}]:
+                with self.subTest(backend=backend, level=level), base.RecordingHTTP() as http:
+                    c = config(backend)
+                    http.responses += [dict(appName=backend.capitalize(), version=c['expected_version']),
+                                       {'listSyncLevel': level, 'secret': 'private'}, []]
+                    api = adapter.ImporterInventoryAdapter(c, request_guard=lambda: 10)
+                    api._opener = http
+                    with patch.object(adapter, 'existing_importer_key', return_value=KEY):
+                        got = api.assessment()
+                    expected = level if type(level) is str and level in known else None
+                    self.assertEqual(got, {'lists': [], 'cleanup_level': expected})
+                    self.assertNotIn('private', json.dumps(got))
+                    self.assertEqual([x[0] for x in http.calls], ['GET'] * 3)
+                    self.assertEqual([x[1] for x in http.calls],
+                        ['/api/v3/system/status', '/api/v3/config/importlist', '/api/v3/importlist'])
+                    self.assertIsNone(api._key)
+        for settings, failure in [({}, False), ([], True), (None, True),
+                                  (b'{"listSyncLevel":', True),
+                                  ((500, {}), True),
+                                  (b'x' * (adapter.IMPORTER_MAX_BODY + 1), True)]:
+            with self.subTest(settings=str(settings)[:40]), base.RecordingHTTP() as http:
+                http.responses += [dict(appName='Radarr', version=config()['expected_version']), settings, []]
+                api = adapter.ImporterInventoryAdapter(config(), request_guard=lambda: 10)
+                api._opener = http
+                with patch.object(adapter, 'existing_importer_key', return_value=KEY):
+                    if failure:
+                        with self.assertRaises(Refused):
+                            api.assessment()
+                        self.assertEqual(api._calls, 2)  # no lists or fallback
+                    else:
+                        self.assertIsNone(api.assessment()['cleanup_level'])
+                self.assertIsNone(api._key)
+
+    def test_cleanup_read_preserves_aggregate_deadline(self):
+        remaining = [10]
+        with base.RecordingHTTP() as http:
+            def respond(call):
+                if call[1] == '/api/v3/system/status':
+                    return dict(appName='Radarr', version=config()['expected_version'])
+                remaining[0] = 0
+                return {'listSyncLevel': 'disabled'}
+            http.responder = respond
+            api = adapter.ImporterInventoryAdapter(config(), request_guard=lambda: remaining[0])
+            api._opener = http
+            with patch.object(adapter, 'existing_importer_key', return_value=KEY), self.assertRaises(Refused):
+                api.assessment()
+            self.assertEqual(api._calls, 2)
+            self.assertIsNone(api._key)
+
     def test_backend_specific_flags_fixed_get_and_privacy(self):
         for backend in ('radarr', 'sonarr'):
             with self.subTest(backend=backend), base.RecordingHTTP() as http:
@@ -322,6 +376,28 @@ class ImporterSocketTests(socket_tests.WorkerCase):
         self.assertEqual(self.credential_reads, 0)
         self.assertEqual([x[0] for x in self.backend_calls()], ['GET', 'GET'])
         self.assertEqual({str(p): p.read_bytes() for p in self.directory.rglob('*') if p.is_file()}, before)
+
+    def test_cleanup_assessment_socket_compatibility_and_privacy(self):
+        fixture = json.loads((ROOT / 'docs/emby-janitor-importers-wire-v2.json').read_text())
+        request = self.request()
+        request['operation'] = 'janitor-importers-assessment'
+        original = self.http.responder
+        self.http.responder = lambda call: ({'listSyncLevel': 'removeAndDelete', 'private': 'secret'}
+            if call[1] == '/api/v3/config/importlist' else original(call))
+        before = {str(p): p.read_bytes() for p in self.directory.rglob('*') if p.is_file()}
+        raw, result = self.call(socket_tests.encode(request))
+        self.assertEqual(result, fixture['responses']['radarr'])
+        self.assertNotIn(b'secret', raw)
+        self.assertEqual(self.credential_reads, 0)
+        self.assertEqual([x[0] for x in self.backend_calls()], ['GET'] * 3)
+        self.assertEqual({str(p): p.read_bytes() for p in self.directory.rglob('*') if p.is_file()}, before)
+        # The new operation has exactly the old independent ceiling.
+        self.policy.pop('janitor_importers')
+        with patch.object(worker, 'private_read') as read:
+            _, refused = self.call(socket_tests.encode(request))
+            self.assertFalse(refused['ok'])
+            read.assert_not_called()
+        self.assertEqual(len(self.backend_calls()), 3)
 
     def test_missing_opt_in_before_any_file_or_backend(self):
         self.policy.pop('janitor_importers')

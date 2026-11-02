@@ -1290,7 +1290,7 @@ def existing_importer_key(path, owner_uid):
 
 
 class ImporterInventoryAdapter:
-    """Two fixed GETs, one ten-second budget, no retry and no write method."""
+    """Versioned fixed GETs, one ten-second budget, no retry or writes."""
     def __init__(self, config, *, request_guard):
         self._config = validate_importer_config(config)
         require(callable(request_guard), 'Importer deadline required')
@@ -1298,14 +1298,18 @@ class ImporterInventoryAdapter:
         self._deadline = time.monotonic() + min(10, request_guard())
         self._key = None
         self._calls = 0
+        self._assessment = False
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), NoRedirect(),
             urllib.request.HTTPSHandler(context=ssl.create_default_context(
                 cafile='/etc/ssl/certs/ca-certificates.crt')))
 
     def _get(self, path):
-        require(path in ('/api/v3/system/status', '/api/v3/importlist') and
-                self._calls < 2 and self._key is not None, 'Importer route refused')
+        routes = ('/api/v3/system/status', '/api/v3/importlist')
+        if self._assessment:
+            routes += ('/api/v3/config/importlist',)
+        require(path in routes and self._calls < (3 if self._assessment else 2) and
+                self._key is not None, 'Importer route refused')
         remaining = min(self._deadline - time.monotonic(), self._guard())
         require(remaining > 0, 'Importer deadline reached')
         self._calls += 1
@@ -1351,6 +1355,13 @@ class ImporterInventoryAdapter:
         return strict_json(raw)
 
     def inventory(self):
+        return self._read_inventory(False)['lists']
+
+    def assessment(self):
+        return self._read_inventory(True)
+
+    def _read_inventory(self, assessment):
+        self._assessment = assessment
         try:
             require(time.monotonic() < self._deadline and self._guard() > 0,
                     'Importer deadline reached')
@@ -1361,6 +1372,15 @@ class ImporterInventoryAdapter:
                     status.get('appName') == self._config['backend'].capitalize() and
                     status.get('version') == self._config['expected_version'] and
                     status.get('urlBase') in (None, ''), 'Importer identity mismatch')
+            cleanup = None
+            if assessment:
+                settings = self._get('/api/v3/config/importlist')
+                require(type(settings) is dict, 'Invalid importer cleanup configuration')
+                known = {'disabled', 'logOnly', 'keepAndUnmonitor'}
+                known |= ({'keepAndTag'} if self._config['backend'] == 'sonarr'
+                          else {'removeAndKeep', 'removeAndDelete'})
+                value = settings.get('listSyncLevel')
+                cleanup = value if type(value) is str and value in known else None
             rows = self._get('/api/v3/importlist')
             require(type(rows) is list and len(rows) <= IMPORTER_MAX_LISTS,
                     'Incomplete importer inventory')
@@ -1379,6 +1399,6 @@ class ImporterInventoryAdapter:
                     'enabled': boolean(row, 'enabled') if radarr else None,
                     'automatic_add': boolean(row, 'enableAuto' if radarr else 'enableAutomaticAdd'),
                     'search_on_add': boolean(row, 'searchOnAdd' if radarr else 'searchForMissingEpisodes')}
-            return [found[key] for key in sorted(found)]
+            return {'lists': [found[key] for key in sorted(found)], 'cleanup_level': cleanup}
         finally:
             self._key = None
