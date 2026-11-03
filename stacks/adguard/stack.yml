@@ -10,7 +10,7 @@
 # file restarts the service when the configuration changes.
 services:
   adguardhome-sync:
-    image: ghcr.io/bakito/adguardhome-sync:latest@sha256:b3499852640866c5742fd72cca190f40e2741c279d60fd62b9130cd8142aafec
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.6@sha256:157e509baeef66cd400dae96c955a1e97312670e0285a92ebe2c3465b3e22e67
     ports:
       - "8321:8080"
     volumes:

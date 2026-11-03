@@ -12,7 +12,7 @@
 
 services:
   radarr:
-    image: lscr.io/linuxserver/radarr:6.4.4.10685-ls318
+    image: lscr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
     # Match the media owner/group on the NFS share; default 911 cannot traverse it.
     environment:
       PUID: "1002"

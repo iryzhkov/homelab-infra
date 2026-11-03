@@ -62,9 +62,9 @@ services:
           memory: 64M
 
   miniflux:
-    # Docker Hub miniflux/miniflux:2.3.3@sha256:49d7b60987616387c306a8023087b31f2c9b7b21288b523026cb04058e8b6dbb,
+    # Docker Hub miniflux/miniflux:2.3.5@sha256:8fd6c3c434ecc3d4083306f83e03c0bb74c632e0f8378da5ead7e1773b0b89c9,
     # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
-    image: git.ryzhkov.dev/igor/mirror/docker.io/miniflux/miniflux@sha256:bb06d6abea8c2a8bd7b78d7b02d8ddc24425aab4d1afec8e3b87655242977a54
+    image: git.ryzhkov.dev/igor/mirror/docker.io/miniflux/miniflux@sha256:cb10731ff2400c7d07e5b8ff379ca9ea69a08781e552c181ad3c3e7cf49481fb
     ports:
       - "5080:8080"
     environment:

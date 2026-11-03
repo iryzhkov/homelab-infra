@@ -12,7 +12,7 @@
 
 services:
   lidarr:
-    image: lscr.io/linuxserver/lidarr:3.1.0.4875-ls42
+    image: lscr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
     ports:
       - "8686:8686"
     volumes:

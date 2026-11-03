@@ -12,7 +12,7 @@
 
 services:
   sonarr:
-    image: lscr.io/linuxserver/sonarr:4.0.20.3014-ls326
+    image: lscr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
     # Match the media owner/group on the NFS share; default 911 cannot traverse it.
     environment:
       PUID: "1002"

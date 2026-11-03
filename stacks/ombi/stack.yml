@@ -10,7 +10,7 @@
 
 services:
   ombi:
-    image: lscr.io/linuxserver/ombi:v4.53.10-ls269
+    image: lscr.io/linuxserver/ombi:v4.53.10-ls275@sha256:cdff52cca1c613aaf67e72bf36de5ea8486fa43fe2c2b7e2dd3368d6a80510d7
     ports:
       - "3579:3579"
     environment:
