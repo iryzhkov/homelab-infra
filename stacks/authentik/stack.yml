@@ -29,8 +29,9 @@
 # Logs stay on the local driver, as in the Compose file, so that Authentik
 # stays debuggable when Loki is down.
 #
-# PostgreSQL retains its cutover pin. Authentik is upgraded sequentially to
-# 2026.8.4; see docs/authentik-upgrade-2026-10-19.md before deploying this pin.
+# PostgreSQL retains its cutover pin. The existing 2026.8 series receives
+# patch 2026.8.5; retain the backup and acceptance procedure in
+# docs/authentik-upgrade-2026-10-19.md before deploying this pin.
 
 x-local-logging: &local-logging
   driver: local

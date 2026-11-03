@@ -54,8 +54,12 @@ For Immich the official upgrade guide permits current same-major upgrades after
 release-note review. Read 3.2 and 3.3 notes; use 3.2.4 as a conservative health
 checkpoint before 3.3.5. Back up the DB before each stage, retain media, and do
 not reset facial recognition, enable new models or change OAuth claims/config.
-The deployed .env pin must reach 3.3.5 via the owning encrypted source. Downgrade
-against a migrated DB is unsupported.
+Apply the checkpoint from the deployed Immich directory with
+`IMMICH_VERSION=v3.2.4 docker compose up -d immich-server immich-machine-learning`.
+Only after its health check passes, converge the reviewed encrypted source pin
+3.3.5 through the owning site play. Upstream recommends updating mobile clients
+before the server; existing v3 clients remain within this same-major update.
+Downgrade against a migrated DB is unsupported.
 
 Miniflux live read-only preflight found zero feed proxies and zero feeds with
 localhost/RFC1918 IPv4 URLs. FETCHER_ALLOW_PRIVATE_NETWORKS stays unchanged.
@@ -76,6 +80,8 @@ release selections. Thelounge, Jellystat and Flaresolverr are app-current.
 Nginx, Excalidraw, Caddy, Piper and InfluxDB digest refreshes are deferred because
 this batch has no verified newer compatible app version for them. Blackpearl and
 OCI OS updates are outside the three-host maintenance scope confirmed by Igor.
+The OCI-hosted gatus-oci application is also outside that scope and remains5.37.0.
+Librespeed's newer unversioned master build is deferred, preserving its current pin.
 
 ## References
 

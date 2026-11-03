@@ -13,6 +13,7 @@
 
 services:
   loki:
+    # Docker Hub grafana/loki:3.7.9 (sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28),
     # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
     image: git.ryzhkov.dev/igor/mirror/docker.io/grafana/loki@sha256:eacb80f9a498439ab17e08fccea76dc55cd34c54060ff20b025b1676b01625a8
     logging:
