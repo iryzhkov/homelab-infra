@@ -1,5 +1,6 @@
 """Bounded protected operator transport. Managed grant and journal provenance only."""
 import copy
+import http.client
 import ipaddress
 import queue
 import threading
@@ -1289,6 +1290,47 @@ def existing_importer_key(path, owner_uid):
             os.close(fd)
 
 
+def importer_response_bytes(response):
+    """One strict framed read, shared by fixed GET and pause-only PUT."""
+    lengths = response.headers.get_all('Content-Length', [])
+    transfers = response.headers.get_all('Transfer-Encoding', [])
+    require(len(lengths) <= 1 and len(transfers) <= 1 and
+            not (lengths and transfers) and
+            (not transfers or transfers[0].strip().lower() == 'chunked'),
+            'Invalid importer response framing')
+    declared = None
+    if lengths:
+        require(re.fullmatch('[0-9]{1,9}', lengths[0]) is not None,
+                'Invalid importer response framing')
+        declared = int(lengths[0])
+        require(declared <= IMPORTER_MAX_BODY, 'Importer response too large')
+    raw = response.read(IMPORTER_MAX_BODY + 1)
+    require(len(raw) <= IMPORTER_MAX_BODY, 'Importer response too large')
+    require(declared is None or len(raw) == declared, 'Incomplete importer response')
+    return raw
+
+
+def project_importer_lists(rows, backend):
+    require(type(rows) is list and len(rows) <= IMPORTER_MAX_LISTS,
+            'Incomplete importer inventory')
+    found = {}
+    def boolean(row, key):
+        value = row.get(key)
+        return value if type(value) is bool else None
+    for row in rows:
+        require(type(row) is dict and type(row.get('id')) is int and
+                1 <= row['id'] <= 2 ** 31 - 1 and row['id'] not in found and
+                printable(row.get('name'), 256) and
+                printable(row.get('implementation'), 64), 'Invalid importer list')
+        radarr = backend == 'radarr'
+        found[row['id']] = {
+            'id': row['id'], 'name': row['name'], 'implementation': row['implementation'],
+            'enabled': boolean(row, 'enabled') if radarr else None,
+            'automatic_add': boolean(row, 'enableAuto' if radarr else 'enableAutomaticAdd'),
+            'search_on_add': boolean(row, 'searchOnAdd' if radarr else 'searchForMissingEpisodes')}
+    return [found[key] for key in sorted(found)]
+
+
 class ImporterInventoryAdapter:
     """Versioned fixed GETs, one ten-second budget, no retry or writes."""
     def __init__(self, config, *, request_guard):
@@ -1299,16 +1341,19 @@ class ImporterInventoryAdapter:
         self._key = None
         self._calls = 0
         self._assessment = False
+        self._ssl_context = ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), NoRedirect(),
-            urllib.request.HTTPSHandler(context=ssl.create_default_context(
-                cafile='/etc/ssl/certs/ca-certificates.crt')))
+            urllib.request.HTTPSHandler(context=self._ssl_context))
+
+    def _call_limit(self):
+        return 3 if self._assessment else 2
 
     def _get(self, path):
         routes = ('/api/v3/system/status', '/api/v3/importlist')
         if self._assessment:
             routes += ('/api/v3/config/importlist',)
-        require(path in routes and self._calls < (3 if self._assessment else 2) and
+        require(path in routes and self._calls < self._call_limit() and
                 self._key is not None, 'Importer route refused')
         remaining = min(self._deadline - time.monotonic(), self._guard())
         require(remaining > 0, 'Importer deadline reached')
@@ -1325,22 +1370,7 @@ class ImporterInventoryAdapter:
             try:
                 with opener.open(request, timeout=remaining) as response:
                     require(response.status == 200, 'Importer inventory unavailable')
-                    lengths = response.headers.get_all('Content-Length', [])
-                    transfers = response.headers.get_all('Transfer-Encoding', [])
-                    require(len(lengths) <= 1 and len(transfers) <= 1 and
-                            not (lengths and transfers) and
-                            (not transfers or transfers[0].strip().lower() == 'chunked'),
-                            'Invalid importer response framing')
-                    declared = None
-                    if lengths:
-                        require(re.fullmatch('[0-9]{1,9}', lengths[0]) is not None,
-                                'Invalid importer response framing')
-                        declared = int(lengths[0])
-                        require(declared <= IMPORTER_MAX_BODY, 'Importer response too large')
-                    raw = response.read(IMPORTER_MAX_BODY + 1)
-                    require(len(raw) <= IMPORTER_MAX_BODY, 'Importer response too large')
-                    require(declared is None or len(raw) == declared,
-                            'Incomplete importer response')
+                    raw = importer_response_bytes(response)
                 completed.put((raw, False))
             except Exception:
                 completed.put((None, True))
@@ -1382,23 +1412,140 @@ class ImporterInventoryAdapter:
                 value = settings.get('listSyncLevel')
                 cleanup = value if type(value) is str and value in known else None
             rows = self._get('/api/v3/importlist')
-            require(type(rows) is list and len(rows) <= IMPORTER_MAX_LISTS,
-                    'Incomplete importer inventory')
-            found = {}
-            def boolean(row, key):
-                value = row.get(key)
-                return value if type(value) is bool else None
-            for row in rows:
-                require(type(row) is dict and type(row.get('id')) is int and
-                        1 <= row['id'] <= 2 ** 31 - 1 and row['id'] not in found and
-                        printable(row.get('name'), 256) and
-                        printable(row.get('implementation'), 64), 'Invalid importer list')
-                radarr = self._config['backend'] == 'radarr'
-                found[row['id']] = {
-                    'id': row['id'], 'name': row['name'], 'implementation': row['implementation'],
-                    'enabled': boolean(row, 'enabled') if radarr else None,
-                    'automatic_add': boolean(row, 'enableAuto' if radarr else 'enableAutomaticAdd'),
-                    'search_on_add': boolean(row, 'searchOnAdd' if radarr else 'searchForMissingEpisodes')}
-            return {'lists': [found[key] for key in sorted(found)], 'cleanup_level': cleanup}
+            return {'lists': project_importer_lists(rows, self._config['backend']), 'cleanup_level': cleanup}
         finally:
             self._key = None
+
+
+class ImporterPauseAdapter(ImporterInventoryAdapter):
+    """One fixed flag-false PUT; never retries or claims quiescence."""
+    def __init__(self, config, *, request_guard):
+        super().__init__(config, request_guard=request_guard)
+        self._put_started = False
+
+    def _call_limit(self):
+        return 5
+
+    def _remaining(self, expires_at):
+        remaining = min(self._deadline - time.monotonic(), self._guard(),
+                        expires_at - time.time())
+        require(remaining > 0, 'Importer pause deadline reached')
+        return remaining
+
+    def _pause_connection(self, remaining):
+        url = urllib.parse.urlsplit(self._config['origin'])
+        if url.scheme == 'https':
+            return http.client.HTTPSConnection(url.hostname, url.port,
+                timeout=remaining, context=self._ssl_context)
+        return http.client.HTTPConnection(url.hostname, url.port, timeout=remaining)
+
+    def _put_once(self, list_id, expires_at):
+        remaining = self._remaining(expires_at)
+        require(self._calls == 3 and self._key is not None, 'Importer pause sequence refused')
+        self._calls += 1
+        field = 'enableAuto' if self._config['backend'] == 'radarr' else 'enableAutomaticAdd'
+        body = json.dumps({'ids': [list_id], field: False}, separators=(',', ':')).encode()
+        key = self._key
+        completed = queue.Queue(maxsize=1)
+
+        def send():
+            connection = None
+            may_send = False
+            reason = 'connect_failed'
+            try:
+                connection = self._pause_connection(self._remaining(expires_at))
+                connection.set_debuglevel(0)
+                connection.connect()  # no HTTP application bytes sent yet
+                reason = 'deadline'
+                budget = self._remaining(expires_at)
+                connection.timeout = budget
+                if connection.sock is not None:
+                    connection.sock.settimeout(budget)
+                may_send = True
+                connection.request('PUT', '/api/v3/importlist/bulk', body=body, headers={
+                    'Accept': 'application/json', 'Content-Type': 'application/json',
+                    'X-Api-Key': key, 'Connection': 'close'})
+                with connection.getresponse() as response:
+                    status = response.status
+                    raw = importer_response_bytes(response)
+                ack = None
+                # A 4xx is not proof that no upstream mutation occurred.
+                if status in (200, 202):
+                    value = strict_json(raw)
+                    if (type(value) is list and len(value) == 1 and
+                            type(value[0]) is dict and type(value[0].get('id')) is int and
+                            value[0]['id'] == list_id and value[0].get(field) is False):
+                        ack = {'status': status, 'id': list_id, 'automatic_add': False}
+                completed.put(('acknowledged' if ack is not None else 'dispatch_unknown',
+                               None if ack is not None else 'put_uncertain', ack))
+            except Exception:
+                completed.put(('dispatch_unknown' if may_send else 'not_sent',
+                               'put_uncertain' if may_send else reason, None))
+            finally:
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+
+        # Once this thread starts, a sampled "connecting" flag cannot prove
+        # not_sent on timeout: it could advance immediately after the sample.
+        self._put_started = True
+        threading.Thread(target=send, daemon=True).start()
+        try:
+            outcome = completed.get(timeout=remaining)
+            self._remaining(expires_at)
+            return outcome
+        except Exception:
+            return 'dispatch_unknown', 'put_uncertain', None
+
+    def pause(self, list_id, expected, expires_at):
+        result = {'stage': 'not_sent', 'reason': 'source_unavailable',
+                  'cleanup_level': None, 'before': None, 'ack': None,
+                  'after': None, 'calls': 0}
+        try:
+            require(self._calls == 0 and type(list_id) is int and
+                    1 <= list_id <= 2 ** 31 - 1 and type(expires_at) is int,
+                    'Invalid importer pause input')
+            self._remaining(expires_at)
+            observed = self.assessment()
+            result['cleanup_level'] = observed['cleanup_level']
+            if observed['cleanup_level'] != 'disabled':
+                result['reason'] = 'cleanup_not_disabled'
+                return result
+            row = next((r for r in observed['lists'] if r['id'] == list_id), None)
+            if row is None:
+                result['reason'] = 'target_missing'
+                return result
+            if row != expected or row['automatic_add'] is not True:
+                result['reason'] = 'target_drift'
+                return result
+            result['before'] = row
+            self._remaining(expires_at)
+            self._key = existing_importer_key(self._config['app_config_file'],
+                                             self._config['app_config_owner_uid'])
+            result['stage'], result['reason'], result['ack'] = self._put_once(list_id, expires_at)
+            if result['stage'] in ('acknowledged', 'dispatch_unknown'):
+                try:
+                    self._remaining(expires_at)
+                    rows = project_importer_lists(self._get('/api/v3/importlist'),
+                                                  self._config['backend'])
+                    result['after'] = next((r for r in rows if r['id'] == list_id), None)
+                    wanted = dict(row, automatic_add=False)
+                    if result['ack'] is not None and result['after'] == wanted:
+                        result['stage'] = 'pause_observed'
+                except Exception:
+                    pass  # An ACK or uncertainty is not erased by read failure.
+            return result
+        except Exception:
+            if self._put_started:
+                result['stage'], result['reason'] = 'dispatch_unknown', 'put_uncertain'
+            else:
+                try:
+                    self._remaining(expires_at)
+                except Exception:
+                    result['reason'] = 'deadline'
+            return result
+        finally:
+            self._key = None
+            result['calls'] = self._calls

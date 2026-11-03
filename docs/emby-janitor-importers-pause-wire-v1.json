@@ -1,0 +1,132 @@
+{
+  "contract": "jocasta:df14d58e94984aa9fb69027762f937ee@2; synthetic pause-only dispatch",
+  "frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "7",
+      "actions": [
+        "janitor.importers.read",
+        "janitor.importers.pause"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "janitor-importers-pause",
+    "request": {
+      "backend": "radarr",
+      "list_id": 1,
+      "resource_id": "radarr-primary",
+      "operation_id": "11111111111111111111111111111111",
+      "expected": {
+        "id": 1,
+        "name": "Synthetic radarr list",
+        "implementation": "SyntheticImport",
+        "enabled": false,
+        "automatic_add": true,
+        "search_on_add": false
+      }
+    }
+  },
+  "policy": {
+    "target_library": "7",
+    "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "backends": {
+      "radarr": "/synthetic/radarr.json",
+      "sonarr": "/synthetic/sonarr.json"
+    }
+  },
+  "responses": {
+    "radarr": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "qualification": "arr_importer_pause_v1",
+        "backend": "radarr",
+        "resource_id": "radarr-primary",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "7",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "operation_id": "11111111111111111111111111111111",
+        "stage": "pause_observed",
+        "reason": null,
+        "cleanup_level": "disabled",
+        "before": {
+          "id": 1,
+          "name": "Synthetic radarr list",
+          "implementation": "SyntheticImport",
+          "enabled": false,
+          "automatic_add": true,
+          "search_on_add": false
+        },
+        "ack": {
+          "status": 202,
+          "id": 1,
+          "automatic_add": false
+        },
+        "after": {
+          "id": 1,
+          "name": "Synthetic radarr list",
+          "implementation": "SyntheticImport",
+          "enabled": false,
+          "automatic_add": false,
+          "search_on_add": false
+        },
+        "calls": 5
+      }
+    },
+    "sonarr": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "qualification": "arr_importer_pause_v1",
+        "backend": "sonarr",
+        "resource_id": "sonarr-primary",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "7",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "operation_id": "11111111111111111111111111111111",
+        "stage": "pause_observed",
+        "reason": null,
+        "cleanup_level": "disabled",
+        "before": {
+          "id": 1,
+          "name": "Synthetic sonarr list",
+          "implementation": "SyntheticImport",
+          "enabled": null,
+          "automatic_add": true,
+          "search_on_add": false
+        },
+        "ack": {
+          "status": 202,
+          "id": 1,
+          "automatic_add": false
+        },
+        "after": {
+          "id": 1,
+          "name": "Synthetic sonarr list",
+          "implementation": "SyntheticImport",
+          "enabled": null,
+          "automatic_add": false,
+          "search_on_add": false
+        },
+        "calls": 5
+      }
+    }
+  },
+  "pause_policy": {
+    "backends": {
+      "radarr": [
+        1
+      ],
+      "sonarr": [
+        1
+      ]
+    }
+  }
+}

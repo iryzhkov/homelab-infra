@@ -27,7 +27,8 @@ import sys
 import time
 
 from emby_operator_adapter import (OperatorAdapter, load_config, load_credentials, private_read,
-                                   strict_json, catalog_id, ImporterInventoryAdapter, IMPORTER_BACKENDS)
+                                   strict_json, catalog_id, printable, ImporterInventoryAdapter,
+                                   ImporterPauseAdapter, IMPORTER_BACKENDS)
 from emby_operator_entry import invoke, operator_session
 from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT,
                                            TYPED_OPERATIONS, Journal, Refused, canonical_id,
@@ -76,7 +77,9 @@ if set(LIST_ACTIONS) != set(LIST_OPERATIONS):
 # every other operation keeps the original caller shape.
 IMPORTER_OPERATION = 'janitor-importers-inventory'
 IMPORTER_ASSESSMENT = 'janitor-importers-assessment'
-IMPORTER_OPERATIONS = (IMPORTER_OPERATION, IMPORTER_ASSESSMENT)
+IMPORTER_PAUSE = 'janitor-importers-pause'
+IMPORTER_OPERATIONS = (IMPORTER_OPERATION, IMPORTER_ASSESSMENT, IMPORTER_PAUSE)
+IMPORTER_PAUSE_ACTIONS = ['janitor.importers.read', 'janitor.importers.pause']
 IMPORTER_ACTIONS = ['janitor.importers.read']
 IMPORTER_CALLER_FIELDS = frozenset({'issuer', 'subject', 'namespace', 'server',
     'target_library', 'actions', 'expires_at', 'policy_revision'})
@@ -104,7 +107,7 @@ SERIES_CALLER_FIELDS = HISTORY_CALLER_FIELDS | {'series_libraries'}
 POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'})
 # Optional opt-ins: without history_users the policy permits no history read;
 # without series_libraries it permits no Series read or typed list state.
-POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries', 'janitor', 'janitor_importers'})
+POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause'})
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
@@ -210,6 +213,16 @@ def validate_policy(value):
             ok(isinstance(path, str) and 1 <= len(path) <= 4096 and path.startswith('/') and
                str(PurePosixPath(path)) == path and '..' not in PurePosixPath(path).parts and
                len(PurePosixPath(path).parts) > 2)
+    if 'janitor_importers_pause' in value:
+        pause = value['janitor_importers_pause']
+        ok('janitor_importers' in value and type(pause) is dict and set(pause) == {'backends'})
+        backends = pause['backends']
+        ok(type(backends) is dict and 1 <= len(backends) <= 2 and
+           set(backends) <= set(value['janitor_importers']['backends']))
+        for ids in backends.values():
+            ok(type(ids) is list and 1 <= len(ids) <= 32 and
+               all(type(i) is int and 1 <= i <= 2 ** 31 - 1 for i in ids) and
+               len(set(ids)) == len(ids))
     return copy.deepcopy(value)
 
 
@@ -322,6 +335,25 @@ def parse_request(frame):
 def typed_request(operation, request):
     check(type(request) is dict, 'refused', 'Invalid request fields')
     fields = set(request)
+    if operation == IMPORTER_PAUSE:
+        check(fields == {'backend', 'list_id', 'resource_id', 'operation_id', 'expected'} and
+              isinstance(request['backend'], str) and request['backend'] in IMPORTER_BACKENDS and
+              type(request['list_id']) is int and 1 <= request['list_id'] <= 2 ** 31 - 1 and
+              isinstance(request['operation_id'], str) and HEX32.fullmatch(request['operation_id']),
+              'refused', 'Invalid importer pause request')
+        try:
+            opaque(request['resource_id'])
+        except Refused:
+            raise WireError('refused', 'Invalid importer resource') from None
+        row = request['expected']
+        check(type(row) is dict and set(row) ==
+              {'id', 'name', 'implementation', 'enabled', 'automatic_add', 'search_on_add'} and
+              type(row['id']) is int and row['id'] == request['list_id'] and
+              printable(row['name'], 256) and printable(row['implementation'], 64) and
+              row['automatic_add'] is True and type(row['search_on_add']) is bool and
+              (type(row['enabled']) is bool if request['backend'] == 'radarr'
+               else row['enabled'] is None), 'refused', 'Invalid importer expected state')
+        return copy.deepcopy(request)
     if operation in IMPORTER_OPERATIONS:
         check(fields == {'backend'} and isinstance(request['backend'], str) and
               request['backend'] in IMPORTER_BACKENDS, 'refused', 'Invalid importer backend')
@@ -412,11 +444,16 @@ def authorize(call, policy):
         ceiling = policy.get('janitor_importers')
         check(ceiling is not None and call['request']['backend'] in ceiling['backends'],
               'refused', 'Importer read not enabled by policy')
+        pause = call['operation'] == IMPORTER_PAUSE
+        if pause:
+            allowed = policy.get('janitor_importers_pause', {}).get('backends', {})
+            check(call['request']['list_id'] in allowed.get(call['request']['backend'], []),
+                  'refused', 'Importer pause target not enabled by policy')
         check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == ceiling['target_library'] and
               caller['policy_revision'] == ceiling['revision'] and
-              caller['actions'] == IMPORTER_ACTIONS and call['recipient'] in policy['recipients'],
+              caller['actions'] == (IMPORTER_PAUSE_ACTIONS if pause else IMPORTER_ACTIONS) and call['recipient'] in policy['recipients'],
               'refused', 'Caller outside importer policy')
         return
     if call['operation'] == JANITOR_OPERATION:
@@ -693,6 +730,34 @@ def importer_inventory(policy, call, guard):
         raise WireError('unavailable', 'Importer inventory unavailable') from None
 
 
+def importer_pause(policy, call, guard):
+    """Stateless fixed write; the client owns write-ahead and no-retry policy."""
+    request, caller = call['request'], call['caller']
+    result = {'qualification': 'arr_importer_pause_v1', 'backend': request['backend'],
+              'resource_id': request['resource_id'], 'server': caller['server'],
+              'library': caller['target_library'], 'policy_revision': caller['policy_revision'],
+              'operation_id': request['operation_id'], 'stage': 'not_sent',
+              'reason': 'config_unavailable', 'cleanup_level': None,
+              'before': None, 'ack': None, 'after': None, 'calls': 0}
+    api = None
+    try:
+        guard()
+        config = strict_json(private_read(
+            policy['janitor_importers']['backends'][request['backend']]))
+        if (type(config) is not dict or config.get('backend') != request['backend'] or
+                config.get('resource_id') != request['resource_id']):
+            result['reason'] = 'identity_mismatch'
+            return result
+        api = ImporterPauseAdapter(config, request_guard=guard)
+        result.update(api.pause(request['list_id'], request['expected'], caller['expires_at']))
+    except Exception:
+        if api is not None and api._put_started:
+            result['stage'], result['reason'] = 'dispatch_unknown', 'put_uncertain'
+        elif guard.tripped or guard.expired():
+            result['reason'] = 'deadline'
+    return result
+
+
 def handle(conn):
     """Validate one connection's request and run it; returns the result object."""
     started = time.monotonic()
@@ -708,6 +773,8 @@ def handle(conn):
     authorize(call, policy)
     guard = Guard(conn, time.monotonic() + remaining_seconds(call, int(time.time() * 1000)))
     check(peer_state(conn) == 'open', 'refused', 'Trailing data or early close')
+    if call['operation'] == IMPORTER_PAUSE:
+        return importer_pause(policy, call, guard)
     if call['operation'] in IMPORTER_OPERATIONS:
         return importer_inventory(policy, call, guard)
     config = selected_config(policy, call['recipient'])

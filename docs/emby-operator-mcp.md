@@ -91,7 +91,7 @@ Request fields, all required, no others:
 | `caller` | object below; supplied by the verifier, never by tool arguments |
 | `recipient` | lowercase 32-hex Emby user ID |
 | `deadline_unix_ms` | integer epoch milliseconds, the request context deadline |
-| `operation` | `show`, `reconcile`, `preview`, `apply`, `movie-metadata`, `series-seeds`, `recipient-series`, `series-catalog`, `janitor-protections` or `janitor-importers-inventory`; read operations have separate exact callers described below |
+| `operation` | `show`, `reconcile`, `preview`, `apply`, `movie-metadata`, `series-seeds`, `recipient-series`, `series-catalog`, `janitor-protections`, `janitor-importers-inventory`, `janitor-importers-assessment` or `janitor-importers-pause`; janitor operations have separate exact callers described below |
 | `request` | object below |
 
 `caller` has exactly `issuer`, `subject`, `namespace`, `server`, `library`,
@@ -141,6 +141,18 @@ Results: `preview` returns `{"request": {...}, "intent_digest": HEX64}`;
 `apply` returns `{"state": STATE, "writes": N}` with the apply state from the
 table above, or `replayed` for a completed key;
 `reconcile` returns the core reconcile object. `show` is described below.
+
+## Pause-only importer dispatch
+
+Source contract jocasta:df14d58e94984aa9fb69027762f937ee@2 defines the fixed janitor-importers-pause operation. Default is off. The separate optional root janitor_importers_pause block contains only backends mapped to one through 32 unique positive list IDs, and requires the existing read block. No pause policy is rendered and no source mode is enabled by this change. The exact managed-janitor caller carries read plus pause actions; missing scope/backend/ID refuses before private files or network. No Emby credentials/history/userdata, recipient journal or playlist session is loaded.
+
+The request has only backend/list_id/resource_id/operation_id and an exact expected projected row. Root pins resource_id before credential/backend access and builds the body itself: one-ID PUT /api/v3/importlist/bulk setting only enableAuto or enableAutomaticAdd false. There is no caller route/body/key. Preflight is the existing v2 status/config/list read, requires disabled cleanup and unchanged known target flags. A drift check is not CAS. The operation uses at most five backend calls under one ten-second budget: three preflight GETs, one PUT and one list readback. Search flags/provider settings are omitted and preserved by the pinned bulk mapper; no delete, re-enable, media/torrent/history or schedule operation exists.
+
+A proven connect failure before HTTP bytes can be not_sent. Once a request may have started, timeout, malformed/truncated/foreign reply, any unqualified error status including 4xx and every unexpected exception remain dispatch_unknown. A background I/O timeout is never classified from a sampled connecting flag, and a late connection rechecks guard/expiry before sending. ACK 200/202 must project exactly the target ID and actual false gate; raw provider Fields are discarded. Only an acknowledged exact readback can become pause_observed. False observed after an unknown send never supplies attribution or releases the client's target lock. Every public result remains quiescence unqualified and cannot authorize media removal.
+
+The worker is stateless; the Go journal owns write-ahead, target exclusion and exact-key replay. A typed worker error after a complete frame is conservatively unknown, including old-worker incompatibility. Native worker compatibility, signed pause authority and hardened XML custody must be qualified before any separate live activation. The existing empty CapabilityBoundingSet custody gap is unchanged. Rollback must preserve all pending/audit data; remove new optional config before old parser/binary rollback and never discard fields to clear an uncertain effect.
+
+The shared synthetic fixture docs/emby-janitor-importers-pause-wire-v1.json is copied byte-for-byte to client testdata. Tests use real loopback HTTP and native socket fixtures only. No real backend, credentials, mode activation or grants changed.
 
 ## Janitor importer inventory
 
