@@ -13,9 +13,9 @@
 
 services:
   vaultwarden:
-    # Docker Hub vaultwarden/server:1.37.3 (sha256:1587c45feaa479f1f5e8af3b00eded36bff77bcf1880cf8dbf0541706dd470e0),
+    # Docker Hub vaultwarden/server:1.37.5 (sha256:4fe17f415f90087377d37c755e0ea3cf189dcc6794e49cdd2a9adbb4937d9e1f),
     # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
-    image: git.ryzhkov.dev/igor/mirror/docker.io/vaultwarden/server@sha256:39894b6d6148d0b2583e4da429a61065f2b08dc3afbbc00f7265b5676e04f9b9
+    image: git.ryzhkov.dev/igor/mirror/docker.io/vaultwarden/server@sha256:1a2c14d2abf5740669758bb15fc1e405568a1a42f3be3361a3bd37dac50c90ae
     ports:
       - "8099:80"
     volumes:

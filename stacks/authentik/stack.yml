@@ -29,8 +29,9 @@
 # Logs stay on the local driver, as in the Compose file, so that Authentik
 # stays debuggable when Loki is down.
 #
-# PostgreSQL retains its cutover pin. Authentik is upgraded sequentially to
-# 2026.8.4; see docs/authentik-upgrade-2026-10-19.md before deploying this pin.
+# PostgreSQL retains its cutover pin. The existing 2026.8 series receives
+# patch 2026.8.5; retain the backup and acceptance procedure in
+# docs/authentik-upgrade-2026-10-19.md before deploying this pin.
 
 x-local-logging: &local-logging
   driver: local
@@ -94,7 +95,7 @@ services:
           memory: 160M
 
   server:
-    image: ghcr.io/goauthentik/server:2026.8.4@sha256:e7226ae116dac5aa0a5643803e735b010038f492c401e08e16b3bf1ac54c090c
+    image: ghcr.io/goauthentik/server:2026.8.5@sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5
     command: server
     environment: *authentik-environment
     secrets:
@@ -141,7 +142,7 @@ services:
           memory: 640M
 
   worker:
-    image: ghcr.io/goauthentik/server:2026.8.4@sha256:e7226ae116dac5aa0a5643803e735b010038f492c401e08e16b3bf1ac54c090c
+    image: ghcr.io/goauthentik/server:2026.8.5@sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5
     command: worker
     environment: *authentik-environment
     secrets:

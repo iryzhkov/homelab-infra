@@ -13,8 +13,9 @@
 
 services:
   loki:
+    # Docker Hub grafana/loki:3.7.9 (sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28),
     # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
-    image: git.ryzhkov.dev/igor/mirror/docker.io/grafana/loki@sha256:e664166bca56031661b40a0a0b1c77dfeffa4b03053cc887836dd4f51cb212ab
+    image: git.ryzhkov.dev/igor/mirror/docker.io/grafana/loki@sha256:eacb80f9a498439ab17e08fccea76dc55cd34c54060ff20b025b1676b01625a8
     logging:
       driver: local
       options:
@@ -66,9 +67,9 @@ services:
         delay: 5s
 
   grafana:
-    # Docker Hub grafana/grafana:13.2.2 (sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0),
+    # Docker Hub grafana/grafana:13.3.0 (sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205),
     # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
-    image: git.ryzhkov.dev/igor/mirror/docker.io/grafana/grafana@sha256:9924c7fe0effe4a5fea08b3451905de54f09fde9d1589463a5f2d02d9ec158bc
+    image: git.ryzhkov.dev/igor/mirror/docker.io/grafana/grafana@sha256:6e5d306338670f381a942f1c50d3c266bf71531e5ddd9ee4fc1a133dac5ce63d
     ports:
       - "3200:3000"
     volumes:

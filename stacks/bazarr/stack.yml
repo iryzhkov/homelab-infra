@@ -12,7 +12,7 @@
 
 services:
   bazarr:
-    image: lscr.io/linuxserver/bazarr:v1.6.2-ls366
+    image: lscr.io/linuxserver/bazarr:v1.6.2-ls370@sha256:9a625883f054e722795affe5e3ca71057e6ed817ecdf99f4a99624346fcc509c
     ports:
       - "6767:6767"
     volumes:

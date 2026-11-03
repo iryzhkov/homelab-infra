@@ -9,13 +9,13 @@
 # The admin user and password are Docker secrets. The image's entrypoint
 # reads only COUCHDB_USER and COUCHDB_PASSWORD, so the command exports them
 # from /run/secrets and then runs the image's own entrypoint, under tini as
-# before. The image is 3.5.0, pinned to the digest that ran at conversion.
+# before. CouchDB 3.5.1 retains the existing database major and state layout.
 
 services:
   obsidian-livesync:
-    # Docker Hub couchdb:3.5.0@sha256:1c0a30a54535377bc9ae23f42efb1ca4e92abe796f78ec98b768ac1d5874cc1b,
+    # Docker Hub couchdb:3.5.1@sha256:ccea1e8035bf7afd68336e24056a1ca9c1c46d7abe42da686322c0ac7218e5c2,
     # served from the Forgejo mirror (playbooks/swarm.yml --tags registry).
-    image: git.ryzhkov.dev/igor/mirror/docker.io/library/couchdb@sha256:33cade1ff68a3f191e2639a339957400cf825aba948eec57f696d28ae851a88d
+    image: git.ryzhkov.dev/igor/mirror/docker.io/library/couchdb@sha256:e9c688a0fe2b09d020b5f7006d87e4cacfbcb43c6031fed92a9d2b136014513e
     entrypoint: ["tini", "--", "/bin/sh", "-c"]
     command:
       - >-

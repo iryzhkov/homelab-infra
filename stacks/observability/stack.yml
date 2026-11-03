@@ -3,7 +3,7 @@
 # published. Only the authenticated, POST-only gateway is published.
 services:
   victoriametrics:
-    image: victoriametrics/victoria-metrics@sha256:d83112326f700fe65f6fe66b12348406191cb20826ae0df72d676a2e69d3f3c9
+    image: victoriametrics/victoria-metrics:v1.155.0@sha256:f60dc268b54ecf87f6e09d740c2b732838aa9193090cc741417c9f6386a130df
     command:
       - -storageDataPath=/storage
       - -retentionPeriod=400d
