@@ -55,7 +55,9 @@ release-note review. Read 3.2 and 3.3 notes; use 3.2.4 as a conservative health
 checkpoint before 3.3.5. Back up the DB before each stage, retain media, and do
 not reset facial recognition, enable new models or change OAuth claims/config.
 Apply the checkpoint from the deployed Immich directory with
-`IMMICH_VERSION=v3.2.4 docker compose up -d immich-server immich-machine-learning`.
+`IMMICH_VERSION=v3.2.4 docker compose --env-file stack.env up -d --no-deps immich-server immich-machine-learning`.
+The deployed directory is `/home/igor/app/immich-stack` on Normandy; its Compose
+interpolation environment is `stack.env`, not an implicit `.env`.
 Only after its health check passes, converge the reviewed encrypted source pin
 3.3.5 through the owning site play. Upstream recommends updating mobile clients
 before the server; existing v3 clients remain within this same-major update.
