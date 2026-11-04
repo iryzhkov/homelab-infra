@@ -37,6 +37,9 @@ ReadOnlyPaths=/etc/{{ web_mcp.service }} /etc/ssl/certs
 {% if web_mcp.service == 'holonet' and web_mcp.config.get('recommendations') %}
 ReadWritePaths=/var/lib/holonet/recommendations
 {% endif %}
+{% if web_mcp.service == 'holonet' and web_mcp.config.get('janitor') %}
+ReadWritePaths=/var/lib/holonet/janitor
+{% endif %}
 MemoryMax=256M
 CPUQuota=100%
 TasksMax=64

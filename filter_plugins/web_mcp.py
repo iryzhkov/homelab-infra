@@ -42,6 +42,8 @@ HOLONET_SERIES_SOURCE = "9efca7904b6b142c765bda4574185615fd374518"
 HOLONET_SERIES_CONTRACT = "748e89df0c765ba82133d9b45b8be00e76925128"
 # Exact history-capable client and compatible unchanged worker/interface.
 # CI, artifact checksum and final release acceptance still gate deployment.
+HOLONET_CUSTODY_SOURCE = "f2f91e1c1f9e7346a324567ad206110a259da306"
+HOLONET_CUSTODY_CONTRACT = "50127da581f2429c92ff6d40fe23156bde0485a1"
 HOLONET_HISTORY_RANGE_SOURCE = "2e7c19fe017e29b15c6e2f0ba9ccb84cadcdc6ff"
 HOLONET_HISTORY_RANGE_CONTRACT = "8a29d33611497ab44a32b06e38cfd78f085b2c93"
 # Fixed runtime paths: the Jellystat key is its own credential file, never the
@@ -268,7 +270,7 @@ def observer_config(config):
 def holonet_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
                   "credential_file", "policy_revision", "policy", "library_guids"),
-         ("recommendations", "playlist_operator", "playback"))
+         ("recommendations", "playlist_operator", "playback", "janitor"))
     require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
             "HoloNet resource is fixed")
     trust(config, "resource", "issuer", ha_canonical_url)
@@ -285,7 +287,7 @@ def holonet_config(config):
     playback = config.get("playback") is not None
     require(policy["Server"] == config["server_id"], "policy server must be the configured server")
     if not playback:
-        require(policy["Actions"] == ["catalog.read"] and policy["HistoryUsers"] == [],
+        require(policy["Actions"] == ["catalog.read"] + (CUSTODY_ACTIONS if "janitor" in config else []) and policy["HistoryUsers"] == [],
                 "initial HoloNet release is catalog-only")
     libraries = records(policy["Libraries"], 1, 1)
     users = records(policy["CatalogUsers"], 1, 1)
@@ -303,6 +305,8 @@ def holonet_config(config):
         holonet_recommendations(config["recommendations"], libraries, users)
     if config.get("playlist_operator") is not None:
         holonet_playlist_operator(config, libraries, users)
+    if "janitor" in config:
+        holonet_janitor(config)
     if playback:
         holonet_playback(config)
         return {"backend.json", HOLONET_PLAYBACK_CREDENTIAL}
@@ -336,7 +340,7 @@ def holonet_playback(config):
     except ValueError:
         require(False, "credential expiry must be a valid UTC time")
     policy = config["policy"]
-    require(policy["Actions"] == ["catalog.read", "history.read"],
+    require(policy["Actions"] == ["catalog.read", "history.read"] + (CUSTODY_ACTIONS if "janitor" in config else []),
             "playback adds only history.read to the catalog ceiling")
     history = records(policy["HistoryUsers"], 1, 16)
     require(all(isinstance(u, str) for u in history), "invalid history user")
@@ -421,8 +425,84 @@ def holonet_recommendations(value, libraries, users):
         require(row_id(home["anchor_id"]) in baseline, "placement anchor must be a baseline row")
 
 
+CUSTODY_ACTIONS = ["janitor.importers.read", "janitor.custody.read"]
+CUSTODY_DESCRIPTOR = "/etc/holonet-playlists/radarr.json"
+
+
+def holonet_janitor(config):
+    value = config["janitor"]
+    operator = config.get("playlist_operator")
+    keys(value, ("custody_source", "importer_source", "state_directory", "subject",
+                 "library", "protected_users", "recipients", "revision"))
+    require(operator is not None and value["custody_source"] == "arr_custody_v1"
+            and value["importer_source"] == "arr_inventory_v2"
+            and value["state_directory"] == "/var/lib/holonet/janitor"
+            and value["subject"] == operator["subject"]
+            and value["library"] == operator["library"]
+            and value["revision"] == config["policy_revision"],
+            "custody requires its fixed independent binding and journal")
+    for name in ("protected_users", "recipients"):
+        users = records(value[name], 1, 16)
+        require(all(isinstance(u, str) for u in users), "invalid custody cohort")
+        unique(users)
+        require(set(users) == set(operator["recipients"]), "custody cohort must match operator")
+
+
+def custody_install_plan(value):
+    """Root-owned metadata only. Never copy or inspect the existing XML key."""
+    config = value["config"]
+    require(("janitor" in config) == ("custody" in value), "custody inputs must be paired")
+    if "custody" not in value:
+        return None
+    require(value["service"] == "holonet", "custody is HoloNet only")
+    holonet_janitor(config)
+    data = value["custody"]
+    keys(data, ("descriptor", "roots", "recycle"))
+    desc = data["descriptor"]
+    keys(desc, ("version", "backend", "resource_id", "origin", "expected_version",
+                "app_config_file", "app_config_owner_uid", "app_config_read_gid"))
+    integer(desc["version"], 1, 1)
+    require(desc["backend"] == "radarr" and desc["expected_version"] == "6.4.4.10685"
+            and desc["app_config_file"] == "/mnt/docker-data/swarm/radarr-movie/config/config.xml",
+            "only the fixed Radarr instance is qualified for custody enrollment")
+    integer(desc["app_config_owner_uid"], 1002, 1002)
+    integer(desc["app_config_read_gid"], 988, 988)
+    match(desc["resource_id"], r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+    origin = url(desc["origin"], schemes=("https", "http"), origin=True)
+    require(origin.scheme == "https" or desc["origin"] == "http://127.0.0.1:7878",
+            "Radarr HTTP origin must be the fixed loopback listener")
+    roots = records(data["roots"], 1, 1)
+    require(roots[0] == {"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"}
+            or roots[0] == {"app_prefix": "/mnt/shared/media/movies",
+                            "host_prefix": "/mnt/shared/media/movies"},
+            "custody media mapping must be the existing Movies root")
+    mappings = [*roots, data["recycle"]]
+    for mapping in mappings:
+        keys(mapping, ("app_prefix", "host_prefix"))
+        for key in ("app_prefix", "host_prefix"):
+            path = mapping[key]
+            require(isinstance(path, str) and 1 < len(path.encode("utf-8")) <= 4096
+                    and path.startswith("/") and not path.startswith("//")
+                    and str(PurePosixPath(path)) == path
+                    and all(part not in (".", "..") for part in path.split("/")[1:]),
+                    "invalid normalized custody mapping")
+        require(mapping["host_prefix"].startswith("/mnt/shared/"),
+                "custody host roots must be on the existing shared mount")
+    for key in ("app_prefix", "host_prefix"):
+        for i, left in enumerate(mappings):
+            a = left[key]
+            require(not any(a == right[key] or a.startswith(right[key] + "/")
+                            or right[key].startswith(a + "/") for right in mappings[i + 1:]),
+                    "custody mappings must be disjoint")
+    return {"path": CUSTODY_DESCRIPTOR, "descriptor": dict(desc),
+            "importers": {"target_library": config["janitor"]["library"],
+                          "revision": config["janitor"]["revision"],
+                          "backends": {"radarr": CUSTODY_DESCRIPTOR}},
+            "custody": {"backends": {"radarr": {"roots": roots, "recycle": data["recycle"]}}}}
+
+
 def endpoint_contract(value):
-    keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"))
+    keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"), ("custody",))
     service = value["service"]
     require(service in SERVICES, "unregistered fixed service package")
     integer(value["uid"], 100, 999)
@@ -437,7 +517,10 @@ def endpoint_contract(value):
     _, contract = SERVICES[service]
     if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
         contract = HOLONET_WRITER_CONTRACT
-    history_range_build = (service == "holonet" and HOLONET_HISTORY_RANGE_SOURCE is not None
+    custody_build = (service == "holonet" and HOLONET_CUSTODY_SOURCE is not None
+                     and HOLONET_CUSTODY_CONTRACT is not None
+                     and artifact["source_revision"] == HOLONET_CUSTODY_SOURCE)
+    history_range_build = custody_build or (service == "holonet" and HOLONET_HISTORY_RANGE_SOURCE is not None
                            and HOLONET_HISTORY_RANGE_CONTRACT is not None
                            and artifact["source_revision"] == HOLONET_HISTORY_RANGE_SOURCE)
     series_build = history_range_build or (service == "holonet" and HOLONET_SERIES_SOURCE is not None
@@ -449,7 +532,9 @@ def endpoint_contract(value):
     operator_build = playback_build or (
         service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
         and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
-    if history_range_build:
+    if custody_build:
+        contract = HOLONET_CUSTODY_CONTRACT
+    elif history_range_build:
         contract = HOLONET_HISTORY_RANGE_CONTRACT
     elif series_build:
         contract = HOLONET_SERIES_CONTRACT
@@ -477,7 +562,10 @@ def endpoint_contract(value):
                 "unaccepted HoloNet source revision")
         require("recommendations" not in value["config"] or artifact["source_revision"] == HOLONET_WRITER_SOURCE,
                 "writer configuration requires its exact reviewed artifact")
+        require("janitor" not in value["config"] or custody_build,
+                "custody configuration requires its exact reviewed artifact")
         expected = holonet_config(value["config"])
+        custody_install_plan(value)
         # Older binaries refuse the unknown key, so even null needs the new build.
         require("playlist_operator" not in value["config"] or operator_build,
                 "playlist_operator requires its exact reviewed artifact")
@@ -492,6 +580,7 @@ def endpoint_contract(value):
             require(value["uid"] == OPERATOR_UID and value["gid"] == OPERATOR_GID,
                     "management requires the homelab holonet identity")
     else:
+        require("custody" not in value, "custody is HoloNet only")
         expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
                     else observer_config(value["config"]))
     names = []
@@ -533,7 +622,9 @@ def playlist_operator_plan(value):
     release = operator_release()
     selected = sorted(operator["recipients"])
     config = value["config"]
+    custody = custody_install_plan(value)
     return {
+        **({"custody_descriptor": custody} if custody else {}),
         "selected": True,
         "release": release,
         "release_directory": OPERATOR_RELEASES + "/" + release,
@@ -542,6 +633,8 @@ def playlist_operator_plan(value):
         "configs": [OPERATOR_RECIPIENTS[r] for r in selected],
         "journals": [str(PurePosixPath(OPERATOR_RECIPIENTS[r]).parent / "journal") for r in selected],
         "policy": {
+            **({"janitor_importers": custody["importers"],
+                "janitor_custody": custody["custody"]} if custody else {}),
             "version": 1, "enabled": True,
             "peer": {"uid": value["uid"], "gid": value["gid"]},
             "caller": {"issuer": config["issuer"], "subject": operator["subject"],

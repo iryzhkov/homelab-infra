@@ -89,7 +89,7 @@ def installed_credentials(config, uid, names):
 
 
 def endpoint(service, uid, gid, sha256, credential_names, journal=False,
-             reuse_installed_credentials=False):
+             reuse_installed_credentials=False, janitor=False):
     dedicated(service, uid, gid)
     inspect("/etc/ssl/certs/ca-certificates.crt", {0}, exact_mode=0o644, required=True)
     root = PACKAGE_ROOT / service
@@ -121,6 +121,9 @@ def endpoint(service, uid, gid, sha256, credential_names, journal=False,
     if journal:
         need(service == "holonet")
         recommendation_journal(uid, gid)
+    if janitor:
+        need(service == 'holonet')
+        janitor_journal(uid, gid)
 
 
 def recommendation_journal(uid, gid):
@@ -130,6 +133,16 @@ def recommendation_journal(uid, gid):
     current = inspect(JOURNAL_ROOT / "recommendations", {0, uid}, directory=True)
     if current:
         need(current.st_uid == uid and current.st_gid == gid and stat.S_IMODE(current.st_mode) == 0o700)
+
+
+def janitor_journal(uid, gid):
+    parent = inspect(JOURNAL_ROOT, {0}, directory=True)
+    if parent:
+        need(stat.S_IMODE(parent.st_mode) == 0o755 and parent.st_gid == 0)
+    current = inspect(JOURNAL_ROOT / "janitor", {0, uid}, directory=True)
+    if current:
+        need(current.st_uid == uid and current.st_gid == gid
+             and stat.S_IMODE(current.st_mode) == 0o700)
 
 
 OPERATOR_PACKAGE = Path("/opt/holonet-playlists")
@@ -229,6 +242,7 @@ def playlist_operator(gid, selected, release=None, modules=None, journals=(), co
     if info:
         need(stat.S_IMODE(info.st_mode) == 0o700)
         inspect(OPERATOR_POLICY / "policy.json", roots(), exact_mode=0o600)
+    inspect(OPERATOR_POLICY / "radarr.json", roots(), exact_mode=0o600)
     need(isinstance(journals, list) and isinstance(configs, list)
          and 1 <= len(journals) == len(configs) <= 16 and len(set(journals)) == len(journals))
     for journal, config in zip(map(Path, journals), map(Path, configs)):
@@ -355,6 +369,7 @@ def main():
         "sha256": {"type": "str"},
         "credential_names": {"type": "list", "elements": "str", "default": []},
         "journal": {"type": "bool", "default": False},
+        "janitor": {"type": "bool", "default": False},
         "reuse_installed_credentials": {"type": "bool", "default": False},
         "source": {"type": "path", "no_log": True},
         "release": {"type": "str"},
@@ -391,7 +406,7 @@ def main():
                 need(p["uid"] is not None and 100 <= p["uid"] <= 999
                      and p["gid"] is not None and 100 <= p["gid"] <= 999)
                 endpoint(p["service"], p["uid"], p["gid"], p["sha256"], p["credential_names"], p["journal"],
-                         p["reuse_installed_credentials"])
+                         p["reuse_installed_credentials"], p["janitor"])
             elif p["kind"] == "binary":
                 binary(p["service"], p["sha256"])
             else:
