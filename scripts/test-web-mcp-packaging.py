@@ -1237,6 +1237,17 @@ class PackagingTest(unittest.TestCase):
             self.assertEqual(contract.endpoint_contract(operator_fixture()), operator_fixture())
 
     def test_playback_history_range_ceiling(self):
+        actual = series_fixture()
+        actual["artifact"].update(source_revision=contract.HOLONET_HISTORY_RANGE_SOURCE,
+                                  contract_revision=contract.HOLONET_HISTORY_RANGE_CONTRACT)
+        actual["config"]["playback"]["history_max_lookback_days"] = 365
+        self.assertEqual(contract.endpoint_contract(actual), actual)
+        wrong = copy.deepcopy(actual)
+        wrong["artifact"]["contract_revision"] = "0" * 40
+        self.rejected(wrong)
+        with mock.patch.multiple(contract, HOLONET_HISTORY_RANGE_SOURCE=None,
+                                 HOLONET_HISTORY_RANGE_CONTRACT=None):
+            self.rejected(actual)
         with operator_pins(), playback_pins(), series_pins():
             for make in (playback_fixture, series_fixture):
                 for days in (0, 1, 365):

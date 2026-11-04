@@ -317,8 +317,10 @@ The playback object has three required fields and one optional history ceiling:
   `holonet_catalog_identity_expires` after any renewal.
 
 Optional `history_max_lookback_days` is accepted only from the exact pinned
-history-range build and is an integer from 0 to 3650. Pending release pins are
-None, so current playback and Series builds refuse the key even at 0. On a
+history-range build and is an integer from 0 to 3650. The source pin is Go
+`2e7c19f` with compatible worker/interface `8a29d33`. Older playback and Series
+builds refuse the key even at 0. Final review, CI and exact artifact verification
+still gate deployment; this source binding changes no running configuration. On a
 compatible build, omitted/0 keeps the separate tool disabled; 365 permits a
 one-year bounded read. Deploy the compatible binary before enabling this field. Existing
 playback_statistics stays fixed at fourteen days. The oldest-row timestamp probe

@@ -40,9 +40,10 @@ HOLONET_PLAYBACK_CONTRACT = "cfea03b6e99e8b501ce5b6f1abbe0d32545ecd3e"
 # Frozen Series source and compatible worker fixture for integration review.
 HOLONET_SERIES_SOURCE = "9efca7904b6b142c765bda4574185615fd374518"
 HOLONET_SERIES_CONTRACT = "748e89df0c765ba82133d9b45b8be00e76925128"
-# Pending release binding; do not admit richer config on older binaries.
-HOLONET_HISTORY_RANGE_SOURCE = None
-HOLONET_HISTORY_RANGE_CONTRACT = None
+# Exact history-capable client and compatible unchanged worker/interface.
+# CI, artifact checksum and final release acceptance still gate deployment.
+HOLONET_HISTORY_RANGE_SOURCE = "2e7c19fe017e29b15c6e2f0ba9ccb84cadcdc6ff"
+HOLONET_HISTORY_RANGE_CONTRACT = "8a29d33611497ab44a32b06e38cfd78f085b2c93"
 # Fixed runtime paths: the Jellystat key is its own credential file, never the
 # Emby backend file, and the only Jellystat URL besides an HTTPS origin is the
 # existing host-local listener.
