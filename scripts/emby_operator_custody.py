@@ -196,8 +196,10 @@ class CustodyAdapter(ImporterInventoryAdapter):
     def observe(self, binding):
         self._ready()
         try:
+            options = ({'read_gid': self._config['app_config_read_gid']}
+                       if 'app_config_read_gid' in self._config else {})
             self._key = existing_importer_key(self._config['app_config_file'],
-                                             self._config['app_config_owner_uid'])
+                                             self._config['app_config_owner_uid'], **options)
             status = self._get(self.routes[0])
             require(type(status) is dict and
                     status.get('appName') == self.value['backend'].capitalize() and

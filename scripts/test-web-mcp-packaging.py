@@ -756,6 +756,43 @@ class PackagingTest(unittest.TestCase):
                     self.assertIn("changed=0", result.stdout)
                 self.assertFalse((base / "missing").exists())
 
+    def test_custody_group_read_is_explicit_and_worker_only(self):
+        defaults = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/defaults/main.yml").read_text())
+        self.assertIs(defaults["web_mcp_custody_group_read"], False)
+        template = (ROOT / "roles/web_mcp_endpoint/templates/holonet-playlists-worker@.service.j2").read_text()
+        from jinja2 import Environment
+        env = Environment()
+        values = {"web_mcp_operator": {"release_directory": "/synthetic", "journals": []}}
+        for enabled in (None, False, True):
+            ctx = dict(values)
+            if enabled is not None:
+                ctx["web_mcp_custody_group_read"] = enabled
+            unit = env.from_string(template).render(ctx)
+            self.assertEqual("SupplementaryGroups=988" in unit, enabled is True)
+            self.assertIn("CapabilityBoundingSet=\n", unit)
+            self.assertIn("ProtectSystem=strict", unit)
+        tasks = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text())[0]["block"]
+        task = next(t for t in tasks if t["name"] == "Require an explicit HoloNet operator opt-in for custody group read")
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            inventory = base / "inventory.yml"
+            inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
+            playbook = base / "group.yml"
+            procenv = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                           ANSIBLE_LOCAL_TEMP=str(base / "local"),
+                           ANSIBLE_REMOTE_TEMP=str(base / "remote"))
+            for enabled, service, operator, ok in (
+                (True, "holonet", {}, True), (False, "ha-mcp", None, True),
+                ("true", "holonet", {}, False), (True, "ha-mcp", {}, False),
+                (True, "holonet", None, False)):
+                playbook.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                    "vars": {"web_mcp_custody_group_read": enabled,
+                             "web_mcp": {"service": service, "config": {"playlist_operator": operator}}},
+                    "tasks": [task]}]))
+                result = subprocess.run(["ansible-playbook", "-i", str(inventory), str(playbook)],
+                    env=procenv, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertEqual(result.returncode == 0, ok, result.stdout)
+
     def test_static_binary_gate_refuses_dynamic_or_wrong_checksum(self):
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as scratch:
             base = Path(scratch)
