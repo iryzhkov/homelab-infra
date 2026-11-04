@@ -287,6 +287,9 @@ HOLONET_WRITER_ACTIONS = ("catalog.read", "playlist.read", "playlist.manage",
 # Optional scoped playback read, appended to an exact writer tuple only. It needs
 # no new scope: the writer's three-scope request already selects its grant.
 HOLONET_HISTORY_ACTION = "history.read"
+HOLONET_JANITOR_SCOPES = ("holonet.read", "holonet.janitor")
+HOLONET_JANITOR_ACTIONS = ("janitor.importers.read", "janitor.custody.read")
+HOLONET_EXTENDED_SCOPES = HOLONET_WRITER_SCOPES + ("holonet.janitor",)
 
 
 def _holonet_grant(item, name):
@@ -306,6 +309,14 @@ def _holonet_grant(item, name):
         _refuse(name + " Series writer requires the existing Movies library")
     grant["holonet_catalog_users"] = _bounded_grants(grant["holonet_catalog_users"], name + " users",
                                                     re.compile(r"[0-9a-f]{32}\Z"), 1, 1)
+    if "holonet_janitor" in item:
+        janitor = _keys(item["holonet_janitor"], {"library", "actions"}, name + " janitor read grant")
+        if (grant["holonet_namespace"] != "managed-recommendations"
+                or grant["holonet_actions"] == ["catalog.read"]
+                or janitor["library"] != "3" or "3" not in grant["holonet_libraries"]
+                or janitor["actions"] != list(HOLONET_JANITOR_ACTIONS)):
+            _refuse(name + " janitor requires the exact existing Movies writer read grant")
+        grant["holonet_janitor"] = {"library": "3", "actions": list(HOLONET_JANITOR_ACTIONS)}
     if grant["holonet_actions"] == ["catalog.read"]:
         # Catalog readers never carry history, targets or userdata.
         if grant["holonet_history_users"] != []:
@@ -347,6 +358,25 @@ def _bounded_expression(access, service, scope=None):
         "    return {}",
     ]
     if service == "holonet":
+        if "holonet.janitor" in access["scope_mappings"]:
+            # Match the complete stored attribute above, then project one flat
+            # purpose grant. Never emit the nested declaration as a JWT claim.
+            lines += [
+                "requested = token.scope",
+                f"if (isinstance(requested, list) and len(requested) == 2",
+                f"        and set(requested) == set({list(HOLONET_JANITOR_SCOPES)!r})):",
+                "    janitor = grant.get('holonet_janitor')",
+                f"    if not janitor or {scope!r} != sorted(requested)[0]:",
+                "        return {}",
+                f"    return {{'aud': {access['resource']!r},",
+                "            'holonet_server': grant['holonet_server'],",
+                "            'holonet_libraries': [janitor['library']],",
+                "            'holonet_catalog_users': [], 'holonet_history_users': [],",
+                "            'holonet_target_users': [],",
+                "            'holonet_actions': list(janitor['actions']),",
+                "            'holonet_namespace': 'managed-janitor'}",
+                "grant = {key: value for key, value in grant.items() if key != 'holonet_janitor'}",
+            ]
         if access["scope"] == "holonet.read":
             # Preserve the historical catalog mapping byte-for-byte.
             lines += [
@@ -420,7 +450,8 @@ def _bounded_expression(access, service, scope=None):
 
 
 SERVICES = {
-    "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS, "scope": "holonet.read",
+    "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS,
+                "optional_account_keys": {"holonet_janitor"}, "scope": "holonet.read",
                 "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},
     "jocasta": SERVICE,
     "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "optional_account_keys": {"ov_actions", "ov_personal"},
@@ -449,7 +480,7 @@ def _application(raw, service):
         if service == "ha":
             scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read")
         elif service == "holonet":
-            scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES))
+            scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES))
         elif service == "ov":
             # ov.read first, then any optional families in canonical order.
             optional = OV_SCOPES[1:] + OV_PERSONAL_SCOPES
@@ -560,8 +591,10 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         name = f"identity {host}/{profile}"
         grant, grant_attributes = profile_spec["grant"](item, name)
         if (service == "holonet" and grant["holonet_actions"] != ["catalog.read"]
-                and access["scope"] != " ".join(HOLONET_WRITER_SCOPES)):
-            _refuse(name + " managed recommendations require the explicit three-scope application")
+                and access["scope"] not in (" ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES))):
+            _refuse(name + " managed recommendations require the explicit writer application")
+        if service == "holonet" and "holonet_janitor" in grant and access["scope"] != " ".join(HOLONET_EXTENDED_SCOPES):
+            _refuse(name + " janitor requires its explicit scope on the existing application")
         if service == "ha":
             scopes = access["scope"].split(" ")
             for action in grant["ha_actions"]:
@@ -943,6 +976,18 @@ def _service_refusals(spec, owned, results, applications):
     found = _found(results, problems)
     owned_state = {(k, i) for k, i, state in owned if state == "present"}
     access = spec["access"]
+    if access["service"] == "holonet":
+        for identity in spec["identities"]:
+            if "holonet_janitor" not in identity["grant"]:
+                continue
+            user_key, token_key = ("user", identity["username"]), ("token", identity["token"])
+            token = found.get(token_key)
+            if (identity["state"] != "present" or user_key not in owned_state
+                    or token_key not in owned_state or not isinstance(found.get(user_key), dict)
+                    or not isinstance(token, dict)):
+                problems.append("janitor enrollment requires an existing owned writer account and token")
+            elif not _same_time(token.get("expires"), identity["expires"]):
+                problems.append("janitor enrollment must preserve the existing token expiry")
     clients = found.get(("client_id", access["client_id"]))
     if isinstance(clients, list) and any(row.get("name") != access["name"] for row in clients):
         problems.append(f"client_id {access['client_id']} belongs to another provider")
