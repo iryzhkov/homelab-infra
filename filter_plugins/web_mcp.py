@@ -287,7 +287,7 @@ def holonet_config(config):
     playback = config.get("playback") is not None
     require(policy["Server"] == config["server_id"], "policy server must be the configured server")
     if not playback:
-        require(policy["Actions"] == ["catalog.read"] + (CUSTODY_ACTIONS if "janitor" in config else []) and policy["HistoryUsers"] == [],
+        require(policy["Actions"] == ["catalog.read"] + janitor_read_actions(config) and policy["HistoryUsers"] == [],
                 "initial HoloNet release is catalog-only")
     libraries = records(policy["Libraries"], 1, 1)
     users = records(policy["CatalogUsers"], 1, 1)
@@ -340,7 +340,7 @@ def holonet_playback(config):
     except ValueError:
         require(False, "credential expiry must be a valid UTC time")
     policy = config["policy"]
-    require(policy["Actions"] == ["catalog.read", "history.read"] + (CUSTODY_ACTIONS if "janitor" in config else []),
+    require(policy["Actions"] == ["catalog.read", "history.read"] + janitor_read_actions(config),
             "playback adds only history.read to the catalog ceiling")
     history = records(policy["HistoryUsers"], 1, 16)
     require(all(isinstance(u, str) for u in history), "invalid history user")
@@ -429,12 +429,19 @@ CUSTODY_ACTIONS = ["janitor.importers.read", "janitor.custody.read"]
 CUSTODY_DESCRIPTOR = "/etc/holonet-playlists/radarr.json"
 
 
+def janitor_read_actions(config):
+    if "janitor" not in config:
+        return []
+    value = config["janitor"]
+    return CUSTODY_ACTIONS if isinstance(value, dict) and "custody_source" in value else CUSTODY_ACTIONS[:1]
+
+
 def holonet_janitor(config):
     value = config["janitor"]
     operator = config.get("playlist_operator")
-    keys(value, ("custody_source", "importer_source", "state_directory", "subject",
-                 "library", "protected_users", "recipients", "revision"))
-    require(operator is not None and value["custody_source"] == "arr_custody_v1"
+    keys(value, ("importer_source", "state_directory", "subject",
+                 "library", "protected_users", "recipients", "revision"), ("custody_source",))
+    require(operator is not None and ("custody_source" not in value or value["custody_source"] == "arr_custody_v1")
             and value["importer_source"] == "arr_inventory_v2"
             and value["state_directory"] == "/var/lib/holonet/janitor"
             and value["subject"] == operator["subject"]
@@ -457,7 +464,10 @@ def custody_install_plan(value):
     require(value["service"] == "holonet", "custody is HoloNet only")
     holonet_janitor(config)
     data = value["custody"]
-    keys(data, ("descriptor", "roots", "recycle"))
+    keys(data, ("descriptor",), ("roots", "recycle"))
+    full_custody = "custody_source" in config["janitor"]
+    require(("roots" in data) == ("recycle" in data) == full_custody,
+            "filesystem mappings require explicit custody opt-in")
     desc = data["descriptor"]
     keys(desc, ("version", "backend", "resource_id", "origin", "expected_version",
                 "app_config_file", "app_config_owner_uid", "app_config_read_gid"))
@@ -471,6 +481,12 @@ def custody_install_plan(value):
     origin = url(desc["origin"], schemes=("https", "http"), origin=True)
     require(origin.scheme == "https" or desc["origin"] == "http://127.0.0.1:7878",
             "Radarr HTTP origin must be the fixed loopback listener")
+    plan = {"path": CUSTODY_DESCRIPTOR, "descriptor": dict(desc),
+            "importers": {"target_library": config["janitor"]["library"],
+                          "revision": config["janitor"]["revision"],
+                          "backends": {"radarr": CUSTODY_DESCRIPTOR}}}
+    if not full_custody:
+        return plan
     roots = records(data["roots"], 1, 1)
     require(roots[0] == {"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"}
             or roots[0] == {"app_prefix": "/mnt/shared/media/movies",
@@ -494,11 +510,7 @@ def custody_install_plan(value):
             require(not any(a == right[key] or a.startswith(right[key] + "/")
                             or right[key].startswith(a + "/") for right in mappings[i + 1:]),
                     "custody mappings must be disjoint")
-    return {"path": CUSTODY_DESCRIPTOR, "descriptor": dict(desc),
-            "importers": {"target_library": config["janitor"]["library"],
-                          "revision": config["janitor"]["revision"],
-                          "backends": {"radarr": CUSTODY_DESCRIPTOR}},
-            "custody": {"backends": {"radarr": {"roots": roots, "recycle": data["recycle"]}}}}
+    return {**plan, "custody": {"backends": {"radarr": {"roots": roots, "recycle": data["recycle"]}}}}
 
 
 def endpoint_contract(value):
@@ -633,8 +645,8 @@ def playlist_operator_plan(value):
         "configs": [OPERATOR_RECIPIENTS[r] for r in selected],
         "journals": [str(PurePosixPath(OPERATOR_RECIPIENTS[r]).parent / "journal") for r in selected],
         "policy": {
-            **({"janitor_importers": custody["importers"],
-                "janitor_custody": custody["custody"]} if custody else {}),
+            **({"janitor_importers": custody["importers"]} if custody else {}),
+            **({"janitor_custody": custody["custody"]} if custody and "custody" in custody else {}),
             "version": 1, "enabled": True,
             "peer": {"uid": value["uid"], "gid": value["gid"]},
             "caller": {"issuer": config["issuer"], "subject": operator["subject"],

@@ -131,6 +131,8 @@ holonet_catalog_interactive_identity:
 # holonet_history_users subset of its target users in the protected input.
 # The readers above always keep empty history and catalog.read alone.
 # Separate writer-only TV/Anime opt-in. Readers remain Movies-only.
+# Add a separate read-only purpose grant to the existing writer only.
+holonet_catalog_janitor_enabled: false
 holonet_catalog_series_enabled: false
 holonet_catalog_playback_enabled: false
 holonet_catalog_recommendations_enabled: false

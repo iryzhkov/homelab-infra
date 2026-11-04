@@ -1,0 +1,19 @@
+# Existing-account janitor read enrollment
+
+Source support, off by default. Igor approved only janitor.importers.read and janitor.custody.read under managed-janitor on the existing HoloNet identity, plus group-read setup and a bounded read-only canary. He confirmed Radarr recycle is not configured. No live enrollment, credentials, permission or media settings changed in this source slice.
+
+The existing recommendation account may carry optional holonet_janitor metadata with exactly library "3" and actions ["janitor.importers.read","janitor.custody.read"]. Only an existing managed-recommendations writer already holding library3 can be selected. Catalog readers cannot inherit this grant. Account name, profile, generation, expiry, token key, secret path, group and application identity stay unchanged.
+
+The existing application may explicitly add holonet.janitor to its three writer scopes. An exact token request for holonet.read plus holonet.janitor projects a flat managed-janitor grant with only these two actions, the existing server, Movies3, and empty catalog/history/target arrays. The private nested declaration never becomes an unknown holonet_* JWT claim. Every scope mapper checks complete stored grant equality and the existing user/group. One elected mapper emits the projection once, avoiding Authentik array deepmerge duplication. Mixed, extra, missing and duplicate scopes refuse.
+
+The three existing writer scopes continue to project the old recommendation/history grant without the nested declaration. Ordinary catalog requests remain unchanged. When no new scope or nested grant is declared, old source outputs remain unchanged. The source default holonet_catalog_janitor_enabled is false.
+
+Ownership preflight additionally requires the selected writer user and its current generation token to be present and recorded as owned, with unchanged expiry. The janitor opt-in cannot create an account/token, rotate generation or renew expiry as part of enrollment.
+
+The owning authentik-holonet-catalog entrypoint validates its existing account cohort and literal application identity before adding the nested grant to only the existing final writer account. The explicit flag requires the writer and strict boolean true. Effective grant/application facts are checked again before credentials. The existing-only ownership, provider/application binding, public content baseline and destination gates remain. No new account or credential delivery is introduced; require a fresh baseline before applying the change.
+
+Revocation sets the grant flag false while retaining the explicit four-scope application declaration in protected operator inputs. The owned holonet.janitor mapping remains present but emits no janitor claims when the account grant is absent. This respects the existing role's refusal to silently drop owned objects. Do not attempt implicit mapping deletion or replace that safeguard. Existing short-lived tokens still need expiry/revocation consideration; source de-enrollment is not instantaneous token invalidation.
+
+Importer-only runtime bootstrap omits custody_source and all roots/recycle mappings, rendering only the importer ceiling. It does not register custody hashing and never authorizes removal. Full custody still needs an actual configured recycle path and cleanup retention evidence, which do not exist today.
+
+Native selection remains a separate source integration prerequisite. The installed closed helper supports catalog/writer modes; it cannot be invoked manually, given model-visible headers, or supplied arbitrary scope overrides. A reviewed fixed janitor mode and native registration must reuse the existing writer credential in place and validate the exact projected signed contract before any live canary. No copied key, token cache, custom refresher or generic claims selector is proposed.

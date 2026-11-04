@@ -145,7 +145,7 @@
     - name: Select only the separate HoloNet recommendation identity and full scope tuple
       ansible.builtin.set_fact:
         authentik_machine_identities: "{{ authentik_machine_identities + [holonet_catalog_recommendations_identity] }}"
-        authentik_machine_services: "{{ authentik_machine_services | combine({'holonet': authentik_machine_services.holonet | combine({'scope': 'holonet.read holonet.curate holonet.home'})}) }}"
+        authentik_machine_services: "{{ authentik_machine_services | combine({'holonet': authentik_machine_services.holonet | combine({'scope': ('holonet.read holonet.curate holonet.home holonet.janitor' if holonet_catalog_janitor_enabled | bool else 'holonet.read holonet.curate holonet.home')})}) }}"
       when: holonet_catalog_recommendations_enabled | bool
 
     # The default keeps 2026-11-20; any other value is an explicit renewal of
@@ -197,13 +197,17 @@
             'content_sha256': 'aef30eb3096776f9edddff5d00cb3eb3aac7d1128b05a730aa138407bc577f58'}
           - authentik_machine_services.keys() | list == ['holonet']
           - >-
-            (authentik_machine_services.holonet | dict2items | rejectattr('key', 'in', ['issuer', 'jwks_url'])
+            (authentik_machine_services.holonet | dict2items | rejectattr('key', 'in', ['issuer', 'jwks_url', 'scope'])
             | items2dict) == {'state': 'present', 'slug': 'chaldea-holonet',
             'name': 'Chaldea HoloNet catalog access', 'group': 'chaldea-holonet-machine-identities',
             'client_id': 'chaldea-holonet-machine', 'resource': 'https://media.mcp.ryzhkov.dev/mcp',
             'signing_key': '8bbd6516-af33-4e64-a73b-caa39e692c29',
-            'scope': ('holonet.read holonet.curate holonet.home' if holonet_catalog_recommendations_enabled | bool else 'holonet.read'),
             'token_seconds': 300}
+          - >-
+            authentik_machine_services.holonet.scope in
+            (['holonet.read holonet.curate holonet.home',
+              'holonet.read holonet.curate holonet.home holonet.janitor']
+             if holonet_catalog_recommendations_enabled | bool else ['holonet.read'])
           - >-
             authentik_machine_identities | map(attribute='profile') | list ==
             (['holonet-movies-catalog', 'holonet-movies-catalog-claude'] +
@@ -279,6 +283,32 @@
 
     # The historical and ordinary-reader anchors predate the writer; never
     # derive this change's baseline from them.
+    - name: Require an explicit existing-writer janitor read enrollment
+      ansible.builtin.assert:
+        that:
+          - holonet_catalog_janitor_enabled is boolean
+          - not holonet_catalog_janitor_enabled or (holonet_catalog_recommendations_enabled | bool)
+        quiet: true
+
+    # Run after the unchanged literal identity guards. Only an extra nested
+    # purpose grant and one scope mapping may change; never a new account.
+    - name: Add only janitor reads to the existing owned writer identity
+      ansible.builtin.set_fact:
+        authentik_machine_identities: >-
+          {{ authentik_machine_identities[:-1] +
+             [authentik_machine_identities[-1] | combine({'holonet_janitor':
+               {'library': '3', 'actions': ['janitor.importers.read', 'janitor.custody.read']}})] }}
+      when: holonet_catalog_janitor_enabled | bool
+
+    - name: Refuse an overridden janitor grant or application before credentials
+      ansible.builtin.assert:
+        that:
+          - >-
+            authentik_machine_identities[-1].holonet_janitor == {'library': '3', 'actions': ['janitor.importers.read', 'janitor.custody.read']}
+          - authentik_machine_services.holonet.scope == 'holonet.read holonet.curate holonet.home holonet.janitor'
+        quiet: true
+      when: holonet_catalog_janitor_enabled | bool
+
     - name: Require a fresh public baseline for renewal or scoped playback
       ansible.builtin.assert:
         that:
@@ -288,7 +318,7 @@
         fail_msg: Renewal and scoped playback need an explicit fresh public baseline of the current four-account content.
         quiet: true
       when: >-
-        (holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
+        (holonet_catalog_janitor_enabled | bool or holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
         and (not ansible_check_mode or holonet_catalog_online_check | default(false) | bool)
 
     - name: Require both destinations bound before any host is touched
