@@ -80,7 +80,16 @@ def credential_name_allowed(service, name):
     return name.startswith("gatus-") and name.endswith(".json") and "/" not in name
 
 
-def endpoint(service, uid, gid, sha256, credential_names, journal=False):
+def installed_credentials(config, uid, names):
+    """Require exact existing custody using metadata only; never open key files."""
+    need(set(names) == {"backend.json", "jellystat.json"} and len(names) == 2)
+    for name in names:
+        result = inspect(Path(config) / name, {0, uid}, exact_mode=0o600, required=True)
+        need(result is not None and result.st_uid == uid)
+
+
+def endpoint(service, uid, gid, sha256, credential_names, journal=False,
+             reuse_installed_credentials=False):
     dedicated(service, uid, gid)
     inspect("/etc/ssl/certs/ca-certificates.crt", {0}, exact_mode=0o644, required=True)
     root = PACKAGE_ROOT / service
@@ -93,6 +102,14 @@ def endpoint(service, uid, gid, sha256, credential_names, journal=False):
     else:
         # Never adopt an existing user's directory, unit or endpoint implicitly.
         need(not root.exists() and not config.exists() and not unit.exists())
+    if reuse_installed_credentials:
+        need(service == "holonet" and uid == 940 and gid == 940 and found is not None)
+        need(optional_account(pwd.getpwnam, service) is not None)
+        need(optional_account(grp.getgrnam, service) is not None)
+        inspect(unit, {0}, exact_mode=0o644, required=True)
+        current = inspect(config / "config.json", {0, uid}, exact_mode=0o600, required=True)
+        need(current is not None and current.st_uid == uid)
+        installed_credentials(config, uid, credential_names)
     for path in (root, root / "releases", root / "releases" / sha256, config):
         inspect(path, {0}, directory=True)
     inspect(unit, {0}, exact_mode=0o644)
@@ -337,6 +354,7 @@ def main():
         "sha256": {"type": "str"},
         "credential_names": {"type": "list", "elements": "str", "default": []},
         "journal": {"type": "bool", "default": False},
+        "reuse_installed_credentials": {"type": "bool", "default": False},
         "source": {"type": "path", "no_log": True},
         "release": {"type": "str"},
         "selected": {"type": "bool", "default": False},
@@ -371,7 +389,8 @@ def main():
             if p["kind"] == "endpoint":
                 need(p["uid"] is not None and 100 <= p["uid"] <= 999
                      and p["gid"] is not None and 100 <= p["gid"] <= 999)
-                endpoint(p["service"], p["uid"], p["gid"], p["sha256"], p["credential_names"], p["journal"])
+                endpoint(p["service"], p["uid"], p["gid"], p["sha256"], p["credential_names"], p["journal"],
+                         p["reuse_installed_credentials"])
             elif p["kind"] == "binary":
                 binary(p["service"], p["sha256"])
             else:
