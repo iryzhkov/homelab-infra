@@ -316,9 +316,11 @@ The playback object has three required fields and one optional history ceiling:
   UTC with whole seconds. Keep it equal to the issuer declaration's
   `holonet_catalog_identity_expires` after any renewal.
 
-Optional `history_max_lookback_days` is an integer from 0 to 3650. Omitted/0
-keeps the separate history-range tool disabled; 365 permits a one-year bounded
-read. Deploy the compatible HoloNet binary before enabling this field. Existing
+Optional `history_max_lookback_days` is accepted only from the exact pinned
+history-range build and is an integer from 0 to 3650. Pending release pins are
+None, so current playback and Series builds refuse the key even at 0. On a
+compatible build, omitted/0 keeps the separate tool disabled; 365 permits a
+one-year bounded read. Deploy the compatible binary before enabling this field. Existing
 playback_statistics stays fixed at fourteen days. The oldest-row timestamp probe
 may predate the range ceiling; it reports temporal availability, never complete
 coverage or janitor eligibility. No signed user/server/credential sets change.
