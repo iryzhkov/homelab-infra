@@ -272,6 +272,20 @@ UID/GID/port, protected backend identity, Authentik enrollment, helper/trust,
 ingress/network/TLS and native renewal require separate concrete operator scope.
 Activation packet jocasta:722e6f93b96e74c6291c3e741eab4641 owns those remaining gates.
 
+## Existing HoloNet playback credential reuse
+
+An upgrade may explicitly set boolean `web_mcp_reuse_installed_credentials: true`.
+Default false keeps the normal controller-source validation and credential copy.
+Reuse is limited to an already-managed HoloNet UID/GID 940 endpoint with its
+existing account, unit, runtime-owned config and both installed backend.json and
+jellystat.json files. Metadata-only preflight requires each credential to be
+regular, single-link, mode 0600, runtime-owned, with safe non-link ancestors.
+Missing, unsafe or first-install state refuses before writes. Keys are never
+opened, copied, hashed or printed by this mode; credential descriptors remain
+part of the exact service contract. Controller source files are neither checked
+nor copied. Artifact, path, policy, worker and identity guards still apply.
+This does not rotate credentials, enable new accounts or expand signed scopes.
+
 ## HoloNet scoped playback
 
 The optional `playback` object enables the writer's `playback_statistics` and

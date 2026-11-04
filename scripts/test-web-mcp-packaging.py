@@ -694,6 +694,68 @@ class PackagingTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 guard.route("ha-mcp", os.getuid())
 
+    def test_installed_credentials_require_safe_existing_files_without_reading(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as scratch:
+            base = Path(scratch)
+            names = ["backend.json", "jellystat.json"]
+            for name in names:
+                private_file(base / name, "synthetic never a real key", 0o600)
+            with mock.patch.object(Path, "open", side_effect=AssertionError("key opened")):
+                guard.installed_credentials(base, os.getuid(), names)
+            for name in names:
+                path = base / name
+                path.chmod(0o644)
+                with self.assertRaises(ValueError):
+                    guard.installed_credentials(base, os.getuid(), names)
+                path.chmod(0o600)
+                alias = base / "alias"
+                os.link(path, alias)
+                with self.assertRaises(ValueError):
+                    guard.installed_credentials(base, os.getuid(), names)
+                alias.unlink()
+                path.unlink()
+                with self.assertRaises(ValueError):
+                    guard.installed_credentials(base, os.getuid(), names)
+                path.symlink_to(base / names[1 - names.index(name)])
+                with self.assertRaises(ValueError):
+                    guard.installed_credentials(base, os.getuid(), names)
+                path.unlink()
+                private_file(path, "synthetic never a real key", 0o600)
+            with self.assertRaises(ValueError):
+                guard.installed_credentials(base, os.getuid() + 1, names)
+            for bad in ([], ["backend.json"], names + ["backend.json"], ["../key", "jellystat.json"]):
+                with self.assertRaises(ValueError):
+                    guard.installed_credentials(base, os.getuid(), bad)
+
+    def test_installed_credential_reuse_skips_controller_sources_and_copy(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            original = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text())[0]
+            chosen = [copy.deepcopy(task) for task in original["block"] if task["name"] in (
+                "Require an explicit boolean for installed credential reuse",
+                "Validate protected controller sources before managed writes",
+                "Install separately supplied protected backend credentials")]
+            inventory = base / "inventory.yml"
+            inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
+            playbook = base / "reuse.yml"
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                       ANSIBLE_LIBRARY=str(ROOT / "playbooks/library"),
+                       ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"),
+                       ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+            for reuse, ok in ((True, True), (False, False), ("true", False)):
+                playbook.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                    "vars": {"web_mcp_reuse_installed_credentials": reuse,
+                        "web_mcp": {"service": "holonet", "uid": 940, "gid": 940,
+                            "credentials": [{"name": "backend.json", "source": str(base / "missing"),
+                                             "source_uid": os.getuid()}]}},
+                    "tasks": chosen}]))
+                result = subprocess.run(["ansible-playbook", "-i", str(inventory), str(playbook)],
+                    env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertEqual(result.returncode == 0, ok, result.stdout)
+                if ok:
+                    self.assertIn("changed=0", result.stdout)
+                self.assertFalse((base / "missing").exists())
+
     def test_static_binary_gate_refuses_dynamic_or_wrong_checksum(self):
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as scratch:
             base = Path(scratch)

@@ -16,6 +16,13 @@
           - ansible_facts.service_mgr == 'systemd'
         quiet: true
 
+    - name: Require an explicit boolean for installed credential reuse
+      ansible.builtin.assert:
+        that:
+          - web_mcp_reuse_installed_credentials is boolean
+          - not web_mcp_reuse_installed_credentials or web_mcp.service == 'holonet'
+        quiet: true
+
     - name: Guard fixed paths and dedicated identities without reading secrets
       web_mcp_guard:
         kind: endpoint
@@ -24,6 +31,7 @@
         gid: "{{ web_mcp.gid }}"
         sha256: "{{ web_mcp.artifact.sha256 }}"
         credential_names: "{{ web_mcp.credentials | map(attribute='name') | list }}"
+        reuse_installed_credentials: "{{ web_mcp_reuse_installed_credentials }}"
         journal: "{{ web_mcp.service == 'holonet' and web_mcp.config.recommendations is defined }}"
 
     - name: Validate protected controller sources before managed writes
@@ -34,6 +42,7 @@
       delegate_to: localhost
       become: false
       loop: "{{ web_mcp.credentials }}"
+      when: not web_mcp_reuse_installed_credentials
       no_log: true
 
     - name: Validate protected local artifact bytes before managed writes
@@ -252,6 +261,7 @@
       no_log: true
       diff: false
       register: web_mcp_credentials
+      when: not web_mcp_reuse_installed_credentials
 
     - name: Stage the root playlist operator worker for configured management
       when: web_mcp_operator.selected

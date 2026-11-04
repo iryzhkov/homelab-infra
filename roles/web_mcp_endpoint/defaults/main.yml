@@ -2,4 +2,6 @@
 # No inventory activation and no implicit artifact, identity, bind or credentials.
 web_mcp_endpoint_enabled: false
 web_mcp_activate: false
+# Upgrade an existing managed HoloNet playback endpoint without handling keys.
+web_mcp_reuse_installed_credentials: false
 web_mcp_endpoint: {}
