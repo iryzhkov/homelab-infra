@@ -102,6 +102,28 @@ def fixture(service="ha-mcp"):
     return value
 
 
+def custody_fixture():
+    value = operator_fixture()
+    value["artifact"].update(source_revision=contract.HOLONET_CUSTODY_SOURCE,
+                             contract_revision=contract.HOLONET_CUSTODY_CONTRACT)
+    config = value["config"]
+    config["policy"]["Actions"] += contract.CUSTODY_ACTIONS
+    recipients = config["playlist_operator"]["recipients"]
+    config["janitor"] = dict(custody_source="arr_custody_v1",
+        importer_source="arr_inventory_v2", state_directory="/var/lib/holonet/janitor",
+        subject=config["playlist_operator"]["subject"], library="3",
+        protected_users=list(recipients), recipients=list(recipients),
+        revision=config["policy_revision"])
+    value["custody"] = {"descriptor": dict(version=1, backend="radarr",
+        resource_id="radarr-primary", origin="http://127.0.0.1:7878",
+        expected_version="6.4.4.10685",
+        app_config_file="/mnt/docker-data/swarm/radarr-movie/config/config.xml",
+        app_config_owner_uid=1002, app_config_read_gid=988),
+        "roots": [{"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"}],
+        "recycle": {"app_prefix": "/recycle", "host_prefix": "/mnt/shared/recycle/radarr"}}
+    return value
+
+
 def checked_run(*args, **kwargs):
     try:
         return subprocess.run(*args, **kwargs)
@@ -756,25 +778,48 @@ class PackagingTest(unittest.TestCase):
                     self.assertIn("changed=0", result.stdout)
                 self.assertFalse((base / "missing").exists())
 
+    def test_importer_bootstrap_needs_no_recycle_or_custody_authority(self):
+        value = custody_fixture()
+        value["config"]["janitor"].pop("custody_source")
+        value["config"]["policy"]["Actions"].remove("janitor.custody.read")
+        value["custody"].pop("roots")
+        value["custody"].pop("recycle")
+        self.assertEqual(contract.endpoint_contract(value), value)
+        plan = contract.playlist_operator_plan(value)
+        self.assertIn("janitor_importers", plan["policy"])
+        for name in ("janitor_custody", "janitor", "janitor_importers_pause"):
+            self.assertNotIn(name, plan["policy"])
+        self.assertNotIn("custody", plan["custody_descriptor"])
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(plan["policy"])
+        finally:
+            sys.path.pop(0)
+        for mutate in (
+            lambda v: v["custody"].update(roots=[]),
+            lambda v: v["custody"].update(recycle=None),
+            lambda v: v["config"]["janitor"].update(custody_source=None),
+            lambda v: v["config"]["janitor"].update(custody_source=""),
+            lambda v: v["config"]["policy"]["Actions"].append("janitor.custody.read"),
+            lambda v: v["config"]["janitor"].update(importer_pause_mode="pause_only"),
+            lambda v: v["config"]["janitor"].update(evidence_source="native"),
+            lambda v: v["config"]["policy"]["Actions"].remove("janitor.importers.read"),
+        ):
+            bad = copy.deepcopy(value)
+            mutate(bad)
+            self.rejected(bad)
+        full = custody_fixture()
+        full["custody"].pop("recycle")
+        self.rejected(full)
+        full = custody_fixture()
+        full["config"]["janitor"].pop("custody_source")
+        full["config"]["policy"]["Actions"].remove("janitor.custody.read")
+        self.rejected(full)
+
     def test_custody_installer_exact_binding_and_old_build_refusals(self):
-        value = operator_fixture()
-        value["artifact"].update(source_revision=contract.HOLONET_CUSTODY_SOURCE,
-                                 contract_revision=contract.HOLONET_CUSTODY_CONTRACT)
-        config = value["config"]
-        config["policy"]["Actions"] += contract.CUSTODY_ACTIONS
-        recipients = config["playlist_operator"]["recipients"]
-        config["janitor"] = dict(custody_source="arr_custody_v1",
-            importer_source="arr_inventory_v2", state_directory="/var/lib/holonet/janitor",
-            subject=config["playlist_operator"]["subject"], library="3",
-            protected_users=list(recipients), recipients=list(recipients),
-            revision=config["policy_revision"])
-        value["custody"] = {"descriptor": dict(version=1, backend="radarr",
-            resource_id="radarr-primary", origin="http://127.0.0.1:7878",
-            expected_version="6.4.4.10685",
-            app_config_file="/mnt/docker-data/swarm/radarr-movie/config/config.xml",
-            app_config_owner_uid=1002, app_config_read_gid=988),
-            "roots": [{"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"}],
-            "recycle": {"app_prefix": "/recycle", "host_prefix": "/mnt/shared/recycle/radarr"}}
+        value = custody_fixture()
+        config = value['config']
         self.assertEqual(contract.endpoint_contract(value), value)
         self.assertEqual(config["policy"]["HistoryUsers"], [])
         plan = contract.playlist_operator_plan(value)
