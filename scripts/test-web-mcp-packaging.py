@@ -756,6 +756,143 @@ class PackagingTest(unittest.TestCase):
                     self.assertIn("changed=0", result.stdout)
                 self.assertFalse((base / "missing").exists())
 
+    def test_custody_installer_exact_binding_and_old_build_refusals(self):
+        value = operator_fixture()
+        value["artifact"].update(source_revision=contract.HOLONET_CUSTODY_SOURCE,
+                                 contract_revision=contract.HOLONET_CUSTODY_CONTRACT)
+        config = value["config"]
+        config["policy"]["Actions"] += contract.CUSTODY_ACTIONS
+        recipients = config["playlist_operator"]["recipients"]
+        config["janitor"] = dict(custody_source="arr_custody_v1",
+            importer_source="arr_inventory_v2", state_directory="/var/lib/holonet/janitor",
+            subject=config["playlist_operator"]["subject"], library="3",
+            protected_users=list(recipients), recipients=list(recipients),
+            revision=config["policy_revision"])
+        value["custody"] = {"descriptor": dict(version=1, backend="radarr",
+            resource_id="radarr-primary", origin="http://127.0.0.1:7878",
+            expected_version="6.4.4.10685",
+            app_config_file="/mnt/docker-data/swarm/radarr-movie/config/config.xml",
+            app_config_owner_uid=1002, app_config_read_gid=988),
+            "roots": [{"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"}],
+            "recycle": {"app_prefix": "/recycle", "host_prefix": "/mnt/shared/recycle/radarr"}}
+        self.assertEqual(contract.endpoint_contract(value), value)
+        self.assertEqual(config["policy"]["HistoryUsers"], [])
+        plan = contract.playlist_operator_plan(value)
+        self.assertEqual(plan["custody_descriptor"]["path"], "/etc/holonet-playlists/radarr.json")
+        self.assertEqual(plan["policy"]["janitor_importers"]["backends"],
+                         {"radarr": "/etc/holonet-playlists/radarr.json"})
+        self.assertNotIn("janitor", plan["policy"])
+        self.assertNotIn("janitor_importers_pause", plan["policy"])
+        # Validate the generated policy and descriptor with their actual consumers.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            import emby_operator_adapter as adapter
+            worker.validate_policy(plan["policy"])
+            adapter.validate_importer_config(plan["custody_descriptor"]["descriptor"])
+        finally:
+            sys.path.pop(0)
+        original = copy.deepcopy(value)
+        def refuses(change):
+            bad = copy.deepcopy(original)
+            change(bad)
+            self.rejected(bad)
+        for key, val in (("state_directory", "/arbitrary"), ("subject", "foreign"),
+                         ("revision", "e" * 40), ("library", "4"),
+                         ("protected_users", []), ("recipients", []),
+                         ("importer_pause_mode", "pause_only"), ("evidence_source", "native")):
+            refuses(lambda v, k=key, x=val: v["config"]["janitor"].update({k: x}))
+        for key, val in (("backend", "sonarr"), ("app_config_read_gid", True),
+                         ("app_config_owner_uid", 0), ("origin", "http://remote.invalid"),
+                         ("origin", "https://synthetic.invalid/base"),
+                         ("app_config_file", "/srv/swarm/radarr-movie/config/config.xml")):
+            refuses(lambda v, k=key, x=val: v["custody"]["descriptor"].update({k: x}))
+        refuses(lambda v: v.pop("custody"))
+        refuses(lambda v: v["config"].pop("janitor"))
+        refuses(lambda v: v["custody"].update(recycle=v["custody"]["roots"][0]))
+        refuses(lambda v: v["custody"]["roots"][0].update(host_prefix="/mnt/shared/downloads"))
+        refuses(lambda v: v["config"]["policy"]["Actions"].append("janitor.importers.pause"))
+        for source, interface in ((contract.HOLONET_HISTORY_RANGE_SOURCE, contract.HOLONET_HISTORY_RANGE_CONTRACT),
+                                  (contract.HOLONET_SERIES_SOURCE, contract.HOLONET_SERIES_CONTRACT),
+                                  (contract.HOLONET_PLAYBACK_SOURCE, contract.HOLONET_PLAYBACK_CONTRACT)):
+            refuses(lambda v, s=source, c=interface: v["artifact"].update(source_revision=s, contract_revision=c))
+        refuses(lambda v: v["artifact"].update(contract_revision="0" * 40))
+        with mock.patch.object(contract, "HOLONET_CUSTODY_SOURCE", None):
+            self.rejected(original)
+        off = copy.deepcopy(original)
+        off.pop("custody")
+        off["config"].pop("janitor")
+        off["config"]["policy"]["Actions"] = ["catalog.read"]
+        self.assertEqual(contract.endpoint_contract(off), off)
+        self.assertNotIn("custody_descriptor", contract.playlist_operator_plan(off))
+        self.assertNotIn("janitor_custody", contract.playlist_operator_plan(off)["policy"])
+
+    def test_custody_journal_guard_and_canonical_staging_preserve_records(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
+            base = Path(scratch)
+            state = base / "state"
+            state.mkdir(mode=0o755)
+            state.chmod(0o755)  # Tests run with a private job umask.
+            with mock.patch.object(guard, "JOURNAL_ROOT", state):
+                guard.janitor_journal(os.getuid(), os.getgid())
+                journal = state / "janitor"
+                journal.mkdir(mode=0o700)
+                guard.janitor_journal(os.getuid(), os.getgid())
+                journal.chmod(0o755)
+                with self.assertRaises(ValueError):
+                    guard.janitor_journal(os.getuid(), os.getgid())
+                journal.rmdir()
+                journal.symlink_to(base, target_is_directory=True)
+                with self.assertRaises(ValueError):
+                    guard.janitor_journal(os.getuid(), os.getgid())
+                journal.unlink()
+            original = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text())[0]["block"]
+            names = {"Create the fixed root-owned HoloNet state parent",
+                     "Create only the private runtime-owned janitor journal directory"}
+            tasks = [copy.deepcopy(t) for t in original if t["name"] in names]
+            worker_block = next(t["block"] for t in original if t.get("name") == "Stage the root playlist operator worker for configured management")
+            descriptor_task = next(copy.deepcopy(t) for t in worker_block
+                if t["name"] == "Install only the private root Radarr descriptor, never its key")
+            tasks.append(descriptor_task)
+            for task in tasks:
+                # Isolated jobs name UID0 "job", so root names are projected to
+                # the same numeric IDs, without changing the canonical role.
+                for module in ("ansible.builtin.file", "ansible.builtin.copy"):
+                    if module in task:
+                        for key, ident in (("owner", os.getuid()), ("group", os.getgid())):
+                            if task[module].get(key) == "root":
+                                task[module][key] = str(ident)
+                if "ansible.builtin.file" in task:
+                    task["ansible.builtin.file"]["path"] = task["ansible.builtin.file"]["path"].replace("/var/lib/holonet", str(base / "stage"))
+                if "ansible.builtin.copy" in task:
+                    task["ansible.builtin.copy"]["dest"] = str(base / "radarr.json")
+            inventory = base / "inventory.yml"
+            inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
+            play = base / "stage.yml"
+            play.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                "vars": {"web_mcp": {"service": "holonet", "uid": os.getuid(), "gid": os.getgid(),
+                                      "config": {"janitor": {"state_directory": "/var/lib/holonet/janitor"}}},
+                         "web_mcp_operator": {"custody_descriptor": {"descriptor": {"synthetic": "metadata-only"}}}},
+                "tasks": tasks}]))
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                ANSIBLE_LOCAL_TEMP=str(base / "local"), ANSIBLE_REMOTE_TEMP=str(base / "remote"))
+            cmd = ["ansible-playbook", "-i", str(inventory), str(play)]
+            def run(extra=()):
+                result = subprocess.run(cmd + list(extra), env=env, text=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                return result.stdout
+            run(["--check"])
+            self.assertFalse((base / "stage").exists())
+            run()
+            journal = base / "stage/janitor"
+            self.assertEqual(stat.S_IMODE(journal.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((base / "radarr.json").stat().st_mode), 0o600)
+            sentinel = journal / "state.json"
+            sentinel.write_text("existing keep and receipt sentinel")
+            self.assertIn("changed=0", run())
+            self.assertEqual(sentinel.read_text(), "existing keep and receipt sentinel")
+
     def test_custody_group_read_is_explicit_and_worker_only(self):
         defaults = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/defaults/main.yml").read_text())
         self.assertIs(defaults["web_mcp_custody_group_read"], False)

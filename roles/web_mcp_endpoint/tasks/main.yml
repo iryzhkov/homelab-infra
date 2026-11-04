@@ -29,6 +29,7 @@
           - web_mcp_custody_group_read is boolean
           - not web_mcp_custody_group_read or web_mcp.service == 'holonet'
           - not web_mcp_custody_group_read or (web_mcp.config.playlist_operator is defined and web_mcp.config.playlist_operator is not none)
+          - web_mcp.config.janitor is not defined or web_mcp_custody_group_read
         quiet: true
 
     - name: Guard fixed paths and dedicated identities without reading secrets
@@ -41,6 +42,7 @@
         credential_names: "{{ web_mcp.credentials | map(attribute='name') | list }}"
         reuse_installed_credentials: "{{ web_mcp_reuse_installed_credentials }}"
         journal: "{{ web_mcp.service == 'holonet' and web_mcp.config.recommendations is defined }}"
+        janitor: "{{ web_mcp.service == 'holonet' and web_mcp.config.janitor is defined }}"
 
     - name: Validate protected controller sources before managed writes
       web_mcp_guard:
@@ -223,7 +225,7 @@
         owner: root
         group: root
         mode: "0755"
-      when: web_mcp.service == 'holonet' and web_mcp.config.recommendations is defined
+      when: web_mcp.service == 'holonet' and (web_mcp.config.recommendations is defined or web_mcp.config.janitor is defined)
 
     - name: Create only the private runtime-owned recommendation journal directory
       ansible.builtin.file:
@@ -233,6 +235,15 @@
         group: "{{ web_mcp.gid }}"
         mode: "0700"
       when: web_mcp.service == 'holonet' and web_mcp.config.recommendations is defined
+
+    - name: Create only the private runtime-owned janitor journal directory
+      ansible.builtin.file:
+        path: /var/lib/holonet/janitor
+        state: directory
+        owner: "{{ web_mcp.uid }}"
+        group: "{{ web_mcp.gid }}"
+        mode: "0700"
+      when: web_mcp.service == 'holonet' and web_mcp.config.janitor is defined
 
     - name: Install the runtime-owned configuration
       ansible.builtin.copy:
@@ -368,6 +379,17 @@
             owner: root
             group: root
             mode: "0700"
+
+        - name: Install only the private root Radarr descriptor, never its key
+          ansible.builtin.copy:
+            content: "{{ web_mcp_operator.custody_descriptor.descriptor | to_nice_json }}\n"
+            dest: /etc/holonet-playlists/radarr.json
+            owner: root
+            group: root
+            mode: "0600"
+          when: web_mcp_operator.custody_descriptor is defined
+          no_log: true
+          diff: false
 
         - name: Install the root management ceiling from the validated endpoint config
           ansible.builtin.copy:

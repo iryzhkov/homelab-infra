@@ -1,0 +1,17 @@
+# Canonical custody configuration
+
+Source support only, default off. This extends the approved read-only activation packet jocasta:1c9fd241f356a004e4cadc1e2140f52d@2. No inventory, signed grant, key permission, service or media change is made by this source commit.
+
+The endpoint contract accepts runtime config.janitor only with Go source f2f91e1c1f9e7346a324567ad206110a259da306 and compatible worker/interface50127da581f2429c92ff6d40fe23156bde0485a1. Older builds reject key presence, even null. New builds retain existing operator, playback, Series and history configuration admission. A concrete checksum-matching static artifact is still required before deployment.
+
+config.janitor has exactly custody_source=arr_custody_v1, importer_source=arr_inventory_v2, state_directory=/var/lib/holonet/janitor, subject, library, protected_users, recipients and revision. Subject/library match the existing operator, revision matches policy_revision, both cohorts match operator recipients. No evidence_source or importer_pause_mode is accepted. Policy Actions appends only janitor.importers.read and janitor.custody.read to the existing catalog/history list. History enrollment is not required when playback is absent.
+
+A paired endpoint-level custody object has descriptor, roots and recycle. These are root-owned deployment inputs, never MCP arguments. Descriptor contains version1, backendradarr, resource_id, origin, expected_version6.4.4.10685, app_config_file=/mnt/docker-data/swarm/radarr-movie/config/config.xml, owner UID1002 and read GID988. Origin comes from inventory; HTTPS requires a pathless origin, HTTP is only127.0.0.1:7878. The installer does not read or copy the XML key.
+
+Exactly one media mapping is allowed, host /mnt/shared/media/movies and app /movies or that same host path. Recycle mapping must be normalized, on the existing /mnt/shared mount, and disjoint in both host and app path spaces. Its live location and cleanup0 still need native verification; rendering does not create a recycle directory or change Arr settings.
+
+The worker plan renders janitor_importers and janitor_custody only. It creates no positive-protection or pause policy block. It stages the descriptor at /etc/holonet-playlists/radarr.json root0600 under the existing root0700 directory, after metadata-only guarded path checks. No new credential source is accepted. The runtime config contains no root paths or descriptors.
+
+The role requires web_mcp_custody_group_read=true for runtime custody. This changes only the existing worker supplementary group. The janitor directory is runtime-owned0700 under root0755, guarded before writes, and the endpoint sandbox adds that fixed writable path only when configured. Existing journals/keeps/receipts are never rewritten by directory staging.
+
+Rollback removes runtime/root opt-ins before an old parser and preserves every journal record. If custody records exist, prefer a forward fix or validated offline migration, not field deletion. Old-source and new-source default-off rendering remain supported. No claim of native NFS visibility, app XML access, complete playback, seed topology, recoverable deletion or removal authorization follows from source validation.
