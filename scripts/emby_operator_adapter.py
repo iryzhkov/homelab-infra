@@ -1349,11 +1349,14 @@ class ImporterInventoryAdapter:
     def _call_limit(self):
         return 3 if self._assessment else 2
 
-    def _get(self, path):
+    def _get_routes(self):
         routes = ('/api/v3/system/status', '/api/v3/importlist')
         if self._assessment:
             routes += ('/api/v3/config/importlist',)
-        require(path in routes and self._calls < self._call_limit() and
+        return routes
+
+    def _get(self, path):
+        require(path in self._get_routes() and self._calls < self._call_limit() and
                 self._key is not None, 'Importer route refused')
         remaining = min(self._deadline - time.monotonic(), self._guard())
         require(remaining > 0, 'Importer deadline reached')

@@ -144,7 +144,8 @@ OPERATOR_UNITS = (Path("/etc/systemd/system/holonet-playlists-worker.socket"),
 OPERATOR_OWNER = "homelab-infra holonet-playlists\n"
 OPERATOR_HEADER = "# Managed by homelab-infra holonet-playlists\n"
 OPERATOR_MODULES = frozenset({"emby_operator_adapter.py", "emby_operator_entry.py",
-                              "emby_operator_recommendations.py", "emby_operator_socket.py"})
+                              "emby_operator_recommendations.py", "emby_operator_socket.py",
+                              "emby_operator_custody.py"})
 HEX64 = re.compile(r"[0-9a-f]{64}")
 # Production trusts only root. Synthetic tests substitute their own uid.
 ROOT_UID = 0

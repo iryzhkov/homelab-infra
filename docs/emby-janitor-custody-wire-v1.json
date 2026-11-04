@@ -1,0 +1,103 @@
+{
+  "contract": "jocasta:682361f792e6c72ed54f3325e22c12f3@2 root dispositions; synthetic read-only custody",
+  "bounds": {
+    "max_files": 64,
+    "chunk_bytes": 268435456,
+    "max_chunks_per_exchange": 1,
+    "max_private_result_bytes": 245760
+  },
+  "frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "7",
+      "actions": [
+        "janitor.importers.read",
+        "janitor.custody.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "janitor-custody-attest",
+    "request": {
+      "backend": "radarr",
+      "target_kind": "movie",
+      "target_id": 1
+    }
+  },
+  "custody_policy": {
+    "backends": {
+      "radarr": {
+        "roots": [
+          {
+            "app_prefix": "/movies",
+            "host_prefix": "/synthetic/media/movies"
+          }
+        ],
+        "recycle": {
+          "app_prefix": "/recycle",
+          "host_prefix": "/synthetic/recycle/radarr"
+        }
+      }
+    }
+  },
+  "response": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "arr_custody_v1",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "7",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "backend": "radarr",
+      "resource_id": "radarr-primary",
+      "target": {
+        "target_kind": "movie",
+        "target_id": 1
+      },
+      "observed_at_unix_ms": 2000000000000,
+      "inventory_revision": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "arr_file_inventory_complete": true,
+      "files": [
+        {
+          "id": 2,
+          "size": 3,
+          "dev": 1,
+          "ino": 2,
+          "mode": 33188,
+          "mtime_ns": 1000,
+          "ctime_ns": 1000,
+          "nlink": 2,
+          "mount_id": 4,
+          "chunks_total": 1
+        }
+      ],
+      "chunk": {
+        "file_id": 2,
+        "index": 0,
+        "bytes": 3,
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      },
+      "cursor": null,
+      "position_complete": true,
+      "recycle": {
+        "configured": true,
+        "cleanup_days": 0
+      },
+      "seed_topology": "unqualified",
+      "media_removal_authorized": false
+    }
+  },
+  "consumer_rules": [
+    "Cursor is traversal position, not authority or evidence that prior chunks were read.",
+    "The consumer must observe every chunk and unchanged complete stat manifest; position_complete alone is insufficient.",
+    "No path, inode or digest belongs in the public MCP response.",
+    "Arr file inventory is not complete Emby episode inventory or seed-payload topology.",
+    "Stable stat checks are not immutable snapshots or authority to remove media."
+  ]
+}
