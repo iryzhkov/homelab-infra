@@ -40,6 +40,10 @@ HOLONET_PLAYBACK_CONTRACT = "cfea03b6e99e8b501ce5b6f1abbe0d32545ecd3e"
 # Frozen Series source and compatible worker fixture for integration review.
 HOLONET_SERIES_SOURCE = "9efca7904b6b142c765bda4574185615fd374518"
 HOLONET_SERIES_CONTRACT = "748e89df0c765ba82133d9b45b8be00e76925128"
+# Exact history-capable client and compatible unchanged worker/interface.
+# CI, artifact checksum and final release acceptance still gate deployment.
+HOLONET_HISTORY_RANGE_SOURCE = "2e7c19fe017e29b15c6e2f0ba9ccb84cadcdc6ff"
+HOLONET_HISTORY_RANGE_CONTRACT = "8a29d33611497ab44a32b06e38cfd78f085b2c93"
 # Fixed runtime paths: the Jellystat key is its own credential file, never the
 # Emby backend file, and the only Jellystat URL besides an HTTPS origin is the
 # existing host-local listener.
@@ -312,7 +316,10 @@ def holonet_playback(config):
     """
     value, operator = config["playback"], config.get("playlist_operator")
     require(operator is not None, "playback requires playlist_operator")
-    keys(value, ("jellystat_url", "credential_file", "credential_expires_at"))
+    keys(value, ("jellystat_url", "credential_file", "credential_expires_at"),
+         ("history_max_lookback_days",))
+    if "history_max_lookback_days" in value:
+        integer(value["history_max_lookback_days"], 0, 3650)
     jellystat = value["jellystat_url"]
     if jellystat != HOLONET_PLAYBACK_LOOPBACK:
         p = ha_canonical_url(jellystat, origin=True)
@@ -429,7 +436,10 @@ def endpoint_contract(value):
     _, contract = SERVICES[service]
     if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
         contract = HOLONET_WRITER_CONTRACT
-    series_build = (service == "holonet" and HOLONET_SERIES_SOURCE is not None
+    history_range_build = (service == "holonet" and HOLONET_HISTORY_RANGE_SOURCE is not None
+                           and HOLONET_HISTORY_RANGE_CONTRACT is not None
+                           and artifact["source_revision"] == HOLONET_HISTORY_RANGE_SOURCE)
+    series_build = history_range_build or (service == "holonet" and HOLONET_SERIES_SOURCE is not None
                     and HOLONET_SERIES_CONTRACT is not None
                     and artifact["source_revision"] == HOLONET_SERIES_SOURCE)
     playback_build = series_build or (service == "holonet" and HOLONET_PLAYBACK_SOURCE is not None
@@ -438,7 +448,9 @@ def endpoint_contract(value):
     operator_build = playback_build or (
         service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
         and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
-    if series_build:
+    if history_range_build:
+        contract = HOLONET_HISTORY_RANGE_CONTRACT
+    elif series_build:
         contract = HOLONET_SERIES_CONTRACT
     elif playback_build:
         contract = HOLONET_PLAYBACK_CONTRACT
@@ -470,6 +482,9 @@ def endpoint_contract(value):
                 "playlist_operator requires its exact reviewed artifact")
         require("playback" not in value["config"] or playback_build,
                 "playback requires its exact reviewed artifact")
+        if value["config"].get("playback") is not None:
+            require("history_max_lookback_days" not in value["config"]["playback"] or history_range_build,
+                    "history range configuration requires its exact reviewed artifact")
         if value["config"].get("playlist_operator") is not None:
             require("series_libraries" not in value["config"]["playlist_operator"] or series_build,
                     "Series configuration requires its exact reviewed artifact")

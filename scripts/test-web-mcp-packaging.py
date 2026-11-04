@@ -1236,6 +1236,36 @@ class PackagingTest(unittest.TestCase):
             # Existing management pins keep working while playback is pending.
             self.assertEqual(contract.endpoint_contract(operator_fixture()), operator_fixture())
 
+    def test_playback_history_range_ceiling(self):
+        actual = series_fixture()
+        actual["artifact"].update(source_revision=contract.HOLONET_HISTORY_RANGE_SOURCE,
+                                  contract_revision=contract.HOLONET_HISTORY_RANGE_CONTRACT)
+        actual["config"]["playback"]["history_max_lookback_days"] = 365
+        self.assertEqual(contract.endpoint_contract(actual), actual)
+        wrong = copy.deepcopy(actual)
+        wrong["artifact"]["contract_revision"] = "0" * 40
+        self.rejected(wrong)
+        with mock.patch.multiple(contract, HOLONET_HISTORY_RANGE_SOURCE=None,
+                                 HOLONET_HISTORY_RANGE_CONTRACT=None):
+            self.rejected(actual)
+        with operator_pins(), playback_pins(), series_pins():
+            for make in (playback_fixture, series_fixture):
+                for days in (0, 1, 365):
+                    value = make()
+                    value["config"]["playback"]["history_max_lookback_days"] = days
+                    self.rejected(value)
+        with operator_pins(), playback_pins(), series_pins(), mock.patch.multiple(
+                contract, HOLONET_HISTORY_RANGE_SOURCE=PLAYBACK_SOURCE,
+                HOLONET_HISTORY_RANGE_CONTRACT=PLAYBACK_INTERFACE):
+            for days in (0, 1, 14, 365, 3650):
+                value = playback_fixture()
+                value["config"]["playback"]["history_max_lookback_days"] = days
+                self.assertEqual(contract.endpoint_contract(value), value)
+            for days in (-1, 3651, True, False, None, "365", 1.5):
+                value = playback_fixture()
+                value["config"]["playback"]["history_max_lookback_days"] = days
+                self.rejected(value)
+
     def test_playback_config_credentials_and_scoped_history(self):
         ids = sorted(OPERATOR_COHORT)
         with operator_pins(), playback_pins():
