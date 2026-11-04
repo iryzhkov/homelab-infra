@@ -154,6 +154,47 @@ The worker is stateless; the Go journal owns write-ahead, target exclusion and e
 
 The shared synthetic fixture docs/emby-janitor-importers-pause-wire-v1.json is copied byte-for-byte to client testdata. Tests use real loopback HTTP and native socket fixtures only. No real backend, credentials, mode activation or grants changed.
 
+## Read-only Arr file custody (source only)
+
+Adopted contract jocasta:682361f792e6c72ed54f3325e22c12f3@2 section8.
+The optional janitor_custody root block is not rendered by the installer.
+Absent opt-in refuses before configuration, credentials, network or media reads.
+The dedicated importer-shaped caller needs exactly janitor.importers.read and
+janitor.custody.read in that order; its managed-janitor identity, recipient,
+library, revision and expiry remain pinned. Existing operations are unchanged.
+
+janitor-custody-attest takes only backend, target_kind, target_id and an optional
+opaque continuation. It uses four fixed GET routes: system/status,
+config/mediamanagement, the parent Movie/Series by ID and its complete file list.
+The HTTP budget is ten seconds; worker deadline and token expiry are never renewed.
+It requires configured recycle retention with cleanup days exactly zero.
+Root-owned app-to-host media/recycle mappings select paths, never MCP callers.
+File opens use directory FDs, no-follow components and checked mount identities.
+The worker observes at most64 unique files and one256MiB content chunk per exchange,
+using one-MiB read buffers and a240KiB private result cap. It writes no journal or
+media and adds no credential, listener, process, service or schedule.
+
+The exact private wire is docs/emby-janitor-custody-wire-v1.json. It includes
+bounded stat facts and one chunk digest; host paths are omitted. The Go consumer
+must retain private chunk progress and verify every expected position itself.
+position_complete is only the end of a traversal from the supplied cursor.
+It does not prove preceding chunks were read. Inventory/stat/config drift
+invalidates continuation; these observations are not immutable NFS snapshots.
+Complete Arr file rows do not prove complete Emby episode membership, recent
+playback coverage, admission or likes. Empty file rows require a verified parent.
+
+seed_topology always remains unqualified and media_removal_authorized is always
+false. A shared inode is expected for independent hardlinks, but cannot identify
+the actual torrent payload pathname. No removal, restore, eligibility update or
+public MCP digest/path exposure is implemented here. Source acceptance cannot
+qualify read visibility under NFS root squashing or the unchanged empty capability
+set. Existing app-owned0600 XML custody, actual mount access, signed read action,
+installer rendering and native qualification remain explicit activation gates.
+No capability, group, account, key copy, live grant or live config is changed.
+Old workers refuse the new policy key: remove it before old-parser rollback.
+Read-only guard checks bound user-space work and response acceptance; they cannot
+guarantee cancellation of a kernel-stalled NFS read. RuntimeMaxSec remains in force.
+
 ## Janitor importer inventory
 
 Contract jocasta:0aa488a423f25ef04a0ba6e7026a8dc0@1 adds janitor-importers-assessment for optional client source arr_inventory_v2. Existing inventory v1 behavior remains exact. The new operation uses the same independent root read ceiling, caller and backend-only request. Three fixed GETs run: system/status, config/importlist, importlist, in one unchanged ten-second budget, with the same strict framing/caps and no retry. No new action, credential, store, method or live configuration. Fixture docs/emby-janitor-importers-wire-v2.json is shared byte-for-byte with the client.

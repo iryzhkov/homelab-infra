@@ -50,14 +50,15 @@ HOLONET_HISTORY_RANGE_CONTRACT = "8a29d33611497ab44a32b06e38cfd78f085b2c93"
 HOLONET_PLAYBACK_CREDENTIAL = "jellystat.json"
 HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 
-# Root playlist operator worker (docs/emby-operator-mcp.md). The four modules are
+# Root playlist operator worker (docs/emby-operator-mcp.md). The fixed modules are
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_adapter.py": "9773bb63b0b9d289da1ff9d379de90652fcc15191624cc5ea32e88faaaee5f3c",
+    "emby_operator_adapter.py": "b657ebf141b498b3c3d364f01ef46eff26c97f91fed1f4cab64e46f1fe155df9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "42969569034acde9ad26dff8db9472d8612122183d5bff4a2a79c1fbb59f053e",
-    "emby_operator_socket.py": "a86c062946d5c60ee299c94666964e390f044c0f2cbe128eda091ff0c6225d08",
+    "emby_operator_socket.py": "318b1f4e73d905956ef5f013c83ef8be23b6c822e3cdd64cadb78075135f486a",
+    "emby_operator_custody.py": "2a26449729545e7321d92a936673e0382989d419b4a6ed663370e57dbe1919c3",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
