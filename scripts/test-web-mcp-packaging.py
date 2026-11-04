@@ -1236,6 +1236,17 @@ class PackagingTest(unittest.TestCase):
             # Existing management pins keep working while playback is pending.
             self.assertEqual(contract.endpoint_contract(operator_fixture()), operator_fixture())
 
+    def test_playback_history_range_ceiling(self):
+        with operator_pins(), playback_pins():
+            for days in (0, 1, 14, 365, 3650):
+                value = playback_fixture()
+                value["config"]["playback"]["history_max_lookback_days"] = days
+                self.assertEqual(contract.endpoint_contract(value), value)
+            for days in (-1, 3651, True, False, None, "365", 1.5):
+                value = playback_fixture()
+                value["config"]["playback"]["history_max_lookback_days"] = days
+                self.rejected(value)
+
     def test_playback_config_credentials_and_scoped_history(self):
         ids = sorted(OPERATOR_COHORT)
         with operator_pins(), playback_pins():

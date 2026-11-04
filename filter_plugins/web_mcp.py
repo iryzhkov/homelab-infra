@@ -312,7 +312,10 @@ def holonet_playback(config):
     """
     value, operator = config["playback"], config.get("playlist_operator")
     require(operator is not None, "playback requires playlist_operator")
-    keys(value, ("jellystat_url", "credential_file", "credential_expires_at"))
+    keys(value, ("jellystat_url", "credential_file", "credential_expires_at"),
+         ("history_max_lookback_days",))
+    if "history_max_lookback_days" in value:
+        integer(value["history_max_lookback_days"], 0, 3650)
     jellystat = value["jellystat_url"]
     if jellystat != HOLONET_PLAYBACK_LOOPBACK:
         p = ha_canonical_url(jellystat, origin=True)

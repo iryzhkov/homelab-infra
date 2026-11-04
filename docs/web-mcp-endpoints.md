@@ -306,7 +306,7 @@ reconcile. Keep a compatible worker for recovery, pause the job if necessary,
 and never downgrade to an older worker or reset journal state. See the typed
 contract `jocasta:c43c23446da086e5157fbca8a5f9977b@4` and the Go `SERIES.md`.
 
-The playback object has exactly three fields:
+The playback object has three required fields and one optional history ceiling:
 
 - `jellystat_url`: `http://127.0.0.1:3012`, or a canonical HTTPS origin with
   no path, query, fragment, userinfo, default port or escape.
@@ -315,6 +315,13 @@ The playback object has exactly three fields:
 - `credential_expires_at`: the writer app password's declared expiry, RFC 3339
   UTC with whole seconds. Keep it equal to the issuer declaration's
   `holonet_catalog_identity_expires` after any renewal.
+
+Optional `history_max_lookback_days` is an integer from 0 to 3650. Omitted/0
+keeps the separate history-range tool disabled; 365 permits a one-year bounded
+read. Deploy the compatible HoloNet binary before enabling this field. Existing
+playback_statistics stays fixed at fourteen days. The oldest-row timestamp probe
+may predate the range ceiling; it reports temporal availability, never complete
+coverage or janitor eligibility. No signed user/server/credential sets change.
 
 With playback, `policy.Actions` is exactly `[catalog.read, history.read]` and
 `policy.HistoryUsers` is 1..16 unique configured management recipients. Keep
