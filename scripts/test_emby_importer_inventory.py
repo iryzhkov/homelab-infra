@@ -142,6 +142,70 @@ class ImporterXMLTests(unittest.TestCase):
             adapter.existing_importer_key('/app/config.xml', os.getuid())
 
 
+class ImporterGroupCustodyTests(ImporterXMLTests):
+    def test_group_opt_in_requires_exact_owner_group_and_mode(self):
+        self.read('<Config><ApiKey>' + KEY + '</ApiKey></Config>')
+        # Chaldea maps only the job UID: project ownership metadata while
+        # retaining real descriptor, mode, link, symlink and ancestor checks.
+        from types import SimpleNamespace
+        import stat
+        owner = [1002, 988]
+        real_fstat = os.fstat
+
+        def projected_fstat(fd):
+            info = real_fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                return info
+            return SimpleNamespace(st_uid=owner[0], st_gid=owner[1],
+                st_mode=info.st_mode, st_nlink=info.st_nlink, st_size=info.st_size)
+
+        projected = patch.object(adapter.os, 'fstat', side_effect=projected_fstat)
+        projected.start()
+        self.addCleanup(projected.stop)
+        self.path.chmod(0o640)
+        self.assertEqual(adapter.existing_importer_key(
+            '/app/config.xml', 1002, read_gid=988), KEY)
+        with self.assertRaises(Refused):
+            adapter.existing_importer_key('/app/config.xml', 1002)
+        for mode in (0o644, 0o660, 0o750, 0o755, 0o440):
+            self.path.chmod(mode)
+            with self.subTest(mode=mode), self.assertRaises(Refused):
+                adapter.existing_importer_key('/app/config.xml', 1002, read_gid=988)
+        self.path.chmod(0o640)
+        owner[:] = [1002, 987]
+        with self.assertRaises(Refused):
+            adapter.existing_importer_key('/app/config.xml', 1002, read_gid=988)
+        owner[:] = [1003, 988]
+        with self.assertRaises(Refused):
+            adapter.existing_importer_key('/app/config.xml', 1002, read_gid=988)
+        owner[:] = [1002, 988]
+        link = self.path.parent / 'group-link.xml'
+        link.symlink_to(self.path)
+        with self.assertRaises(Refused):
+            adapter.existing_importer_key('/app/group-link.xml', 1002, read_gid=988)
+        hard = self.path.parent / 'hard.xml'
+        os.link(self.path, hard)
+        with self.assertRaises(Refused):
+            adapter.existing_importer_key('/app/config.xml', 1002, read_gid=988)
+        hard.unlink()
+        self.path.parent.chmod(0o770)
+        with self.assertRaises(Refused):
+            adapter.existing_importer_key('/app/config.xml', 1002, read_gid=988)
+
+    def test_group_config_is_radarr_only_and_not_caller_selected(self):
+        good = dict(config(), app_config_owner_uid=1002, app_config_read_gid=988)
+        self.assertEqual(adapter.validate_importer_config(good), good)
+        for change in ({'app_config_read_gid': True}, {'app_config_read_gid': 0},
+                       {'app_config_read_gid': None}, {'app_config_read_gid': '988'},
+                       {'backend': 'sonarr'}, {'app_config_owner_uid': 1001},
+                       {'unknown': 988}):
+            with self.subTest(change=change), self.assertRaises(Refused):
+                adapter.validate_importer_config(dict(good, **change))
+        with patch.object(adapter, 'existing_importer_key', return_value=KEY) as read:
+            self.assertEqual(adapter.importer_key(good), KEY)
+            read.assert_called_once_with(good['app_config_file'], 1002, read_gid=988)
+
+
 class ImporterTransportTests(unittest.TestCase):
 
     def test_cleanup_assessment_levels_unknown_and_fixed_routes(self):

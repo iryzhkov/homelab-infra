@@ -1200,7 +1200,7 @@ IMPORTER_MAX_LISTS = 32
 
 
 def validate_importer_config(value):
-    require(type(value) is dict and set(value) == {
+    require(type(value) is dict and set(value) - {'app_config_read_gid'} == {
         'version', 'backend', 'resource_id', 'origin', 'expected_version',
         'app_config_file', 'app_config_owner_uid'}, 'Invalid importer configuration')
     require(type(value['version']) is int and value['version'] == 1 and
@@ -1208,6 +1208,10 @@ def validate_importer_config(value):
             type(value['app_config_owner_uid']) is int and
             0 <= value['app_config_owner_uid'] < 2 ** 31,
             'Invalid importer configuration')
+    if 'app_config_read_gid' in value:
+        require(type(value['app_config_read_gid']) is int and
+                value['app_config_read_gid'] == 988 and value['backend'] == 'radarr' and
+                value['app_config_owner_uid'] == 1002, 'Invalid importer read group')
     opaque(value['resource_id'])
     require(isinstance(value['expected_version'], str) and
             re.fullmatch(r'[0-9]{1,6}(?:\.[0-9]{1,8}){3}', value['expected_version']),
@@ -1239,12 +1243,15 @@ def validate_importer_config(value):
     return copy.deepcopy(value)
 
 
-def existing_importer_key(path, owner_uid):
+def existing_importer_key(path, owner_uid, *, read_gid=None):
     """Read the app's existing private config.xml by directory FDs, no copy.
 
     The instance API key has admin power. Fixed GET routes, not key privileges,
     enforce this operation's read-only boundary.
     """
+    require(read_gid is None or (type(read_gid) is int and read_gid == 988 and
+                                 type(owner_uid) is int and owner_uid == 1002),
+            'Invalid importer read group')
     fd = None
     try:
         p = PurePosixPath(path)
@@ -1261,8 +1268,12 @@ def existing_importer_key(path, owner_uid):
         leaf = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
         try:
             info = os.fstat(leaf)
+            private_mode = stat.S_IMODE(info.st_mode) in (0o400, 0o600)
+            group_mode = (read_gid is not None and info.st_gid == read_gid and
+                          stat.S_IMODE(info.st_mode) == 0o640)
             require(stat.S_ISREG(info.st_mode) and info.st_uid == owner_uid and
-                    stat.S_IMODE(info.st_mode) in (0o400, 0o600) and info.st_nlink == 1 and
+                    (private_mode or group_mode) and
+                    (read_gid is None or info.st_gid == read_gid) and info.st_nlink == 1 and
                     info.st_size <= IMPORTER_MAX_BODY, 'Unsafe importer config file')
             with os.fdopen(leaf, 'rb', closefd=False) as stream:
                 raw = stream.read(IMPORTER_MAX_BODY + 1)
@@ -1288,6 +1299,14 @@ def existing_importer_key(path, owner_uid):
     finally:
         if fd is not None:
             os.close(fd)
+
+
+def importer_key(config):
+    # Preserve the legacy call shape when group custody is not explicitly opted in.
+    options = ({'read_gid': config['app_config_read_gid']}
+               if 'app_config_read_gid' in config else {})
+    return existing_importer_key(config['app_config_file'],
+                                 config['app_config_owner_uid'], **options)
 
 
 def importer_response_bytes(response):
@@ -1398,8 +1417,7 @@ class ImporterInventoryAdapter:
         try:
             require(time.monotonic() < self._deadline and self._guard() > 0,
                     'Importer deadline reached')
-            self._key = existing_importer_key(self._config['app_config_file'],
-                                             self._config['app_config_owner_uid'])
+            self._key = importer_key(self._config)
             status = self._get('/api/v3/system/status')
             require(type(status) is dict and
                     status.get('appName') == self._config['backend'].capitalize() and
@@ -1525,8 +1543,7 @@ class ImporterPauseAdapter(ImporterInventoryAdapter):
                 return result
             result['before'] = row
             self._remaining(expires_at)
-            self._key = existing_importer_key(self._config['app_config_file'],
-                                             self._config['app_config_owner_uid'])
+            self._key = importer_key(self._config)
             result['stage'], result['reason'], result['ack'] = self._put_once(list_id, expires_at)
             if result['stage'] in ('acknowledged', 'dispatch_unknown'):
                 try:

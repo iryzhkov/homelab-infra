@@ -4,4 +4,6 @@ web_mcp_endpoint_enabled: false
 web_mcp_activate: false
 # Upgrade an existing managed HoloNet playback endpoint without handling keys.
 web_mcp_reuse_installed_credentials: false
+# Explicit source-supported group read; never changes XML permissions itself.
+web_mcp_custody_group_read: false
 web_mcp_endpoint: {}

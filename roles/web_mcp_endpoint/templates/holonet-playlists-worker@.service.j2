@@ -8,6 +8,10 @@ CollectMode=inactive-or-failed
 Type=simple
 User=root
 Group=root
+{% if web_mcp_custody_group_read | default(false) %}
+# Existing media group only; no capabilities or membership change for HoloNet.
+SupplementaryGroups=988
+{% endif %}
 WorkingDirectory=/
 Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 # Keep sibling imports while ignoring environment and user-site Python settings.
