@@ -192,6 +192,11 @@ set. Existing app-owned0600 XML custody, actual mount access, signed read action
 installer rendering and native qualification remain explicit activation gates.
 No capability, group, account, key copy, live grant or live config is changed.
 Old workers refuse the new policy key: remove it before old-parser rollback.
+Custody failures emit one bounded, fixed reason on the worker's stderr for the
+system journal. Exception text, paths, credentials and digests are never logged.
+The wire response remains generic; diagnostics do not relax drift or read guards
+and a logging failure does not replace the original refusal. A reason describes
+only that attempt, not the cause of any earlier undiagnosed failure.
 Read-only guard checks bound user-space work and response acceptance; they cannot
 guarantee cancellation of a kernel-stalled NFS read. RuntimeMaxSec remains in force.
 
