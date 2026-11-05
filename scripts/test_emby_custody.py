@@ -2,6 +2,7 @@
 import base64
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -338,6 +339,37 @@ class CustodySocketTests(socket_tests.WorkerCase):
         self.assertEqual([x[0] for x in self.backend_calls()], ['GET'] * 4)
         after = {str(p): p.read_bytes() for p in self.directory.rglob('*') if p.is_file()}
         self.assertEqual(before, after)
+
+    def test_custody_failure_diagnostic_is_closed_and_wire_stays_generic(self):
+        expected = {'code': 'unavailable', 'message': 'Custody observation unavailable'}
+        cases = [
+            (Refused('Custody observation changed'), 'observation_changed'),
+            (Refused('Custody roots changed'), 'roots_changed'),
+            (Refused('Importer deadline reached'), 'backend_deadline'),
+            (Refused('Importer inventory unavailable'), 'backend_unavailable'),
+            (Refused('private /media/title APIKEY\nforged log'), 'refused'),
+            (OSError('private /media/title APIKEY'), 'io_unavailable'),
+            (ValueError('private /media/title APIKEY'), 'unexpected'),
+        ]
+        for error, reason in cases:
+            with self.subTest(reason=reason), patch.object(
+                    worker, 'custody_attest', side_effect=error), patch(
+                    'sys.stderr', new_callable=io.StringIO) as diagnostic:
+                raw, result = self.call(socket_tests.encode(self.request()))
+                self.assertEqual(result['error'], expected)
+                self.assertEqual(diagnostic.getvalue(),
+                                 'holonet custody failure reason=' + reason + '\n')
+                self.assertNotIn(b'APIKEY', raw)
+        self.assertEqual(self.backend_calls(), [])
+
+    def test_custody_log_failure_preserves_original_refusal(self):
+        with patch.object(worker, 'custody_attest',
+                          side_effect=Refused('Custody observation changed')), patch(
+                'sys.stderr') as diagnostic:
+            diagnostic.write.side_effect = OSError('log unavailable')
+            _, result = self.call(socket_tests.encode(self.request()))
+        self.assertEqual(result['error'],
+                         {'code': 'unavailable', 'message': 'Custody observation unavailable'})
 
     def test_missing_opt_in_and_action_refuse_before_config(self):
         self.policy.pop('janitor_custody')

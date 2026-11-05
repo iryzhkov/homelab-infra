@@ -784,6 +784,31 @@ def importer_pause(policy, call, guard):
     return result
 
 
+def custody_failure_log(error, guard):
+    """One fixed diagnostic on stderr; never serialize exception text or facts."""
+    reason = 'unexpected'
+    if guard.tripped or guard.expired():
+        reason = 'deadline'
+    elif isinstance(error, Refused):
+        reason = {
+            'Importer deadline reached': 'backend_deadline',
+            'Importer inventory unavailable': 'backend_unavailable',
+            'Custody observation changed': 'observation_changed',
+            'Custody roots changed': 'roots_changed',
+            'Custody file size changed': 'file_size_changed',
+            'Custody content changed': 'content_changed',
+            'Custody retention unavailable': 'retention_unavailable',
+            'Custody recycle mismatch': 'recycle_mismatch',
+            'Custody identity mismatch': 'backend_identity_mismatch',
+        }.get(str(error), 'refused')
+    elif isinstance(error, OSError):
+        reason = 'io_unavailable'
+    try:
+        print('holonet custody failure reason=' + reason, file=sys.stderr, flush=True)
+    except Exception:
+        pass  # Diagnostics must not change the original fail-closed response.
+
+
 def handle(conn):
     """Validate one connection's request and run it; returns the result object."""
     started = time.monotonic()
@@ -802,7 +827,8 @@ def handle(conn):
     if call['operation'] == CUSTODY_OPERATION:
         try:
             return custody_attest(policy, call, guard)
-        except Exception:
+        except Exception as error:
+            custody_failure_log(error, guard)
             if guard.tripped or guard.expired():
                 raise WireError('deadline', STOPPED[guard.tripped or 'deadline']) from None
             raise WireError('unavailable', 'Custody observation unavailable') from None
