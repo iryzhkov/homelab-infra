@@ -891,10 +891,13 @@ class PackagingTest(unittest.TestCase):
                                    HOLONET_SEED_JOIN_SHA256="7" * 64)
 
     def test_seed_join_pending_pins_refuse_every_key(self):
-        # No compatible Go artifact exists: even the accepted torrent build refuses.
-        self.assertIsNone(contract.HOLONET_SEED_JOIN_SOURCE)
-        self.assertIsNone(contract.HOLONET_SEED_JOIN_CONTRACT)
-        self.assertIsNone(contract.HOLONET_SEED_JOIN_SHA256)
+        # Pending pins fail closed even for a candidate claiming the exact build.
+        value = self.seed_join_fixture()
+        value["artifact"].update(source_revision=contract.HOLONET_SEED_JOIN_SOURCE,
+            contract_revision=contract.HOLONET_SEED_JOIN_CONTRACT, sha256=contract.HOLONET_SEED_JOIN_SHA256)
+        with mock.patch.multiple(contract, HOLONET_SEED_JOIN_SOURCE=None,
+                                 HOLONET_SEED_JOIN_CONTRACT=None, HOLONET_SEED_JOIN_SHA256=None):
+            self.rejected(value)
         self.rejected(self.seed_join_fixture())
         for drop in ("seed_join",):
             value = self.seed_join_fixture()
@@ -911,6 +914,22 @@ class PackagingTest(unittest.TestCase):
         self.assertNotIn("janitor.seed_join.read", value["config"]["policy"]["Actions"])
         self.assertIn("emby_operator_seed_join.py", contract.OPERATOR_MODULES)
         self.assertEqual(set(contract.OPERATOR_MODULES), guard.OPERATOR_MODULES)
+
+    def test_seed_join_exact_released_build_admission(self):
+        value = self.seed_join_fixture()
+        value["artifact"].update(source_revision=contract.HOLONET_SEED_JOIN_SOURCE,
+            contract_revision=contract.HOLONET_SEED_JOIN_CONTRACT, sha256=contract.HOLONET_SEED_JOIN_SHA256)
+        self.assertEqual(contract.endpoint_contract(value), value)
+        plan = contract.playlist_operator_plan(value)
+        self.assertEqual(plan["policy"]["janitor_seed_join"]["seed_root"]["host_prefix"],
+                         "/mnt/shared/downloads/complete/movies")
+        for field, bad in (("source_revision", contract.HOLONET_TORRENT_SOURCE),
+                           ("contract_revision", contract.HOLONET_TORRENT_CONTRACT),
+                           ("sha256", "0" * 64)):
+            changed = copy.deepcopy(value)
+            changed["artifact"][field] = bad
+            with self.subTest(field=field):
+                self.rejected(changed)
 
     def test_seed_join_canonical_render_with_a_future_pinned_build(self):
         with self.seed_join_pins():

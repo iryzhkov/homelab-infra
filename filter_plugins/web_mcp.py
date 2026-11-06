@@ -49,11 +49,11 @@ TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
 # Stat-only seed/library pair (jocasta:c3070dfe196e7f67732749db4b279689@3).
-# Pending: no compatible reviewed Go artifact exists yet, so every seed-join
-# key refuses until all three pins name one exact build.
-HOLONET_SEED_JOIN_SOURCE = None
-HOLONET_SEED_JOIN_CONTRACT = None
-HOLONET_SEED_JOIN_SHA256 = None
+# Exact reviewed client/worker pair; publication and CI still gate deployment.
+# Static linux/amd64 artifact: Chaldea b02e84fd-94d4-4491-bfa8-76370db21cc9.
+HOLONET_SEED_JOIN_SOURCE = "ddd1a223b99ee65abec33cf91b01b0c78ae4f688"
+HOLONET_SEED_JOIN_CONTRACT = "c37b45fe27233fe36779fc0741cacefa51331425"
+HOLONET_SEED_JOIN_SHA256 = "98369bb77b1d56b4b2ae87709f0860e4123a1ad4777e121c3e0b89384a2505f6"
 SEED_JOIN_SOURCE = "stat_pair_v1"
 SEED_JOIN_ACTION = "janitor.seed_join.read"
 # The user-approved fixed stat-only ceiling; never an installer input.
