@@ -236,6 +236,138 @@ class TorrentGrantTest(unittest.TestCase):
             profiles.spec([writer() | {"holonet_libraries": ["3"], "holonet_torrents": good}], {"holonet": app()})
 
 
+def seed_join_writer():
+    return historian() | {"holonet_libraries": ["3"],
+        "holonet_janitor": {"library": "3", "actions": list(mi.HOLONET_JANITOR_ACTIONS)},
+        "holonet_torrents": {"library": "3", "actions": list(mi.HOLONET_TORRENT_ACTIONS)},
+        "holonet_seed_join": {"library": "3", "actions": list(mi.HOLONET_SEED_JOIN_ACTIONS)}}
+
+
+class SeedJoinGrantTest(unittest.TestCase):
+    """jocasta:c3070dfe196e7f67732749db4b279689@3: a distinct scope and flat grant."""
+    def mapped(self, item, scope):
+        s = profiles.spec([item], {"holonet": app() | {"scope": " ".join(scope)}})
+        access, current = s["services"]["holonet"], s["identities"][0]
+        mappings = [{"scope_name": k, "expression": v} for k, v in access["scope_expressions"].items()]
+        user = types.SimpleNamespace(username=current["username"], type="service_account",
+                                     attributes=copy.deepcopy(current["grant_attributes"]))
+        return access, current, mappings, user
+
+    def test_exact_three_scope_request_projects_only_the_seed_join_action(self):
+        original = historian() | {"holonet_libraries": ["3"]}
+        before = profiles.spec([original], {"holonet": app()})
+        access, current, mappings, user = self.mapped(seed_join_writer(), mi.HOLONET_SEED_JOIN_APP_SCOPES)
+        old = before["identities"][0]
+        for key in ("username", "token", "secret_path", "generation", "expires", "profile", "host"):
+            self.assertEqual(old[key], current[key])
+        flat = {"aud": access["resource"], "holonet_server": current["grant"]["holonet_server"],
+                "holonet_libraries": ["3"], "holonet_catalog_users": [], "holonet_history_users": [],
+                "holonet_target_users": [], "holonet_namespace": "managed-janitor"}
+        scopes = mi.HOLONET_SEED_JOIN_APP_SCOPES
+        requests = [list(p) for size in range(1, 7)
+                    for subset in combinations(scopes, size) for p in permutations(subset)
+                    if size <= 3 or p == subset]
+        requests += [[], ["holonet.read"] * 2, [*mi.HOLONET_SEED_JOIN_SCOPES, "ha.read"],
+                     ["holonet.read", "holonet.seedjoin"], ["holonet.seedjoin"],
+                     [*mi.HOLONET_SEED_JOIN_SCOPES, "holonet.torrents"]]
+        for requested in requests:
+            if len(requested) == 3 and set(requested) == set(mi.HOLONET_SEED_JOIN_SCOPES):
+                expected = flat | {"holonet_actions": list(mi.HOLONET_SEED_JOIN_ACTIONS)}
+            elif len(requested) == 3 and set(requested) == set(mi.HOLONET_TORRENT_SCOPES):
+                expected = flat | {"holonet_actions": list(mi.HOLONET_TORRENT_ACTIONS)}
+            elif len(requested) == 2 and set(requested) == set(mi.HOLONET_JANITOR_SCOPES):
+                expected = flat | {"holonet_actions": list(mi.HOLONET_JANITOR_ACTIONS)}
+            elif len(requested) == 3 and set(requested) == set(SCOPES):
+                expected = {"aud": access["resource"]} | old["grant"]
+            else:
+                expected = {}
+            with self.subTest(requested=requested):
+                claims = profiles.merged_claims(mappings, user, access["group"], requested)
+                self.assertEqual(claims, expected)
+                for nested in ("holonet_janitor", "holonet_torrents", "holonet_seed_join"):
+                    self.assertNotIn(nested, claims)
+        for key, value in (("username", "foreign"), ("type", "internal")):
+            changed = copy.deepcopy(user)
+            setattr(changed, key, value)
+            self.assertEqual(profiles.merged_claims(mappings, changed, access["group"],
+                                                   mi.HOLONET_SEED_JOIN_SCOPES), {})
+        changed = copy.deepcopy(user)
+        changed.attributes["chaldea_holonet"]["holonet_seed_join"]["actions"].append("janitor.torrents.read")
+        self.assertEqual(profiles.merged_claims(mappings, changed, access["group"],
+                                               mi.HOLONET_SEED_JOIN_SCOPES), {})
+        self.assertEqual(profiles.merged_claims(mappings, user, "foreign", mi.HOLONET_SEED_JOIN_SCOPES), {})
+
+    def test_torrent_only_account_on_seed_join_application_gets_no_seed_join(self):
+        item = seed_join_writer()
+        item.pop("holonet_seed_join")
+        access, _, mappings, user = self.mapped(item, mi.HOLONET_SEED_JOIN_APP_SCOPES)
+        self.assertEqual(profiles.merged_claims(mappings, user, access["group"],
+                                               mi.HOLONET_SEED_JOIN_SCOPES), {})
+        self.assertEqual(profiles.merged_claims(mappings, user, access["group"], mi.HOLONET_TORRENT_SCOPES)
+                         ["holonet_actions"], list(mi.HOLONET_TORRENT_ACTIONS))
+
+    def test_existing_applications_keep_identical_expressions(self):
+        item = historian() | {"holonet_libraries": ["3"],
+            "holonet_janitor": {"library": "3", "actions": list(mi.HOLONET_JANITOR_ACTIONS)},
+            "holonet_torrents": {"library": "3", "actions": list(mi.HOLONET_TORRENT_ACTIONS)}}
+        for scope in (mi.HOLONET_EXTENDED_SCOPES, mi.HOLONET_TORRENT_APP_SCOPES):
+            access, _, _, _ = self.mapped(item if "holonet.torrents" in scope else
+                                          {k: v for k, v in item.items() if k != "holonet_torrents"}, scope)
+            for expression in access["scope_expressions"].values():
+                self.assertNotIn("seed", expression)
+                self.assertIn("grant = {key: value for key, value in grant.items() if key not in "
+                              "('holonet_janitor', 'holonet_torrents')}", expression.splitlines())
+
+    def test_scope_alone_never_enrolls_and_nested_grant_is_closed(self):
+        application = app() | {"scope": " ".join(mi.HOLONET_SEED_JOIN_APP_SCOPES)}
+        spec = profiles.spec([profiles.identity("holonet"), writer()], {"holonet": application})
+        access = spec["services"]["holonet"]
+        mappings = [{"scope_name": k, "expression": v} for k, v in access["scope_expressions"].items()]
+        for item in spec["identities"]:
+            user = types.SimpleNamespace(username=item["username"], type="service_account",
+                                         attributes=copy.deepcopy(item["grant_attributes"]))
+            self.assertEqual(profiles.merged_claims(mappings, user, access["group"],
+                                                   mi.HOLONET_SEED_JOIN_SCOPES), {})
+        good = {"library": "3", "actions": list(mi.HOLONET_SEED_JOIN_ACTIONS)}
+        for bad in (None, {}, {"library": "4", "actions": good["actions"]},
+                    good | {"namespace": "managed-janitor"},
+                    good | {"actions": list(mi.HOLONET_TORRENT_ACTIONS)},
+                    good | {"actions": good["actions"] + ["janitor.torrents.read"]},
+                    good | {"actions": good["actions"] + ["janitor.custody.read"]}):
+            with self.subTest(bad=bad), self.assertRaises(mi.AnsibleFilterError):
+                profiles.spec([seed_join_writer() | {"holonet_seed_join": bad}], {"holonet": application})
+        with self.assertRaises(mi.AnsibleFilterError):
+            profiles.spec([profiles.identity("holonet") | {"holonet_seed_join": good}], {"holonet": application})
+        for scope in (mi.HOLONET_TORRENT_APP_SCOPES, mi.HOLONET_EXTENDED_SCOPES, SCOPES):
+            with self.subTest(scope=scope), self.assertRaises(mi.AnsibleFilterError):
+                profiles.spec([seed_join_writer()], {"holonet": app() | {"scope": " ".join(scope)}})
+        for scope in ("holonet.read holonet.curate holonet.home holonet.janitor holonet.seedjoin",
+                      " ".join(mi.HOLONET_SEED_JOIN_APP_SCOPES) + " holonet.admin"):
+            with self.subTest(scope=scope), self.assertRaises(mi.AnsibleFilterError):
+                profiles.spec([writer()], {"holonet": app() | {"scope": scope}})
+
+    def test_enrollment_requires_existing_owned_writer_and_token(self):
+        from unittest.mock import patch
+        s = profiles.spec([seed_join_writer()],
+                          {"holonet": app() | {"scope": " ".join(mi.HOLONET_SEED_JOIN_APP_SCOPES)}})
+        part = next(mi._service_specs(s))
+        account = part["identities"][0]
+        user, token = ("user", account["username"]), ("token", account["token"])
+        owned = [[*user, "present"], [*token, "present"]]
+        found = {user: {"pk": 1}, token: {"expires": account["expires"]},
+                 ("keypair", part["access"]["signing_key"]): {"private_key_available": True, "key_type": "rsa"}}
+        def check(seen, owners=owned):
+            with patch.object(mi, "_found", return_value=seen), patch.object(mi, "_binding_problems", return_value=[]):
+                return mi._service_refusals(part, owners, [], None)
+        self.assertEqual(check(found), [])
+        changed = copy.deepcopy(found)
+        changed.pop(token)
+        self.assertIn("janitor enrollment requires an existing owned writer account and token", check(changed))
+        changed = copy.deepcopy(found)
+        changed[token]["expires"] = "2027-01-01T00:00:00Z"
+        self.assertIn("janitor enrollment must preserve the existing token expiry", check(changed))
+
+
 class WriterGrantTest(unittest.TestCase):
     def test_composed_mappings_emit_once_and_preserve_reader(self):
         reader = profiles.identity("holonet")

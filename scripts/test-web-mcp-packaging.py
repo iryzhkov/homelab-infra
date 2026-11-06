@@ -870,6 +870,101 @@ class PackagingTest(unittest.TestCase):
         self.assertNotIn("torrent_descriptor", contract.playlist_operator_plan(old))
         self.assertNotIn("janitor_torrents", contract.playlist_operator_plan(old)["policy"])
 
+    def seed_join_fixture(self, root=None):
+        value = custody_fixture()
+        value["artifact"].update(source_revision=contract.HOLONET_TORRENT_SOURCE,
+            contract_revision=contract.HOLONET_TORRENT_CONTRACT, sha256=contract.HOLONET_TORRENT_SHA256)
+        value["config"]["janitor"].update(torrent_source="qbit_inventory_v1",
+            torrent_resource_id="homelab-qbit-movies", seed_join_source="stat_pair_v1")
+        value["config"]["policy"]["Actions"] += ["janitor.torrents.read", "janitor.seed_join.read"]
+        value["torrents"] = {"descriptor": dict(version=1, resource_id="homelab-qbit-movies",
+            origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
+            credential_file="/etc/holonet-playlists/qbit-auth.json", categories=["radarr-movies"],
+            payload_prefixes=["/mnt/shared/downloads/complete/movies"])}
+        value["seed_join"] = {"library_root": root or
+                              {"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"}}
+        return value
+
+    def seed_join_pins(self):
+        return mock.patch.multiple(contract, HOLONET_SEED_JOIN_SOURCE="5" * 40,
+                                   HOLONET_SEED_JOIN_CONTRACT="6" * 40,
+                                   HOLONET_SEED_JOIN_SHA256="7" * 64)
+
+    def test_seed_join_pending_pins_refuse_every_key(self):
+        # No compatible Go artifact exists: even the accepted torrent build refuses.
+        self.assertIsNone(contract.HOLONET_SEED_JOIN_SOURCE)
+        self.assertIsNone(contract.HOLONET_SEED_JOIN_CONTRACT)
+        self.assertIsNone(contract.HOLONET_SEED_JOIN_SHA256)
+        self.rejected(self.seed_join_fixture())
+        for drop in ("seed_join",):
+            value = self.seed_join_fixture()
+            value.pop(drop)
+            self.rejected(value)
+        value = self.seed_join_fixture()
+        value["config"]["janitor"].pop("seed_join_source")
+        value["config"]["policy"]["Actions"].remove("janitor.seed_join.read")
+        self.rejected(value)  # Endpoint input without the key.
+        value.pop("seed_join")
+        self.assertEqual(contract.endpoint_contract(value), value)  # Torrent mode unchanged.
+        plan = contract.playlist_operator_plan(value)
+        self.assertNotIn("janitor_seed_join", plan["policy"])
+        self.assertNotIn("janitor.seed_join.read", value["config"]["policy"]["Actions"])
+        self.assertIn("emby_operator_seed_join.py", contract.OPERATOR_MODULES)
+        self.assertEqual(set(contract.OPERATOR_MODULES), guard.OPERATOR_MODULES)
+
+    def test_seed_join_canonical_render_with_a_future_pinned_build(self):
+        with self.seed_join_pins():
+            value = self.seed_join_fixture()
+            value["artifact"].update(source_revision="5" * 40, contract_revision="6" * 40, sha256="7" * 64)
+            self.assertEqual(contract.endpoint_contract(value), value)
+            plan = contract.playlist_operator_plan(value)
+            self.assertEqual(plan["policy"]["janitor_seed_join"], {
+                "target_library": "3", "revision": value["config"]["policy_revision"],
+                "library_root": {"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"},
+                "seed_root": {"app_prefix": "/mnt/shared/downloads/complete/movies",
+                              "host_prefix": "/mnt/shared/downloads/complete/movies"}})
+            self.assertEqual(value["config"]["policy"]["Actions"][-1], "janitor.seed_join.read")
+            sys.path.insert(0, str(ROOT / "scripts"))
+            try:
+                import emby_operator_socket as worker
+                worker.validate_policy(plan["policy"])
+            finally:
+                sys.path.pop(0)
+            # Same artifact bytes are required; the torrent build cannot carry the key.
+            for key, bad in (("sha256", "0" * 64), ("contract_revision", contract.HOLONET_TORRENT_CONTRACT)):
+                changed = copy.deepcopy(value)
+                changed["artifact"][key] = bad
+                self.rejected(changed)
+            self.rejected(self.seed_join_fixture())
+            mutations = (
+                lambda v: v["seed_join"].update(seed_root={"app_prefix": "/x", "host_prefix": "/x"}),
+                lambda v: v["seed_join"].update(library_root={"app_prefix": "/movies", "host_prefix": "/mnt/shared"}),
+                lambda v: v["seed_join"].update(library_root={"app_prefix": "/films",
+                                                              "host_prefix": "/mnt/shared/media/movies"}),
+                lambda v: v["config"]["janitor"].update(seed_join_source="stat_pair_v2"),
+                lambda v: v["config"]["janitor"].update(seed_join_source=None),
+                lambda v: v["config"]["janitor"].pop("torrent_source"),
+                lambda v: v.pop("torrents"),
+                lambda v: v["config"]["policy"]["Actions"].remove("janitor.seed_join.read"),
+                lambda v: v["config"]["policy"]["Actions"].insert(1, v["config"]["policy"]["Actions"].pop()),
+                lambda v: v.pop("seed_join"),
+            )
+            for mutate in mutations:
+                changed = copy.deepcopy(value)
+                mutate(changed)
+                with self.subTest(mutate=mutate):
+                    self.rejected(changed)
+            # Custody, when full, must name the same Movies root.
+            changed = copy.deepcopy(value)
+            changed["seed_join"]["library_root"] = {"app_prefix": "/mnt/shared/media/movies",
+                                                    "host_prefix": "/mnt/shared/media/movies"}
+            self.rejected(changed)
+            changed["custody"]["roots"] = [dict(changed["seed_join"]["library_root"])]
+            self.assertEqual(contract.endpoint_contract(changed), changed)
+            ha = fixture("ha-mcp")
+            ha["seed_join"] = value["seed_join"]
+            self.rejected(ha)
+
     def test_torrent_private_staging_apply_repeat_and_installed_reuse(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

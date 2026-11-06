@@ -293,6 +293,11 @@ HOLONET_EXTENDED_SCOPES = HOLONET_WRITER_SCOPES + ("holonet.janitor",)
 HOLONET_TORRENT_SCOPES = HOLONET_JANITOR_SCOPES + ("holonet.torrents",)
 HOLONET_TORRENT_ACTIONS = ("janitor.torrents.read",)
 HOLONET_TORRENT_APP_SCOPES = HOLONET_EXTENDED_SCOPES + ("holonet.torrents",)
+# Stat-only seed/library pair (jocasta:c3070dfe196e7f67732749db4b279689@3): its
+# own scope selects its own flat grant; it never widens another purpose grant.
+HOLONET_SEED_JOIN_SCOPES = HOLONET_JANITOR_SCOPES + ("holonet.seedjoin",)
+HOLONET_SEED_JOIN_ACTIONS = ("janitor.seed_join.read",)
+HOLONET_SEED_JOIN_APP_SCOPES = HOLONET_TORRENT_APP_SCOPES + ("holonet.seedjoin",)
 
 
 def _holonet_grant(item, name):
@@ -328,6 +333,14 @@ def _holonet_grant(item, name):
                 or torrent["actions"] != list(HOLONET_TORRENT_ACTIONS)):
             _refuse(name + " torrent requires the exact existing Movies writer read grant")
         grant["holonet_torrents"] = {"library": "3", "actions": list(HOLONET_TORRENT_ACTIONS)}
+    if "holonet_seed_join" in item:
+        seed = _keys(item["holonet_seed_join"], {"library", "actions"}, name + " seed join read grant")
+        if (grant["holonet_namespace"] != "managed-recommendations"
+                or grant["holonet_actions"] == ["catalog.read"]
+                or seed["library"] != "3" or "3" not in grant["holonet_libraries"]
+                or seed["actions"] != list(HOLONET_SEED_JOIN_ACTIONS)):
+            _refuse(name + " seed join requires the exact existing Movies writer read grant")
+        grant["holonet_seed_join"] = {"library": "3", "actions": list(HOLONET_SEED_JOIN_ACTIONS)}
     if grant["holonet_actions"] == ["catalog.read"]:
         # Catalog readers never carry history, targets or userdata.
         if grant["holonet_history_users"] != []:
@@ -369,6 +382,24 @@ def _bounded_expression(access, service, scope=None):
         "    return {}",
     ]
     if service == "holonet":
+        if "holonet.seedjoin" in access["scope_mappings"]:
+            # Match the complete stored attribute above, then project one flat
+            # purpose grant. Never emit the nested declaration as a JWT claim.
+            lines += [
+                "requested = token.scope",
+                f"if (isinstance(requested, list) and len(requested) == 3",
+                f"        and set(requested) == set({list(HOLONET_SEED_JOIN_SCOPES)!r})):",
+                "    seed = grant.get('holonet_seed_join')",
+                f"    if not seed or {scope!r} != sorted(requested)[0]:",
+                "        return {}",
+                f"    return {{'aud': {access['resource']!r},",
+                "            'holonet_server': grant['holonet_server'],",
+                "            'holonet_libraries': [seed['library']],",
+                "            'holonet_catalog_users': [], 'holonet_history_users': [],",
+                "            'holonet_target_users': [],",
+                "            'holonet_actions': list(seed['actions']),",
+                "            'holonet_namespace': 'managed-janitor'}",
+            ]
         if "holonet.torrents" in access["scope_mappings"]:
             # Match the complete stored attribute above, then project one flat
             # purpose grant. Never emit the nested declaration as a JWT claim.
@@ -405,7 +436,10 @@ def _bounded_expression(access, service, scope=None):
                 "            'holonet_actions': list(janitor['actions']),",
                 "            'holonet_namespace': 'managed-janitor'}",
             ]
-        if set(access["scope_mappings"]) & {"holonet.janitor", "holonet.torrents"}:
+        if "holonet.seedjoin" in access["scope_mappings"]:
+            lines.append("grant = {key: value for key, value in grant.items() if key not in ('holonet_janitor', 'holonet_torrents', 'holonet_seed_join')}")
+        elif set(access["scope_mappings"]) & {"holonet.janitor", "holonet.torrents"}:
+            # Unchanged bytes for the existing two- and three-purpose applications.
             lines.append("grant = {key: value for key, value in grant.items() if key not in ('holonet_janitor', 'holonet_torrents')}")
         if access["scope"] == "holonet.read":
             # Preserve the historical catalog mapping byte-for-byte.
@@ -481,7 +515,7 @@ def _bounded_expression(access, service, scope=None):
 
 SERVICES = {
     "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS,
-                "optional_account_keys": {"holonet_janitor", "holonet_torrents"}, "scope": "holonet.read",
+                "optional_account_keys": {"holonet_janitor", "holonet_torrents", "holonet_seed_join"}, "scope": "holonet.read",
                 "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},
     "jocasta": SERVICE,
     "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "optional_account_keys": {"ov_actions", "ov_personal"},
@@ -510,7 +544,8 @@ def _application(raw, service):
         if service == "ha":
             scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read")
         elif service == "holonet":
-            scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES))
+            scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES),
+                      " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES))
         elif service == "ov":
             # ov.read first, then any optional families in canonical order.
             optional = OV_SCOPES[1:] + OV_PERSONAL_SCOPES
@@ -621,12 +656,14 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         name = f"identity {host}/{profile}"
         grant, grant_attributes = profile_spec["grant"](item, name)
         if (service == "holonet" and grant["holonet_actions"] != ["catalog.read"]
-                and access["scope"] not in (" ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES))):
+                and access["scope"] not in (" ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES))):
             _refuse(name + " managed recommendations require the explicit writer application")
-        if service == "holonet" and "holonet_janitor" in grant and access["scope"] not in (" ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES)):
+        if service == "holonet" and "holonet_janitor" in grant and access["scope"] not in (" ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES)):
             _refuse(name + " janitor requires its explicit scope on the existing application")
-        if service == "holonet" and "holonet_torrents" in grant and access["scope"] != " ".join(HOLONET_TORRENT_APP_SCOPES):
+        if service == "holonet" and "holonet_torrents" in grant and access["scope"] not in (" ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES)):
             _refuse(name + " torrents require their explicit scope on the existing application")
+        if service == "holonet" and "holonet_seed_join" in grant and access["scope"] != " ".join(HOLONET_SEED_JOIN_APP_SCOPES):
+            _refuse(name + " seed join requires its explicit scope on the existing application")
         if service == "ha":
             scopes = access["scope"].split(" ")
             for action in grant["ha_actions"]:
@@ -1010,7 +1047,7 @@ def _service_refusals(spec, owned, results, applications):
     access = spec["access"]
     if access["service"] == "holonet":
         for identity in spec["identities"]:
-            if not ({"holonet_janitor", "holonet_torrents"} & set(identity["grant"])):
+            if not ({"holonet_janitor", "holonet_torrents", "holonet_seed_join"} & set(identity["grant"])):
                 continue
             user_key, token_key = ("user", identity["username"]), ("token", identity["token"])
             token = found.get(token_key)

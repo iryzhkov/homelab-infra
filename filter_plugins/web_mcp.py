@@ -48,6 +48,16 @@ HOLONET_TORRENT_SHA256 = "d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848
 TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
+# Stat-only seed/library pair (jocasta:c3070dfe196e7f67732749db4b279689@3).
+# Pending: no compatible reviewed Go artifact exists yet, so every seed-join
+# key refuses until all three pins name one exact build.
+HOLONET_SEED_JOIN_SOURCE = None
+HOLONET_SEED_JOIN_CONTRACT = None
+HOLONET_SEED_JOIN_SHA256 = None
+SEED_JOIN_SOURCE = "stat_pair_v1"
+SEED_JOIN_ACTION = "janitor.seed_join.read"
+# The user-approved fixed stat-only ceiling; never an installer input.
+SEED_CEILING = "/mnt/shared/downloads/complete/movies"
 
 HOLONET_CUSTODY_SOURCE = "f2f91e1c1f9e7346a324567ad206110a259da306"
 HOLONET_CUSTODY_CONTRACT = "50127da581f2429c92ff6d40fe23156bde0485a1"
@@ -66,9 +76,10 @@ OPERATOR_MODULES = {
     "emby_operator_adapter.py": "368b5375ac5227a53bbe560db0333b01461e4979d6bfe97fd3a2b5cd7bcc5cb9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "42969569034acde9ad26dff8db9472d8612122183d5bff4a2a79c1fbb59f053e",
-    "emby_operator_socket.py": "d34fe1dd3c28f632182bac018aceb2036ed3a7c8bb07cfde579ebc86517f6c69",
+    "emby_operator_socket.py": "f7ccab7174be366de7435a7536e2467243fc6b61a50d785fb0e2326d979f27f4",
     "emby_operator_torrents.py": "540a5148b3eef7dd9581a564bf574687d4062194599ea3b8155e01e7c436f175",
     "emby_operator_custody.py": "09bbaf1a9a59ca2a2df533d5fdae669cfda4170cd0d3ecb7250cdcde34c3b79c",
+    "emby_operator_seed_join.py": "deb669172df79565cd17a8774c827604432936eb2404e86a49e59b8e68eb21d2",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
@@ -442,14 +453,15 @@ def janitor_read_actions(config):
         return []
     value = config["janitor"]
     return ((CUSTODY_ACTIONS if "custody_source" in value else CUSTODY_ACTIONS[:1])
-            + (["janitor.torrents.read"] if "torrent_source" in value else [])) if isinstance(value, dict) else []
+            + (["janitor.torrents.read"] if "torrent_source" in value else [])
+            + ([SEED_JOIN_ACTION] if "seed_join_source" in value else [])) if isinstance(value, dict) else []
 
 
 def holonet_janitor(config):
     value = config["janitor"]
     operator = config.get("playlist_operator")
     keys(value, ("importer_source", "state_directory", "subject",
-                 "library", "protected_users", "recipients", "revision"), ("custody_source", "torrent_source", "torrent_resource_id"))
+                 "library", "protected_users", "recipients", "revision"), ("custody_source", "torrent_source", "torrent_resource_id", "seed_join_source"))
     require(operator is not None and ("custody_source" not in value or value["custody_source"] == "arr_custody_v1")
             and value["importer_source"] == "arr_inventory_v2"
             and value["state_directory"] == "/var/lib/holonet/janitor"
@@ -462,6 +474,9 @@ def holonet_janitor(config):
             and value["torrent_source"] == "qbit_inventory_v1"
             and value["torrent_resource_id"] == TORRENT_RESOURCE
             and value["library"] == OPERATOR_LIBRARY), "invalid torrent source binding")
+    require("seed_join_source" not in value or (value["seed_join_source"] == SEED_JOIN_SOURCE
+            and torrent_keys == {"torrent_source", "torrent_resource_id"}),
+            "seed join requires its fixed source and the torrent pair")
     for name in ("protected_users", "recipients"):
         users = records(value[name], 1, 16)
         require(all(isinstance(u, str) for u in users), "invalid custody cohort")
@@ -559,8 +574,36 @@ def torrent_install_plan(value):
                        "revision": config["policy_revision"], "config": TORRENT_DESCRIPTOR}}
 
 
+def seed_join_install_plan(value):
+    """Root policy block only. The seed root is the fixed constant, never an input."""
+    config = value["config"]
+    janitor = config.get("janitor")
+    selected = isinstance(janitor, dict) and "seed_join_source" in janitor
+    require(selected == ("seed_join" in value), "seed join inputs must be paired")
+    if not selected:
+        return None
+    require(value["service"] == "holonet", "seed join is HoloNet only")
+    holonet_janitor(config)
+    require(torrent_install_plan(value) is not None and "custody" in value,
+            "seed join requires the torrent descriptor and Radarr importer inputs")
+    data = value["seed_join"]
+    keys(data, ("library_root",))
+    root = data["library_root"]
+    require(root == {"app_prefix": "/movies", "host_prefix": "/mnt/shared/media/movies"}
+            or root == {"app_prefix": "/mnt/shared/media/movies",
+                        "host_prefix": "/mnt/shared/media/movies"},
+            "seed join library root must be the existing Movies root")
+    custody = value["custody"].get("roots")
+    require(custody is None or custody[0] == root,
+            "seed join library root must equal the custody Movies root")
+    return {"policy": {"target_library": OPERATOR_LIBRARY, "revision": config["policy_revision"],
+                       "library_root": dict(root),
+                       "seed_root": {"app_prefix": SEED_CEILING, "host_prefix": SEED_CEILING}}}
+
+
 def endpoint_contract(value):
-    keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"), ("custody", "torrents"))
+    keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"),
+         ("custody", "torrents", "seed_join"))
     service = value["service"]
     require(service in SERVICES, "unregistered fixed service package")
     integer(value["uid"], 100, 999)
@@ -575,8 +618,15 @@ def endpoint_contract(value):
     _, contract = SERVICES[service]
     if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
         contract = HOLONET_WRITER_CONTRACT
-    torrent_build = service == "holonet" and artifact["source_revision"] == HOLONET_TORRENT_SOURCE
-    if torrent_build:
+    seed_join_build = (service == "holonet" and HOLONET_SEED_JOIN_SOURCE is not None
+                       and HOLONET_SEED_JOIN_CONTRACT is not None
+                       and HOLONET_SEED_JOIN_SHA256 is not None
+                       and artifact["source_revision"] == HOLONET_SEED_JOIN_SOURCE)
+    if seed_join_build:
+        require(artifact["sha256"] == HOLONET_SEED_JOIN_SHA256, "unaccepted seed join binary")
+    torrent_build = seed_join_build or (
+        service == "holonet" and artifact["source_revision"] == HOLONET_TORRENT_SOURCE)
+    if torrent_build and not seed_join_build:
         require(artifact["sha256"] == HOLONET_TORRENT_SHA256, "unaccepted torrent binary")
     custody_build = torrent_build or (service == "holonet" and HOLONET_CUSTODY_SOURCE is not None
                      and HOLONET_CUSTODY_CONTRACT is not None
@@ -593,7 +643,9 @@ def endpoint_contract(value):
     operator_build = playback_build or (
         service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
         and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
-    if torrent_build:
+    if seed_join_build:
+        contract = HOLONET_SEED_JOIN_CONTRACT
+    elif torrent_build:
         contract = HOLONET_TORRENT_CONTRACT
     elif custody_build:
         contract = HOLONET_CUSTODY_CONTRACT
@@ -632,6 +684,10 @@ def endpoint_contract(value):
         torrent_install_plan(value)
         require(not ({"torrent_source", "torrent_resource_id"} & set(value["config"].get("janitor") or {}))
                 or torrent_build, "torrent keys require their exact reviewed artifact")
+        # Older builds refuse the unknown key; no compatible build is pinned yet.
+        require("seed_join_source" not in (value["config"].get("janitor") or {}) or seed_join_build,
+                "seed join keys require their exact reviewed artifact")
+        seed_join_install_plan(value)
         # Older binaries refuse the unknown key, so even null needs the new build.
         require("playlist_operator" not in value["config"] or operator_build,
                 "playlist_operator requires its exact reviewed artifact")
@@ -646,7 +702,8 @@ def endpoint_contract(value):
             require(value["uid"] == OPERATOR_UID and value["gid"] == OPERATOR_GID,
                     "management requires the homelab holonet identity")
     else:
-        require("custody" not in value and "torrents" not in value, "root readers are HoloNet only")
+        require("custody" not in value and "torrents" not in value and "seed_join" not in value,
+                "root readers are HoloNet only")
         expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
                     else observer_config(value["config"]))
     names = []
@@ -690,6 +747,7 @@ def playlist_operator_plan(value):
     config = value["config"]
     custody = custody_install_plan(value)
     torrents = torrent_install_plan(value)
+    seed_join = seed_join_install_plan(value)
     return {
         **({"torrent_descriptor": torrents} if torrents else {}),
         **({"custody_descriptor": custody} if custody else {}),
@@ -704,6 +762,7 @@ def playlist_operator_plan(value):
             **({"janitor_torrents": torrents["policy"]} if torrents else {}),
             **({"janitor_importers": custody["importers"]} if custody else {}),
             **({"janitor_custody": custody["custody"]} if custody and "custody" in custody else {}),
+            **({"janitor_seed_join": seed_join["policy"]} if seed_join else {}),
             "version": 1, "enabled": True,
             "peer": {"uid": value["uid"], "gid": value["gid"]},
             "caller": {"issuer": config["issuer"], "subject": operator["subject"],

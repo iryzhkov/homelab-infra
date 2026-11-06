@@ -106,7 +106,7 @@ class DeclarationTest(unittest.TestCase):
             "authentik_machine_services", "authentik_machine_identities",
             "holonet_catalog_interactive_enabled", "holonet_catalog_interactive_identity",
             "holonet_catalog_playback_enabled", "holonet_catalog_series_enabled", "holonet_catalog_janitor_enabled",
-            "holonet_catalog_torrents_enabled",
+            "holonet_catalog_torrents_enabled", "holonet_catalog_seed_join_enabled",
             "holonet_catalog_recommendations_enabled", "holonet_catalog_recommendations_identity"})
         self.assertIs(values["holonet_catalog_interactive_enabled"], False)
         self.assertEqual(values["holonet_catalog_interactive_identity"], INTERACTIVE | {"expires": TEMPLATED_EXPIRES})
@@ -114,6 +114,7 @@ class DeclarationTest(unittest.TestCase):
         self.assertIs(values["holonet_catalog_series_enabled"], False)
         self.assertIs(values["holonet_catalog_janitor_enabled"], False)
         self.assertIs(values["holonet_catalog_torrents_enabled"], False)
+        self.assertIs(values["holonet_catalog_seed_join_enabled"], False)
         self.assertIs(values["holonet_catalog_recommendations_enabled"], False)
         self.assertEqual(values["holonet_catalog_recommendations_identity"], WRITER | {
             "holonet_target_users": [], "expires": ""})
@@ -919,6 +920,67 @@ class EntrypointTest(unittest.TestCase):
         for mapping in x.state.mappings.values():
             self.assertEqual(evaluate(mapping["expression"], user, HOLONET["group"],
                                       ("holonet.read", "holonet.janitor", "holonet.torrents")), {})
+
+    def test_seed_join_same_account_apply_repeat_and_inverse_keep_every_key(self):
+        x = self.x
+        self.use_patched = True
+        accounts = COHORT + [INTERACTIVE, WRITER]
+        full = self.holonet | {"scope": "holonet.read holonet.curate holonet.home"}
+        code, output = x.run(accounts, services={"holonet": full},
+                            extra_vars={"authentik_machine_identities_blueprint_name": BLUEPRINT})
+        self.assertEqual(code, 0, output)
+        users_before = copy.deepcopy(x.state.users)
+        tokens_before = copy.deepcopy(x.state.tokens)
+        def files():
+            result = {}
+            for item in accounts:
+                path = self.secret(item["host"], item)
+                result[item["profile"]] = (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+            return result
+        files_before = files()
+        extended = full | {"scope": full["scope"] + " holonet.janitor holonet.torrents holonet.seedjoin"}
+        options = {"holonet_catalog_recommendations_enabled": True,
+                   "holonet_catalog_recommendations_identity": WRITER,
+                   "holonet_catalog_interactive_enabled": True,
+                   "holonet_catalog_torrents_enabled": True,
+                   "holonet_catalog_seed_join_enabled": True,
+                   "authentik_machine_services": {"holonet": extended}}
+        self.refused("Require explicit existing writer seed join", **(options | {
+            "holonet_catalog_seed_join_enabled": "true"}))
+        self.refused("Refuse overridden torrent projection", **(options | {
+            "authentik_machine_services": {"holonet": full | {
+                "scope": full["scope"] + " holonet.janitor holonet.torrents"}}}))
+        self.refused("Require explicit existing writer seed join", **(options | {
+            "holonet_catalog_torrents_enabled": False}))
+        self.assertFalse((x.base / "sops-loaded").exists())
+        self.refused("Require a fresh public baseline", **options)
+        self.assertFalse((x.base / "sops-loaded").exists())
+        self.ok(self.baseline(), **options)
+        self.assertEqual(set(x.state.users), set(users_before))
+        self.assertEqual(x.state.tokens, tokens_before)
+        self.assertEqual(files(), files_before)
+        expected = copy.deepcopy(users_before)
+        username = "chaldea-laptop-holonet-recommendations"
+        expected[username]["attributes"]["chaldea_holonet"]["holonet_torrents"] = {
+            "library": "3", "actions": ["janitor.torrents.read"]}
+        expected[username]["attributes"]["chaldea_holonet"]["holonet_seed_join"] = {
+            "library": "3", "actions": ["janitor.seed_join.read"]}
+        self.assertEqual(x.state.users, expected)
+        self.assertIn(HOLONET["name"] + ": holonet.seedjoin", x.state.mappings)
+        self.assertEqual(x.changed(self.ok(self.baseline(), **options)), 0)
+        self.assertEqual(x.state.tokens, tokens_before)
+        self.assertEqual(files(), files_before)
+        # Revoke only the seed join grant; the torrent grant and owned mapping stay.
+        self.ok(self.baseline(), **(options | {"holonet_catalog_seed_join_enabled": False}))
+        expected[username]["attributes"]["chaldea_holonet"].pop("holonet_seed_join")
+        self.assertEqual(x.state.users, expected)
+        self.assertEqual(x.state.tokens, tokens_before)
+        self.assertEqual(files(), files_before)
+        self.assertIn(HOLONET["name"] + ": holonet.seedjoin", x.state.mappings)
+        user = types.SimpleNamespace(**x.state.users[username])
+        for mapping in x.state.mappings.values():
+            self.assertEqual(evaluate(mapping["expression"], user, HOLONET["group"],
+                                      ("holonet.read", "holonet.janitor", "holonet.seedjoin")), {})
 
     def test_writer_actual_add_repeat_and_inverse_preserve_every_reader(self):
         x = self.x
