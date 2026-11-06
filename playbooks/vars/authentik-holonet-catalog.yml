@@ -133,6 +133,7 @@ holonet_catalog_interactive_identity:
 # Separate writer-only TV/Anime opt-in. Readers remain Movies-only.
 # Add a separate read-only purpose grant to the existing writer only.
 holonet_catalog_janitor_enabled: false
+holonet_catalog_torrents_enabled: false
 holonet_catalog_series_enabled: false
 holonet_catalog_playback_enabled: false
 holonet_catalog_recommendations_enabled: false

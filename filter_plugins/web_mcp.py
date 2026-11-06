@@ -42,6 +42,13 @@ HOLONET_SERIES_SOURCE = "9efca7904b6b142c765bda4574185615fd374518"
 HOLONET_SERIES_CONTRACT = "748e89df0c765ba82133d9b45b8be00e76925128"
 # Exact history-capable client and compatible unchanged worker/interface.
 # CI, artifact checksum and final release acceptance still gate deployment.
+HOLONET_TORRENT_SOURCE = "06b7162d865b89c36385705c0583dab4b043e939"
+HOLONET_TORRENT_CONTRACT = "d07c64a5f291e7c0e47e5ebb9f25bf3fcb8f6eb2"
+HOLONET_TORRENT_SHA256 = "d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848f7dc91cef2"
+TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
+TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
+TORRENT_RESOURCE = "homelab-qbit-movies"
+
 HOLONET_CUSTODY_SOURCE = "f2f91e1c1f9e7346a324567ad206110a259da306"
 HOLONET_CUSTODY_CONTRACT = "50127da581f2429c92ff6d40fe23156bde0485a1"
 HOLONET_HISTORY_RANGE_SOURCE = "2e7c19fe017e29b15c6e2f0ba9ccb84cadcdc6ff"
@@ -434,14 +441,15 @@ def janitor_read_actions(config):
     if "janitor" not in config:
         return []
     value = config["janitor"]
-    return CUSTODY_ACTIONS if isinstance(value, dict) and "custody_source" in value else CUSTODY_ACTIONS[:1]
+    return ((CUSTODY_ACTIONS if "custody_source" in value else CUSTODY_ACTIONS[:1])
+            + (["janitor.torrents.read"] if "torrent_source" in value else [])) if isinstance(value, dict) else []
 
 
 def holonet_janitor(config):
     value = config["janitor"]
     operator = config.get("playlist_operator")
     keys(value, ("importer_source", "state_directory", "subject",
-                 "library", "protected_users", "recipients", "revision"), ("custody_source",))
+                 "library", "protected_users", "recipients", "revision"), ("custody_source", "torrent_source", "torrent_resource_id"))
     require(operator is not None and ("custody_source" not in value or value["custody_source"] == "arr_custody_v1")
             and value["importer_source"] == "arr_inventory_v2"
             and value["state_directory"] == "/var/lib/holonet/janitor"
@@ -449,6 +457,11 @@ def holonet_janitor(config):
             and value["library"] == operator["library"]
             and value["revision"] == config["policy_revision"],
             "custody requires its fixed independent binding and journal")
+    torrent_keys = {"torrent_source", "torrent_resource_id"} & set(value)
+    require(not torrent_keys or (torrent_keys == {"torrent_source", "torrent_resource_id"}
+            and value["torrent_source"] == "qbit_inventory_v1"
+            and value["torrent_resource_id"] == TORRENT_RESOURCE
+            and value["library"] == OPERATOR_LIBRARY), "invalid torrent source binding")
     for name in ("protected_users", "recipients"):
         users = records(value[name], 1, 16)
         require(all(isinstance(u, str) for u in users), "invalid custody cohort")
@@ -514,8 +527,39 @@ def custody_install_plan(value):
     return {**plan, "custody": {"backends": {"radarr": {"roots": roots, "recycle": data["recycle"]}}}}
 
 
+def qbit_auth(value):
+    keys(value, ("username", "password"))
+    for key, cap in (("username", 256), ("password", 4096)):
+        text = value[key]
+        require(isinstance(text, str) and 1 <= len(text.encode("utf-8")) <= cap
+                and not any(c in text for c in "\x00\r\n"), "invalid qBit credential schema")
+    return value
+
+
+def torrent_install_plan(value):
+    config = value["config"]
+    janitor = config.get("janitor")
+    selected = isinstance(janitor, dict) and bool({"torrent_source", "torrent_resource_id"} & set(janitor))
+    require(selected == ("torrents" in value), "torrent inputs must be paired")
+    if not selected:
+        return None
+    require(value["service"] == "holonet", "torrents are HoloNet only")
+    holonet_janitor(config)
+    data = value["torrents"]
+    keys(data, ("descriptor",))
+    expected = dict(version=1, resource_id=TORRENT_RESOURCE,
+        origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
+        credential_file=TORRENT_AUTH, categories=["radarr-movies"],
+        payload_prefixes=["/mnt/shared/downloads/complete/movies"])
+    require(data["descriptor"] == expected and type(data["descriptor"].get("version")) is int,
+            "torrent descriptor must match the canonical Movies source")
+    return {"path": TORRENT_DESCRIPTOR, "descriptor": expected,
+            "policy": {"target_library": OPERATOR_LIBRARY,
+                       "revision": config["policy_revision"], "config": TORRENT_DESCRIPTOR}}
+
+
 def endpoint_contract(value):
-    keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"), ("custody",))
+    keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"), ("custody", "torrents"))
     service = value["service"]
     require(service in SERVICES, "unregistered fixed service package")
     integer(value["uid"], 100, 999)
@@ -530,7 +574,10 @@ def endpoint_contract(value):
     _, contract = SERVICES[service]
     if service == "holonet" and artifact["source_revision"] == HOLONET_WRITER_SOURCE:
         contract = HOLONET_WRITER_CONTRACT
-    custody_build = (service == "holonet" and HOLONET_CUSTODY_SOURCE is not None
+    torrent_build = service == "holonet" and artifact["source_revision"] == HOLONET_TORRENT_SOURCE
+    if torrent_build:
+        require(artifact["sha256"] == HOLONET_TORRENT_SHA256, "unaccepted torrent binary")
+    custody_build = torrent_build or (service == "holonet" and HOLONET_CUSTODY_SOURCE is not None
                      and HOLONET_CUSTODY_CONTRACT is not None
                      and artifact["source_revision"] == HOLONET_CUSTODY_SOURCE)
     history_range_build = custody_build or (service == "holonet" and HOLONET_HISTORY_RANGE_SOURCE is not None
@@ -545,7 +592,9 @@ def endpoint_contract(value):
     operator_build = playback_build or (
         service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
         and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
-    if custody_build:
+    if torrent_build:
+        contract = HOLONET_TORRENT_CONTRACT
+    elif custody_build:
         contract = HOLONET_CUSTODY_CONTRACT
     elif history_range_build:
         contract = HOLONET_HISTORY_RANGE_CONTRACT
@@ -579,6 +628,9 @@ def endpoint_contract(value):
                 "custody configuration requires its exact reviewed artifact")
         expected = holonet_config(value["config"])
         custody_install_plan(value)
+        torrent_install_plan(value)
+        require(not ({"torrent_source", "torrent_resource_id"} & set(value["config"].get("janitor") or {}))
+                or torrent_build, "torrent keys require their exact reviewed artifact")
         # Older binaries refuse the unknown key, so even null needs the new build.
         require("playlist_operator" not in value["config"] or operator_build,
                 "playlist_operator requires its exact reviewed artifact")
@@ -593,7 +645,7 @@ def endpoint_contract(value):
             require(value["uid"] == OPERATOR_UID and value["gid"] == OPERATOR_GID,
                     "management requires the homelab holonet identity")
     else:
-        require("custody" not in value, "custody is HoloNet only")
+        require("custody" not in value and "torrents" not in value, "root readers are HoloNet only")
         expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
                     else observer_config(value["config"]))
     names = []
@@ -636,7 +688,9 @@ def playlist_operator_plan(value):
     selected = sorted(operator["recipients"])
     config = value["config"]
     custody = custody_install_plan(value)
+    torrents = torrent_install_plan(value)
     return {
+        **({"torrent_descriptor": torrents} if torrents else {}),
         **({"custody_descriptor": custody} if custody else {}),
         "selected": True,
         "release": release,
@@ -646,6 +700,7 @@ def playlist_operator_plan(value):
         "configs": [OPERATOR_RECIPIENTS[r] for r in selected],
         "journals": [str(PurePosixPath(OPERATOR_RECIPIENTS[r]).parent / "journal") for r in selected],
         "policy": {
+            **({"janitor_torrents": torrents["policy"]} if torrents else {}),
             **({"janitor_importers": custody["importers"]} if custody else {}),
             **({"janitor_custody": custody["custody"]} if custody and "custody" in custody else {}),
             "version": 1, "enabled": True,
@@ -835,7 +890,8 @@ def ov_contract(value):
 
 class FilterModule:
     def filters(self):
-        return {"web_mcp_endpoint_contract": endpoint_contract,
+        return {"web_mcp_qbit_auth": qbit_auth,
+                "web_mcp_endpoint_contract": endpoint_contract,
                 "web_mcp_playlist_operator": playlist_operator_plan,
                 "web_mcp_route_contract": route_contract,
                 "ov_http_contract": ov_contract,

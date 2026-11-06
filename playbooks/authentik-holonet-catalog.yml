@@ -64,6 +64,7 @@
       ansible.builtin.assert:
         that:
           - ansible_check_mode
+          - not (holonet_catalog_torrents_enabled | bool)
           - not (holonet_catalog_apply | default(false) | bool)
           - not (holonet_catalog_online_check | default(false) | bool)
           - holonet_catalog_baseline_checkpoint | default('historical') in ['historical', 'ordinary-reader', 'series-writer-20261102']
@@ -206,7 +207,8 @@
           - >-
             authentik_machine_services.holonet.scope in
             (['holonet.read holonet.curate holonet.home',
-              'holonet.read holonet.curate holonet.home holonet.janitor']
+              'holonet.read holonet.curate holonet.home holonet.janitor',
+              'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents']
              if holonet_catalog_recommendations_enabled | bool else ['holonet.read'])
           - >-
             authentik_machine_identities | map(attribute='profile') | list ==
@@ -305,9 +307,37 @@
         that:
           - >-
             authentik_machine_identities[-1].holonet_janitor == {'library': '3', 'actions': ['janitor.importers.read', 'janitor.custody.read']}
-          - authentik_machine_services.holonet.scope == 'holonet.read holonet.curate holonet.home holonet.janitor'
+          - authentik_machine_services.holonet.scope in ['holonet.read holonet.curate holonet.home holonet.janitor', 'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents']
         quiet: true
       when: holonet_catalog_janitor_enabled | bool
+
+    - name: Require explicit existing writer torrent enrollment without lifecycle changes
+      ansible.builtin.assert:
+        that:
+          - holonet_catalog_torrents_enabled is boolean
+          - not holonet_catalog_torrents_enabled or (holonet_catalog_recommendations_enabled | bool)
+          - not holonet_catalog_torrents_enabled or authentik_machine_identity_existing_owned_only
+          - not holonet_catalog_torrents_enabled or holonet_catalog_recommendations_identity.generation == 1
+          - not holonet_catalog_torrents_enabled or holonet_catalog_recommendations_identity.state == 'present'
+        quiet: true
+
+    - name: Add only the separate torrent grant and scope to the existing application
+      ansible.builtin.set_fact:
+        authentik_machine_identities: >-
+          {{ authentik_machine_identities[:-1] +
+             [authentik_machine_identities[-1] | combine({'holonet_torrents':
+               {'library': '3', 'actions': ['janitor.torrents.read']}})] }}
+        authentik_machine_services: "{{ authentik_machine_services | combine({'holonet': authentik_machine_services.holonet | combine({'scope': 'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents'})}) }}"
+      when: holonet_catalog_torrents_enabled | bool
+
+    - name: Refuse overridden torrent projection before credentials
+      ansible.builtin.assert:
+        that:
+          - >-
+            authentik_machine_identities[-1].holonet_torrents == {'library': '3', 'actions': ['janitor.torrents.read']}
+          - authentik_machine_services.holonet.scope == 'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents'
+        quiet: true
+      when: holonet_catalog_torrents_enabled | bool
 
     - name: Require a fresh public baseline for renewal or scoped playback
       ansible.builtin.assert:
@@ -318,7 +348,7 @@
         fail_msg: Renewal and scoped playback need an explicit fresh public baseline of the current four-account content.
         quiet: true
       when: >-
-        (holonet_catalog_janitor_enabled | bool or holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
+        (holonet_catalog_torrents_enabled | bool or holonet_catalog_janitor_enabled | bool or holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
         and (not ansible_check_mode or holonet_catalog_online_check | default(false) | bool)
 
     - name: Require both destinations bound before any host is touched

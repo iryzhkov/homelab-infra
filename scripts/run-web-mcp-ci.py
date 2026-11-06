@@ -11,6 +11,7 @@ FILES = (
     "ansible.cfg filter_plugins/web_mcp.py playbooks/library/web_mcp_guard.py "
     "playbooks/web-mcp-endpoint.yml playbooks/web-mcp-route.yml "
     "roles/web_mcp_endpoint/defaults/main.yml roles/web_mcp_endpoint/tasks/main.yml "
+    "roles/web_mcp_endpoint/tasks/qbit.yml "
     "roles/web_mcp_endpoint/templates/endpoint.service.j2 "
     "roles/web_mcp_endpoint/templates/holonet-playlists-worker.socket.j2 "
     "roles/web_mcp_endpoint/templates/holonet-playlists-worker@.service.j2 "
