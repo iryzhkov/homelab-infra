@@ -1,0 +1,116 @@
+{
+  "contract": "jocasta:c3070dfe196e7f67732749db4b279689@3; synthetic stat-only seed/library hardlink pair",
+  "frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "7",
+      "actions": [
+        "janitor.seed_join.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000025000,
+    "operation": "janitor-seed-join-stat",
+    "request": {
+      "arr_movie_id": 42,
+      "torrent_hash": "ffffffffffffffffffffffffffffffffffffffff",
+      "file_index": 0
+    }
+  },
+  "policy": {
+    "target_library": "7",
+    "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "library_root": {
+      "app_prefix": "/movies",
+      "host_prefix": "/mnt/shared/media/movies"
+    },
+    "seed_root": {
+      "app_prefix": "/mnt/shared/downloads/complete/movies",
+      "host_prefix": "/mnt/shared/downloads/complete/movies"
+    }
+  },
+  "responses": {
+    "linked": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "qualification": "seed_join_stat_v1",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "7",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "torrent_resource_id": "synthetic-qbit",
+        "arr_movie_id": 42,
+        "torrent_hash": "ffffffffffffffffffffffffffffffffffffffff",
+        "file_index": 0,
+        "status": "linked",
+        "reason": null,
+        "observed_at_unix_ms": 2000000001000,
+        "media_removal_authorized": false
+      }
+    },
+    "not_linked": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "qualification": "seed_join_stat_v1",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "7",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "torrent_resource_id": "synthetic-qbit",
+        "arr_movie_id": 42,
+        "torrent_hash": "ffffffffffffffffffffffffffffffffffffffff",
+        "file_index": 0,
+        "status": "not_linked",
+        "reason": null,
+        "observed_at_unix_ms": 2000000001000,
+        "media_removal_authorized": false
+      }
+    },
+    "unknown": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "qualification": "seed_join_stat_v1",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "7",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "torrent_resource_id": "synthetic-qbit",
+        "arr_movie_id": 42,
+        "torrent_hash": "ffffffffffffffffffffffffffffffffffffffff",
+        "file_index": 0,
+        "status": "unknown",
+        "reason": "changed",
+        "observed_at_unix_ms": 2000000001000,
+        "media_removal_authorized": false
+      }
+    },
+    "error": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "unavailable",
+        "message": "Seed join unavailable"
+      }
+    }
+  },
+  "statuses": [
+    "linked",
+    "not_linked",
+    "unknown"
+  ],
+  "reasons": [
+    "source_unqualified",
+    "missing",
+    "denied",
+    "unsafe_path",
+    "changed",
+    "incomparable",
+    "unavailable"
+  ]
+}
