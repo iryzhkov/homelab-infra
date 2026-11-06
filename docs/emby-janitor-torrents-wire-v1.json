@@ -1,0 +1,74 @@
+{
+  "contract": "jocasta:97c57beac1981833793fb7dd0f1580e5@3; synthetic read-only qBittorrent inventory",
+  "frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "7",
+      "actions": [
+        "janitor.torrents.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "janitor-torrents-inventory",
+    "request": {
+      "torrent_hash": "ffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "policy": {
+    "target_library": "7",
+    "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "config": "/synthetic/qbittorrent.json"
+  },
+  "descriptor": {
+    "version": 1,
+    "resource_id": "synthetic-qbit",
+    "origin": "https://torrent.invalid",
+    "expected_version": "v5.3.0",
+    "credential_file": "/synthetic/qbittorrent-credentials.json",
+    "categories": [
+      "radarr-movies"
+    ],
+    "payload_prefixes": [
+      "/synthetic/downloads"
+    ]
+  },
+  "response": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "qbit_torrent_inventory_v1",
+      "resource_id": "synthetic-qbit",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "7",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "torrent_hash": "ffffffffffffffffffffffffffffffffffffffff",
+      "category": "radarr-movies",
+      "state": "stalledUP",
+      "progress": 1,
+      "amount_left": 0,
+      "total_size": 16,
+      "save_path": "/synthetic/downloads/movies",
+      "content_path": "/synthetic/downloads/movies/Title.mkv",
+      "files": [
+        {
+          "index": 0,
+          "name": "Title.mkv",
+          "size": 12,
+          "progress": 1,
+          "priority": 1
+        }
+      ],
+      "client_reports_complete": true,
+      "paths_qualified": false,
+      "seed_topology": "unqualified",
+      "media_removal_authorized": false
+    }
+  }
+}

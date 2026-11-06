@@ -59,7 +59,8 @@ OPERATOR_MODULES = {
     "emby_operator_adapter.py": "368b5375ac5227a53bbe560db0333b01461e4979d6bfe97fd3a2b5cd7bcc5cb9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "42969569034acde9ad26dff8db9472d8612122183d5bff4a2a79c1fbb59f053e",
-    "emby_operator_socket.py": "264f6e79d11bb8d16e76917a6cc7ef8e8c62f8410e2eff9b6053cb405d3e9b07",
+    "emby_operator_socket.py": "d34fe1dd3c28f632182bac018aceb2036ed3a7c8bb07cfde579ebc86517f6c69",
+    "emby_operator_torrents.py": "540a5148b3eef7dd9581a564bf574687d4062194599ea3b8155e01e7c436f175",
     "emby_operator_custody.py": "09bbaf1a9a59ca2a2df533d5fdae669cfda4170cd0d3ecb7250cdcde34c3b79c",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"

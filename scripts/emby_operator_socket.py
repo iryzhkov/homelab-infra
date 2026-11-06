@@ -32,6 +32,8 @@ from emby_operator_adapter import (OperatorAdapter, load_config, load_credential
 from emby_operator_custody import (OPERATION as CUSTODY_OPERATION, ACTIONS as CUSTODY_ACTIONS,
                                     validate_block as validate_custody_block,
                                     request as custody_request, attest as custody_attest)
+from emby_operator_torrents import (OPERATION as TORRENT_OPERATION, ACTIONS as TORRENT_ACTIONS,
+                                    path as torrent_path, inventory as torrent_inventory)
 from emby_operator_entry import invoke, operator_session
 from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT,
                                            TYPED_OPERATIONS, Journal, Refused, canonical_id,
@@ -100,7 +102,7 @@ SERIES_REQUEST = {'series-seeds': {'episode_ids'}, 'recipient-series': {'ids'}}
 CATALOG_REQUIRED = frozenset({'library_id', 'limit'})
 CATALOG_OPTIONAL = frozenset({'offset', 'person_id', 'person_role'})
 WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply', METADATA_OPERATION,
-                     *SERIES_OPERATIONS, JANITOR_OPERATION, *IMPORTER_OPERATIONS, CUSTODY_OPERATION)
+                     *SERIES_OPERATIONS, JANITOR_OPERATION, *IMPORTER_OPERATIONS, CUSTODY_OPERATION, TORRENT_OPERATION)
 REQUEST_FIELDS = frozenset({'version', 'caller', 'recipient', 'deadline_unix_ms',
                             'operation', 'request'})
 PINNED_CALLER = ('issuer', 'subject', 'namespace', 'server', 'library', 'catalog_user')
@@ -110,7 +112,7 @@ SERIES_CALLER_FIELDS = HISTORY_CALLER_FIELDS | {'series_libraries'}
 POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'})
 # Optional opt-ins: without history_users the policy permits no history read;
 # without series_libraries it permits no Series read or typed list state.
-POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause', 'janitor_custody'})
+POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause', 'janitor_custody', 'janitor_torrents'})
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
@@ -204,6 +206,15 @@ def validate_policy(value):
            janitor['target_library'] == caller['library'] and
            isinstance(janitor['revision'], str) and
            re.fullmatch('[0-9a-f]{40,64}', janitor['revision']))
+    if 'janitor_torrents' in value:
+        block = value['janitor_torrents']
+        ok(type(block) is dict and set(block) == {'target_library', 'revision', 'config'})
+        ok(catalog_id(block['target_library']) and block['target_library'] == caller['library'] and
+           isinstance(block['revision'], str) and re.fullmatch('[0-9a-f]{40,64}', block['revision']))
+        try:
+            torrent_path(block['config'])
+        except (Refused, TypeError, ValueError, UnicodeError):
+            ok(False)
     if 'janitor_importers' in value:
         block = value['janitor_importers']
         ok(type(block) is dict and set(block) == {'target_library', 'revision', 'backends'})
@@ -313,7 +324,7 @@ def parse_request(frame):
     metadata = value['operation'] == METADATA_OPERATION
     series_read = value['operation'] in SERIES_OPERATIONS
     janitor = value['operation'] == JANITOR_OPERATION
-    importer = value['operation'] in IMPORTER_OPERATIONS or value['operation'] == CUSTODY_OPERATION
+    importer = value['operation'] in (*IMPORTER_OPERATIONS, CUSTODY_OPERATION, TORRENT_OPERATION)
     allowed = ((IMPORTER_CALLER_FIELDS,) if importer else (JANITOR_CALLER_FIELDS,) if janitor else
                (HISTORY_CALLER_FIELDS,) if metadata else (SERIES_CALLER_FIELDS,) if series_read
                else (CALLER_FIELDS, CALLER_FIELDS | {'series_libraries'}))
@@ -344,6 +355,11 @@ def parse_request(frame):
 def typed_request(operation, request):
     check(type(request) is dict, 'refused', 'Invalid request fields')
     fields = set(request)
+    if operation == TORRENT_OPERATION:
+        check(fields == {'torrent_hash'} and isinstance(request['torrent_hash'], str) and
+              re.fullmatch('[0-9a-f]{40}', request['torrent_hash']),
+              'refused', 'Invalid torrent request')
+        return copy.deepcopy(request)
     if operation == CUSTODY_OPERATION:
         try:
             return copy.deepcopy(custody_request(request))
@@ -454,6 +470,16 @@ def series_request(operation, request):
 def authorize(call, policy):
     """Intersect the verified caller with the root ceiling on every request."""
     caller = call['caller']
+    if call['operation'] == TORRENT_OPERATION:
+        ceiling = policy.get('janitor_torrents')
+        check(ceiling is not None, 'refused', 'Torrent read not enabled by policy')
+        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+              caller['namespace'] == 'managed-janitor' and
+              caller['target_library'] == ceiling['target_library'] and
+              caller['policy_revision'] == ceiling['revision'] and
+              caller['actions'] == TORRENT_ACTIONS and call['recipient'] in policy['recipients'],
+              'refused', 'Caller outside torrent policy')
+        return
     if call['operation'] == CUSTODY_OPERATION:
         ceiling = policy.get('janitor_importers')
         custody = policy.get('janitor_custody', {}).get('backends', {})
@@ -543,7 +569,7 @@ def authorize(call, policy):
 def remaining_seconds(call, now_ms):
     """min(token expiry, caller deadline, worker ceiling) from now; never renewed."""
     end = min(call['caller']['expires_at'] * 1000, call['deadline_unix_ms'],
-              now_ms + MAX_SECONDS * 1000)
+              now_ms + (10 if call.get('operation') == TORRENT_OPERATION else MAX_SECONDS) * 1000)
     check(end > now_ms, 'deadline', 'Deadline or token expiry already reached')
     return (end - now_ms) / 1000
 
@@ -824,6 +850,11 @@ def handle(conn):
     authorize(call, policy)
     guard = Guard(conn, time.monotonic() + remaining_seconds(call, int(time.time() * 1000)))
     check(peer_state(conn) == 'open', 'refused', 'Trailing data or early close')
+    if call['operation'] == TORRENT_OPERATION:
+        try:
+            return torrent_inventory(policy, call, guard)
+        except Exception:
+            raise WireError('unavailable', 'Torrent inventory unavailable') from None
     if call['operation'] == CUSTODY_OPERATION:
         try:
             return custody_attest(policy, call, guard)

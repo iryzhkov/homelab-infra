@@ -91,7 +91,7 @@ Request fields, all required, no others:
 | `caller` | object below; supplied by the verifier, never by tool arguments |
 | `recipient` | lowercase 32-hex Emby user ID |
 | `deadline_unix_ms` | integer epoch milliseconds, the request context deadline |
-| `operation` | `show`, `reconcile`, `preview`, `apply`, `movie-metadata`, `series-seeds`, `recipient-series`, `series-catalog`, `janitor-protections`, `janitor-importers-inventory`, `janitor-importers-assessment` or `janitor-importers-pause`; janitor operations have separate exact callers described below |
+| `operation` | `show`, `reconcile`, `preview`, `apply`, `movie-metadata`, `series-seeds`, `recipient-series`, `series-catalog`, `janitor-protections`, `janitor-importers-inventory`, `janitor-importers-assessment`, `janitor-importers-pause`, `janitor-custody-attest` or `janitor-torrents-inventory`; janitor operations have separate exact callers described below and [the torrent read contract](emby-janitor-torrents.md) |
 | `request` | object below |
 
 `caller` has exactly `issuer`, `subject`, `namespace`, `server`, `library`,
