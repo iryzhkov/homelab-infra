@@ -684,7 +684,7 @@ def endpoint_contract(value):
         torrent_install_plan(value)
         require(not ({"torrent_source", "torrent_resource_id"} & set(value["config"].get("janitor") or {}))
                 or torrent_build, "torrent keys require their exact reviewed artifact")
-        # Older builds refuse the unknown key; no compatible build is pinned yet.
+        # Older builds refuse the unknown key; require the exact compatible build.
         require("seed_join_source" not in (value["config"].get("janitor") or {}) or seed_join_build,
                 "seed join keys require their exact reviewed artifact")
         seed_join_install_plan(value)
