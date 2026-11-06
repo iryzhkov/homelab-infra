@@ -15,6 +15,7 @@ from unittest.mock import patch
 import emby_operator_socket as worker
 import emby_operator_torrents as torrents
 import test_emby_operator_socket as existing
+import test_emby_operator_adapter as adapter_tests
 from emby_operator_recommendations import Refused
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,14 @@ class TorrentTests(unittest.TestCase):
         self.policy = worker.validate_policy(self.policy)
         self.stderr = io.StringIO()
         self.addCleanup(patch.stopall)
+        # CI mounts the checkout beneath runner-owned ancestors. Emulate the
+        # protected deployment ancestry only during synthetic file reads, using
+        # the existing custody fixture; real leaf/link/size checks still run.
+        private_read = torrents.private_read
+        def read_fixture(*args, **kwargs):
+            with adapter_tests.CustodyTests().synthetic_root_ancestors():
+                return private_read(*args, **kwargs)
+        patch.object(torrents, 'private_read', side_effect=read_fixture).start()
         patch.object(worker, 'load_policy', lambda: worker.validate_policy(self.policy)).start()
         patch.object(worker, 'selected_config', side_effect=AssertionError('Emby config accessed')).start()
         patch.object(worker, 'Journal', side_effect=AssertionError('Journal accessed')).start()
@@ -166,6 +175,18 @@ class TorrentTests(unittest.TestCase):
             self.assertFalse(set(k.lower() for k in headers) &
                              {'origin', 'referer', 'sec-fetch-site', 'x-forwarded-for'})
         self.assertEqual(self.calls[0][3], b'username=synthetic-user&password=synthetic-password-only')
+
+    def test_runner_owned_ancestor_is_only_a_fixture_seam(self):
+        # A mounted CI checkout is not a production protected credential path.
+        home = Path(os.environ['HOME'])
+        mode = home.stat().st_mode & 0o777
+        try:
+            home.chmod(0o777)
+            with self.assertRaisesRegex(Refused, 'Unsafe protected ancestor'):
+                adapter_tests.adapter.private_read(self.config_path)
+            self.assertEqual(self.call(), FIXTURE['response'])
+        finally:
+            home.chmod(mode)
 
     def test_authorization_before_files(self):
         for key, value in [('issuer', 'wrong'), ('subject', 'wrong'), ('server', 'b' * 32),
