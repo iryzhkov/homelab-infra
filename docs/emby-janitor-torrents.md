@@ -1,0 +1,11 @@
+# Single-torrent inventory source
+
+Contract jocasta:97c57beac1981833793fb7dd0f1580e5@3 adds default-off janitor-torrents-inventory. The independent optional root janitor_torrents block contains target_library, revision and config. Only the exact eight-field managed-janitor caller with janitor.torrents.read is admitted. No Emby config or journal is accessed. Arr callers retain their existing shapes and routing.
+
+The root-selected descriptor and future protected username/password file are read in place through directory-FD custody checks. This source change renders neither. Activation must supply the existing managed credential through protected input; no generated key, Arr database extraction, new account or enrollment is provided.
+
+The five fixed HTTP requests use a single ten-second ceiling capped by caller expiry and guard. Reads stop two seconds early for one owned-cookie logout. No facts are published unless cleanup returns 200/204 empty. Login is 204 empty with one QBT_SID_port cookie, ordinary attributes allowed. Later cookie refreshes are ignored; logout expiry cookies are not login cookies. A 204 does not prove password validation under trusted-IP bypass. Cancellation/expiry may leave the full-admin session until idle expiry, indefinitely for timeout zero. Login may evict another session at the configured limit; logout cannot undo that. Zero session limit means unlimited. No retry or cleanup daemon is added.
+
+Only one exact hash and category under root path ceilings is projected. Paths are client hints, including getFiles names, never host storage attestation; no payload file is opened. Paths remain unqualified, seed topology unqualified, and media removal unauthorized even when client_reports_complete. Listed file sizes may be below total_size because padding is omitted. One granted torrent's application paths are disclosed. No tracker/comment/magnet/provider fields cross the projection.
+
+Compatible Go/worker release review, source installer/build admission, credential custody, actual authentication/TLS qualification, narrow signed action and root ceilings are activation successors owned by integration. This commit performs no activation. Roll back by disabling the Go torrent source before removing its root block or producer.

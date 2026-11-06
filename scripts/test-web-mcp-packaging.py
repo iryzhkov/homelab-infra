@@ -828,6 +828,7 @@ class PackagingTest(unittest.TestCase):
                          {"radarr": "/etc/holonet-playlists/radarr.json"})
         self.assertNotIn("janitor", plan["policy"])
         self.assertNotIn("janitor_importers_pause", plan["policy"])
+        self.assertNotIn("janitor_torrents", plan["policy"])
         # Validate the generated policy and descriptor with their actual consumers.
         sys.path.insert(0, str(ROOT / "scripts"))
         try:

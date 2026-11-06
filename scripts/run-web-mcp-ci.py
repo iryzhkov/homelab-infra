@@ -17,7 +17,7 @@ FILES = (
     "roles/web_mcp_endpoint/templates/holonet-playlists.tmpfiles.j2 "
     "scripts/emby_operator_adapter.py scripts/emby_operator_entry.py "
     "scripts/emby_operator_recommendations.py scripts/emby_operator_socket.py "
-    "scripts/emby_operator_custody.py "
+    "scripts/emby_operator_custody.py scripts/emby_operator_torrents.py "
     "roles/web_mcp_endpoint/library/web_mcp_local_artifact.py "
     "roles/web_mcp_route/defaults/main.yml roles/web_mcp_route/tasks/main.yml "
     "roles/web_mcp_route/templates/route.yml.j2 roles/web_mcp_route/vars/main.yml "
