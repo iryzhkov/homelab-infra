@@ -8,8 +8,10 @@ import http.client
 from http.cookies import SimpleCookie
 import ipaddress
 import math
+import os
 import queue
 import re
+import socket
 import ssl
 import threading
 import time
@@ -82,7 +84,8 @@ def descriptor(value):
 def json_body(raw):
     # Bound nesting before parsing, including ignored upstream fields.
     depth, quoted, escaped = 0, False, False
-    for c in raw.decode('utf-8'):
+    decoded = raw.decode('utf-8')
+    for c in decoded:
         if quoted:
             if escaped:
                 escaped = False
@@ -97,7 +100,7 @@ def json_body(raw):
             need(depth <= 32)
         elif c in ']}':
             depth -= 1
-    return strict_json(raw)
+    return strict_json(decoded)
 
 
 def integer(value):
@@ -148,6 +151,7 @@ class TorrentAdapter:
         self.deadline = time.monotonic() + min(10, request_guard())
         self.cookie = None
         self.calls = 0
+        self.io_stalled = False
         self.origin = urllib.parse.urlsplit(self.config['origin'])
         self.context = ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
 
@@ -162,7 +166,7 @@ class TorrentAdapter:
                    ('GET', '/api/v2/app/version')}
         allowed.update({('GET', '/api/v2/torrents/info?hashes=' + self.torrent_hash),
                         ('GET', '/api/v2/torrents/files?hash=' + self.torrent_hash)})
-        need((method, route) in allowed and self.calls < 5)
+        need((method, route) in allowed and self.calls < 5 and not self.io_stalled)
         remaining = self.remaining(cleanup)
         self.calls += 1
         headers = {'Accept': 'application/json', 'Connection': 'close'}
@@ -171,8 +175,11 @@ class TorrentAdapter:
         if body is not None:
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
         completed = queue.Queue(maxsize=1)
+        cancelled = threading.Event()
+        transport_lock = threading.Lock()
+        transport = [None]
         def io():
-            conn = None
+            conn, abort_socket = None, None
             try:
                 if self.origin.scheme == 'https':
                     conn = http.client.HTTPSConnection(self.origin.hostname, self.origin.port,
@@ -181,8 +188,17 @@ class TorrentAdapter:
                     conn = http.client.HTTPConnection(self.origin.hostname, self.origin.port,
                         timeout=remaining)
                 conn.connect()
-                # A slow connect must not send after authority or the original budget expires.
+                # Keep an owned raw handle even when getresponse() transfers the
+                # original socket to HTTPResponse (Connection: close / TLS).
+                abort_socket = socket.socket(fileno=os.dup(conn.sock.fileno()))
+                with transport_lock:
+                    if cancelled.is_set():
+                        return
+                    transport[0] = abort_socket
+                # A late connect must never send after the waiter cancelled.
                 conn.sock.settimeout(self.remaining(cleanup))
+                if cancelled.is_set():
+                    return
                 conn.request(method, route, body=body, headers=headers)
                 response = conn.getresponse()
                 raw = importer_response_bytes(response)
@@ -190,19 +206,38 @@ class TorrentAdapter:
             except Exception:
                 completed.put(None)
             finally:
+                with transport_lock:
+                    transport[0] = None
+                    if abort_socket is not None:
+                        abort_socket.close()
                 if conn is not None:
                     conn.close()
-        threading.Thread(target=io, daemon=True).start()
-        while True:
-            wait = min(.05, self.remaining(cleanup))
-            try:
-                result = completed.get(timeout=wait)
-                break
-            except queue.Empty:
-                pass
-        self.remaining(cleanup)
-        need(result is not None)
-        return result
+        thread = threading.Thread(target=io, daemon=True)
+        thread.start()
+        try:
+            while True:
+                wait = min(.05, self.remaining(cleanup))
+                try:
+                    result = completed.get(timeout=wait)
+                    break
+                except queue.Empty:
+                    pass
+            self.remaining(cleanup)
+            need(result is not None)
+            return result
+        finally:
+            cancelled.set()
+            with transport_lock:
+                if transport[0] is not None:
+                    try:
+                        transport[0].shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+            # Do not overlap cleanup with an unconfirmed reader. A connect/DNS
+            # stall may not be interruptible, but its late result cannot send.
+            thread.join(min(.25, max(0, self.deadline - time.monotonic())))
+            if thread.is_alive():
+                self.io_stalled = True
 
     def inventory(self, torrent_hash, caller):
         need(isinstance(torrent_hash, str) and re.fullmatch('[0-9a-f]{40}', torrent_hash))

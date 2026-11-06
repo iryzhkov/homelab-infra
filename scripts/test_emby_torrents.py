@@ -35,6 +35,12 @@ class TorrentTests(unittest.TestCase):
         self.cookies = [SID + '; HttpOnly; Path=/; Secure; SameSite=Strict; Expires=Wed, 01 Jan 2030 00:00:00 GMT']
         self.overrides = {}
         self.delays = {}
+        self.trickle = None
+        self.trickle_started = threading.Event()
+        self.trickle_done = threading.Event()
+        self.trickle_hook = None
+        self.active_io_threads = []
+        self.readers_at_logout = []
         owner = self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -50,6 +56,7 @@ class TorrentTests(unittest.TestCase):
                 if self.path.endswith('/login'):
                     status, raw, headers = owner.login_status, b'', [('Set-Cookie', c) for c in owner.cookies]
                 elif self.path.endswith('/logout'):
+                    owner.readers_at_logout.append([t.is_alive() for t in owner.active_io_threads[:-1]])
                     status, raw, headers = owner.logout_status, b'', [('Set-Cookie', 'QBT_SID_8080=; Max-Age=0')]
                 elif self.path.endswith('/version'):
                     status, raw, headers = 200, b'v5.3.0', [('Set-Cookie', 'QBT_SID_8080=' + 'Z' * 32)]
@@ -58,6 +65,25 @@ class TorrentTests(unittest.TestCase):
                 else:
                     status, raw, headers = 200, json.dumps(owner.files).encode(), []
                 status, raw, headers = owner.overrides.get(self.path, (status, raw, headers))
+                if owner.trickle and self.path.endswith('/version'):
+                    owner.trickle_started.set()
+                    try:
+                        self.wfile.write(b'HTTP/1.1 200 OK\r\n')
+                        self.wfile.write(b'X-Slow: ' if owner.trickle == 'headers'
+                                         else b'Connection: close\r\nContent-Length: 400\r\n\r\n')
+                        self.wfile.flush()
+                        if owner.trickle_hook is not None:
+                            owner.trickle_hook()
+                        # Every byte arrives before the per-read socket timeout.
+                        for _ in range(400):
+                            self.wfile.write(b'x')
+                            self.wfile.flush()
+                            time.sleep(.01)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    finally:
+                        owner.trickle_done.set()
+                    return
                 self.send_response(status)
                 for key, value in headers:
                     self.send_header(key, value)
@@ -206,7 +232,8 @@ class TorrentTests(unittest.TestCase):
         route = '/api/v2/torrents/info?hashes=' + 'f' * 40
         for raw in [b'[]', b'[{},{}]', b'[{"hash":"wrong"}]', b'{} garbage', b'\xff',
                     b'[{"a":1,"a":2}]', b'[' * 33 + b'0' + b']' * 33,
-                    b' ' * 262145]:
+                    json.dumps([self.info]).encode('utf-16-le'),
+                    b'\xef\xbb\xbf' + json.dumps([self.info]).encode(), b' ' * 262145]:
             self.overrides[route] = (200, raw, [])
             self.fail_call()
             self.assertEqual(self.calls[-1][1], '/api/v2/auth/logout')
@@ -310,6 +337,85 @@ class TorrentTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
         self.assertEqual([p for _, p, _, _ in self.calls],
                          ['/api/v2/auth/login', '/api/v2/app/version', '/api/v2/auth/logout'])
+
+    @contextlib.contextmanager
+    def capture_io_threads(self):
+        original = threading.Thread
+        self.active_io_threads = []
+        def create(*args, **kwargs):
+            thread = original(*args, **kwargs)
+            if getattr(kwargs.get('target'), '__name__', '') == 'io':
+                self.active_io_threads.append(thread)
+            return thread
+        with patch.object(torrents.threading, 'Thread', side_effect=create):
+            yield self.active_io_threads
+
+    def test_trickling_headers_and_body_stop_before_logout(self):
+        for kind in ('headers', 'body'):
+            with self.subTest(kind=kind):
+                self.trickle = kind
+                self.trickle_started.clear()
+                self.trickle_done.clear()
+                self.readers_at_logout.clear()
+                self.calls.clear()
+                call = self.request()
+                call['deadline_unix_ms'] = int(time.time() * 1000) + 3300
+                started = time.monotonic()
+                with self.capture_io_threads() as readers:
+                    self.assertFalse(self.call(call)['ok'])
+                self.assertLess(time.monotonic() - started, 3)
+                self.assertTrue(self.trickle_started.is_set())
+                self.assertEqual(len(readers), 3)  # login, stalled GET, logout
+                self.assertTrue(all(not t.is_alive() for t in readers))
+                self.assertEqual(self.readers_at_logout, [[False, False]])
+                self.assertEqual([p for _, p, _, _ in self.calls], [
+                    '/api/v2/auth/login', '/api/v2/app/version', '/api/v2/auth/logout'])
+                self.assertTrue(self.trickle_done.wait(.5))
+
+    def test_late_connect_cannot_send_or_overlap_logout(self):
+        entered, release = threading.Event(), threading.Event()
+        original = torrents.http.client.HTTPConnection.connect
+        count = 0
+        def connect(conn):
+            nonlocal count
+            count += 1
+            if count == 2:
+                entered.set()
+                release.wait(5)
+            return original(conn)
+        api = torrents.TorrentAdapter(self.config, request_guard=lambda: 10)
+        api.deadline = time.monotonic() + 3.3
+        readers = []
+        try:
+            with patch.object(torrents.http.client.HTTPConnection, 'connect', connect):
+                with self.capture_io_threads() as readers, self.assertRaises(Refused):
+                    api.inventory('f' * 40, self.request()['caller'])
+                self.assertTrue(entered.is_set())
+                self.assertTrue(api.io_stalled)
+                self.assertEqual(len(readers), 2)
+                self.assertIsNone(api.cookie)
+        finally:
+            release.set()
+            for reader in readers:
+                reader.join(1)
+        self.assertTrue(all(not t.is_alive() for t in readers))
+        self.assertEqual([p for _, p, _, _ in self.calls], ['/api/v2/auth/login'])
+
+    def test_inflight_cancellation_stops_reader_without_logout(self):
+        cancelled = threading.Event()
+        self.trickle = 'body'
+        self.trickle_hook = cancelled.set
+        api = torrents.TorrentAdapter(self.config,
+            request_guard=lambda: 0 if cancelled.is_set() else 10)
+        with self.capture_io_threads() as readers, self.assertRaises(Refused):
+            api.inventory('f' * 40, self.request()['caller'])
+        self.assertTrue(self.trickle_started.is_set())
+        self.assertEqual(len(readers), 2)
+        self.assertTrue(all(not t.is_alive() for t in readers))
+        self.assertIsNone(api.cookie)
+        self.assertEqual([p for _, p, _, _ in self.calls],
+                         ['/api/v2/auth/login', '/api/v2/app/version'])
+        self.assertTrue(self.trickle_done.wait(.5))
 
     def test_cancelled_authority_does_not_logout(self):
         config = torrents.descriptor(self.config)
