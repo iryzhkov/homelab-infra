@@ -2,7 +2,7 @@
 
 Source support only. No inventory enables it. The endpoint, issuer and native consumer require separate explicit opt-ins and coordinated review.
 
-The admitted client is source `493a5d42720de07a1c4fd49a6dda6a99a3753579`, interface `d07c64a5f291e7c0e47e5ebb9f25bf3fcb8f6eb2`, release `holonet-qbit-493a5d4`, binary SHA256 `c7010193a97d6d57f82dada0f115cd3dd746a55f1532963a23daeb39a819ac3a`. Historical artifacts remain admissible without torrent keys. Even null torrent keys refuse old builds. Worker modules and their pins remain unchanged.
+The admitted client is source `06b7162d865b89c36385705c0583dab4b043e939`, interface `d07c64a5f291e7c0e47e5ebb9f25bf3fcb8f6eb2`, release `holonet-qbit-06b7162`, binary SHA256 `d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848f7dc91cef2`. Historical artifacts remain admissible without torrent keys. Even null torrent keys refuse old builds. Worker modules and their pins remain unchanged.
 
 ## Endpoint binding
 

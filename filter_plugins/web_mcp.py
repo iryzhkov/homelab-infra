@@ -42,9 +42,9 @@ HOLONET_SERIES_SOURCE = "9efca7904b6b142c765bda4574185615fd374518"
 HOLONET_SERIES_CONTRACT = "748e89df0c765ba82133d9b45b8be00e76925128"
 # Exact history-capable client and compatible unchanged worker/interface.
 # CI, artifact checksum and final release acceptance still gate deployment.
-HOLONET_TORRENT_SOURCE = "493a5d42720de07a1c4fd49a6dda6a99a3753579"
+HOLONET_TORRENT_SOURCE = "06b7162d865b89c36385705c0583dab4b043e939"
 HOLONET_TORRENT_CONTRACT = "d07c64a5f291e7c0e47e5ebb9f25bf3fcb8f6eb2"
-HOLONET_TORRENT_SHA256 = "c7010193a97d6d57f82dada0f115cd3dd746a55f1532963a23daeb39a819ac3a"
+HOLONET_TORRENT_SHA256 = "d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848f7dc91cef2"
 TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
