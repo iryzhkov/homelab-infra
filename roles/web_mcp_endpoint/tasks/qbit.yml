@@ -1,0 +1,32 @@
+---
+- name: Load only existing qBit credentials for an explicitly missing auth file
+  community.sops.load_vars:
+    file: "{{ playbook_dir }}/../secrets/blackpearl-torrent.sops.yaml"
+    name: web_mcp_qbit_secrets
+  delegate_to: localhost
+  become: false
+  when: web_mcp_operator.torrent_descriptor is defined and not web_mcp_qbit_custody.qbit_auth_installed
+  no_log: true
+
+- name: Stage missing private qBit auth without changing an existing credential
+  ansible.builtin.copy:
+    content: "{{ {'username': web_mcp_qbit_secrets.QBITTORRENT_USER, 'password': web_mcp_qbit_secrets.QBITTORRENT_PASS} | web_mcp_qbit_auth | to_nice_json }}\n"
+    dest: /etc/holonet-playlists/qbit-auth.json
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  when: web_mcp_operator.torrent_descriptor is defined and not web_mcp_qbit_custody.qbit_auth_installed
+  no_log: true
+  diff: false
+
+- name: Stage the canonical private qBit descriptor before its root ceiling
+  ansible.builtin.copy:
+    content: "{{ web_mcp_operator.torrent_descriptor.descriptor | to_nice_json }}\n"
+    dest: /etc/holonet-playlists/qbit.json
+    owner: root
+    group: root
+    mode: "0600"
+  when: web_mcp_operator.torrent_descriptor is defined
+  no_log: true
+  diff: false

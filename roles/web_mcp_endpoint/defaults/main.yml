@@ -6,4 +6,5 @@ web_mcp_activate: false
 web_mcp_reuse_installed_credentials: false
 # Explicit source-supported group read; never changes XML permissions itself.
 web_mcp_custody_group_read: false
+web_mcp_install_qbit_auth: false
 web_mcp_endpoint: {}

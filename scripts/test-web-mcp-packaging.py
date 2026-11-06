@@ -817,6 +817,156 @@ class PackagingTest(unittest.TestCase):
         full["config"]["policy"]["Actions"].remove("janitor.custody.read")
         self.rejected(full)
 
+    def test_torrent_canonical_render_and_closed_admission(self):
+        value = custody_fixture()
+        value["artifact"].update(source_revision=contract.HOLONET_TORRENT_SOURCE,
+            contract_revision=contract.HOLONET_TORRENT_CONTRACT, sha256=contract.HOLONET_TORRENT_SHA256)
+        value["config"]["janitor"].update(torrent_source="qbit_inventory_v1",
+            torrent_resource_id="homelab-qbit-movies")
+        value["config"]["policy"]["Actions"].append("janitor.torrents.read")
+        desc = dict(version=1, resource_id="homelab-qbit-movies",
+            origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
+            credential_file="/etc/holonet-playlists/qbit-auth.json",
+            categories=["radarr-movies"], payload_prefixes=["/mnt/shared/downloads/complete/movies"])
+        value["torrents"] = {"descriptor": desc}
+        plan = contract.playlist_operator_plan(value)
+        self.assertEqual(plan["torrent_descriptor"]["descriptor"], desc)
+        self.assertEqual(plan["policy"]["janitor_torrents"], dict(target_library="3",
+            revision=value["config"]["policy_revision"], config="/etc/holonet-playlists/qbit.json"))
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(plan["policy"])
+        finally:
+            sys.path.pop(0)
+        for key, bad in (("version", True), ("resource_id", "other"), ("origin", "http://localhost"),
+                         ("expected_version", "v5.4.0"), ("credential_file", "/arbitrary"),
+                         ("categories", ["movies"]), ("payload_prefixes", ["/mnt/shared"])):
+            changed = copy.deepcopy(value)
+            changed["torrents"]["descriptor"][key] = bad
+            self.rejected(changed)
+        for key, bad in (("torrent_source", None), ("torrent_resource_id", "other")):
+            changed = copy.deepcopy(value)
+            changed["config"]["janitor"][key] = bad
+            self.rejected(changed)
+        for key in ("torrent_source", "torrent_resource_id"):
+            changed = copy.deepcopy(value)
+            changed["config"]["janitor"].pop(key)
+            self.rejected(changed)
+        for key in ("sha256", "source_revision", "contract_revision"):
+            changed = copy.deepcopy(value)
+            changed["artifact"][key] = "0" * len(changed["artifact"][key])
+            self.rejected(changed)
+        changed = copy.deepcopy(value)
+        changed.pop("torrents")
+        self.rejected(changed)
+        changed = copy.deepcopy(value)
+        changed["artifact"].update(source_revision=contract.HOLONET_CUSTODY_SOURCE,
+            contract_revision=contract.HOLONET_CUSTODY_CONTRACT)
+        for key in ("torrent_source", "torrent_resource_id"):
+            changed["config"]["janitor"][key] = None
+        self.rejected(changed)
+        old = custody_fixture()
+        self.assertNotIn("torrent_descriptor", contract.playlist_operator_plan(old))
+        self.assertNotIn("janitor_torrents", contract.playlist_operator_plan(old)["policy"])
+
+    def test_torrent_private_staging_apply_repeat_and_installed_reuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            private = base / "private"
+            private.mkdir(mode=0o700)
+            source = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/qbit.yml").read_text())
+            # Replace only the decrypting action with synthetic facts, retaining
+            # production when/no_log and the actual guarded render/copy tasks.
+            tasks = copy.deepcopy(source)
+            tasks[0].pop("community.sops.load_vars")
+            tasks[0]["ansible.builtin.set_fact"] = {
+                "web_mcp_qbit_secrets": {"QBITTORRENT_USER": "synthetic-user", "QBITTORRENT_PASS": "synthetic-pass"}}
+            tasks[0].pop("delegate_to")
+            tasks[0].pop("become")
+            for task in tasks:
+                if "ansible.builtin.copy" in task:
+                    task["ansible.builtin.copy"]["dest"] = str(private / Path(task["ansible.builtin.copy"]["dest"]).name)
+                    task["ansible.builtin.copy"]["owner"] = str(os.getuid())
+                    task["ansible.builtin.copy"]["group"] = str(os.getgid())
+            inventory = base / "inventory.yml"
+            inventory.write_text("all:\n  hosts:\n    fixture:\n      ansible_connection: local\n")
+            playbook = base / "qbit.yml"
+            env = dict(os.environ, ANSIBLE_CONFIG=str(ROOT / "ansible.cfg"),
+                ANSIBLE_FILTER_PLUGINS=str(ROOT / "filter_plugins"),
+                ANSIBLE_LOCAL_TEMP=str(base / "local-tmp"), ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
+            desc = {"version": 1, "credential_file": "/etc/holonet-playlists/qbit-auth.json"}
+            def run(installed, check=False):
+                playbook.write_text(yaml.safe_dump([{"hosts": "fixture", "gather_facts": False,
+                    "vars": {"web_mcp_operator": {"torrent_descriptor": {"descriptor": desc}},
+                             "web_mcp_qbit_custody": {"qbit_auth_installed": installed}},
+                    "tasks": tasks}]))
+                result = subprocess.run(["ansible-playbook", "-i", str(inventory), str(playbook)] +
+                    (["--check"] if check else []), env=env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("synthetic-pass", result.stdout)
+                return result.stdout
+            run(False, check=True)
+            auth, descriptor = private / "qbit-auth.json", private / "qbit.json"
+            self.assertFalse(auth.exists() or descriptor.exists())
+            run(False)
+            self.assertEqual(json.loads(auth.read_text()), {"username": "synthetic-user", "password": "synthetic-pass"})
+            self.assertEqual(json.loads(descriptor.read_text()), desc)
+            for path in (auth, descriptor):
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            saved = (auth.read_bytes(), auth.stat().st_ino, auth.stat().st_mtime_ns)
+            self.assertIn("changed=0", run(True))
+            self.assertEqual((auth.read_bytes(), auth.stat().st_ino, auth.stat().st_mtime_ns), saved)
+
+    def test_torrent_metadata_guards_and_secret_staging_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / "private"
+            parent.mkdir(mode=0o700)
+            with mock.patch.object(guard, "OPERATOR_POLICY", parent), mock.patch.object(guard, "ROOT_UID", os.getuid()):
+                with self.assertRaises(ValueError):
+                    guard.torrent_auth()
+                self.assertEqual(guard.torrent_auth(True), {"qbit_auth_installed": False})
+                auth = parent / "qbit-auth.json"
+                auth.write_text('synthetic')
+                auth.chmod(0o600)
+                with mock.patch.object(Path, "open", side_effect=AssertionError("metadata only")):
+                    self.assertEqual(guard.torrent_auth(), {"qbit_auth_installed": True})
+                auth.chmod(0o644)
+                with self.assertRaises(ValueError):
+                    guard.torrent_auth(True)
+                auth.chmod(0o600)
+                os.link(auth, parent / "other")
+                with self.assertRaises(ValueError):
+                    guard.torrent_auth(True)
+                (parent / "other").unlink()
+                auth.unlink()
+                auth.symlink_to(parent / "missing")
+                with self.assertRaises(ValueError):
+                    guard.torrent_auth(True)
+        tasks = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/main.yml").read_text())[0]["block"]
+        stage = next(t["block"] for t in tasks if t["name"].startswith("Stage the root playlist"))
+        included = next(i for i, t in enumerate(stage) if t.get("ansible.builtin.include_tasks") == "qbit.yml")
+        qbit = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/tasks/qbit.yml").read_text())
+        stage[included:included + 1] = qbit
+        names = [t["name"] for t in stage]
+        load_task = next(t for t in stage if "community.sops.load_vars" in t)
+        self.assertTrue(load_task["no_log"])
+        self.assertEqual(load_task["community.sops.load_vars"]["file"],
+            "{{ playbook_dir }}/../secrets/blackpearl-torrent.sops.yaml")
+        for path in ("/etc/holonet-playlists/qbit-auth.json", "/etc/holonet-playlists/qbit.json"):
+            task = next(t for t in stage if t.get("ansible.builtin.copy", {}).get("dest") == path)
+            self.assertTrue(task["no_log"])
+            self.assertFalse(task["diff"])
+            self.assertEqual(task["ansible.builtin.copy"]["mode"], "0600")
+            self.assertLess(names.index(task["name"]), names.index("Install the root management ceiling from the validated endpoint config"))
+        defaults = yaml.safe_load((ROOT / "roles/web_mcp_endpoint/defaults/main.yml").read_text())
+        self.assertIs(defaults["web_mcp_install_qbit_auth"], False)
+        for bad in ({"username": "", "password": "synthetic"}, {"username": "a", "password": "b", "url": "x"},
+                    {"username": "a", "password": "x\n"}, {"username": "é" * 129, "password": "x"}):
+            with self.assertRaises(AnsibleFilterError):
+                contract.qbit_auth(bad)
+
     def test_custody_installer_exact_binding_and_old_build_refusals(self):
         value = custody_fixture()
         config = value['config']

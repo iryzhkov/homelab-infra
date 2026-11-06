@@ -243,6 +243,8 @@ def playlist_operator(gid, selected, release=None, modules=None, journals=(), co
         need(stat.S_IMODE(info.st_mode) == 0o700)
         inspect(OPERATOR_POLICY / "policy.json", roots(), exact_mode=0o600)
     inspect(OPERATOR_POLICY / "radarr.json", roots(), exact_mode=0o600)
+    for name in ("qbit.json", "qbit-auth.json"):
+        inspect(OPERATOR_POLICY / name, roots(), exact_mode=0o600)
     need(isinstance(journals, list) and isinstance(configs, list)
          and 1 <= len(journals) == len(configs) <= 16 and len(set(journals)) == len(journals))
     for journal, config in zip(map(Path, journals), map(Path, configs)):
@@ -254,6 +256,17 @@ def playlist_operator(gid, selected, release=None, modules=None, journals=(), co
         inspect(config, roots(), exact_mode=0o600, required=True)
         need(stat.S_IMODE(config.parent.lstat().st_mode) == 0o700)
     return result
+
+
+def torrent_auth(allow_missing=False):
+    # Metadata only. Never open the installed credential.
+    info = inspect(OPERATOR_POLICY, roots(), directory=True, required=True)
+    need(stat.S_IMODE(info.st_mode) == 0o700)
+    inspect(OPERATOR_POLICY / "qbit.json", roots(), exact_mode=0o600)
+    auth = inspect(OPERATOR_POLICY / "qbit-auth.json", roots(), exact_mode=0o600,
+                   required=not allow_missing)
+    need(auth is None or auth.st_gid == ROOT_UID)
+    return {"qbit_auth_installed": auth is not None}
 
 
 def route(service, uid):
@@ -361,7 +374,7 @@ def ov_runtime():
 def main():
     module = AnsibleModule(argument_spec={
         "kind": {"type": "str", "choices": ["endpoint", "credential", "route", "binary", "ov-package", "ov-files",
-                                             "ov-runtime", "playlist-operator"],
+                                             "ov-runtime", "playlist-operator", "torrent-auth"],
                  "required": True},
         "service": {"type": "str", "choices": [*SERVICES, "ov-http", "jocasta"]},
         "uid": {"type": "int"},
@@ -374,6 +387,7 @@ def main():
         "source": {"type": "path", "no_log": True},
         "release": {"type": "str"},
         "selected": {"type": "bool", "default": False},
+        "allow_missing": {"type": "bool", "default": False},
         "modules": {"type": "dict", "default": {}},
         "journals": {"type": "list", "elements": "str", "default": []},
         "configs": {"type": "list", "elements": "str", "default": []},
@@ -381,7 +395,9 @@ def main():
     p = module.params
     facts = {}
     try:
-        if p["kind"] == "playlist-operator":
+        if p["kind"] == "torrent-auth":
+            facts = torrent_auth(p["allow_missing"])
+        elif p["kind"] == "playlist-operator":
             need(p["gid"] is not None and 100 <= p["gid"] <= 999)
             facts = playlist_operator(p["gid"], p["selected"], p["release"], p["modules"],
                                       p["journals"], p["configs"])

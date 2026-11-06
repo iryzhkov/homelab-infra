@@ -32,6 +32,13 @@
           - web_mcp.config.janitor is not defined or web_mcp_custody_group_read
         quiet: true
 
+    - name: Require a strict optional missing qBit auth install switch
+      ansible.builtin.assert:
+        that:
+          - web_mcp_install_qbit_auth is boolean
+          - not web_mcp_install_qbit_auth or (web_mcp.service == 'holonet' and web_mcp.torrents is defined)
+        quiet: true
+
     - name: Guard fixed paths and dedicated identities without reading secrets
       web_mcp_guard:
         kind: endpoint
@@ -282,6 +289,13 @@
       register: web_mcp_credentials
       when: not web_mcp_reuse_installed_credentials
 
+    - name: Guard existing root qBit credential custody before operator writes
+      web_mcp_guard:
+        kind: torrent-auth
+        allow_missing: "{{ web_mcp_install_qbit_auth }}"
+      register: web_mcp_qbit_custody
+      when: web_mcp_operator.torrent_descriptor is defined
+
     - name: Stage the root playlist operator worker for configured management
       when: web_mcp_operator.selected
       block:
@@ -390,6 +404,10 @@
           when: web_mcp_operator.custody_descriptor is defined
           no_log: true
           diff: false
+
+        - name: Stage explicitly selected qBit custody before the root ceiling
+          ansible.builtin.include_tasks: qbit.yml
+          when: web_mcp_operator.torrent_descriptor is defined
 
         - name: Install the root management ceiling from the validated endpoint config
           ansible.builtin.copy:
