@@ -1797,7 +1797,10 @@ class PackagingTest(unittest.TestCase):
     def test_series_contract_through_ansible_extra_vars(self):
         self.test_playlist_operator_contract_through_ansible_extra_vars(series=True)
 
-    def test_playlist_operator_contract_through_ansible_extra_vars(self, series=False):
+    def test_torrent_contract_through_ansible_extra_vars(self):
+        self.test_playlist_operator_contract_through_ansible_extra_vars(torrents=True)
+
+    def test_playlist_operator_contract_through_ansible_extra_vars(self, series=False, torrents=False):
         # Real extra vars are tagged by Ansible 2.19, unlike plain fixture dicts.
         with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
             base = Path(scratch)
@@ -1805,6 +1808,17 @@ class PackagingTest(unittest.TestCase):
             value["artifact"].update(
                 source_revision=contract.HOLONET_SERIES_SOURCE if series else contract.HOLONET_OPERATOR_SOURCE,
                 contract_revision=contract.HOLONET_SERIES_CONTRACT if series else contract.HOLONET_OPERATOR_CONTRACT)
+            if torrents:
+                value = custody_fixture()
+                value["artifact"].update(source_revision=contract.HOLONET_TORRENT_SOURCE,
+                    contract_revision=contract.HOLONET_TORRENT_CONTRACT, sha256=contract.HOLONET_TORRENT_SHA256)
+                value["config"]["janitor"].update(torrent_source="qbit_inventory_v1",
+                    torrent_resource_id="homelab-qbit-movies")
+                value["config"]["policy"]["Actions"].append("janitor.torrents.read")
+                value["torrents"] = {"descriptor": dict(version=1, resource_id="homelab-qbit-movies",
+                    origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
+                    credential_file="/etc/holonet-playlists/qbit-auth.json", categories=["radarr-movies"],
+                    payload_prefixes=["/mnt/shared/downloads/complete/movies"])}
             play = base / "validate.yml"
             play.write_text(yaml.safe_dump([{
                 "hosts": "localhost", "connection": "local", "gather_facts": False,
@@ -1822,7 +1836,10 @@ class PackagingTest(unittest.TestCase):
                        ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
             for version in (1, True, False, 1.0, "1", 2):
                 with self.subTest(version=version):
-                    value["config"]["playlist_operator"]["wire_version"] = version
+                    if torrents:
+                        value["torrents"]["descriptor"]["version"] = version
+                    else:
+                        value["config"]["playlist_operator"]["wire_version"] = version
                     variables.write_text(json.dumps({"web_mcp_endpoint": value}))
                     result = subprocess.run(
                         ["ansible-playbook", "-i", "localhost,", str(play),
