@@ -551,8 +551,9 @@ def torrent_install_plan(value):
         origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
         credential_file=TORRENT_AUTH, categories=["radarr-movies"],
         payload_prefixes=["/mnt/shared/downloads/complete/movies"])
-    require(data["descriptor"] == expected and type(data["descriptor"].get("version")) is int,
+    require(data["descriptor"] == expected,
             "torrent descriptor must match the canonical Movies source")
+    integer(data["descriptor"].get("version"), 1, 1)
     return {"path": TORRENT_DESCRIPTOR, "descriptor": expected,
             "policy": {"target_library": OPERATOR_LIBRARY,
                        "revision": config["policy_revision"], "config": TORRENT_DESCRIPTOR}}
