@@ -2413,6 +2413,9 @@ class PackagingTest(unittest.TestCase):
 
 
 class CoexistencePackaging(unittest.TestCase):
+    seed_join_fixture = PackagingTest.seed_join_fixture
+    acquire_fixture = PackagingTest.acquire_fixture
+
     def test_exact_subjects_and_purpose_contract(self):
         endpoint = PackagingTest.seed_join_fixture(self)
         endpoint["config"]["playlist_operator"]["series_libraries"] = copy.deepcopy(SERIES_LIBRARIES)
@@ -2478,6 +2481,69 @@ class CoexistencePackaging(unittest.TestCase):
         for invalid in ([], [operator["subject"]]*2, ["new"], subjects+["third"]):
             with self.subTest(subjects=invalid), self.assertRaises(AnsibleFilterError):
                 contract.holonet_subjects(dict(operator, subjects=invalid))
+
+    def test_acquisition_and_coexistence_accept_one_artifact(self):
+        # The coexistence source contains acquisition, so both gates name one build.
+        self.assertEqual(
+            (contract.HOLONET_ACQUIRE_SOURCE, contract.HOLONET_ACQUIRE_CONTRACT,
+             contract.HOLONET_ACQUIRE_SHA256),
+            (contract.HOLONET_COEXISTENCE_SOURCE, contract.HOLONET_COEXISTENCE_SOURCE,
+             contract.HOLONET_COEXISTENCE_SHA256))
+        endpoint = self.acquire_fixture()
+        endpoint["artifact"].update(source_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+                                    contract_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+                                    sha256=contract.HOLONET_COEXISTENCE_SHA256)
+        config = endpoint["config"]
+        operator = config["playlist_operator"]
+        subjects = [operator["subject"], "chaldea-laptop"]
+        operator["subjects"] = subjects
+        config["janitor"]["subjects"] = subjects
+        user = operator["catalog_user"]
+        config["purpose_grants"] = {"writer": dict(subjects=subjects,
+            scopes=["holonet.read", "holonet.curate", "holonet.home"],
+            namespace="managed-recommendations", libraries=[operator["library"]],
+            catalog_users=[user], history_users=[], target_users=operator["recipients"],
+            actions=["catalog.read"])}
+        for name, scopes, actions in (
+                ("importer", ["holonet.read", "holonet.janitor"],
+                 ["janitor.importers.read", "janitor.custody.read"]),
+                ("torrent", ["holonet.read", "holonet.janitor", "holonet.torrents"],
+                 ["janitor.torrents.read"]),
+                ("seed_join", ["holonet.read", "holonet.janitor", "holonet.seedjoin"],
+                 ["janitor.seed_join.read"])):
+            config["purpose_grants"][name] = dict(subjects=subjects, scopes=scopes,
+                namespace="managed-janitor", libraries=[operator["library"]],
+                catalog_users=[user], history_users=[], target_users=[], actions=actions)
+        self.assertEqual(contract.endpoint_contract(endpoint), endpoint)
+        policy = contract.playlist_operator_plan(endpoint)["policy"]
+        self.assertEqual(policy["subjects"], subjects)
+        self.assertFalse(policy["janitor_acquire"]["start_enabled"])
+        self.assertFalse(policy["janitor_acquire"]["media_enabled"])
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(policy)
+        finally:
+            sys.path.pop(0)
+        # The superseded pre-coexistence acquisition candidate and wrong bytes refuse.
+        for source, sha256 in (
+                ("4e6f87442b88f61b4017f86e507bf90567ad2c29",
+                 "8516cc4b398c528ba968e3b70f54932000f0c0bca8d8ffee5cf658eec9ca90ed"),
+                (contract.HOLONET_COEXISTENCE_SOURCE, "0" * 64)):
+            for changed in (copy.deepcopy(endpoint), self.acquire_fixture()):
+                changed["artifact"].update(source_revision=source, contract_revision=source,
+                                           sha256=sha256)
+                with self.subTest(source=source, sha256=sha256), \
+                        self.assertRaises(AnsibleFilterError):
+                    contract.endpoint_contract(changed)
+        # Purposes are not widened: no acquisition purpose exists under coexistence.
+        for name in ("acquire", "acquire_read"):
+            bad = copy.deepcopy(config)
+            bad["purpose_grants"][name] = dict(config["purpose_grants"]["importer"],
+                scopes=["holonet.read", "holonet.janitor", "holonet.acquire"],
+                actions=["janitor.acquire.read"])
+            with self.subTest(purpose=name), self.assertRaises(AnsibleFilterError):
+                contract.holonet_purposes(bad)
 
 
 if __name__ == "__main__":

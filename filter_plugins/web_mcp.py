@@ -50,10 +50,16 @@ HOLONET_TORRENT_SHA256 = "d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848
 TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
-# Exact candidate artifact. Independent review, CI and access approval still gate activation.
-HOLONET_ACQUIRE_SOURCE = "4e6f87442b88f61b4017f86e507bf90567ad2c29"
-HOLONET_ACQUIRE_SHA256 = "8516cc4b398c528ba968e3b70f54932000f0c0bca8d8ffee5cf658eec9ca90ed"
-HOLONET_ACQUIRE_CONTRACT = "4e6f87442b88f61b4017f86e507bf90567ad2c29"
+# Default-off staged acquisition ships in the coexistence build. CLI 3d4dcb35
+# contains acquisition PR54 and has the same tree as merged main 8350d751, which
+# reproduces SHA256 189717cc byte for byte. One artifact therefore satisfies
+# both gates. The earlier pre-coexistence candidate (source 4e6f8744, SHA256
+# 8516cc4b) is no longer admissible because it would drop installed subjects.
+# The acquisition wire fixture is unchanged. Review, CI and access approval
+# still gate activation.
+HOLONET_ACQUIRE_SOURCE = HOLONET_COEXISTENCE_SOURCE
+HOLONET_ACQUIRE_SHA256 = HOLONET_COEXISTENCE_SHA256
+HOLONET_ACQUIRE_CONTRACT = HOLONET_COEXISTENCE_SOURCE
 # Stat-only seed/library pair (jocasta:c3070dfe196e7f67732749db4b279689@3).
 # Exact reviewed client/worker pair; publication and CI still gate deployment.
 # Static linux/amd64 artifact: Chaldea b02e84fd-94d4-4491-bfa8-76370db21cc9.
@@ -758,9 +764,10 @@ def endpoint_contract(value):
     acquire_build = (service == "holonet" and HOLONET_ACQUIRE_SOURCE is not None
                      and HOLONET_ACQUIRE_SHA256 is not None and HOLONET_ACQUIRE_CONTRACT is not None
                      and artifact["source_revision"] == HOLONET_ACQUIRE_SOURCE)
-    if acquire_build:
-        require(artifact["sha256"] == HOLONET_ACQUIRE_SHA256, "unaccepted acquisition binary")
     coexistence_build = service == "holonet" and artifact["source_revision"] == HOLONET_COEXISTENCE_SOURCE
+    # The shared coexistence build is checked once below against the same pin.
+    if acquire_build and not coexistence_build:
+        require(artifact["sha256"] == HOLONET_ACQUIRE_SHA256, "unaccepted acquisition binary")
     seed_join_build = coexistence_build or acquire_build or (service == "holonet" and HOLONET_SEED_JOIN_SOURCE is not None
                        and HOLONET_SEED_JOIN_CONTRACT is not None
                        and HOLONET_SEED_JOIN_SHA256 is not None
