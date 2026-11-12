@@ -66,6 +66,7 @@
           - ansible_check_mode
           - not (holonet_catalog_torrents_enabled | bool)
           - not (holonet_catalog_seed_join_enabled | bool)
+          - not (holonet_catalog_acquire_enabled | bool)
           - not (holonet_catalog_apply | default(false) | bool)
           - not (holonet_catalog_online_check | default(false) | bool)
           - holonet_catalog_baseline_checkpoint | default('historical') in ['historical', 'ordinary-reader', 'series-writer-20261102']
@@ -381,6 +382,46 @@
         quiet: true
       when: holonet_catalog_seed_join_enabled | bool
 
+    - name: Require explicit existing Anime writer acquisition enrollment
+      ansible.builtin.assert:
+        that:
+          - holonet_catalog_acquire_enabled is boolean
+          - holonet_catalog_acquire_start_enabled is boolean
+          - holonet_catalog_acquire_media_enabled is boolean
+          - not holonet_catalog_acquire_start_enabled or holonet_catalog_acquire_enabled
+          - not holonet_catalog_acquire_media_enabled or holonet_catalog_acquire_enabled
+          - not holonet_catalog_acquire_enabled or holonet_catalog_seed_join_enabled
+          - not holonet_catalog_acquire_enabled or holonet_catalog_series_enabled
+          - not holonet_catalog_acquire_enabled or authentik_machine_identity_existing_owned_only
+          - not holonet_catalog_acquire_enabled or holonet_catalog_recommendations_identity.generation == 1
+          - not holonet_catalog_acquire_enabled or holonet_catalog_recommendations_identity.state == 'present'
+        quiet: true
+
+    - name: Add separately selected acquisition purposes without changing old grants
+      ansible.builtin.set_fact:
+        authentik_machine_identities: >-
+          {{ authentik_machine_identities[:-1] +
+             [authentik_machine_identities[-1] | combine({'holonet_acquire':
+               {'library': '3', 'actions': ['janitor.acquire.read'] +
+                (['janitor.acquire.start'] if holonet_catalog_acquire_start_enabled else []) +
+                (['janitor.acquire.media'] if holonet_catalog_acquire_media_enabled else [])}})] }}
+        authentik_machine_services: "{{ authentik_machine_services | combine({'holonet': authentik_machine_services.holonet | combine({'scope': 'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents holonet.seedjoin holonet.acquire holonet.acquire.start holonet.acquire.media'})}) }}"
+      when: holonet_catalog_acquire_enabled
+
+    - name: Refuse overridden acquisition projection before credentials
+      ansible.builtin.assert:
+        that:
+          - >-
+            authentik_machine_identities[-1].holonet_acquire ==
+            {'library': '3', 'actions': ['janitor.acquire.read'] +
+             (['janitor.acquire.start'] if holonet_catalog_acquire_start_enabled else []) +
+             (['janitor.acquire.media'] if holonet_catalog_acquire_media_enabled else [])}
+          - >-
+            authentik_machine_services.holonet.scope ==
+            'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents holonet.seedjoin holonet.acquire holonet.acquire.start holonet.acquire.media'
+        quiet: true
+      when: holonet_catalog_acquire_enabled
+
     - name: Require a fresh public baseline for renewal or scoped playback
       ansible.builtin.assert:
         that:
@@ -390,7 +431,7 @@
         fail_msg: Renewal and scoped playback need an explicit fresh public baseline of the current four-account content.
         quiet: true
       when: >-
-        (holonet_catalog_seed_join_enabled | bool or holonet_catalog_torrents_enabled | bool or holonet_catalog_janitor_enabled | bool or holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
+        (holonet_catalog_acquire_enabled | bool or holonet_catalog_seed_join_enabled | bool or holonet_catalog_torrents_enabled | bool or holonet_catalog_janitor_enabled | bool or holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
         and (not ansible_check_mode or holonet_catalog_online_check | default(false) | bool)
 
     - name: Require both destinations bound before any host is touched

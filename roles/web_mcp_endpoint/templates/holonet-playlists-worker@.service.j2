@@ -8,7 +8,7 @@ CollectMode=inactive-or-failed
 Type=simple
 User=root
 Group=root
-{% if web_mcp_custody_group_read | default(false) %}
+{% if web_mcp_custody_group_read | default(false) or (web_mcp_operator.policy.janitor_acquire is defined and web_mcp_operator.policy.janitor_acquire.start_enabled) %}
 # Existing media group only; no capabilities or membership change for HoloNet.
 SupplementaryGroups=988
 {% endif %}
@@ -47,6 +47,10 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 # Only the selected recipients' existing journals are writable. Source, policy,
 # configs and the shared credential stay read-only through ProtectSystem=strict.
 ReadWritePaths={{ web_mcp_operator.journals | join(' ') }}
+{% if web_mcp_operator.policy.janitor_acquire is defined and web_mcp_operator.policy.janitor_acquire.start_enabled %}
+# Fixed acquisition staging only; ownership/export qualification is independent.
+ReadWritePaths=/mnt/shared/downloads/staging/holonet
+{% endif %}
 MemoryMax=128M
 CPUQuota=50%
 TasksMax=8

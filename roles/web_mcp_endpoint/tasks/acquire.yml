@@ -1,0 +1,22 @@
+---
+# Uses existing root qBit auth in place. No SOPS load or credential creation here.
+- name: Require existing guarded qBit custody for the acquisition descriptor
+  ansible.builtin.assert:
+    that:
+      - web_mcp_qbit_custody.qbit_auth_installed | default(false)
+    quiet: true
+
+- name: Stage acquisition descriptors before enabling the root policy
+  ansible.builtin.copy:
+    content: "{{ item.value | to_nice_json }}\n"
+    dest: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - path: /etc/holonet-playlists/sonarr.json
+      value: "{{ web_mcp_operator.acquire_descriptor.sonarr }}"
+    - path: /etc/holonet-playlists/qbit-stage.json
+      value: "{{ web_mcp_operator.acquire_descriptor.stage }}"
+  no_log: true
+  diff: false

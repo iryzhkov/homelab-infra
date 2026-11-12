@@ -135,6 +135,10 @@ holonet_catalog_interactive_identity:
 holonet_catalog_janitor_enabled: false
 holonet_catalog_torrents_enabled: false
 holonet_catalog_seed_join_enabled: false
+# Source support only. Explicit separate purpose grants on the existing writer.
+holonet_catalog_acquire_enabled: false
+holonet_catalog_acquire_start_enabled: false
+holonet_catalog_acquire_media_enabled: false
 holonet_catalog_series_enabled: false
 holonet_catalog_playback_enabled: false
 holonet_catalog_recommendations_enabled: false

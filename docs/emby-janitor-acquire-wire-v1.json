@@ -1,0 +1,497 @@
+{
+  "provenance": "Canonical synthetic acquisition wire v1 from homelab-infra; matching producer/consumer schemas, not live backend evidence.",
+  "contract": "jocasta:cf9f8403ccc2eedb927b3fe0e346bd18@3",
+  "contract_sha256": "e9524060aad405be02548db6835fbd43e56057247130ce6d2944835a30714c66",
+  "inspect_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "janitor.acquire.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000018000,
+    "operation": "janitor-acquire-inspect",
+    "request": {
+      "series_id": "31372",
+      "library_id": "615",
+      "season": 1
+    }
+  },
+  "inspect": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "acquire_inspect_v1",
+      "resource_id": "synthetic-sonarr",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "3",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "binding": {
+        "emby_series_id": "31372",
+        "emby_library_id": "615",
+        "tvdb_id": "999",
+        "sonarr_series_id": 42,
+        "sonarr_title": "Synthetic series",
+        "sonarr_path": "/media/anime/Synthetic",
+        "season": 1
+      },
+      "episodes": [
+        {
+          "sonarr_episode_id": 101,
+          "episode_number": 1,
+          "monitored": true,
+          "has_file": true,
+          "file": {
+            "relative_path": "Season 1/E1.mkv",
+            "size": 100,
+            "audio_languages": "jpn",
+            "subtitles": "eng",
+            "quality": "HD"
+          }
+        },
+        {
+          "sonarr_episode_id": 102,
+          "episode_number": 2,
+          "monitored": true,
+          "has_file": true,
+          "file": {
+            "relative_path": "Season 1/E2.mkv",
+            "size": 100,
+            "audio_languages": "jpn",
+            "subtitles": "eng",
+            "quality": "HD"
+          }
+        }
+      ],
+      "sonarr_import_surface": {
+        "root_folders": [
+          "/media/anime"
+        ],
+        "download_clients": [
+          {
+            "name": "Synthetic",
+            "implementation": "QBittorrent",
+            "enabled": true,
+            "protocol": "torrent",
+            "category": "tv-sonarr",
+            "remove_completed_downloads": true
+          }
+        ],
+        "remote_path_mappings": [
+          {
+            "host": "synthetic",
+            "remote_path": "/downloads/complete",
+            "local_path": "/downloads/complete"
+          }
+        ],
+        "list_sync_level": null
+      },
+      "stage_safety": {
+        "prefix": "/mnt/shared/downloads/staging/holonet",
+        "category": "holonet-stage",
+        "outside_root_folders": true,
+        "category_unused_by_arr": true
+      },
+      "media_removal_authorized": false
+    }
+  },
+  "search": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "acquire_search_v1",
+      "resource_id": "synthetic-sonarr",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "3",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "inspect": {
+        "qualification": "acquire_inspect_v1",
+        "resource_id": "synthetic-sonarr",
+        "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "library": "3",
+        "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "binding": {
+          "emby_series_id": "31372",
+          "emby_library_id": "615",
+          "tvdb_id": "999",
+          "sonarr_series_id": 42,
+          "sonarr_title": "Synthetic series",
+          "sonarr_path": "/media/anime/Synthetic",
+          "season": 1
+        },
+        "episodes": [
+          {
+            "sonarr_episode_id": 101,
+            "episode_number": 1,
+            "monitored": true,
+            "has_file": true,
+            "file": {
+              "relative_path": "Season 1/E1.mkv",
+              "size": 100,
+              "audio_languages": "jpn",
+              "subtitles": "eng",
+              "quality": "HD"
+            }
+          },
+          {
+            "sonarr_episode_id": 102,
+            "episode_number": 2,
+            "monitored": true,
+            "has_file": true,
+            "file": {
+              "relative_path": "Season 1/E2.mkv",
+              "size": 100,
+              "audio_languages": "jpn",
+              "subtitles": "eng",
+              "quality": "HD"
+            }
+          }
+        ],
+        "sonarr_import_surface": {
+          "root_folders": [
+            "/media/anime"
+          ],
+          "download_clients": [
+            {
+              "name": "Synthetic",
+              "implementation": "QBittorrent",
+              "enabled": true,
+              "protocol": "torrent",
+              "category": "tv-sonarr",
+              "remove_completed_downloads": true
+            }
+          ],
+          "remote_path_mappings": [
+            {
+              "host": "synthetic",
+              "remote_path": "/downloads/complete",
+              "local_path": "/downloads/complete"
+            }
+          ],
+          "list_sync_level": null
+        },
+        "stage_safety": {
+          "prefix": "/mnt/shared/downloads/staging/holonet",
+          "category": "holonet-stage",
+          "outside_root_folders": true,
+          "category_unused_by_arr": true
+        },
+        "media_removal_authorized": false
+      },
+      "releases": [
+        {
+          "handle": "1111111111111111111111111111111111111111111111111111111111111111",
+          "title": "Synthetic S01 English Audio",
+          "indexer": "Synthetic",
+          "size": 1000,
+          "seeders": 2,
+          "season": 1,
+          "full_season": true,
+          "episode_numbers": [
+            1,
+            2
+          ],
+          "languages": [
+            "English"
+          ],
+          "info_hash": "ffffffffffffffffffffffffffffffffffffffff",
+          "audio_claim": "english_audio_claimed",
+          "audio_evidence": "English Audio"
+        },
+        {
+          "handle": "2222222222222222222222222222222222222222222222222222222222222222",
+          "title": "Synthetic S01 English Subtitles",
+          "indexer": "Synthetic",
+          "size": 1000,
+          "seeders": 2,
+          "season": 1,
+          "full_season": true,
+          "episode_numbers": [
+            1,
+            2
+          ],
+          "languages": [
+            "English"
+          ],
+          "info_hash": "ffffffffffffffffffffffffffffffffffffffff",
+          "audio_claim": "subtitle_only_claimed",
+          "audio_evidence": "English Subtitles"
+        },
+        {
+          "handle": "3333333333333333333333333333333333333333333333333333333333333333",
+          "title": "Synthetic S01 Dual Audio",
+          "indexer": "Synthetic",
+          "size": 1000,
+          "seeders": 2,
+          "season": 1,
+          "full_season": true,
+          "episode_numbers": [
+            1,
+            2
+          ],
+          "languages": [
+            "English"
+          ],
+          "info_hash": "ffffffffffffffffffffffffffffffffffffffff",
+          "audio_claim": "unknown",
+          "audio_evidence": "Dual Audio"
+        }
+      ],
+      "media_removal_authorized": false
+    }
+  },
+  "start_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-janitor",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "janitor.acquire.read",
+        "janitor.acquire.start"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000028000,
+    "operation": "janitor-acquire-start",
+    "request": {
+      "search_id": "dddddddddddddddddddddddddddddddd",
+      "handle": "1111111111111111111111111111111111111111111111111111111111111111",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "target": {
+        "series_id": "31372",
+        "library_id": "615",
+        "season": 1,
+        "tvdb_id": "999",
+        "sonarr_series_id": 42
+      },
+      "search_expires_at": "2033-05-18T03:58:20Z",
+      "preview_expires_at": "2033-05-18T03:48:20Z",
+      "expected_episodes": [
+        {
+          "sonarr_episode_id": 101,
+          "episode_number": 1
+        },
+        {
+          "sonarr_episode_id": 102,
+          "episode_number": 2
+        }
+      ],
+      "expected": {
+        "title": "Synthetic S01 English Audio",
+        "size": 1000,
+        "info_hash": "ffffffffffffffffffffffffffffffffffffffff"
+      }
+    }
+  },
+  "started": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "acquire_start_v1",
+      "resource_id": "homelab-qbit-stage",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "3",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "stage": "started",
+      "reason": null,
+      "info_hash": "ffffffffffffffffffffffffffffffffffffffff",
+      "torrent_name": "Synthetic",
+      "save_path": "/mnt/shared/downloads/staging/holonet/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "category": "holonet-stage",
+      "files": [
+        {
+          "index": 0,
+          "name": "S01E01.mkv",
+          "size": 500
+        },
+        {
+          "index": 1,
+          "name": "S01E02.mkv",
+          "size": 500
+        }
+      ],
+      "calls": 8,
+      "media_removal_authorized": false
+    }
+  },
+  "not_sent": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "acquire_start_v1",
+      "resource_id": "homelab-qbit-stage",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "3",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "stage": "not_sent",
+      "reason": "torrent_exists",
+      "info_hash": null,
+      "torrent_name": null,
+      "save_path": null,
+      "category": "holonet-stage",
+      "files": null,
+      "calls": 4,
+      "media_removal_authorized": false
+    }
+  },
+  "unknown": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "acquire_start_v1",
+      "resource_id": "homelab-qbit-stage",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "3",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "stage": "dispatch_unknown",
+      "reason": "add_uncertain",
+      "info_hash": "ffffffffffffffffffffffffffffffffffffffff",
+      "torrent_name": "Synthetic",
+      "save_path": "/mnt/shared/downloads/staging/holonet/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "category": "holonet-stage",
+      "files": [
+        {
+          "index": 0,
+          "name": "S01E01.mkv",
+          "size": 500
+        },
+        {
+          "index": 1,
+          "name": "S01E02.mkv",
+          "size": 500
+        }
+      ],
+      "calls": 6,
+      "media_removal_authorized": false
+    }
+  },
+  "status": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "qbit_torrent_inventory_v1",
+      "resource_id": "homelab-qbit-stage",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "3",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "torrent_hash": "ffffffffffffffffffffffffffffffffffffffff",
+      "category": "holonet-stage",
+      "state": "stoppedUP",
+      "progress": 1,
+      "amount_left": 0,
+      "total_size": 1000,
+      "save_path": "/mnt/shared/downloads/staging/holonet/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "content_path": "/mnt/shared/downloads/staging/holonet/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/Synthetic",
+      "files": [
+        {
+          "index": 0,
+          "name": "S01E01.mkv",
+          "size": 500,
+          "progress": 1,
+          "priority": 1
+        },
+        {
+          "index": 1,
+          "name": "S01E02.mkv",
+          "size": 500,
+          "progress": 1,
+          "priority": 1
+        }
+      ],
+      "client_reports_complete": true,
+      "paths_qualified": false,
+      "seed_topology": "unqualified",
+      "media_removal_authorized": false,
+      "tags_match_operation": true
+    }
+  },
+  "verify": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "qualification": "acquire_verify_v1",
+      "resource_id": "homelab-qbit-stage",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "library": "3",
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "sonarr_resource_id": "synthetic-sonarr",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "info_hash": "ffffffffffffffffffffffffffffffffffffffff",
+      "target": {
+        "series_id": "31372",
+        "library_id": "615",
+        "season": 1,
+        "tvdb_id": "999",
+        "sonarr_series_id": 42
+      },
+      "observed_from": "2033-05-18T03:33:20Z",
+      "observed_through": "2033-05-18T03:33:21Z",
+      "files": [
+        {
+          "episode": {
+            "sonarr_episode_id": 101,
+            "episode_number": 1
+          },
+          "relative_filename": "S01E01.mkv",
+          "size": 500,
+          "container": "mkv",
+          "audio_tracks": [
+            {
+              "language": "eng",
+              "codec": "aac",
+              "name": null
+            }
+          ],
+          "subtitle_tracks": [
+            {
+              "language": "eng"
+            }
+          ],
+          "parse_status": "parsed",
+          "identity_stable": true
+        },
+        {
+          "episode": {
+            "sonarr_episode_id": 102,
+            "episode_number": 2
+          },
+          "relative_filename": "S01E02.mkv",
+          "size": 500,
+          "container": "mkv",
+          "audio_tracks": [
+            {
+              "language": "jpn",
+              "codec": "aac",
+              "name": null
+            }
+          ],
+          "subtitle_tracks": [
+            {
+              "language": "eng"
+            }
+          ],
+          "parse_status": "parsed",
+          "identity_stable": true
+        }
+      ],
+      "english_audio_metadata_verified": false,
+      "media_removal_authorized": false
+    }
+  }
+}

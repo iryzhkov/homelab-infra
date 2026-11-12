@@ -298,6 +298,10 @@ HOLONET_TORRENT_APP_SCOPES = HOLONET_EXTENDED_SCOPES + ("holonet.torrents",)
 HOLONET_SEED_JOIN_SCOPES = HOLONET_JANITOR_SCOPES + ("holonet.seedjoin",)
 HOLONET_SEED_JOIN_ACTIONS = ("janitor.seed_join.read",)
 HOLONET_SEED_JOIN_APP_SCOPES = HOLONET_TORRENT_APP_SCOPES + ("holonet.seedjoin",)
+HOLONET_ACQUIRE_SCOPES = HOLONET_JANITOR_SCOPES + ("holonet.acquire",)
+HOLONET_ACQUIRE_ACTIONS = ("janitor.acquire.read", "janitor.acquire.start", "janitor.acquire.media")
+HOLONET_ACQUIRE_APP_SCOPES = HOLONET_SEED_JOIN_APP_SCOPES + (
+    "holonet.acquire", "holonet.acquire.start", "holonet.acquire.media")
 
 
 def _holonet_grant(item, name):
@@ -341,6 +345,18 @@ def _holonet_grant(item, name):
                 or seed["actions"] != list(HOLONET_SEED_JOIN_ACTIONS)):
             _refuse(name + " seed join requires the exact existing Movies writer read grant")
         grant["holonet_seed_join"] = {"library": "3", "actions": list(HOLONET_SEED_JOIN_ACTIONS)}
+    if "holonet_acquire" in item:
+        acquire = _keys(item["holonet_acquire"], {"library", "actions"}, name + " acquisition grant")
+        if (grant["holonet_namespace"] != "managed-recommendations"
+                or grant["holonet_actions"] == ["catalog.read"]
+                or acquire["library"] != "3" or "615" not in grant["holonet_libraries"]
+                or acquire["actions"] not in (
+                    list(HOLONET_ACQUIRE_ACTIONS[:1]),
+                    list(HOLONET_ACQUIRE_ACTIONS[:2]),
+                    [HOLONET_ACQUIRE_ACTIONS[0], HOLONET_ACQUIRE_ACTIONS[2]],
+                    list(HOLONET_ACQUIRE_ACTIONS))):
+            _refuse(name + " acquisition requires the exact existing Anime writer purpose grant")
+        grant["holonet_acquire"] = {"library": "3", "actions": list(acquire["actions"])}
     if grant["holonet_actions"] == ["catalog.read"]:
         # Catalog readers never carry history, targets or userdata.
         if grant["holonet_history_users"] != []:
@@ -382,6 +398,29 @@ def _bounded_expression(access, service, scope=None):
         "    return {}",
     ]
     if service == "holonet":
+        if "holonet.acquire" in access["scope_mappings"]:
+            for extra, needed in (("", HOLONET_ACQUIRE_ACTIONS[:1]),
+                    ("holonet.acquire.start", HOLONET_ACQUIRE_ACTIONS[:2]),
+                    ("holonet.acquire.media", (HOLONET_ACQUIRE_ACTIONS[0], HOLONET_ACQUIRE_ACTIONS[2]))):
+                required = list(HOLONET_ACQUIRE_SCOPES) + ([extra] if extra else [])
+                lines += [
+                    "requested = token.scope",
+                    f"if (isinstance(requested, list) and len(requested) == {len(required)}",
+                    f"        and set(requested) == set({required!r})):",
+                    "    acquire = grant.get('holonet_acquire')",
+                    f"    if (not acquire or not set({list(needed)!r}) <= set(acquire['actions'])",
+                    f"            or {scope!r} != sorted(requested)[0]):",
+                    "        return {}",
+                    f"    return {{'aud': {access['resource']!r},",
+                    "            'holonet_server': grant['holonet_server'],",
+                    "            'holonet_libraries': [acquire['library']],",
+                    "            'holonet_catalog_users': [], 'holonet_history_users': [],",
+                    "            'holonet_target_users': [],",
+                    f"            'holonet_actions': {list(needed)!r},",
+                    "            'holonet_namespace': 'managed-janitor'}",
+                ]
+            # Never leak the nested acquisition declaration on historical purposes.
+            lines.append("grant = {key: value for key, value in grant.items() if key != 'holonet_acquire'}")
         if "holonet.seedjoin" in access["scope_mappings"]:
             # Match the complete stored attribute above, then project one flat
             # purpose grant. Never emit the nested declaration as a JWT claim.
@@ -524,7 +563,7 @@ SERVICES = {
     "shizune": {"name": "shizune", "account_keys": {"shizune_owner"}, "scope": "shizune.use",
                 "resource": "https://shizune.mcp.ryzhkov.dev/mcp", "grant": _shizune_grant},
     "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS,
-                "optional_account_keys": {"holonet_janitor", "holonet_torrents", "holonet_seed_join"}, "scope": "holonet.read",
+                "optional_account_keys": {"holonet_janitor", "holonet_torrents", "holonet_seed_join", "holonet_acquire"}, "scope": "holonet.read",
                 "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},
     "jocasta": SERVICE,
     "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "optional_account_keys": {"ov_actions", "ov_personal"},
@@ -554,7 +593,7 @@ def _application(raw, service):
             scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read")
         elif service == "holonet":
             scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES),
-                      " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES))
+                      " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES))
         elif service == "ov":
             # ov.read first, then any optional families in canonical order.
             optional = OV_SCOPES[1:] + OV_PERSONAL_SCOPES
@@ -665,14 +704,16 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         name = f"identity {host}/{profile}"
         grant, grant_attributes = profile_spec["grant"](item, name)
         if (service == "holonet" and grant["holonet_actions"] != ["catalog.read"]
-                and access["scope"] not in (" ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES))):
+                and access["scope"] not in (" ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES))):
             _refuse(name + " managed recommendations require the explicit writer application")
-        if service == "holonet" and "holonet_janitor" in grant and access["scope"] not in (" ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES)):
+        if service == "holonet" and "holonet_janitor" in grant and access["scope"] not in (" ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES)):
             _refuse(name + " janitor requires its explicit scope on the existing application")
-        if service == "holonet" and "holonet_torrents" in grant and access["scope"] not in (" ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES)):
+        if service == "holonet" and "holonet_torrents" in grant and access["scope"] not in (" ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES)):
             _refuse(name + " torrents require their explicit scope on the existing application")
-        if service == "holonet" and "holonet_seed_join" in grant and access["scope"] != " ".join(HOLONET_SEED_JOIN_APP_SCOPES):
+        if service == "holonet" and "holonet_seed_join" in grant and access["scope"] not in (" ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES)):
             _refuse(name + " seed join requires its explicit scope on the existing application")
+        if service == "holonet" and "holonet_acquire" in grant and access["scope"] != " ".join(HOLONET_ACQUIRE_APP_SCOPES):
+            _refuse(name + " acquisition requires its explicit purpose scopes")
         if service == "ha":
             scopes = access["scope"].split(" ")
             for action in grant["ha_actions"]:
@@ -1056,7 +1097,7 @@ def _service_refusals(spec, owned, results, applications):
     access = spec["access"]
     if access["service"] == "holonet":
         for identity in spec["identities"]:
-            if not ({"holonet_janitor", "holonet_torrents", "holonet_seed_join"} & set(identity["grant"])):
+            if not ({"holonet_janitor", "holonet_torrents", "holonet_seed_join", "holonet_acquire"} & set(identity["grant"])):
                 continue
             user_key, token_key = ("user", identity["username"]), ("token", identity["token"])
             token = found.get(token_key)

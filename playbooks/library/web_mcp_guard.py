@@ -159,7 +159,8 @@ OPERATOR_HEADER = "# Managed by homelab-infra holonet-playlists\n"
 OPERATOR_MODULES = frozenset({"emby_operator_adapter.py", "emby_operator_entry.py",
                               "emby_operator_recommendations.py", "emby_operator_socket.py",
                               "emby_operator_custody.py", "emby_operator_torrents.py",
-                              "emby_operator_seed_join.py"})
+                              "emby_operator_seed_join.py", "emby_operator_acquire.py",
+                              "emby_operator_acquire_torrents.py", "emby_operator_acquire_media.py"})
 HEX64 = re.compile(r"[0-9a-f]{64}")
 # Production trusts only root. Synthetic tests substitute their own uid.
 ROOT_UID = 0
@@ -244,7 +245,7 @@ def playlist_operator(gid, selected, release=None, modules=None, journals=(), co
         need(stat.S_IMODE(info.st_mode) == 0o700)
         inspect(OPERATOR_POLICY / "policy.json", roots(), exact_mode=0o600)
     inspect(OPERATOR_POLICY / "radarr.json", roots(), exact_mode=0o600)
-    for name in ("qbit.json", "qbit-auth.json"):
+    for name in ("qbit.json", "qbit-auth.json", "sonarr.json", "qbit-stage.json"):
         inspect(OPERATOR_POLICY / name, roots(), exact_mode=0o600)
     need(isinstance(journals, list) and isinstance(configs, list)
          and 1 <= len(journals) == len(configs) <= 16 and len(set(journals)) == len(journals))

@@ -67,6 +67,7 @@ jobs:
           python3 scripts/test_emby_importer_pause.py
           python3 scripts/test_emby_custody.py
           python3 scripts/test_emby_torrents.py
+          python3 scripts/test_emby_acquire.py
           python3 scripts/test_emby_seed_join.py
           ansible-playbook playbooks/emby-operator-viewers.yml --syntax-check
       - name: Test opt-in Jocasta MCP stack configuration
@@ -224,7 +225,19 @@ jobs:
         run: python3 -m unittest discover -s roles/authentik_machine_identities/tests -p test_machine_identities.py -v
 
   machine-profiles:
-    # Keep the long real-role coexistence/cleanup matrix separate from legacy tests.
+    # Each existing module remains a complete independent gate; avoid serial
+    # hour-long feedback for a declaration failure in the fourth module.
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - test_service_profiles.py
+          - test_ov_http_identities.py
+          - test_shizune_identities.py
+          - test_ov_full_rollback.py
+          - test_holonet_catalog_identities.py
+          - test_holonet_writer_grants.py
+          - test_holonet_acquire_grants.py
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -234,6 +247,7 @@ jobs:
       image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
     env:
       TMPDIR: ${{ github.workspace }}/machine-profiles-${{ github.run_id }}-${{ github.run_attempt }}
+      PROFILE_TEST_FILE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@v4
       - name: Run synthetic web MCP identity profiles in a scratch home
@@ -244,17 +258,10 @@ jobs:
           mkdir -p "$HOME" "$TMPDIR"
           pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
-            -s roles/authentik_machine_identities/tests -p test_service_profiles.py -v
+            -s roles/authentik_machine_identities/tests -p test_holonet_catalog_identities.py \
+            -k test_source_declaration_is_exact_isolated_and_unbound -v
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
-            -s roles/authentik_machine_identities/tests -p test_ov_http_identities.py -v
-          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
-            -s roles/authentik_machine_identities/tests -p test_shizune_identities.py -v
-          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
-            -s roles/authentik_machine_identities/tests -p test_ov_full_rollback.py -v
-          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
-            -s roles/authentik_machine_identities/tests -p test_holonet_catalog_identities.py -v
-          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
-            -s roles/authentik_machine_identities/tests -p test_holonet_writer_grants.py -v
+            -s roles/authentik_machine_identities/tests -p "$PROFILE_TEST_FILE" -v
 
   akasha:
     runs-on: ubuntu-24.04

@@ -1309,8 +1309,9 @@ def importer_key(config):
                                  config['app_config_owner_uid'], **options)
 
 
-def importer_response_bytes(response):
+def importer_response_bytes(response, *, limit=IMPORTER_MAX_BODY):
     """One strict framed read, shared by fixed GET and pause-only PUT."""
+    require(type(limit) is int and 0 < limit <= 8 * 1024 * 1024, 'Invalid importer response bound')
     lengths = response.headers.get_all('Content-Length', [])
     transfers = response.headers.get_all('Transfer-Encoding', [])
     require(len(lengths) <= 1 and len(transfers) <= 1 and
@@ -1322,9 +1323,9 @@ def importer_response_bytes(response):
         require(re.fullmatch('[0-9]{1,9}', lengths[0]) is not None,
                 'Invalid importer response framing')
         declared = int(lengths[0])
-        require(declared <= IMPORTER_MAX_BODY, 'Importer response too large')
-    raw = response.read(IMPORTER_MAX_BODY + 1)
-    require(len(raw) <= IMPORTER_MAX_BODY, 'Importer response too large')
+        require(declared <= limit, 'Importer response too large')
+    raw = response.read(limit + 1)
+    require(len(raw) <= limit, 'Importer response too large')
     require(declared is None or len(raw) == declared, 'Incomplete importer response')
     return raw
 
@@ -1374,6 +1375,9 @@ class ImporterInventoryAdapter:
             routes += ('/api/v3/config/importlist',)
         return routes
 
+    def _response_limit(self, path):
+        return IMPORTER_MAX_BODY
+
     def _get(self, path):
         require(path in self._get_routes() and self._calls < self._call_limit() and
                 self._key is not None, 'Importer route refused')
@@ -1392,7 +1396,7 @@ class ImporterInventoryAdapter:
             try:
                 with opener.open(request, timeout=remaining) as response:
                     require(response.status == 200, 'Importer inventory unavailable')
-                    raw = importer_response_bytes(response)
+                    raw = importer_response_bytes(response, limit=self._response_limit(path))
                 completed.put((raw, False))
             except Exception:
                 completed.put((None, True))
