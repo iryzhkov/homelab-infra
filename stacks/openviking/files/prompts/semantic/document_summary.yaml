@@ -48,11 +48,10 @@ template: |
 
   Do not add audience guesses, generic purpose claims, or promotional framing such as 'serves as'.
 
-  Structure your summary with:
-  1. One sentence describing the document's primary purpose
-  2. Main sections or topics covered
-  3. Key information or takeaways
-  4. Intended audience or use case context, if apparent from the file content
+  Use the first sentence for the main subject and current status stated in the source.
+  Use one or two more sentences for concrete facts, identifiers or replacement links.
+  Preserve an explicit Superseded status when present in the source title.
+  Do not enumerate every heading or repeat generic document-purpose language.
 
   Special considerations:
   - For Markdown files: pay attention to heading hierarchy
