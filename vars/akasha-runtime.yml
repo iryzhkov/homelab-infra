@@ -1,9 +1,9 @@
 ---
 # Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
 # Official host-v0.2.20 at abc9c90; verified GitHub release digest.
-# Independent root requires existing016/017/018 and matching cache pairs.
-# Keep collectors016 and explicit rollback018; newest prior018 is retained too.
-# After installation require016/017/018/020; newest prior018.
+# Independent root requires existing017/018 and matching cache pairs.
+# Keep collector018 (fleet akasha_collector_version) and rollback017 explicitly;
+# newest prior018 is retained too. After installation require017/018/020.
 # Require fresh root ownership, no-symlink and mtime evidence before every call.
 # Never install missing old versions or alter mtimes to satisfy retention.
 # The trust call uses its own list; never pass the runtime list as extra vars.
