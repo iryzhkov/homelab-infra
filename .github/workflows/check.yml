@@ -379,7 +379,7 @@ jobs:
       - name: Install verifier and serving test runtimes
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends nodejs npm golang-go nginx
+          apt-get install -y --no-install-recommends nodejs npm golang-go nginx libatomic1
           pip install --disable-pip-version-check ansible-core==2.19.13 cryptography==46.0.3 PyJWT==2.15.0 Django==5.2.17 djangorestframework==3.17.1 deepmerge==2.1.0
       - name: Run isolated signer and affected enrollment checks
         run: |
