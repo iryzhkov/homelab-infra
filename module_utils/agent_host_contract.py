@@ -372,11 +372,27 @@ def claims(service, grant, requested):
     return {"jocasta_operator": True} if service == "jocasta" else copy.deepcopy(grant)
 
 
+def canonical(value):
+    # Render API data deterministically so an unchanged state renders the same
+    # expression bytes. Dict keys are sorted; list order is kept because
+    # host_allowed compares attributes by value.
+    if isinstance(value, dict):
+        return {k: canonical(value[k]) for k in sorted(value)}
+    if isinstance(value, list):
+        return [canonical(x) for x in value]
+    return value
+
+
+def expected_users(users, service):
+    # Groups are compared as a set by host_allowed, so their order is free.
+    return canonical({str(u["pk"]): {"username": u["username"], "attributes": u["attributes"],
+                                     "groups": sorted(str(g) for g in u["groups"])}
+                      for u in users if service in u["attributes"]["services"]})
+
+
 def jocasta_policy(users, original):
     public_users(users)
-    expected = {str(u["pk"]): {"username": u["username"], "attributes": u["attributes"],
-                              "groups": u["groups"]} for u in users
-                if "jocasta" in u["attributes"]["services"]}
+    expected = expected_users(users, "jocasta")
     return ("expected = " + repr(expected) + "\n" + RUNTIME_GUARD + """
 u = request.user
 if u and u.username.startswith('chaldea-') and u.path == 'homelab-infra/agent-hosts':
@@ -414,9 +430,7 @@ def public_users(users):
 
 def scope_expression(service, scope, users, original):
     public_users(users)
-    expected = {str(u["pk"]): {"username": u["username"], "attributes": u["attributes"],
-                              "groups": u["groups"]} for u in users
-                if service in u["attributes"]["services"]}
+    expected = expected_users(users, service)
     # All host-shaped accounts, including ungranted hosts, are denied before the
     # legacy expression. Legacy account expressions remain byte-for-byte intact.
     select = """requested = token.scope

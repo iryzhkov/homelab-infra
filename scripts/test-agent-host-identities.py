@@ -473,6 +473,20 @@ class Lifecycle(unittest.TestCase):
                     self.enrollment().resources([item("agent-b")], [baseline])
             self.assertTrue(all(method == "GET" for method, _, _ in self.api.calls))
 
+    def test_expressions_render_identically_for_reordered_api_data(self):
+        user = {"pk": 7, "username": "chaldea-agent-b", "groups": ["g2", "g1"],
+                "attributes": {"services": {"jocasta": {"b": 1, "a": [3, 1]}}, "host": "agent-b"}}
+        other = copy.deepcopy(user)
+        other["groups"] = ["g1", "g2"]
+        other["attributes"] = {"host": "agent-b", "services": {"jocasta": {"a": [3, 1], "b": 1}}}
+        from unittest.mock import patch
+        with patch.object(c, "public_users", lambda users: None):
+            self.assertEqual(c.jocasta_policy([user], "return False"), c.jocasta_policy([other], "return False"))
+            self.assertEqual(c.scope_expression("jocasta", "jocasta.read", [user], "return {}"),
+                             c.scope_expression("jocasta", "jocasta.read", [other], "return {}"))
+        # List order inside attributes is data, not formatting, and is kept.
+        self.assertEqual(c.canonical({"a": [3, 1]}), {"a": [3, 1]})
+
     def test_mid_commit_crash_leaves_explicit_pending(self):
         atomic = d.atomic
         calls = []
