@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "roles/authentik_webmcp_interactive/tests"))
 import used_by_seam as seam
 import provider_inventory_seam as inventory
+for name in ("authentik_enrollment", "agent_host_contract"):
+    helper_spec = importlib.util.spec_from_file_location("ansible.module_utils." + name, ROOT / "module_utils" / (name + ".py"))
+    helper = importlib.util.module_from_spec(helper_spec)
+    sys.modules[helper_spec.name] = helper
+    helper_spec.loader.exec_module(helper)
 spec = importlib.util.spec_from_file_location("managed", ROOT / "roles/authentik_webmcp_interactive/library/webmcp_managed_enrollment.py")
 assert spec and spec.loader
 m = importlib.util.module_from_spec(spec)
@@ -27,6 +32,7 @@ NOW = dt.datetime(2026, 10, 24, tzinfo=dt.timezone.utc)
 
 class FakeAPI:
     def __init__(self):
+        self.paths = m.PATHS
         self.data = {k: [] for k in m.PATHS}
         self.calls = []
         self.next = 100
@@ -158,6 +164,26 @@ class Tests(unittest.TestCase):
 
     def enroll(self):
         return m.Enrollment(self.api, self.fd, OWNER)
+
+    def test_host_writer_patches_coexist_with_managed_convergence(self):
+        from ansible.module_utils.agent_host_contract import attributes, scope_expression, jocasta_policy
+        self.enroll().converge(hosts(), "present")
+        host_users = [{"pk": 999, "username": "chaldea-agent-a", "groups": [],
+                       "attributes": attributes("agent-a", OWNER)}]
+        old_write = copy.deepcopy(self.api.data["mapping"][1])
+        # These are the exact expressions installed by HostEnrollment.expressions.
+        for row in self.api.data["mapping"]:
+            if row["scope_name"] == "jocasta.read":
+                row["expression"] = scope_expression("jocasta", "jocasta.read", host_users, row["expression"])
+        row = self.api.data["policy"][0]
+        row["expression"] = jocasta_policy(host_users, row["expression"])
+        before = len([call for call in self.api.calls if call[0] != "GET"])
+        enrollment = m.Enrollment(self.api, self.fd, OWNER, host_users)
+        enrollment.verify_owned()
+        self.assertFalse(enrollment.converge(hosts(), "present"))
+        self.assertEqual(before, len([call for call in self.api.calls if call[0] != "GET"]))
+        self.assertEqual(old_write, self.api.data["mapping"][1])
+        self.assertFalse(m.Enrollment(self.api, self.fd, OWNER, host_users).converge(hosts(), "present"))
 
     def test_enroll_noop_rotation_and_revocation(self):
         self.assertTrue(self.enroll().converge(hosts(), "present"))
@@ -571,7 +597,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(evaluate(identity, user=user, provider=provider), {})
 
     def test_transport_redirect_and_failure_are_generic(self):
-        self.assertRaises(m.Refused, m.NoRedirect().redirect_request, None, None, None, None, None, None)
+        self.assertRaises(m.Refused, sys.modules["ansible.module_utils.authentik_enrollment"].NoRedirect().redirect_request, None, None, None, None, None, None)
         api = m.APIClient("synthetic-admin-token")
         class Opener:
             def open(self, *args, **kwargs):

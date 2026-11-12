@@ -7,9 +7,6 @@ import hashlib
 import json
 import os
 import stat
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.agent_host_contract import (
@@ -21,152 +18,12 @@ ORIGIN = "https://auth.ryzhkov.dev"
 API = ORIGIN + "/api/v3"
 PATHS = {"user": "/core/users/", "token": "/core/tokens/",
          "group": "/core/groups/", "mapping": "/propertymappings/provider/scope/",
-         "policy": "/policies/expression/"}
+         "policy": "/policies/expression/", "provider": "/providers/oauth2/",
+         "application": "/core/applications/", "binding": "/policies/bindings/"}
 
-class Refused(Exception):
-    pass
-
-def matches(seen, body):
-    for key, value in body.items():
-        actual = seen.get(key)
-        if key == "expires":
-            try:
-                if dt.datetime.fromisoformat(actual.replace("Z", "+00:00")) != dt.datetime.fromisoformat(value.replace("Z", "+00:00")):
-                    return False
-            except (ValueError, AttributeError):
-                return False
-        elif key == "groups":
-            if not isinstance(actual, list) or sorted(actual) != sorted(value):
-                return False
-        elif actual != value:
-            return False
-    return True
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        raise Refused()
-
-
-class APIClient:
-    def __init__(self, token):
-        require(isinstance(token, str) and 16 <= len(token) <= 4096 and "\n" not in token and "\r" not in token)
-        self.token = token
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-
-    def request(self, method, path, body=None, public=False):
-        require(isinstance(path, str) and path.startswith("/") and not path.startswith("//"))
-        endpoint = ORIGIN + path if public else API + path
-        data = None if body is None else json.dumps(body).encode()
-        headers = {"Accept": "application/json"}
-        if not public:
-            headers["Authorization"] = "Bearer " + self.token
-        if data is not None:
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(endpoint, data=data, headers=headers, method=method)
-        try:
-            with self.opener.open(request, timeout=8) as response:
-                require(response.status in (200, 201, 204))
-                raw = response.read(2 * 1024 * 1024 + 1)
-                require(len(raw) <= 2 * 1024 * 1024)
-                return json.loads(raw) if raw else {}
-        except Exception:
-            raise Refused() from None
-
-    def require_superuser(self):
-        # Both collection and used_by views can silently filter non-admin reads.
-        actor = self.request("GET", "/core/users/me/")
-        require(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
-                and actor["user"].get("is_superuser") is True)
-
-    def mapping_uses(self, pk):
-        require(isinstance(pk, str) and str(uuid.UUID(pk)) == pk)
-        # Check authority here, independent of any previous application load.
-        self.require_superuser()
-        result = self.request("GET", "/propertymappings/all/" + pk + "/used_by/")
-        require(isinstance(result, list) and len(result) <= 500)
-        fields = {"app", "model_name", "pk", "name", "action"}
-        require(all(isinstance(row, dict) and set(row) == fields
-                    and all(isinstance(value, str) and 1 <= len(value) <= 1024
-                            for value in row.values()) for row in result))
-        return result
-
-    def rows(self, kind, owned=None):
-        # Complete public discovery; never list secret-bearing OAuth2 bodies.
-        path = ("/providers/all/" if kind == "provider" else PATHS[kind]) + "?page_size=500"
-        if kind == "provider":
-            self.require_superuser()
-        if kind == "application":
-            # A matching pagination count is not completeness evidence when
-            # Authentik silently filters applications for a non-superuser.
-            self.require_superuser()
-            path += "&superuser_full_list=true"
-        result = self.request("GET", path)
-        require(isinstance(result, dict) and isinstance(result.get("results"), list))
-        rows = result["results"]
-        require(len(rows) <= 500 and not result.get("pagination", {}).get("next"))
-        require(result.get("pagination", {}).get("count") == len(rows))
-        if kind == "provider":
-            # Only the original receipt ID permits an OAuth2 detail read.
-            # Check all public name/ID collisions before opening any such body.
-            records = [r for r in (owned or {}).values() if r["kind"] == kind]
-            for record in records:
-                pk = record["pk"]
-                require(type(pk) is int and pk > 0 and record["lookup"] == pk)
-                found = [r for r in rows if r.get("pk") == pk]
-                named = [r for r in rows if r.get("name") == record["body"]["name"]]
-                require(len(found) == len(named) == 1 and found[0] == named[0])
-            for record in records:
-                detail = self.request("GET", PATHS[kind] + str(record["pk"]) + "/")
-                require(isinstance(detail, dict) and detail.get("pk") == record["pk"]
-                        and matches(detail, record["body"]))
-                rows = [detail if r.get("pk") == record["pk"] else r for r in rows]
-        return rows
-
-
-def secure_dir(path):
-    require(isinstance(path, str) and path.startswith("/") and os.path.normpath(path) == path)
-    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        for part in path[1:].split("/"):
-            st = os.fstat(fd)
-            require(st.st_uid in (0, os.getuid()) and not st.st_mode & 0o022)
-            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = next_fd
-        st = os.fstat(fd)
-        require(st.st_uid == os.getuid() and stat.S_IMODE(st.st_mode) == 0o700)
-        return fd
-    except Exception:
-        os.close(fd)
-        raise Refused() from None
-
-
-def read_private(fd, name):
-    leaf = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
-    with os.fdopen(leaf) as stream:
-        st = os.fstat(stream.fileno())
-        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_nlink == 1 and stat.S_IMODE(st.st_mode) == 0o600 and st.st_size <= 1048576)
-        raw = stream.read(1048577)
-        require(len(raw) <= 1048576)
-        return json.loads(raw)
-
-
-def write_private(fd, name, value):
-    # Only a named receipt or a fixed host file in a held private directory.
-    try:
-        read_private(fd, name)
-    except FileNotFoundError:
-        pass
-    temp = ".new-" + str(uuid.uuid4())
-    leaf = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=fd)
-    with os.fdopen(leaf, "w") as stream:
-        json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.rename(temp, name, src_dir_fd=fd, dst_dir_fd=fd)
-    os.fsync(fd)
-
-
+from ansible.module_utils.authentik_enrollment import (
+    APIClient, Refused, matches, secure_dir, read_private, write_private,
+)
 
 
 class HostEnrollment:
@@ -183,6 +40,63 @@ class HostEnrollment:
         self.changed = False
         api.require_superuser()
         self.rows = {k: api.rows(k) for k in PATHS}
+
+    def resources(self, hosts, baselines):
+        # Inspect public provider bodies only. Never open an OAuth2 secret.
+        for service in set().union(*(set(MATRIX[h["host"]]) for h in hosts)):
+            selected = [b for b in baselines if b["service"] == service]
+            mappings = [b for b in selected if b["kind"] == "mapping"]
+            require(mappings)
+            ids = {b["pk"] for b in mappings}
+            anchor = mappings[0]["ownership"]
+            if service == "jocasta":
+                fd = secure_dir(anchor["receipt_dir"])
+                try:
+                    receipt = read_private(fd, "receipt.json")
+                finally:
+                    os.close(fd)
+                require(receipt["pending"] is None)
+                owned = receipt["objects"]
+                ids.add(owned["write"]["pk"])
+                provider_pk = owned["provider"]["pk"]
+                app_pk = owned["application"]["pk"]
+                providers = [p for p in self.rows["provider"] if p["pk"] == provider_pk]
+                apps = [a for a in self.rows["application"] if a["pk"] == app_pk]
+                bindings = [b for b in self.rows["binding"] if b.get("target") == app_pk]
+                require(len(bindings) == 1 and matches(bindings[0], owned["binding"]["body"]))
+                require(len(apps) == 1 and matches(apps[0], owned["application"]["body"]))
+            else:
+                blueprint = self.api.request("GET", "/managed/blueprints/" + anchor["blueprint_pk"] + "/")
+                content = blueprint["content"]
+                require(blueprint["status"] == "successful"
+                        and hashlib.sha256(content.encode()).hexdigest() == anchor["content_sha256"])
+                prefix = "# homelab-infra-owned: "
+                markers = [json.loads(line[len(prefix):]) for line in content.splitlines() if line.startswith(prefix)]
+                require(len(markers) == 1 and markers[0]["version"] == 1)
+                objects = markers[0]["objects"]
+                providers = [p for p in self.rows["provider"] if set(p["property_mappings"]) == ids
+                             and ["provider", p["name"], "present"] in objects]
+                require(len(providers) == 1)
+                provider_pk = providers[0]["pk"]
+                apps = [a for a in self.rows["application"] if a.get("provider") == provider_pk]
+                require(len(apps) == 1 and ["application", apps[0]["slug"], "present"] in objects)
+                app_pk = apps[0]["pk"]
+                require(apps[0]["policy_engine_mode"] == "any")
+                bindings = [b for b in self.rows["binding"] if b.get("target") == app_pk]
+                require(len(bindings) == 1 and bindings[0].get("group") == GROUP_IDS[service]
+                        and bindings[0].get("policy") is None and bindings[0].get("user") is None)
+            require(len(providers) == len(apps) == 1)
+            provider = providers[0]
+            attached = provider["property_mappings"]
+            require(provider["meta_model_name"] == "authentik_providers_oauth2.oauth2provider"
+                    and len(attached) == len(ids) and set(attached) == ids)
+            rows = [m for m in self.rows["mapping"] if m["pk"] in ids]
+            require(len(rows) == len(ids) and all(m["scope_name"] != "goauthentik.io/api" for m in rows))
+            require(apps[0]["provider"] == provider["pk"] and apps[0].get("backchannel_providers") == [])
+            require([a["pk"] for a in self.rows["application"] if a.get("provider") == provider["pk"]] == [app_pk])
+            require(not any(provider["pk"] in a.get("backchannel_providers", []) for a in self.rows["application"]))
+            require(bindings[0]["enabled"] is True and bindings[0]["negate"] is False
+                    and bindings[0]["order"] == 0)
 
     def save(self):
         if not self.check:
@@ -357,7 +271,7 @@ class HostEnrollment:
             self.receipt["expressions"][key] = {"original": original, "rendered": desired}
             self.commit()
         # Every resource scope needs coexistence. Missing a row is not a partial rollout.
-        expected = {("jocasta", "jocasta.read"), ("jocasta", "jocasta.write"),
+        expected = {("jocasta", "jocasta.read"),
                     ("shizune", "shizune.use"), ("ha", "ha.read"), ("homelab", "homelab.read")}
         from ansible.module_utils.agent_host_contract import MATRIX as matrix
         expected |= {("ov", "ov." + a) for a in matrix["laptop"]["ov"]["ov_actions"]}
@@ -377,7 +291,7 @@ def main():
     fd = lock = None
     try:
         p = module.params
-        hosts = declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc))
+        declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc), MATRIX)
         fd = secure_dir(p["receipt_dir"])
         if not module.check_mode:
             lock = os.open("host.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=fd)
@@ -385,7 +299,9 @@ def main():
             require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
                     and st.st_nlink == 1 and stat.S_IMODE(st.st_mode) == 0o600)
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        e = HostEnrollment(APIClient(p["api_token"]), fd, p["owner"], module.check_mode)
+        e = HostEnrollment(APIClient(p["api_token"], PATHS), fd, p["owner"], module.check_mode)
+        hosts = declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc), e.receipt["tokens"])
+        e.resources(hosts, p["baselines"])
         # Preflight the entire operation before the first account/token write.
         original_receipt = copy.deepcopy(e.receipt)
         e.check = True

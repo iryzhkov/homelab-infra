@@ -7,33 +7,13 @@ import os
 import pwd
 import socket
 import stat
-import uuid
 from ansible.module_utils.basic import AnsibleModule
 
 def require(ok):
     if not ok:
         raise ValueError("Host credential custody refused")
 
-def read_file(fd, name):
-    try:
-        leaf = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-    except FileNotFoundError:
-        return None
-    with os.fdopen(leaf, "rb") as stream:
-        st = os.fstat(stream.fileno())
-        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
-                and st.st_nlink == 1 and stat.S_IMODE(st.st_mode) == 0o600 and st.st_size <= 4096)
-        return stream.read(4097)
-
-def atomic(fd, name, content):
-    temp = ".host-" + str(uuid.uuid4())
-    leaf = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
-    with os.fdopen(leaf, "wb") as stream:
-        stream.write(content)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.rename(temp, name, src_dir_fd=fd, dst_dir_fd=fd)
-    os.fsync(fd)
+from ansible.module_utils.authentik_enrollment import read_file, atomic
 
 def credential(fd, host, uid, generation, revoked, password=None, check=False):
     raw = read_file(fd, "host.generation.json")

@@ -276,7 +276,7 @@ def require(ok):
     if not ok:
         raise ValueError("Host enrollment contract refused")
 
-def declaration(hosts, owner, now):
+def declaration(hosts, owner, now, tokens=None):
     require(str(uuid.UUID(owner)) == owner)
     require(isinstance(hosts, list) and 1 <= len(hosts) <= 5)
     seen = set()
@@ -289,7 +289,7 @@ def declaration(hosts, owner, now):
         require(type(item["revoked"]) is bool)
         expiry = dt.datetime.fromisoformat(item["expires"].replace("Z", "+00:00"))
         require(item["expires"].endswith("Z"))
-        if not item["revoked"]:
+        if not item["revoked"] and host not in (tokens or {}):
             require(now + dt.timedelta(days=1) <= expiry <= now + dt.timedelta(days=60))
         dest = item["destination"]
         require(set(dest) == {"hostname", "uid"})

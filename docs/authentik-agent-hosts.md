@@ -66,7 +66,7 @@ authentik_agent_host_baselines:
       receipt_dir: /home/igor/.cache/EXISTING-MANAGED-ENROLLMENT/receipt
 ```
 
-Required mapping baseline scopes are jocasta.read/write; all four ov resource
+Required mapping baseline scopes are jocasta.read; all four ov resource
 scopes plus the five ov.personal actions; holonet.read/curate/home/janitor/
 torrents/seedjoin; shizune.use; ha.read; homelab.read. Supply exact current
 mapping IDs and hashes from the existing owned applications, using protected
@@ -78,7 +78,7 @@ the exact mapping name and its resource group as present-owned objects.
 Jocasta anchors point to the original private managed enrollment receipt,
 which must have no pending operation and bind the exact object ID/body.
 Expression hashes alone never establish ownership.
-No provider detail or client secret is needed by this writer.
+Public provider, application and binding inventories must match the owned resources and complete scope-mapping sets; API mappings are refused. No client secret is read.
 
 The journal records API-returned IDs and original/rendered expressions.
 Name collisions, missing ownership, changed grants/groups, invalid managed roles,
@@ -90,7 +90,7 @@ later rotation belongs to P3.2.
 
 Freeze the old resource blueprint writers during coexistence: they do not own
 new host accounts and will reject the new group members. Do not run them to
-reset group membership or mappings. For the managed Jocasta role, supply
+reset group membership or mappings. Content-stored legacy blueprints are not re-applied on a schedule, and a deliberate re-apply fails closed. For the managed Jocasta role, supply
 `webmcp_managed_host_users` with exact `public_host_users` readbacks from the
 host writer when deliberately reconciling its protected receipt. Its expressions
 accept both generations; it does not create or modify host accounts. Changes to

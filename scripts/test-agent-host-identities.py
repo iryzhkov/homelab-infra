@@ -23,6 +23,7 @@ def load(name, path):
     spec.loader.exec_module(m)
     return m
 
+load("ansible.module_utils.authentik_enrollment", "module_utils/authentik_enrollment.py")
 c = load("ansible.module_utils.agent_host_contract", "module_utils/agent_host_contract.py")
 e = load("host_enrollment", "roles/authentik_machine_identities/library/authentik_agent_hosts.py")
 d = load("host_delivery", "roles/authentik_machine_identities/library/authentik_host_credential.py")
@@ -117,6 +118,12 @@ class Contract(unittest.TestCase):
                       dict(item(), expires="2027-11-12T00:00:00Z")]:
             with self.assertRaises(Exception):
                 c.declaration([value], OWNER, NOW)
+
+    def test_expiry_window_only_before_bootstrap(self):
+        stale = dict(item(), expires="2026-01-01T00:00:00Z")
+        with self.assertRaises(Exception):
+            c.declaration([stale], OWNER, NOW)
+        c.declaration([stale], OWNER, NOW, {"laptop": {"generation": 1}})
 
     def test_purpose_and_resource_isolation(self):
         for host, services in c.MATRIX.items():
@@ -334,7 +341,7 @@ class Lifecycle(unittest.TestCase):
 
     def test_mapping_baselines_and_check_accuracy(self):
         self.enrollment().users([item()])
-        scopes = {"jocasta": ["jocasta.read", "jocasta.write"], "ha": ["ha.read"],
+        scopes = {"jocasta": ["jocasta.read"], "ha": ["ha.read"],
             "homelab": ["homelab.read"], "shizune": ["shizune.use"],
             "ov": ["ov." + a for a in c.MATRIX["laptop"]["ov"]["ov_actions"]] +
                   ["ov.personal." + a for a in c.MATRIX["laptop"]["ov"]["ov_personal"]["actions"]],
@@ -386,6 +393,43 @@ class Lifecycle(unittest.TestCase):
         self.api.data["mapping"][0]["expression"] = "return {'foreign': True}"
         with self.assertRaises(Exception):
             self.enrollment(True).expressions(users, baselines)
+
+    def test_resource_preflight_rejects_extra_api_mapping_and_relationship_drift(self):
+        scope = {"pk": "read", "scope_name": "ha.read"}
+        provider = {"pk": 7, "name": "HA", "property_mappings": ["read"],
+                    "meta_model_name": "authentik_providers_oauth2.oauth2provider"}
+        app = {"pk": "app", "slug": "ha", "provider": 7, "backchannel_providers": [],
+               "policy_engine_mode": "any"}
+        binding = {"pk": "bind", "target": "app", "group": c.GROUP_IDS["ha"],
+                   "policy": None, "user": None, "enabled": True, "negate": False, "order": 0}
+        content = "# homelab-infra-owned: " + json.dumps({"version": 1, "objects": [
+            ["provider", "HA", "present"], ["application", "ha", "present"]]})
+        self.api.blueprint = {"status": "successful", "content": content}
+        baseline = {"kind": "mapping", "pk": "read", "service": "ha", "ownership": {
+            "blueprint_pk": OWNER, "content_sha256": hashlib.sha256(content.encode()).hexdigest()}}
+        # Limit the cohort's grant matrix to isolate this resource's preflight.
+        from unittest.mock import patch
+        with patch.dict(c.MATRIX, {"homelab": {"ha": {}}}):
+            self.api.data.update(mapping=[scope], provider=[provider], application=[app], binding=[binding])
+            self.enrollment().resources([item("homelab")], [baseline])
+            good = copy.deepcopy(self.api.data)
+            for drift in ("api", "missing", "provider", "binding", "backchannel"):
+                self.api.data = copy.deepcopy(good)
+                if drift == "api":
+                    self.api.data["mapping"].append({"pk": "api", "scope_name": "goauthentik.io/api"})
+                    self.api.data["provider"][0]["property_mappings"].append("api")
+                elif drift == "missing":
+                    self.api.data["provider"][0]["property_mappings"] = []
+                elif drift == "provider":
+                    self.api.data["application"][0]["provider"] = 999
+                elif drift == "binding":
+                    self.api.data["binding"][0]["negate"] = True
+                else:
+                    self.api.data["application"][0]["backchannel_providers"] = [7]
+                with self.subTest(drift=drift), self.assertRaises(Exception):
+                    self.enrollment().resources([item("homelab")], [baseline])
+            self.assertTrue(all(method == "GET" for method, _, _ in self.api.calls))
+            self.assertEqual(os.listdir(self.fd), [])
 
     def test_mid_commit_crash_leaves_explicit_pending(self):
         atomic = d.atomic
