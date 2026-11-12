@@ -1279,7 +1279,7 @@ class PackagingTest(unittest.TestCase):
         template = (ROOT / "roles/web_mcp_endpoint/templates/holonet-playlists-worker@.service.j2").read_text()
         from jinja2 import Environment
         env = Environment()
-        values = {"web_mcp_operator": {"release_directory": "/synthetic", "journals": []}}
+        values = {"web_mcp_operator": {"release_directory": "/synthetic", "journals": [], "policy": {}}}
         for enabled in (None, False, True):
             ctx = dict(values)
             if enabled is not None:
