@@ -10,7 +10,7 @@ import stat
 import uuid
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.agent_host_contract import (
-    MATRIX, GROUPS, GROUP_IDS, PATH, attributes, declaration, managed_role_ok,
+    MATRIX, GROUPS, GROUP_IDS, PATH, ROTATION_HOSTS, attributes, declaration, managed_role_ok,
     require, scope_expression, writer_user_readback, writer_token_readback, rotation_provider_body,
 )
 
@@ -142,7 +142,8 @@ class HostEnrollment:
     def akasha(self, users, signing_key):
         """Dedicated resource, receipt-owned and fail closed on foreign objects."""
         from ansible.module_utils.agent_host_contract import (
-            AKASHA_HOSTS, AKASHA_AUDIENCE, AKASHA_CLIENT, RUNTIME_GUARD, public_users, canonical)
+            AKASHA_HOSTS, AKASHA_REGISTRY_HOSTS, AKASHA_AUDIENCE, AKASHA_CLIENT,
+            RUNTIME_GUARD, public_users, canonical)
         public_users(users)
         require(str(uuid.UUID(signing_key)) == signing_key)
         expected = canonical({str(u["pk"]): {
@@ -167,7 +168,8 @@ return (p.get('client_id') == 'chaldea-akasha' and p.get('username') == u.userna
     and request.context.get('oauth_grant_type') == 'client_credentials'
     and request.context.get('oauth_scopes') == {'akasha.ingest'})
 """)
-        expression = ("expected = " + repr(expected) + "\n" + RUNTIME_GUARD + """
+        expression = ("registry_hosts = " + repr(AKASHA_REGISTRY_HOSTS) + "\n"
+                      + "expected = " + repr(expected) + "\n" + RUNTIME_GUARD + """
 u = user
 e = expected.get(str(u.pk)) if u else None
 if (not e or e['username'] != u.username or not host_allowed(u, e)
@@ -175,8 +177,9 @@ if (not e or e['username'] != u.username or not host_allowed(u, e)
         or provider.application.slug != 'chaldea-akasha'
         or token.scope != ['akasha.ingest']):
     return {}
+host = registry_hosts[u.attributes['agent-host']]
 return {'aud': 'https://akasha.ryzhkov.dev',
-        'preferred_username': u.username, 'host': u.attributes['agent-host'],
+        'preferred_username': 'chaldea-' + host, 'host': host,
         'run_id': u.username}
 """)
         objects = self.receipt.setdefault("akasha", {})
@@ -241,6 +244,8 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             "authorization_flow": flow("default-provider-authorization-implicit-consent"),
             "invalidation_flow": flow("default-provider-invalidation-flow"),
             "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
+        "sub_mode": "hashed_user_id", "encryption_key": None,
+        "include_claims_in_id_token": False, "refresh_token_validity": "seconds=0",
             "redirect_uris": [], "signing_key": signing_key, "property_mappings": [mapping],
             "jwt_federation_sources": [], "jwt_federation_providers": []})
         app = owned("application", {"name": "Chaldea Akasha", "slug": AKASHA_CLIENT,
@@ -439,7 +444,7 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             require(g["pk"] == GROUP_IDS[service])
             require(g.get("is_superuser") is False and g.get("roles") == [] and g.get("parents") == [])
             ids.append(g["pk"])
-        if self.receipt.get("rotation", {}).get("group"):
+        if host in ROTATION_HOSTS and self.receipt.get("rotation", {}).get("group"):
             record = self.receipt["rotation"]["group"]
             found = [g for g in self.rows["group"] if g["pk"] == record["pk"]]
             # The newly created group is not in the initial snapshot yet.
@@ -458,7 +463,7 @@ return {'aud': 'https://akasha.ryzhkov.dev',
         actual.pop("revoked", None)
         rotation_group = self.receipt.get("rotation", {}).get("group", {}).get("pk")
         legacy_groups = [g for g in groups if g != rotation_group]
-        rotation = {"group": rotation_group, "client_id": "chaldea-host-rotation"} if rotation_group else None
+        rotation = {"group": rotation_group, "client_id": "chaldea-host-rotation"} if rotation_group and host in ROTATION_HOSTS else None
         require(actual in (expected, attributes(host, self.owner, rotation))
                 and sorted(user["groups"]) in (groups, legacy_groups))
         roles, permissions = {}, {}
@@ -541,7 +546,7 @@ return {'aud': 'https://akasha.ryzhkov.dev',
                 self.receipt["users"][host] = user["pk"]
                 self.commit()
             rotation_group = self.receipt.get("rotation", {}).get("group", {}).get("pk")
-            rotation = {"group": rotation_group, "client_id": "chaldea-host-rotation"} if rotation_group else None
+            rotation = {"group": rotation_group, "client_id": "chaldea-host-rotation"} if rotation_group and host in ROTATION_HOSTS else None
             desired = {"groups": groups, "attributes": attributes(host, self.owner, rotation)}
             if sorted(user["groups"]) != groups or user["attributes"] != desired["attributes"]:
                 updated = self.mutate("PATCH", "/core/users/" + str(user["pk"]) + "/", desired)

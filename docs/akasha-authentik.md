@@ -6,15 +6,23 @@ and resource/audience `https://akasha.ryzhkov.dev`. Issuer is exactly
 `https://auth.ryzhkov.dev/application/o/chaldea-akasha/`, JWKS is
 `https://auth.ryzhkov.dev/application/o/chaldea-akasha/jwks/`, cache TTL 60 seconds.
 The provider uses the existing protected RS256 signer pin, client_credentials only,
-and access_token_validity seconds=300. Akasha enforces the 300-second lifetime and
+and access_token_validity seconds=300. Both Akasha and rotation explicitly pin
+sub_mode hashed_user_id, encryption_key null, include_claims_in_id_token false,
+and refresh_token_validity seconds=0. These are writable/readable fields in the
+pinned Authentik serializer; refresh grants and ID-token claims are unnecessary
+for this client_credentials-only resource. Exact readback checks every field. Akasha enforces the 300-second lifetime and
 60-second skew. R1 accepts the residual validity and Authentik outage trade-offs.
 
-The sole scope mapping overrides aud and emits preferred_username, host and stable
-run_id equal to chaldea-HOST. Authentik supplies sub, iss, iat and exp. No custom nbf
+The sole scope mapping overrides aud and emits host from a fixed reviewed map:
+laptop maps to omarchy-macbook-air-igor, normandy to omarchy-normandy, and the
+other four agent-host names map to themselves. preferred_username is chaldea-
+plus that registry host; stable run_id remains the account username chaldea-HOST. Authentik supplies sub, iss, iat and exp. No custom nbf
 or source selector is emitted. No API scope or grants are attached. All six existing
 producer hosts are eligible; their exact sources, kinds, roots and read permissions
 remain the Akasha registry's authority. Normandy gets a new chaldea-normandy account
-with no Jocasta, OV, HoloNet, Shizune, HA or observer grant. It uses the normal
+with no Jocasta, OV, HoloNet, Shizune, HA, observer or rotation grant. Rotation
+membership and client attributes are restricted to laptop, omarchy-pc, agent-a,
+agent-b and homelab. It uses the normal
 host credential custody path /home/igor/.config/chaldea/authentik/host.app-password,
 mode 0600 with private parents and exact node/UID binding. No producer consumes it yet.
 
@@ -57,7 +65,8 @@ ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -
 3. Verify current artifact roots and caches before each Akasha invocation.
    The independent runtime root must contain 016/017/018 with matching cache pairs,
    newest prior018 excluding selected020. After installation expect016/017/018/020.
-   Explicitly retained016 keeps collectors; explicit018 keeps rollback. Never change
+   Explicit016 keeps collectors, explicit017 keeps the older rollback, and newest
+   prior018 is retained automatically. Never change
    mtimes or install missing versions to pass retention. Shared022 and clock012 stay pinned.
    Use the existing reviewed activation packet and exact artifact attestation:
 
@@ -101,6 +110,7 @@ akasha_dual -e '{"akasha_authentik_enabled":true}'
    not claims made by source tests.
 
 Rollback first disables akasha_authentik_enabled using the same check/apply path.
+Disabled rendering omits every authentik key, preserving the 018 config schema.
 Existing PKI producers keep working. If runtime rollback is needed, restore the
 captured config/unit and host-v0.2.18 executable without running GC or changing
 the shared root; preserve data and trust state. Do not revoke or delete PKI keys.

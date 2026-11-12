@@ -13,6 +13,7 @@ from types import SimpleNamespace as NS
 import unittest
 import traceback
 import uuid
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 assert os.environ["HOME"].startswith(("/home/job", str(ROOT / ".cache"), "/root/.cache", str(ROOT / "authentik-identities-")))
@@ -301,6 +302,10 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(set(body) <= set(seam.OAUTH_FIELDS))
         self.assertTrue(e.matches(seam.oauth_provider(dict(body, pk=objects["provider"]["pk"])), body))
         self.assertEqual(body["access_token_validity"], "seconds=300")
+        self.assertEqual(body["sub_mode"], "hashed_user_id")
+        self.assertIsNone(body["encryption_key"])
+        self.assertIs(body["include_claims_in_id_token"], False)
+        self.assertEqual(body["refresh_token_validity"], "seconds=0")
         self.assertEqual(body["signing_key"], OWNER)
         self.assertEqual(body["property_mappings"], [objects["mapping"]["pk"]])
         self.assertEqual(objects["mapping"]["body"]["scope_name"], "akasha.ingest")
@@ -319,13 +324,17 @@ class Lifecycle(unittest.TestCase):
         class Post(dict):
             def getlist(self, key):
                 return self.get(key, [])
+        registry = yaml.safe_load((ROOT / "vars/akasha-enrollment-registry.yml").read_text())
+        registry_hosts = {entry["host"] for entry in registry["akasha_enrollment_registry_additions"]}
+        self.assertEqual(set(c.AKASHA_REGISTRY_HOSTS), set(c.AKASHA_HOSTS))
+        self.assertEqual(set(c.AKASHA_REGISTRY_HOSTS.values()), registry_hosts)
         for row in users:
             u = NS(**row)
             context = dict(user=u, provider=provider, token=NS(scope=["akasha.ingest"]),
                            host_allowed=lambda u, e: u.is_active and u.attributes == e["attributes"])
             result = function(mapping, **context)
-            self.assertEqual(result, {"aud": c.AKASHA_AUDIENCE, "preferred_username": u.username,
-                                      "host": u.attributes["agent-host"], "run_id": u.username})
+            self.assertEqual(result, {"aud": c.AKASHA_AUDIENCE, "preferred_username": "chaldea-" + c.AKASHA_REGISTRY_HOSTS[u.attributes["agent-host"]],
+                                      "host": c.AKASHA_REGISTRY_HOSTS[u.attributes["agent-host"]], "run_id": u.username})
             p = Post(client_id=c.AKASHA_CLIENT, username=u.username, password="SYNTHETIC",
                      grant_type="client_credentials", resource=[c.AKASHA_AUDIENCE], scope="akasha.ingest")
             req = NS(user=u, http_request=NS(method="POST", POST=p),
@@ -348,6 +357,10 @@ class Lifecycle(unittest.TestCase):
                                     ("provider", "jwt_federation_sources", [OWNER]),
                                     ("provider", "jwt_federation_providers", [113]),
                                     ("provider", "client_type", "public"),
+                                    ("provider", "sub_mode", "user_username"),
+                                    ("provider", "encryption_key", OWNER),
+                                    ("provider", "include_claims_in_id_token", True),
+                                    ("provider", "refresh_token_validity", "days=30"),
                                     ("provider", "access_token_validity", "seconds=301"),
                                     ("provider", "authorization_flow", "foreign"),
                                     ("provider", "invalidation_flow", "foreign"),
@@ -503,6 +516,30 @@ class Lifecycle(unittest.TestCase):
         signing_key = str(uuid.uuid4())
         return signing_key
 
+    def test_normandy_never_admitted_to_initialized_rotation(self):
+        key = self.rotation_fixture()
+        self.enrollment().rotation(key)
+        hosts = [item(h) for h in sorted(c.AKASHA_HOSTS)]
+        users, _ = self.enrollment().users(hosts)
+        receipt = e.read_private(self.fd, "hosts.json")
+        binding = receipt["rotation"]["binding"]["body"]
+        self.assertEqual(binding["target"], receipt["rotation"]["application"]["pk"])
+        for user in users:
+            host = user["attributes"]["agent-host"]
+            admitted = binding["enabled"] and not binding["negate"] and binding["group"] in user["groups"]
+            self.assertEqual(admitted, host in c.ROTATION_HOSTS)
+            if host == "normandy":
+                self.assertEqual(user["groups"], [])
+                self.assertIsNone(user["attributes"]["rotation"])
+                self.assertEqual(user["attributes"]["services"], {})
+            else:
+                self.assertEqual(user["attributes"]["rotation"]["client_id"], "chaldea-host-rotation")
+        repeated = self.enrollment()
+        repeated.users(hosts)
+        self.assertFalse(repeated.changed)
+        with self.assertRaises(ValueError):
+            c.attributes("normandy", OWNER, {"group": binding["group"], "client_id": "chaldea-host-rotation"})
+
     def test_separate_provider_exact_scope_and_binding(self):
         signing_key = self.rotation_fixture()
         api = self.api
@@ -517,6 +554,10 @@ class Lifecycle(unittest.TestCase):
         self.assertNotIn("allowed_grant_types", provider)
         self.assertEqual(provider["grant_types"], ["client_credentials"])
         self.assertEqual(provider["access_token_validity"], "seconds=300")
+        self.assertEqual(provider["sub_mode"], "hashed_user_id")
+        self.assertIsNone(provider["encryption_key"])
+        self.assertIs(provider["include_claims_in_id_token"], False)
+        self.assertEqual(provider["refresh_token_validity"], "seconds=0")
         binding = api.data["binding"][0]
         self.assertEqual(binding["group"], users[0]["attributes"]["rotation"]["group"])
         self.assertIsNone(binding["policy"])

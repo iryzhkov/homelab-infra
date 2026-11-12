@@ -12,6 +12,8 @@ def rotation_provider_body(signing_key, authorization_flow, invalidation_flow, a
         "client_type": "confidential", "grant_types": ["client_credentials"],
         "authorization_flow": authorization_flow, "invalidation_flow": invalidation_flow,
         "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
+        "sub_mode": "hashed_user_id", "encryption_key": None,
+        "include_claims_in_id_token": False, "refresh_token_validity": "seconds=0",
         "redirect_uris": [], "signing_key": signing_key, "property_mappings": [api_mapping],
     }
 
@@ -262,6 +264,13 @@ MATRIX = {
 # Normandy has only Akasha identity admission; registry supplies its backup grant.
 MATRIX["normandy"] = {}
 AKASHA_HOSTS = frozenset({"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
+# Reviewed agent-host to verifier registry-host identities; never caller supplied.
+AKASHA_REGISTRY_HOSTS = {
+    "laptop": "omarchy-macbook-air-igor", "normandy": "omarchy-normandy",
+    "omarchy-pc": "omarchy-pc", "agent-a": "agent-a", "agent-b": "agent-b",
+    "homelab": "homelab",
+}
+ROTATION_HOSTS = frozenset({"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab"})
 AKASHA_AUDIENCE = "https://akasha.ryzhkov.dev"
 AKASHA_CLIENT = "chaldea-akasha"
 
@@ -315,6 +324,7 @@ def declaration(hosts, owner, now, tokens=None):
     return copy.deepcopy(hosts)
 
 def attributes(host, owner, rotation=None):
+    require(rotation is None or host in ROTATION_HOSTS)
     return {"agent-host-owner": owner, "agent-host": host, "services": copy.deepcopy(MATRIX[host]),
             "rotation": rotation, "goauthentik.io/user/token-maximum-lifetime": "days=60"}
 
