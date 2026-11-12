@@ -124,7 +124,12 @@ class SnapshotTest(unittest.TestCase):
             "verifier_state": "/access", "bundle": "/bundle", "clock_health": "/clock"},
             chaldea_access_trust_anchors=[], akasha_registry=[], akasha_nats_seed_file="/seed")
         disabled = json.loads(env.from_string(source).render(**values))
-        self.assertFalse(any(k.startswith("authentik") for k in disabled))
+        self.assertEqual(disabled, {
+            "database": "/state/events.db", "access_state": "/access", "anchors": [],
+            "bundle_file": "/bundle", "clock_health_file": "/clock", "registry": [],
+            "nats_url": "wss://nats.ryzhkov.dev", "nats_seed_file": "/seed",
+            "bind": "127.0.0.1", "port": 1935})
+        self.assertTrue(env.from_string(source).render(**values).startswith("{"))
         for enabled in (False, True):
             rendered = json.loads(env.from_string(source).render(
                 **values, **{k: v for k, v in defaults.items() if k.startswith("akasha_authentik_")},
