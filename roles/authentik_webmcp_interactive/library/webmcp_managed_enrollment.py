@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.cohort_signer import signer
 
 ORIGIN = "https://auth.ryzhkov.dev"
 API = ORIGIN + "/api/v3"
@@ -114,9 +115,14 @@ class Enrollment:
             require(set(os.listdir(fd)) <= {"lock"})
             self.receipt = {"version": 1, "owner": owner, "objects": {}, "pending": None, "generations": {}}
             self.save()
-        self.changed = False
+        from ansible.module_utils.cohort_signer import receipt
+        approved = receipt(self.receipt)
+        self.changed = approved != self.receipt
+        self.receipt = approved
         self.rows = {k: api.rows(k, owned=self.receipt["objects"]) for k in PATHS}
         self.verify_owned()
+        if self.changed:
+            self.save()
 
     def save(self):
         write_private(self.fd, "receipt.json", self.receipt)
@@ -287,7 +293,7 @@ class Enrollment:
                 # Authentik 2026.8.4 builds access JWTs from IDToken.to_dict;
                 # this flag must be true for resource/operator mappings to appear.
                 "include_claims_in_id_token": True, "issuer_mode": "per_provider",
-                "signing_key": SIGNING_KEY, "encryption_key": None,
+                "signing_key": signer(CLIENT, SIGNING_KEY), "encryption_key": None,
                 "jwt_federation_sources": [], "jwt_federation_providers": [],
                 "property_mappings": [],
             }

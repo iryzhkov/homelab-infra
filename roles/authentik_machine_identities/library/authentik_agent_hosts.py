@@ -64,13 +64,18 @@ class HostEnrollment:
             require(set(os.listdir(fd)) <= {"host.lock"})
             self.receipt = {"version": 1, "owner": owner, "pending": None,
                             "users": {}, "tokens": {}, "revoked": [], "expressions": {}}
-        self.changed = False
+        from ansible.module_utils.cohort_signer import receipt
+        approved = receipt(self.receipt)
+        self.changed = self.signer_rebased = approved != self.receipt
+        self.receipt = approved
         api.require_superuser()
         self.rows = {k: api.rows(k) for k in PATHS}
 
 
     def rotation(self, signing_key):
         """Own a separate group/provider/application; never touch resource scopes."""
+        from ansible.module_utils.cohort_signer import signer
+        signing_key = signer("chaldea-host-rotation", signing_key)
         require(str(uuid.UUID(signing_key)) == signing_key)
         mappings = [m for m in self.rows["mapping"] if m.get("scope_name") == "goauthentik.io/api"]
         require(len(mappings) == 1)
@@ -143,6 +148,8 @@ class HostEnrollment:
 
     def akasha(self, users, signing_key):
         """Dedicated resource, receipt-owned and fail closed on foreign objects."""
+        from ansible.module_utils.cohort_signer import signer
+        signing_key = signer("chaldea-akasha", signing_key)
         from ansible.module_utils.agent_host_contract import (
             AKASHA_HOSTS, AKASHA_REGISTRY_HOSTS, AKASHA_AUDIENCE, AKASHA_CLIENT,
             RUNTIME_GUARD, public_users, canonical)
@@ -797,10 +804,13 @@ def main():
             e.rows = {k: e.api.rows(k) for k in PATHS}
             users, delivery = e.users(hosts)
             e.original_writer(p["original_writer_read"])
+        # Persist signer-only receipt rebasing after all ownership checks.
+        if not module.check_mode:
+            e.save()
         # Projection-only enrollment never reads/delivers any host credential.
         if projection_changed or resource_changed:
             delivery = []
-        module.exit_json(changed=e.changed, delivery=delivery,
+        module.exit_json(changed=e.changed or e.signer_rebased, delivery=delivery,
                          public_host_users=users, predicted_pks=False)
     except RotationReconciliationRefused:
         module.fail_json(msg=ROTATION_REFUSAL)

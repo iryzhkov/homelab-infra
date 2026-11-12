@@ -1,0 +1,52 @@
+---
+- name: Install the opt-in signer controller
+  when: authentik_signer_install | bool
+  become: true
+  block:
+    - name: Require the designated controller and protected configuration
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'omarchy-pc'
+          - authentik_signer_config_source is match('^/')
+        quiet: true
+    - name: Install public certificate parsing dependency
+      ansible.builtin.package:
+        name: python-cryptography
+        state: present
+    - name: Create private journal directory
+      ansible.builtin.file:
+        path: /var/lib/authentik-signer
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+    - name: Install controller
+      ansible.builtin.copy:
+        src: authentik-signer.py
+        dest: /usr/local/sbin/authentik-signer
+        owner: root
+        group: root
+        mode: "0700"
+    - name: Install protected public configuration
+      ansible.builtin.copy:
+        src: "{{ authentik_signer_config_source }}"
+        dest: /etc/authentik-signer.json
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      diff: false
+    - name: Install service and daily timer
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [authentik-signer.service, authentik-signer.timer]
+    - name: Converge explicit timer opt-in
+      ansible.builtin.systemd_service:
+        name: authentik-signer.timer
+        daemon_reload: true
+        enabled: "{{ authentik_signer_rotation_enabled | bool }}"
+        state: "{{ 'started' if authentik_signer_rotation_enabled | bool else 'stopped' }}"

@@ -10,6 +10,19 @@
 # blueprint and shows the plan and any refusal. It never reads a key, writes a
 # file or changes Authentik.
 
+- name: Refuse frozen blueprint writers after signer enrollment
+  ansible.builtin.stat:
+    path: /etc/authentik-signer-generation.json
+  become: true
+  register: cohort_generation
+  check_mode: false
+
+- name: Preserve the current cohort signer
+  ansible.builtin.assert:
+    that: not cohort_generation.stat.exists
+    fail_msg: "Cohort signer enrolled. Legacy blueprint writes are frozen; use the locked enrollment entrypoint."
+    quiet: true
+
 - name: Require an explicit opt-in and API facts outside check mode
   ansible.builtin.assert:
     that:

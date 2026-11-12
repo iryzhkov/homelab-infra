@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "roles/authentik_webmcp_interactive/tests"))
 import used_by_seam as seam
 import provider_inventory_seam as inventory
-for name in ("authentik_enrollment", "agent_host_contract"):
+for name in ("cohort_signer", "authentik_enrollment", "agent_host_contract"):
     helper_spec = importlib.util.spec_from_file_location("ansible.module_utils." + name, ROOT / "module_utils" / (name + ".py"))
     helper = importlib.util.module_from_spec(helper_spec)
     sys.modules[helper_spec.name] = helper

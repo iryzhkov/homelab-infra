@@ -365,3 +365,30 @@ jobs:
           ansible-playbook playbooks/akasha.yml --syntax-check
           ansible-playbook playbooks/akasha-normandy-consumer-trust.yml --syntax-check
           ansible-playbook playbooks/akasha.yml --list-hosts
+
+  authentik-signer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    container:
+      options: --memory=1g --cpus=2
+      image: python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install verifier and serving test runtimes
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends nginx
+          pip install --disable-pip-version-check ansible-core==2.19.13 cryptography==46.0.3 PyJWT==2.15.0 Django==5.2.17 djangorestframework==3.17.1 deepmerge==2.1.0
+      - name: Run isolated signer and affected enrollment checks
+        run: |
+          export HOME=/work/.cache/p32b/home
+          test "$HOME" = /work/.cache/p32b/home
+          export TMPDIR="$HOME/tmp" WEBMCP_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
+          mkdir -p "$TMPDIR"
+          python3 -B scripts/test-authentik-signer.py -v
+          python3 -B scripts/test-agent-host-identities.py -v
+          python3 -B scripts/test-webmcp-managed-interactive.py -v
+          ansible-playbook playbooks/authentik-signer.yml --syntax-check
+          ansible-playbook playbooks/traefik.yml --syntax-check

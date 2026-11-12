@@ -1,4 +1,17 @@
 ---
+- name: Refuse frozen blueprint writers after signer enrollment
+  ansible.builtin.stat:
+    path: /etc/authentik-signer-generation.json
+  become: true
+  register: cohort_generation
+  check_mode: false
+
+- name: Preserve the current cohort signer
+  ansible.builtin.assert:
+    that: not cohort_generation.stat.exists
+    fail_msg: "Cohort signer enrolled. Legacy blueprint writes are frozen; use the locked enrollment entrypoint."
+    quiet: true
+
 - name: Validate the separate opt-in declaration
   ansible.builtin.assert:
     that:

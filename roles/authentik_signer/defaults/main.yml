@@ -1,0 +1,5 @@
+---
+authentik_signer_install: false
+# Explicit enable is separate from installation and coexistence.
+authentik_signer_rotation_enabled: false
+authentik_signer_config_source: ""

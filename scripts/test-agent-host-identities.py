@@ -16,7 +16,7 @@ import uuid
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-assert os.environ["HOME"].startswith(("/home/job", str(ROOT / ".cache"), "/root/.cache", str(ROOT / "authentik-identities-")))
+assert os.environ["HOME"].startswith(("/work/.cache/", "/home/job", str(ROOT / ".cache"), "/root/.cache", str(ROOT / "authentik-identities-")))
 assert os.environ["TMPDIR"].startswith(os.environ["HOME"])
 
 def load(name, path):
@@ -26,6 +26,7 @@ def load(name, path):
     spec.loader.exec_module(m)
     return m
 
+load("ansible.module_utils.cohort_signer", "module_utils/cohort_signer.py")
 load("ansible.module_utils.authentik_enrollment", "module_utils/authentik_enrollment.py")
 c = load("ansible.module_utils.agent_host_contract", "module_utils/agent_host_contract.py")
 e = load("host_enrollment", "roles/authentik_machine_identities/library/authentik_agent_hosts.py")

@@ -35,6 +35,8 @@ def stable(value):
 
 
 def matches(seen, body):
+    from ansible.module_utils.cohort_signer import body as approved_body
+    body = approved_body(seen.get("pk"), body)
     for k, v in body.items():
         got = seen.get(k)
         if k == "expires":
@@ -60,6 +62,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class APIClient:
     def __init__(self, token, paths=None):
+        from ansible.module_utils.cohort_signer import generation
+        generation()  # Require the common lock when rotation is enrolled.
         self.paths = paths or PATHS
         require(isinstance(token, str) and 16 <= len(token) <= 4096 and "\n" not in token and "\r" not in token)
         self.token = token
