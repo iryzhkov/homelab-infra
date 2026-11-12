@@ -568,6 +568,11 @@ class Lifecycle(unittest.TestCase):
         x.rotation(signing_key)
         self.assertFalse(x.changed)
         self.assertFalse(any(method != "GET" for method, _, _ in api.calls[before:]))
+        for field in ("sub_mode", "encryption_key", "include_claims_in_id_token", "refresh_token_validity"):
+            value = api.data["provider"][0].pop(field)
+            with self.assertRaises(Exception):
+                self.enrollment().rotation(signing_key)
+            api.data["provider"][0][field] = value
         api.data["provider"][0]["property_mappings"].append("foreign")
         with self.assertRaises(Exception):
             self.enrollment().rotation(signing_key)

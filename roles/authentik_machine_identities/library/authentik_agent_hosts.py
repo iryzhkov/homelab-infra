@@ -91,7 +91,9 @@ class HostEnrollment:
                 actual = found[0]
                 if kind == "provider":
                     actual = self.api.request("GET", PATHS[kind] + str(prior["pk"]) + "/")
-                require(matches(actual, prior["body"]) and prior["body"] == body)
+                require(matches(actual, prior["body"]) and prior["body"] == body
+                        and (kind != "provider" or (actual.get("pk") == prior["pk"]
+                             and all(key in actual for key in body))))
                 return prior["pk"]
             pending = self.receipt["pending"]
             if kind == "provider" and pending is not None:
@@ -426,6 +428,8 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             self.receipt["pending"]["pk"] = result["pk"]
             self.save()
         require(matches(result, body))
+        if method == "POST" and path == PATHS["provider"]:
+            require(all(key in result for key in body))
         # Caller records actual IDs before clearing the pending journal.
         return result
 
