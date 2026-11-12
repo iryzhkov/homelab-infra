@@ -213,6 +213,14 @@ class CustodyTests(unittest.TestCase):
         call = worker.parse_request(socket_tests.encode(fixture['frame'])[:-1])
         worker.authorize(call, policy)
         self.assertEqual(call, fixture['frame'])
+        # Coexistence changes subject membership only for admitted read purposes.
+        coexist = copy.deepcopy(policy)
+        coexist['subjects'] = [coexist['caller']['subject'], 'chaldea-laptop']
+        coexist = worker.validate_policy(coexist)
+        changed = copy.deepcopy(call)
+        changed['caller']['subject'] = 'chaldea-laptop'
+        worker.authorize(changed, coexist)
+
         result = fixture['response']['result']
         self.assertFalse(result['media_removal_authorized'])
         self.assertEqual(result['seed_topology'], 'unqualified')

@@ -27,6 +27,15 @@ class JanitorPolicyTests(unittest.TestCase):
         call = worker.parse_request(socket_tests.encode(FIXTURE['frame'])[:-1])
         worker.authorize(call, policy)
         self.assertEqual(call, FIXTURE['frame'])
+        # Coexistence changes subject membership only for admitted read purposes.
+        coexist = copy.deepcopy(policy)
+        coexist['subjects'] = [coexist['caller']['subject'], 'chaldea-laptop']
+        coexist = worker.validate_policy(coexist)
+        changed = copy.deepcopy(call)
+        changed['caller']['subject'] = 'chaldea-laptop'
+        with self.assertRaises(worker.WireError):
+            worker.authorize(changed, coexist)
+
         # The optional block changes none of the established caller grammars.
         worker.authorize(worker.parse_request(socket_tests.encode(socket_tests.frame())[:-1]), policy)
         for mutate in (

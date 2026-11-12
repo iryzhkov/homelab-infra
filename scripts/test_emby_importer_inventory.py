@@ -42,6 +42,14 @@ class ImporterContractTests(unittest.TestCase):
         call = worker.parse_request(socket_tests.encode(FIXTURE['frame'])[:-1])
         worker.authorize(call, p)
         self.assertEqual(call, FIXTURE['frame'])
+        # Coexistence changes subject membership only for admitted read purposes.
+        coexist = copy.deepcopy(p)
+        coexist['subjects'] = [coexist['caller']['subject'], 'chaldea-laptop']
+        coexist = worker.validate_policy(coexist)
+        changed = copy.deepcopy(call)
+        changed['caller']['subject'] = 'chaldea-laptop'
+        worker.authorize(changed, coexist)
+
         worker.authorize(worker.parse_request(socket_tests.encode(socket_tests.frame())[:-1]), p)
         for mutate in (
             lambda c: c['caller'].update(actions=['catalog.read']),

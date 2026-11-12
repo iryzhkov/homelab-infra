@@ -264,6 +264,20 @@ class PauseSocketTests(socket_tests.WorkerCase):
         call['deadline_unix_ms'] = int(time.time() * 1000) + 10000
         return call
 
+    def test_coexistence_subject_cannot_pause(self):
+        self.policy['subjects'] = [self.policy['caller']['subject'], 'chaldea-laptop']
+        self.policy = worker.validate_policy(self.policy)
+        call = self.request()
+        # Establish the exact same request is authorized for the original subject.
+        worker.authorize(worker.parse_request(socket_tests.encode(call)[:-1]), self.policy)
+        call['caller']['subject'] = 'chaldea-laptop'
+        with patch.object(worker, 'private_read') as read:
+            _, result = self.call(socket_tests.encode(call))
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['error']['message'], 'Caller outside importer pause policy')
+            read.assert_not_called()
+        self.assertEqual(self.service.calls, [])
+
     def test_actual_socket_and_http_unchanged_files(self):
         before = {str(p): p.read_bytes() for p in self.directory.rglob('*') if p.is_file()}
         raw, result = self.call(socket_tests.encode(self.request()))

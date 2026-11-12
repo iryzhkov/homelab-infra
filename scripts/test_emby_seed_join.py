@@ -577,6 +577,14 @@ class SeedJoinTests(unittest.TestCase):
         call = worker.parse_request(existing.encode(FIXTURE['frame'])[:-1])
         worker.authorize(call, policy)
         self.assertEqual(call, FIXTURE['frame'])
+        # Coexistence changes subject membership only for admitted read purposes.
+        coexist = copy.deepcopy(policy)
+        coexist['subjects'] = [coexist['caller']['subject'], 'chaldea-laptop']
+        coexist = worker.validate_policy(coexist)
+        changed = copy.deepcopy(call)
+        changed['caller']['subject'] = 'chaldea-laptop'
+        worker.authorize(changed, coexist)
+
         self.assertEqual(worker.remaining_seconds(call, FIXTURE['frame']['deadline_unix_ms'] - 30000), 25)
         for name, response in FIXTURE['responses'].items():
             if name == 'error':
