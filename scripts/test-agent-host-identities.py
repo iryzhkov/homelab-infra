@@ -339,7 +339,7 @@ class Lifecycle(unittest.TestCase):
             raise e.Refused()
         x.expressions = refuse
         params = dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
-                      baselines=[], api_token="SYNTHETIC", reenable_host="",
+                      baselines=[], api_token="SYNTHETIC-invalid-token", reenable_host="",
                       rotation_signing_key=OWNER)
         module = NS(params=params, check_mode=False,
                     fail_json=lambda **kw: None)
