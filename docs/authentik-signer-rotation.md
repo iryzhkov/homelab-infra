@@ -86,8 +86,10 @@ sudo systemctl start authentik-signer.service
 # Require successful publication, exact bytes on both edges and the feed entry.
 sudo rm /run/systemd/system/authentik-signer.service.d/coexistence.conf
 sudo systemctl daemon-reload
-sudo systemctl start authentik-signer.service
-# Require the normal idle rotation check to succeed without a signer change.
+systemctl cat authentik-signer.service
+# Require ExecStart to be authentik-signer rotate again, with no drop-in.
+# Do not start the unit here: once 30 days have passed since bootstrap, rotate
+# performs a real rotation, which must wait for the live canary in step 6.
 ```
 
 6. Complete the design's disposable live canary with every installed verifier,
