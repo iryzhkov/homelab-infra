@@ -46,20 +46,17 @@ def canonical(value):
 def atomic(path, value, mode=0o600):
     raw = canonical(value)
     fd = os.open(str(path) + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    os.fchmod(fd, mode)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(str(path) + ".new", path)
+    d = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(str(path) + ".new", path)
-        d = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(d)
-        finally:
-            os.close(d)
-    except BaseException:
-        raise
+        os.fsync(d)
+    finally:
+        os.close(d)
 
 
 def private(path):
@@ -161,7 +158,7 @@ class IO:
         if staging:
             require(numbers.n.bit_length() == 4096)
             remaining = (certificate.not_valid_after_utc - dt.datetime.now(dt.timezone.utc)).total_seconds()
-            require(89 * 86400 <= remaining <= 90 * 86400 + 60)
+            require(remaining >= 60 * 86400)
         return key
 
     def patch(self, pk, key):
@@ -198,14 +195,24 @@ class IO:
                                 check=True, capture_output=True, timeout=10)
         require(result.stdout.strip() == b"yes")
 
+    def check_canaries(self):
+        forms = self.secrets.get("signer_canaries", {})
+        eligible = {p["slug"] for p in self.c["providers"]
+                    if "client_credentials" in p["body"]["grant_types"]}
+        require(set(forms) == eligible)
+        require(all(f["grant_type"] == "client_credentials" for f in forms.values()))
+
     def probe(self, expected, keys):
         from cryptography.hazmat.primitives.asymmetric import padding, rsa
         from cryptography.hazmat.primitives import hashes
+        self.check_canaries()
         by_kid = {k["kid"]: k for k in keys}
         for p in self.c["providers"]:
+            if "client_credentials" not in p["body"]["grant_types"]:
+                continue
             for replica in self.c["replicas"]:
                 form = self.secrets["signer_canaries"][p["slug"]]
-                require(form["grant_type"] in ("client_credentials", "refresh_token"))
+                require(form["grant_type"] == "client_credentials")
                 # Credentials stay in-process, never argv, files, journal or output.
                 url = replica + "/application/o/token/"
                 require(replica.startswith("https://") and "@" not in replica)
@@ -244,7 +251,8 @@ class Controller:
         c = self.io.c
         require(type(c["cache_ceiling"]) is int and 0 < c["cache_ceiling"] <= 300
                 and type(c["max_inflight"]) is int and 0 <= c["max_inflight"] <= 60)
-        require(len(c["edges"]) == 2 and len(set(c["edges"])) == 2 and c["replicas"])
+        require(len(c["edges"]) == 2 and len(set(c["edges"])) == 2 and len(c["replicas"]) == 1)
+        self.io.check_canaries()
         require(set(SLUGS[:-1]) <= {p["slug"] for p in c["providers"]} <= set(SLUGS))
         require(len({p["pk"] for p in c["providers"]}) == len(c["providers"]) > 0)
         require(self.s["contracts"] == c["providers"])
@@ -266,7 +274,6 @@ class Controller:
             app = self.io.request("GET", "/core/applications/" + p["slug"] + "/")
             require(app["provider"] == p["pk"] and app["slug"] == p["slug"])
         stage = c["stage"]
-        require(stage == self.s["stage"])
         provider = self.io.request("GET", "/providers/oauth2/" + str(stage["provider"]) + "/")
         require(provider["pk"] == stage["provider"] and projection(provider) == stage["body"] and provider["grant_types"] == []
                 and provider["encryption_key"] is None)
@@ -314,8 +321,6 @@ class Controller:
         drift = False
         for p in self.io.c["providers"]:
             pk = p["pk"]
-            # Journal intent before each possibly uncertain PATCH.
-            self.commit(patch={"provider": pk, "key": target["pk"]})
             row = self.io.request("GET", "/providers/oauth2/" + str(pk) + "/")
             allowed = {x["pk"] for x in (self.s["current"], self.s.get("next"), self.s.get("retiring")) if x}
             require(row["pk"] == pk and row["signing_key"] in allowed)
@@ -325,12 +330,12 @@ class Controller:
             row = self.io.request("GET", "/providers/oauth2/" + str(pk) + "/")
             require(row["pk"] == pk and row["signing_key"] == target["pk"])
             drift |= projection(row) != p["body"]
-            self.commit(patch=None)
             require(restore or not drift)
         require(not drift)
         self.io.probe(target["jwk"], self.keys())
 
     def rollback(self):
+        require(self.s["phase"] not in ("prune", "delete", "idle"))
         require(self.s.get("next") or self.s.get("retiring"))
         # During retirement the previous signer remains available for rollback.
         if self.s.get("retiring"):
@@ -416,7 +421,6 @@ class Controller:
                 actual = self.io.request("GET", "/providers/oauth2/" + str(self.io.c["stage"]["provider"]) + "/")
                 require(projection(actual) == self.io.c["stage"]["body"]
                         and actual["signing_key"] == self.s["current"]["pk"])
-                refs = self.io.request("GET", "/crypto/certificatekeypairs/" + old["pk"] + "/used_by/")
                 # Any remaining references prevent deletion; the original key
                 # always remains, regardless of household token lifetimes.
                 self.io.publish([self.s["current"]["jwk"]])
@@ -437,7 +441,7 @@ class Controller:
         except Exception:
             # Persist alert before trying delivery. Do not log exception bodies.
             self.commit(alert=True)
-            if self.s["phase"] in ("switch", "switching", "rollback", "retire"):
+            if self.s["phase"] in ("switching", "rollback", "retire"):
                 try:
                     self.rollback()
                 except Exception:
@@ -470,7 +474,8 @@ def bootstrap(io, save, state):
     body = copy.deepcopy(io.c["providers"][0]["body"])
     body.update(name=slug, client_id=slug, grant_types=[], encryption_key=None,
                 access_token_validity="seconds=300", refresh_token_validity="seconds=0",
-                redirect_uris=[], property_mappings=[])
+                redirect_uris=[], property_mappings=[],
+                jwt_federation_sources=[], jwt_federation_providers=[])
     objects = [
         ("provider", "/providers/oauth2/", dict(body, signing_key=ORIGINAL)),
         ("policy", "/policies/expression/", {"name": slug, "expression": "return False",

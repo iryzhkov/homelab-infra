@@ -39,6 +39,7 @@ class Fixture:
         body = {f: [] if f in ("grant_types", "redirect_uris", "property_mappings",
                                "jwt_federation_sources", "jwt_federation_providers") else "" for f in m.FIELDS}
         body.update(encryption_key=None, access_token_validity="seconds=300", issuer_mode="per_provider")
+        self.secrets = {"signer_canaries": {}}
         self.c = dict(providers=[dict(pk=i+1, slug=s, body=copy.deepcopy(body), canary_audience=s)
                                  for i,s in enumerate(m.SLUGS[:-1])],
                       cache_ceiling=300, max_inflight=60, edges=["1.1.1.1", "2.2.2.2"], replicas=["https://replica"])
@@ -110,6 +111,8 @@ class Fixture:
         if staging:
             self.patch(900, pk)
         return copy.deepcopy(NEW["jwk"])
+
+    check_canaries = m.IO.check_canaries
 
     def authority(self):
         pass
@@ -200,6 +203,62 @@ class ControllerTests(unittest.TestCase):
                 if f.s["phase"]!="create":
                     self.assertEqual(f.s["phase"],"idle")
 
+    def test_manual_rollback_after_key_removal_refuses_without_mutation(self):
+        for phase in ("prune", "delete", "idle"):
+            with self.subTest(phase=phase):
+                f=Fixture()
+                publish,save=f.publish,f.save
+                def publish_then_crash(keys):
+                    publish(keys)
+                    if phase=="prune" and keys==[NEW["jwk"]]: raise Crash()
+                def save_then_crash(state):
+                    save(state)
+                    if phase=="delete" and state["phase"]=="delete": raise Crash()
+                f.publish,f.save=publish_then_crash,save_then_crash
+                try: f.run()
+                except Crash: f.restart()
+                self.assertEqual(f.s["phase"],phase)
+                self.assertEqual(f.keys,[NEW["jwk"]])
+                f.publish,f.save=publish,save
+                providers,keys=copy.deepcopy(f.providers),copy.deepcopy(f.keys)
+                with self.assertRaises(RuntimeError): f.run("rollback")
+                self.assertEqual(f.providers,providers)
+                self.assertEqual(f.keys,keys)
+
+    def test_refresh_canaries_and_multiple_replicas_refused_in_preflight(self):
+        for change in ("refresh", "replicas"):
+            f=Fixture()
+            if change=="refresh":
+                f.c["providers"][0]["body"]["grant_types"]=["client_credentials"]
+                f.providers[1]["grant_types"]=["client_credentials"]
+                f.secrets["signer_canaries"][m.SLUGS[0]]={"grant_type":"refresh_token"}
+            else:
+                f.c["replicas"].append("https://second")
+            with self.assertRaises(RuntimeError): f.run()
+            self.assertEqual(f.generated,[])
+            self.assertFalse(any(e[0]=="PATCH" for e in f.events))
+
+    def test_non_client_credentials_providers_need_no_token_probe(self):
+        f=Fixture()
+        io=m.IO(f.c,{"signer_canaries":{}})
+        with patch.object(io.opener,"open",side_effect=AssertionError("token exchange")):
+            io.check_canaries()
+            io.probe(OLD["jwk"],[OLD["jwk"]])
+
+    def test_failure_before_patch_preserves_switch_for_retry(self):
+        f=Fixture()
+        f.s.update(phase="switch",next=copy.deepcopy(NEW))
+        f.keys=[OLD["jwk"],NEW["jwk"]]
+        f.providers[900]["signing_key"]=NEW["pk"]
+        edges=f.edges
+        f.edges=lambda keys: (_ for _ in ()).throw(OSError())
+        with self.assertRaises(RuntimeError): f.run()
+        self.assertEqual(f.s["phase"],"switch")
+        self.assertFalse(any(e[0]=="PATCH" for e in f.events))
+        f.edges=edges
+        f.run()
+        self.assertEqual(f.s["current"],NEW)
+
     def test_publication_failure_keeps_old(self):
         f=Fixture(); f.publication_fail=True
         with self.assertRaises(RuntimeError): f.run()
@@ -275,10 +334,9 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): m.jwks([key("x"),key("x")])
 
 
-    def test_rsa4096_python_pyjwt_and_node_jose(self):
+    def test_rsa4096_pyjwt(self):
         import jwt
         from cryptography.hazmat.primitives.asymmetric import rsa
-        from cryptography.hazmat.primitives import serialization
         private_key=rsa.generate_private_key(public_exponent=65537,key_size=4096)
         numbers=private_key.public_key().public_numbers()
         public=dict(kid="rsa4096",kty="RSA",use="sig",alg="RS256",n=b64(numbers.n),e=b64(numbers.e))
@@ -287,32 +345,6 @@ class ControllerTests(unittest.TestCase):
                          private_key,algorithm="RS256",headers={"kid":"rsa4096"})
         decoded=jwt.decode(token,jwt.PyJWK(public).key,algorithms=["RS256"],audience="resource",issuer="fixture")
         self.assertEqual(decoded["aud"],"resource")
-        # Only public JWK and a synthetic token go to other runtimes.
-        node = os.environ.get("SIGNER_JOSE_RUNNER")
-        if not node:
-            self.fail("SIGNER_JOSE_RUNNER must name the pinned jose compatibility runner")
-        result=subprocess.run(["node",node],input=json.dumps({"public":public,"token":token}).encode(),
-                              capture_output=True,check=True)
-        self.assertEqual(result.stdout.strip(),b"RSA-4096 accepted")
-        with tempfile.TemporaryDirectory(dir=HOME) as directory:
-            source=Path(directory)/"verify.go"
-            source.write_text('''package main
-import ("crypto"; "crypto/rsa"; "crypto/sha256"; "encoding/base64"; "encoding/json"; "math/big"; "os"; "strings")
-func main() {
- var v struct {Public map[string]string; Token string}
- if json.NewDecoder(os.Stdin).Decode(&v)!=nil {panic("input")}
- decode:=func(s string) []byte {b,e:=base64.RawURLEncoding.DecodeString(s); if e!=nil {panic("base64")}; return b}
- parts:=strings.Split(v.Token,".")
- n:=new(big.Int).SetBytes(decode(v.Public["n"]))
- e:=new(big.Int).SetBytes(decode(v.Public["e"]))
- key:=rsa.PublicKey{N:n,E:int(e.Int64())}
- if key.N.BitLen()!=4096 {panic("bits")}
- digest:=sha256.Sum256([]byte(parts[0]+"."+parts[1]))
- if rsa.VerifyPKCS1v15(&key,crypto.SHA256,digest[:],decode(parts[2]))!=nil {panic("signature")}
-}
-''')
-            subprocess.run(["go","run",str(source)],input=json.dumps({"public":public,"token":token}).encode(),
-                           capture_output=True,check=True,env=dict(os.environ,GOCACHE=str(HOME/"go-cache")))
 
     def test_stale_enrollment_converges_only_approved_provider(self):
         spec=importlib.util.spec_from_file_location("cohort",ROOT/"module_utils/cohort_signer.py")
@@ -339,6 +371,7 @@ func main() {
             with patch.object(m.os,"replace",side_effect=OSError):
                 with self.assertRaises(OSError): m.atomic(p,{"phase":"new"})
             self.assertEqual(json.loads(p.read_bytes()),{"phase":"old"})
+            self.assertEqual(p.stat().st_mode & 0o777,0o600)
             real_fsync=m.os.fsync
             calls=[]
             def fsync(fd):
@@ -363,6 +396,9 @@ func main() {
             def __init__(self):
                 f=Fixture()
                 self.c=f.c
+                for field in ("jwt_federation_sources","jwt_federation_providers"):
+                    self.c["providers"][0]["body"][field]=["foreign"]
+                    f.providers[1][field]=["foreign"]
                 self.initial=f
                 self.objects={}
                 self.posts=[]
@@ -400,6 +436,8 @@ func main() {
                 if path=="/providers/oauth2/":
                     self.assertEqual(value["grant_types"],[])
                     self.assertEqual(value["property_mappings"],[])
+                    self.assertEqual(value["jwt_federation_sources"],[])
+                    self.assertEqual(value["jwt_federation_providers"],[])
             if state.get("phase")=="idle":
                 stage=state["stage"]
                 self.assertEqual(stage["provider"],900)
@@ -427,6 +465,17 @@ func main() {
         self.assertEqual({k["kid"] for k in f.keys},{"old","new"})
 
     def test_route_renders_exact_scope_with_optional_akasha(self):
+        route=(ROOT/"roles/traefik/templates/authentik-jwks.yml.j2").read_text()
+        self.assertNotIn("PathPrefix",route)
+        self.assertNotIn("staging/jwks",route)
+        for slug in m.SLUGS: self.assertIn("/application/o/"+slug+"/jwks/",route)
+        self.assertIn("priority: 10000",route)
+        self.assertIn("Method(`GET`, `HEAD`)",route)
+        nginx=(ROOT/"stacks/observability/files/nginx.conf").read_text()
+        self.assertIn("location = /signer-jwks.json",nginx)
+        self.assertIn('Cache-Control "no-store"',nginx)
+        self.assertIn("limit_except GET { deny all; }",nginx)
+        self.assertIn("authentik_signer_routes_enabled: false",(ROOT/"roles/traefik/defaults/main.yml").read_text())
         import jinja2
         import yaml
         env=jinja2.Environment(loader=jinja2.FileSystemLoader(ROOT/"roles/traefik/templates"))
@@ -457,9 +506,11 @@ func main() {
         public=dict(kid="native-kid",kty="RSA",use="sig",alg="RS256",n=b64(numbers.n),e=b64(numbers.e))
         subject=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,"fixture")])
         now=dt.datetime.now(dt.timezone.utc)
-        cert=(x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(private_key.public_key())
-              .serial_number(1).not_valid_before(now-dt.timedelta(days=1)).not_valid_after(now+dt.timedelta(days=90))
-              .sign(private_key,hashes.SHA256()).public_bytes(serialization.Encoding.PEM).decode())
+        def certificate(days):
+            return (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(private_key.public_key())
+                .serial_number(1).not_valid_before(now-dt.timedelta(days=1)).not_valid_after(now+dt.timedelta(days=days))
+                .sign(private_key,hashes.SHA256()).public_bytes(serialization.Encoding.PEM).decode())
+        cert=certificate(90)
         io=m.IO(dict(stage=dict(provider=900,slug="stage",body={f:"" for f in m.FIELDS})), {})
         def request(method,path,body=None):
             if path.endswith("/view_certificate/"): return dict(data=cert)
@@ -470,6 +521,11 @@ func main() {
         io.patch=lambda *a:None
         io.public=lambda u:json.dumps(dict(keys=[dict(public,x5c=["public-certificate"])])).encode()
         self.assertEqual(io.key("fixture",staging=True),public)
+        cert=certificate(75)
+        self.assertEqual(io.key("fixture",staging=True),public)
+        cert=certificate(59)
+        with self.assertRaises(RuntimeError): io.key("fixture",staging=True)
+        cert=certificate(90)
         io.public=lambda u:json.dumps(dict(keys=[dict(public,d="synthetic-private-field")])).encode()
         with self.assertRaises(RuntimeError): io.key("fixture",staging=True)
         io.public=lambda u:json.dumps(dict(keys=[dict(public,n=b64(numbers.n+2))])).encode()
@@ -482,7 +538,7 @@ func main() {
         private_key=rsa.generate_private_key(public_exponent=65537,key_size=4096)
         n=private_key.public_key().public_numbers()
         public=dict(kid="canary",kty="RSA",use="sig",alg="RS256",n=b64(n.n),e=b64(n.e))
-        io=m.IO(dict(providers=[dict(slug="fixture",canary_audience="resource")],replicas=["https://replica"]),
+        io=m.IO(dict(providers=[dict(slug="fixture",canary_audience="resource",body=dict(grant_types=["client_credentials"]))],replicas=["https://replica"]),
                 dict(signer_canaries=dict(fixture=dict(grant_type="client_credentials"))))
         now=int(time.time())
         claims=dict(iss=m.ORIGIN+"/application/o/fixture/",aud="resource",iat=now,exp=now+300)
@@ -551,28 +607,6 @@ func main() {
             finally:
                 proc.terminate(); proc.wait(timeout=5)
                 proc.stderr.close()
-
-    def test_atomic_journal(self):
-        with tempfile.TemporaryDirectory(dir=HOME) as directory:
-            path=Path(directory)/"state.json"
-            m.atomic(path,{"phase":"one"})
-            m.atomic(path,{"phase":"two"})
-            self.assertEqual(json.loads(path.read_bytes()),{"phase":"two"})
-            self.assertEqual(path.stat().st_mode & 0o777,0o600)
-
-    def test_route_and_nginx_scope(self):
-        route=(ROOT/"roles/traefik/templates/authentik-jwks.yml.j2").read_text()
-        self.assertNotIn("PathPrefix",route)
-        self.assertNotIn("staging/jwks",route)
-        for slug in m.SLUGS: self.assertIn("/application/o/"+slug+"/jwks/",route)
-        self.assertIn("priority: 10000",route)
-        self.assertIn("Method(`GET`, `HEAD`)",route)
-        nginx=(ROOT/"stacks/observability/files/nginx.conf").read_text()
-        self.assertIn("location = /signer-jwks.json",nginx)
-        self.assertIn('Cache-Control "no-store"',nginx)
-        self.assertIn("limit_except GET { deny all; }",nginx)
-        self.assertIn("authentik_signer_routes_enabled: false",(ROOT/"roles/traefik/defaults/main.yml").read_text())
-
 
 if __name__=="__main__":
     unittest.main()

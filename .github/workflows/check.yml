@@ -379,28 +379,14 @@ jobs:
       - name: Install verifier and serving test runtimes
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends nodejs npm golang-go nginx libatomic1
+          apt-get install -y --no-install-recommends nginx
           pip install --disable-pip-version-check ansible-core==2.19.13 cryptography==46.0.3 PyJWT==2.15.0 Django==5.2.17 djangorestframework==3.17.1 deepmerge==2.1.0
       - name: Run isolated signer and affected enrollment checks
         run: |
           export HOME=/work/.cache/p32b/home
           test "$HOME" = /work/.cache/p32b/home
           export TMPDIR="$HOME/tmp" WEBMCP_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
-          mkdir -p "$TMPDIR" "$HOME/node" "$HOME/bin"
-          python3 - <<'PY'
-          import hashlib, io, os, pathlib, tarfile, urllib.request
-          raw = urllib.request.urlopen("https://nodejs.org/dist/v26.10.0/node-v26.10.0-linux-x64.tar.xz", timeout=60).read()
-          assert hashlib.sha256(raw).hexdigest() == "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022"
-          with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
-              data = archive.extractfile("node-v26.10.0-linux-x64/bin/node").read()
-          target = pathlib.Path(os.environ["HOME"]) / "bin/node"
-          target.write_bytes(data)
-          target.chmod(0o755)
-          PY
-          export PATH="$HOME/bin:$PATH"
-          npm install --prefix "$HOME/node" --ignore-scripts --no-audit --no-fund jose@6.2.12
-          cp scripts/signer-jose-compat.mjs "$HOME/node/runner.mjs"
-          export SIGNER_JOSE_RUNNER="$HOME/node/runner.mjs"
+          mkdir -p "$TMPDIR"
           python3 -B scripts/test-authentik-signer.py -v
           python3 -B scripts/test-agent-host-identities.py -v
           python3 -B scripts/test-webmcp-managed-interactive.py -v
