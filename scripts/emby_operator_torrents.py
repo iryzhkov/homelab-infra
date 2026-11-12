@@ -160,20 +160,32 @@ class TorrentAdapter:
         need(remaining > 0)
         return remaining
 
-    def exchange(self, method, route, body=None, cleanup=False):
+    def allowed_exchanges(self):
         # Internal fixed call sites only; even accidental callers cannot enumerate.
         allowed = {('POST', '/api/v2/auth/login'), ('POST', '/api/v2/auth/logout'),
                    ('GET', '/api/v2/app/version')}
         allowed.update({('GET', '/api/v2/torrents/info?hashes=' + self.torrent_hash),
                         ('GET', '/api/v2/torrents/files?hash=' + self.torrent_hash)})
-        need((method, route) in allowed and self.calls < 5 and not self.io_stalled)
+        return allowed
+
+    def call_limit(self):
+        return 5
+
+    def before_send(self, method, route):
+        pass
+
+    def content_type(self):
+        return 'application/x-www-form-urlencoded'
+
+    def exchange(self, method, route, body=None, cleanup=False):
+        need((method, route) in self.allowed_exchanges() and self.calls < self.call_limit() and not self.io_stalled)
         remaining = self.remaining(cleanup)
         self.calls += 1
         headers = {'Accept': 'application/json', 'Connection': 'close'}
         if self.cookie is not None:
             headers['Cookie'] = self.cookie
         if body is not None:
-            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            headers['Content-Type'] = self.content_type()
         completed = queue.Queue(maxsize=1)
         cancelled = threading.Event()
         transport_lock = threading.Lock()
@@ -199,6 +211,7 @@ class TorrentAdapter:
                 conn.sock.settimeout(self.remaining(cleanup))
                 if cancelled.is_set():
                     return
+                self.before_send(method, route)
                 conn.request(method, route, body=body, headers=headers)
                 response = conn.getresponse()
                 raw = importer_response_bytes(response)

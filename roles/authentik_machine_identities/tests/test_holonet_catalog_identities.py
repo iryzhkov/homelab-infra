@@ -107,6 +107,8 @@ class DeclarationTest(unittest.TestCase):
             "holonet_catalog_interactive_enabled", "holonet_catalog_interactive_identity",
             "holonet_catalog_playback_enabled", "holonet_catalog_series_enabled", "holonet_catalog_janitor_enabled",
             "holonet_catalog_torrents_enabled", "holonet_catalog_seed_join_enabled",
+            "holonet_catalog_acquire_enabled", "holonet_catalog_acquire_start_enabled",
+            "holonet_catalog_acquire_media_enabled",
             "holonet_catalog_recommendations_enabled", "holonet_catalog_recommendations_identity"})
         self.assertIs(values["holonet_catalog_interactive_enabled"], False)
         self.assertEqual(values["holonet_catalog_interactive_identity"], INTERACTIVE | {"expires": TEMPLATED_EXPIRES})
@@ -115,6 +117,9 @@ class DeclarationTest(unittest.TestCase):
         self.assertIs(values["holonet_catalog_janitor_enabled"], False)
         self.assertIs(values["holonet_catalog_torrents_enabled"], False)
         self.assertIs(values["holonet_catalog_seed_join_enabled"], False)
+        self.assertIs(values["holonet_catalog_acquire_enabled"], False)
+        self.assertIs(values["holonet_catalog_acquire_start_enabled"], False)
+        self.assertIs(values["holonet_catalog_acquire_media_enabled"], False)
         self.assertIs(values["holonet_catalog_recommendations_enabled"], False)
         self.assertEqual(values["holonet_catalog_recommendations_identity"], WRITER | {
             "holonet_target_users": [], "expires": ""})

@@ -870,6 +870,76 @@ class PackagingTest(unittest.TestCase):
         self.assertNotIn("torrent_descriptor", contract.playlist_operator_plan(old))
         self.assertNotIn("janitor_torrents", contract.playlist_operator_plan(old)["policy"])
 
+
+    def acquire_fixture(self):
+        value = self.seed_join_fixture()
+        series = series_fixture()
+        value["config"]["playlist_operator"]["series_libraries"] = copy.deepcopy(
+            series["config"]["playlist_operator"]["series_libraries"])
+        value["config"]["playback"] = copy.deepcopy(series["config"]["playback"])
+        value["config"]["policy"]["HistoryUsers"] = list(series["config"]["policy"]["HistoryUsers"])
+        value["config"]["policy"]["Actions"].insert(1, "history.read")
+        value["credentials"] = copy.deepcopy(series["credentials"])
+        value["config"]["janitor"].update(acquire_source="sonarr_qbit_stage_v1",
+            acquire_series_libraries=["615"], acquire_torrent_resource_id="homelab-qbit-stage")
+        value["config"]["policy"]["Actions"] += [
+            "janitor.acquire.read", "janitor.acquire.start", "janitor.acquire.media"]
+        value["acquire"] = dict(start_enabled=False, media_enabled=False, sonarr=dict(
+            version=1, backend="sonarr", resource_id="homelab-sonarr",
+            origin="https://sonarr.ryzhkov.dev", expected_version="4.0.20.3014",
+            app_config_file="/mnt/docker-data/swarm/sonarr-tv/config/config.xml",
+            app_config_owner_uid=1002, app_config_read_gid=988,
+            acquire_download_origins=["https://prowlarr.ryzhkov.dev"]))
+        return value
+
+    def test_acquire_default_off_artifact_gate_and_descriptor_pair(self):
+        value = self.acquire_fixture()
+        self.rejected(value)  # Old admitted artifacts cannot accept any new keys.
+        with mock.patch.multiple(contract, HOLONET_ACQUIRE_SOURCE="8" * 40,
+                HOLONET_ACQUIRE_CONTRACT="9" * 40, HOLONET_ACQUIRE_SHA256="a" * 64):
+            value["artifact"].update(source_revision="8" * 40,
+                contract_revision="9" * 40, sha256="a" * 64)
+            self.assertEqual(contract.endpoint_contract(value), value)
+            plan = contract.playlist_operator_plan(value)
+            self.assertFalse(plan["policy"]["janitor_acquire"]["start_enabled"])
+            self.assertFalse(plan["policy"]["janitor_acquire"]["media_enabled"])
+            stage = plan["acquire_descriptor"]["stage"]
+            self.assertEqual(stage["resource_id"], "homelab-qbit-stage")
+            self.assertEqual(stage["credential_file"], value["torrents"]["descriptor"]["credential_file"])
+            self.assertEqual(value["torrents"]["descriptor"]["categories"], ["radarr-movies"])
+            for key, wrong in (("start_enabled", "true"), ("media_enabled", 1)):
+                changed = copy.deepcopy(value)
+                changed["acquire"][key] = wrong
+                self.rejected(changed)
+            for change in ({"acquire_download_origins": ["https://foreign.invalid"]},
+                           {"app_config_owner_uid": 0}, {"origin": "http://10.0.0.1"}):
+                changed = copy.deepcopy(value)
+                changed["acquire"]["sonarr"].update(change)
+                self.rejected(changed)
+            changed = copy.deepcopy(value)
+            changed.pop("acquire")
+            self.rejected(changed)
+
+    def test_acquire_unit_write_path_is_fixed_and_start_only(self):
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+        template = env.from_string((ROOT /
+            "roles/web_mcp_endpoint/templates/holonet-playlists-worker@.service.j2").read_text())
+        value = self.acquire_fixture()
+        value["artifact"].update(source_revision=contract.HOLONET_ACQUIRE_SOURCE,
+            contract_revision=contract.HOLONET_ACQUIRE_CONTRACT, sha256=contract.HOLONET_ACQUIRE_SHA256)
+        for enabled in (False, True):
+            value["acquire"]["start_enabled"] = enabled
+            plan = contract.playlist_operator_plan(value)
+            rendered = template.render(web_mcp_operator=plan)
+            writable = [line for line in rendered.splitlines() if line.startswith("ReadWritePaths=")]
+            expected = ["ReadWritePaths=" + " ".join(plan["journals"])]
+            if enabled:
+                expected.append("ReadWritePaths=/mnt/shared/downloads/staging/holonet")
+            self.assertEqual(writable, expected)
+            self.assertIn("ProtectSystem=strict", rendered)
+            self.assertIn("CapabilityBoundingSet=\n", rendered)
+            self.assertEqual("SupplementaryGroups=988" in rendered, enabled)
+
     def seed_join_fixture(self, root=None):
         value = custody_fixture()
         value["artifact"].update(source_revision=contract.HOLONET_TORRENT_SOURCE,
@@ -1209,7 +1279,7 @@ class PackagingTest(unittest.TestCase):
         template = (ROOT / "roles/web_mcp_endpoint/templates/holonet-playlists-worker@.service.j2").read_text()
         from jinja2 import Environment
         env = Environment()
-        values = {"web_mcp_operator": {"release_directory": "/synthetic", "journals": []}}
+        values = {"web_mcp_operator": {"release_directory": "/synthetic", "journals": [], "policy": {}}}
         for enabled in (None, False, True):
             ctx = dict(values)
             if enabled is not None:
@@ -1914,7 +1984,10 @@ class PackagingTest(unittest.TestCase):
     def test_torrent_contract_through_ansible_extra_vars(self):
         self.test_playlist_operator_contract_through_ansible_extra_vars(torrents=True)
 
-    def test_playlist_operator_contract_through_ansible_extra_vars(self, series=False, torrents=False):
+    def test_acquire_contract_through_ansible_extra_vars(self):
+        self.test_playlist_operator_contract_through_ansible_extra_vars(acquire=True)
+
+    def test_playlist_operator_contract_through_ansible_extra_vars(self, series=False, torrents=False, acquire=False):
         # Real extra vars are tagged by Ansible 2.19, unlike plain fixture dicts.
         with tempfile.TemporaryDirectory(dir=os.environ["HOME"]) as scratch:
             base = Path(scratch)
@@ -1933,6 +2006,10 @@ class PackagingTest(unittest.TestCase):
                     origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
                     credential_file="/etc/holonet-playlists/qbit-auth.json", categories=["radarr-movies"],
                     payload_prefixes=["/mnt/shared/downloads/complete/movies"])}
+            if acquire:
+                value = self.acquire_fixture()
+                value["artifact"].update(source_revision=contract.HOLONET_ACQUIRE_SOURCE,
+                    contract_revision=contract.HOLONET_ACQUIRE_CONTRACT, sha256=contract.HOLONET_ACQUIRE_SHA256)
             play = base / "validate.yml"
             play.write_text(yaml.safe_dump([{
                 "hosts": "localhost", "connection": "local", "gather_facts": False,
@@ -1950,7 +2027,9 @@ class PackagingTest(unittest.TestCase):
                        ANSIBLE_REMOTE_TEMP=str(base / "remote-tmp"))
             for version in (1, True, False, 1.0, "1", 2):
                 with self.subTest(version=version):
-                    if torrents:
+                    if acquire:
+                        value["acquire"]["sonarr"]["version"] = version
+                    elif torrents:
                         value["torrents"]["descriptor"]["version"] = version
                     else:
                         value["config"]["playlist_operator"]["wire_version"] = version
