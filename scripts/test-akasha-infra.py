@@ -118,7 +118,6 @@ class SnapshotTest(unittest.TestCase):
         self.assertIs(defaults["akasha_authentik_enabled"], False)
         env = jinja2.Environment(undefined=jinja2.StrictUndefined)
         env.filters["to_nice_json"] = json.dumps
-        env.filters["combine"] = lambda base, extra: {**base, **extra}
         source = (ROOT / "roles/akasha/templates/config.json.j2").read_text()
         values = dict(akasha_state_root="/state", chaldea_access_paths={
             "verifier_state": "/access", "bundle": "/bundle", "clock_health": "/clock"},

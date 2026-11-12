@@ -5,7 +5,7 @@
   'authentikJwksUrl': akasha_authentik_jwks_url | default('https://auth.ryzhkov.dev/application/o/chaldea-akasha/jwks/'),
   'authentikJwksTtlSeconds': akasha_authentik_jwks_ttl_seconds | default(60),
 } if akasha_authentik_enabled | default(false) else {} -%}
-{{ {
+{{ dict({
   'database': akasha_state_root + '/events.db',
   'access_state': chaldea_access_paths.verifier_state,
   'anchors': chaldea_access_trust_anchors,
@@ -16,4 +16,4 @@
   'nats_seed_file': akasha_nats_seed_file,
   'bind': '127.0.0.1',
   'port': 1935
-} | combine(authentik) | to_nice_json }}
+}, **authentik) | to_nice_json }}
