@@ -6,11 +6,14 @@ and resource/audience `https://akasha.ryzhkov.dev`. Issuer is exactly
 `https://auth.ryzhkov.dev/application/o/chaldea-akasha/`, JWKS is
 `https://auth.ryzhkov.dev/application/o/chaldea-akasha/jwks/`, cache TTL 60 seconds.
 The provider uses the existing protected RS256 signer pin, client_credentials only,
-and access_token_validity seconds=300. Both Akasha and rotation explicitly pin
-sub_mode hashed_user_id, encryption_key null, include_claims_in_id_token false,
-and refresh_token_validity seconds=0. These are writable/readable fields in the
-pinned Authentik serializer; refresh grants and ID-token claims are unnecessary
-for this client_credentials-only resource. Exact readback checks every field. Akasha enforces the 300-second lifetime and
+and access_token_validity seconds=300. The Akasha provider pins sub_mode
+hashed_user_id, encryption_key null, include_claims_in_id_token true and
+refresh_token_validity seconds=0. include_claims_in_id_token must be true: in
+Authentik 2026.8.5 client_credentials encodes the access JWT from the ID token,
+and scope mappings run only when that flag is set (see
+managed-interactive-webmcp.md). With false, tokens verify but carry no aud,
+host or run_id. A provider created with false migrates once by a PATCH of
+that single field with full readback. Exact readback checks every field. Akasha enforces the 300-second lifetime and
 60-second skew. R1 accepts the residual validity and Authentik outage trade-offs.
 
 The sole scope mapping overrides aud and emits host from a fixed reviewed map:
