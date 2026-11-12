@@ -345,6 +345,8 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
         good = copy.deepcopy(self.api.data)
         for kind, field, value in (("provider", "grant_types", ["authorization_code"]),
+                                    ("provider", "jwt_federation_sources", [OWNER]),
+                                    ("provider", "jwt_federation_providers", [113]),
                                     ("provider", "client_type", "public"),
                                     ("provider", "access_token_validity", "seconds=301"),
                                     ("provider", "authorization_flow", "foreign"),
@@ -359,6 +361,111 @@ class Lifecycle(unittest.TestCase):
             with self.assertRaises(Exception):
                 self.enrollment().akasha(users, OWNER)
         self.api.data = good
+
+
+    def akasha_pending_fixture(self):
+        key = self.rotation_fixture()
+        users, _ = self.enrollment().users([item()])
+        request = self.api.request
+        def incompatible_response(method, path, body=None):
+            result = request(method, path, body)
+            if method == "POST" and path == e.PATHS["provider"]:
+                result.pop("grant_types")
+            return result
+        self.api.request = incompatible_response
+        with self.assertRaises(ValueError):
+            self.enrollment().akasha(users, key)
+        self.api.request = request
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertEqual(receipt["pending"]["pk"], self.api.data["provider"][0]["pk"])
+        self.assertNotIn("provider", receipt["akasha"])
+        self.assertEqual(receipt["pending"]["body"]["jwt_federation_sources"], [])
+        self.assertEqual(receipt["pending"]["body"]["jwt_federation_providers"], [])
+        self.api.calls.clear()
+        return key, users, receipt
+
+    def test_akasha_pending_exact_pk_recovery_check_real_and_second_zero(self):
+        key, users, receipt = self.akasha_pending_fixture()
+        checked = self.enrollment(check=True)
+        checked.recover_provider("", key)
+        self.assertTrue(checked.changed)
+        self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+        actual = self.enrollment()
+        actual.recover_provider("", key)
+        self.assertIsNone(actual.receipt["pending"])
+        self.assertEqual(actual.receipt["akasha"]["provider"]["pk"], receipt["pending"]["pk"])
+        self.assertFalse(any(m == "POST" and p == e.PATHS["provider"] for m, p, _ in self.api.calls))
+        self.api.calls.clear()
+        repeated = self.enrollment()
+        repeated.akasha(users, key)
+        self.assertFalse(repeated.changed)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+
+    def test_akasha_main_recovers_before_other_writes_without_check_placeholders(self):
+        from unittest.mock import patch
+        key, _, receipt = self.akasha_pending_fixture()
+        params = dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
+                      baselines=[], api_token="SYNTHETIC-invalid-token", reenable_host="",
+                      rotation_signing_key=key, akasha_signing_key=key, original_writer_read={})
+        for check in (True, False):
+            x = self.enrollment(check)
+            # Resource-baseline and rotation behavior have independent tests.
+            # Keep the real main preflight/REAL orchestration and Akasha recovery.
+            x.resources = lambda *args: None
+            x.rotation = lambda *args: None
+            x.expressions = lambda *args: None
+            result = {}
+            module = NS(params=params, check_mode=check,
+                        fail_json=lambda **kw: result.update(failed=True, traceback=traceback.format_exc(), **kw),
+                        exit_json=lambda **kw: result.update(**kw))
+            with patch.object(e, "AnsibleModule", return_value=module), \
+                 patch.object(e, "HostEnrollment", return_value=x):
+                e.main()
+            self.assertNotIn("failed", result, result)
+            if check:
+                self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+                self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+            else:
+                self.assertIsNone(e.read_private(self.fd, "hosts.json")["pending"])
+            self.assertFalse(any(m == "POST" and p == e.PATHS["provider"]
+                                 for m, p, _ in self.api.calls))
+
+    def test_akasha_pending_mismatch_and_missing_fields_never_write(self):
+        key, _, receipt = self.akasha_pending_fixture()
+        provider = self.api.data["provider"][0]
+        good = copy.deepcopy(provider)
+        # Every compared field must survive readback; no missing-field defaulting.
+        for field in receipt["pending"]["body"]:
+            for check in (True, False):
+                provider.pop(field)
+                with self.assertRaises(Exception):
+                    self.enrollment(check).recover_provider("", key)
+                provider.clear()
+                provider.update(copy.deepcopy(good))
+                self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        for field, value in [("pk", good["pk"] + 1),
+                             ("jwt_federation_sources", [OWNER]),
+                             ("jwt_federation_providers", [113]),
+                             ("access_token_validity", "seconds=301"),
+                             ("property_mappings", ["foreign-api"])]:
+            for check in (True, False):
+                provider[field] = value
+                with self.assertRaises(Exception):
+                    self.enrollment(check).recover_provider("", key)
+                provider.clear()
+                provider.update(copy.deepcopy(good))
+                self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        with self.assertRaises(ValueError):
+            self.enrollment().mutate("POST", e.PATHS["provider"], good)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+        receipt["pending"].pop("pk")
+        e.write_private(self.fd, "hosts.json", receipt)
+        self.api.calls.clear()
+        with self.assertRaises(Exception):
+            self.enrollment().recover_provider("", key)
+        self.assertEqual(self.api.calls, [])
+        self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
 
     def test_manual_reenable_only_and_local_tombstone(self):
         self.enrollment().users([item()])

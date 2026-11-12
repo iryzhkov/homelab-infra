@@ -51,8 +51,12 @@ class HostEnrollment:
             if pending is not None and not (
                 pending.get("method") == "POST" and pending.get("path") == PATHS["provider"]
                 and type(pending.get("pk")) is int and pending["pk"] > 0
-                and "provider" not in self.receipt.get("rotation", {})
-                and "group" in self.receipt.get("rotation", {})
+                and ((pending.get("body", {}).get("name") == "chaldea-host-rotation"
+                      and "provider" not in self.receipt.get("rotation", {})
+                      and "group" in self.receipt.get("rotation", {}))
+                     or (pending.get("body", {}).get("name") == "chaldea-akasha"
+                         and "provider" not in self.receipt.get("akasha", {})
+                         and {"mapping", "policy"} <= set(self.receipt.get("akasha", {}))))
             ):
                 raise RotationReconciliationRefused()
             require(self.receipt["version"] == 1)
@@ -188,6 +192,9 @@ return {'aud': 'https://akasha.ryzhkov.dev',
                 if kind == "provider":
                     actual = self.api.request("GET", PATHS[kind] + str(prior["pk"]) + "/")
                 require(matches(actual, prior["body"]))
+                if kind == "provider":
+                    require(actual.get("pk") == prior["pk"]
+                            and all(key in actual for key in body))
                 if prior["body"] != body:
                     # Only the exact account cohort in our own expressions may evolve.
                     require(kind in ("mapping", "policy")
@@ -197,6 +204,17 @@ return {'aud': 'https://akasha.ryzhkov.dev',
                     prior["body"] = body
                     self.commit()
                 return prior["pk"]
+            pending = self.receipt["pending"]
+            if kind == "provider" and pending is not None:
+                require(pending["body"] == body and len(found) == 1
+                        and found[0]["pk"] == pending["pk"])
+                actual = self.api.request("GET", PATHS[kind] + str(pending["pk"]) + "/")
+                require(actual.get("pk") == pending["pk"]
+                        and all(key in actual for key in body) and matches(actual, body))
+                objects[kind] = {"pk": pending["pk"], "body": body}
+                self.changed = True
+                self.commit()
+                return actual["pk"]
             require(not found)
             if self.check:
                 self.changed = True
@@ -223,7 +241,8 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             "authorization_flow": flow("default-provider-authorization-implicit-consent"),
             "invalidation_flow": flow("default-provider-invalidation-flow"),
             "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
-            "redirect_uris": [], "signing_key": signing_key, "property_mappings": [mapping]})
+            "redirect_uris": [], "signing_key": signing_key, "property_mappings": [mapping],
+            "jwt_federation_sources": [], "jwt_federation_providers": []})
         app = owned("application", {"name": "Chaldea Akasha", "slug": AKASHA_CLIENT,
             "provider": provider, "backchannel_providers": [], "policy_engine_mode": "all"})
         owned("binding", {"target": app, "policy": policy, "group": None, "user": None,
@@ -231,6 +250,25 @@ return {'aud': 'https://akasha.ryzhkov.dev',
         require(not any(a.get("provider") == provider and a["pk"] != app
                         or provider in a.get("backchannel_providers", [])
                         for a in self.rows["application"]))
+
+    def recover_provider(self, rotation_key, akasha_key):
+        """Resolve only the exact journaled provider before allowing other writes."""
+        pending = self.receipt["pending"]
+        if pending is None:
+            return
+        if pending["body"].get("name") == "chaldea-akasha":
+            require(akasha_key)
+            # Reuse current receipt-owned users, without lifecycle mutation. Changed
+            # cohort expressions refuse until this exact pending write is reconciled.
+            users = [u for u in self.rows["user"]
+                     if u["pk"] in self.receipt["users"].values()
+                     and u["is_active"]
+                     and u["attributes"]["agent-host"] not in self.receipt["revoked"]]
+            self.akasha(users, akasha_key)
+        else:
+            if not rotation_key:
+                raise RotationReconciliationRefused()
+            self.rotation(rotation_key)
 
     def acquire_mapping(self, hosts, baselines, value, create=False):
         """One bounded resource effect, using the existing write-ahead journal."""
@@ -708,11 +746,8 @@ def main():
         from ansible.module_utils.agent_host_contract import original_writer_declaration
         projection_changed = original_writer_declaration(p["original_writer_read"]) != e.receipt.get("original_writer", {})
         e.check = True
-        if e.receipt["pending"] is not None:
-            if not rotation_key:
-                raise RotationReconciliationRefused()
-            e.rotation(rotation_key)
         saved_rows = copy.deepcopy(e.rows)
+        e.recover_provider(rotation_key, akasha_key)
         baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
                                       p.get("create_original_writer_read_mapping", False))
         e.resources(hosts, baselines)
@@ -730,6 +765,7 @@ def main():
         e.changed = False
         e.check = module.check_mode
         e.rows = saved_rows
+        e.recover_provider(rotation_key, akasha_key)
         baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
                                       p.get("create_original_writer_read_mapping", False))
         e.resources(hosts, baselines)

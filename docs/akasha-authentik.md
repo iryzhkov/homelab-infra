@@ -23,7 +23,12 @@ Append Normandy's explicit node/UID, generation 1 and UTC expiry within 60 days.
 Set authentik_agent_akasha_signing_key to the existing resource-provider RS256 key UUID,
 equal to authentik_agent_rotation_signing_key. Confirm this against current protected
 resource-provider ownership evidence. This creates receipt-owned objects; name
-collisions, modified bodies and uncertain writes refuse adoption or replay.
+collisions and modified bodies refuse adoption. A returned provider PK is persisted
+before response comparison. A pending provider can be recovered only by that exact
+PK and a live body matching every compared field, including empty
+jwt_federation_sources and jwt_federation_providers. CHECK does not write the
+journal; REAL commits the verified provider before further writes. A pending write
+without a returned PK requires operator reconciliation and is never retried.
 Subsequent runs retain the pin from the receipt. The account attributes and existing
 resource mappings do not gain Akasha permissions. Admission policy pins the exact
 active cohort and uses the existing host role/group/revocation guard.
