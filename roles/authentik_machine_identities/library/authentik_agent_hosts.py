@@ -97,6 +97,104 @@ class HostEnrollment:
         require(not any(a.get("provider") == provider and a["pk"] != app
                         or provider in a.get("backchannel_providers", []) for a in self.rows["application"]))
 
+
+    def akasha(self, users, signing_key):
+        """Dedicated resource, receipt-owned and fail closed on foreign objects."""
+        from ansible.module_utils.agent_host_contract import (
+            AKASHA_HOSTS, AKASHA_AUDIENCE, AKASHA_CLIENT, RUNTIME_GUARD, public_users, canonical)
+        public_users(users)
+        require(str(uuid.UUID(signing_key)) == signing_key)
+        expected = canonical({str(u["pk"]): {
+            "username": u["username"], "attributes": u["attributes"],
+            "groups": sorted(str(g) for g in u["groups"])}
+            for u in users if u["attributes"]["agent-host"] in AKASHA_HOSTS})
+        guard = ("expected = " + repr(expected) + "\n" + RUNTIME_GUARD + """
+u = request.user
+e = expected.get(str(u.pk)) if u else None
+if not e or e['username'] != u.username or not host_allowed(u, e):
+    return False
+http = request.http_request
+if http is None or http.method != 'POST':
+    return False
+p = http.POST
+return (p.get('client_id') == 'chaldea-akasha' and p.get('username') == u.username
+    and bool(p.get('password')) and not p.get('client_secret')
+    and not p.get('client_assertion') and not p.get('client_assertion_type')
+    and p.get('grant_type') == 'client_credentials'
+    and p.getlist('resource') == ['https://akasha.ryzhkov.dev']
+    and p.get('scope', '').split() == ['akasha.ingest']
+    and request.context.get('oauth_grant_type') == 'client_credentials'
+    and request.context.get('oauth_scopes') == {'akasha.ingest'})
+""")
+        expression = ("expected = " + repr(expected) + "\n" + RUNTIME_GUARD + """
+u = user
+e = expected.get(str(u.pk)) if u else None
+if (not e or e['username'] != u.username or not host_allowed(u, e)
+        or provider.client_id != 'chaldea-akasha'
+        or provider.application.slug != 'chaldea-akasha'
+        or token.scope != ['akasha.ingest']):
+    return {}
+return {'aud': 'https://akasha.ryzhkov.dev',
+        'preferred_username': u.username, 'host': u.attributes['agent-host'],
+        'run_id': u.username}
+""")
+        objects = self.receipt.setdefault("akasha", {})
+        def owned(kind, body):
+            prior = objects.get(kind)
+            field = "slug" if kind == "application" else "name"
+            found = [r for r in self.rows[kind] if r.get(field) == body.get(field)]
+            if kind == "binding":
+                found = [r for r in self.rows[kind] if r.get("target") == body["target"]]
+            if prior:
+                require(len(found) == 1 and found[0]["pk"] == prior["pk"])
+                actual = found[0]
+                if kind == "provider":
+                    actual = self.api.request("GET", PATHS[kind] + str(prior["pk"]) + "/")
+                require(matches(actual, prior["body"]))
+                if prior["body"] != body:
+                    # Only the exact account cohort in our own expressions may evolve.
+                    require(kind in ("mapping", "policy")
+                            and {k: v for k, v in body.items() if k != "expression"}
+                            == {k: v for k, v in prior["body"].items() if k != "expression"})
+                    self.mutate("PATCH", PATHS[kind] + str(prior["pk"]) + "/", body)
+                    prior["body"] = body
+                    self.commit()
+                return prior["pk"]
+            require(not found)
+            if self.check:
+                self.changed = True
+                pk = "pending-akasha-" + kind
+            else:
+                pk = self.mutate("POST", PATHS[kind], body)["pk"]
+            objects[kind] = {"pk": pk, "body": body}
+            self.commit()
+            self.rows[kind].append(dict(body, pk=pk))
+            return pk
+        flows = self.api.request("GET", "/flows/instances/?page_size=500")
+        require(not flows["pagination"].get("next")
+                and flows["pagination"]["count"] == len(flows["results"]))
+        def flow(slug):
+            found = [f["pk"] for f in flows["results"] if f["slug"] == slug]
+            require(len(found) == 1)
+            return found[0]
+        mapping = owned("mapping", {"name": "Chaldea Akasha identity",
+            "scope_name": "akasha.ingest", "expression": expression})
+        policy = owned("policy", {"name": "Chaldea Akasha host admission",
+            "expression": guard})
+        provider = owned("provider", {"name": AKASHA_CLIENT, "client_id": AKASHA_CLIENT,
+            "client_type": "confidential", "allowed_grant_types": ["client_credentials"],
+            "authorization_flow": flow("default-provider-authorization-implicit-consent"),
+            "invalidation_flow": flow("default-provider-invalidation-flow"),
+            "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
+            "redirect_uris": [], "signing_key": signing_key, "property_mappings": [mapping]})
+        app = owned("application", {"name": "Chaldea Akasha", "slug": AKASHA_CLIENT,
+            "provider": provider, "backchannel_providers": [], "policy_engine_mode": "all"})
+        owned("binding", {"target": app, "policy": policy, "group": None, "user": None,
+                          "order": 0, "enabled": True, "negate": False})
+        require(not any(a.get("provider") == provider and a["pk"] != app
+                        or provider in a.get("backchannel_providers", [])
+                        for a in self.rows["application"]))
+
     def acquire_mapping(self, hosts, baselines, value, create=False):
         """One bounded resource effect, using the existing write-ahead journal."""
         record = self.receipt.get("acquire_mapping")
@@ -538,6 +636,7 @@ def main():
         "create_original_writer_read_mapping": {"type": "bool", "default": False},
         "original_writer_previous_sha256": {"type": "str", "default": ""},
         "reenable_host": {"type": "str", "default": ""},
+        "akasha_signing_key": {"type": "str", "default": ""},
         "rotation_signing_key": {"type": "str", "default": ""},
         "api_token": {"type": "str", "no_log": True, "required": True},
     }, supports_check_mode=True)
@@ -557,6 +656,10 @@ def main():
         if p["original_writer_read"]:
             require(any("holonet" in MATRIX[h["host"]] for h in hosts))
         rotation_key = (p["rotation_signing_key"] or e.receipt.get("rotation", {}).get("provider", {}).get("body", {}).get("signing_key"))
+        akasha_key = (p.get("akasha_signing_key") or e.receipt.get("akasha", {}).get("provider", {}).get("body", {}).get("signing_key"))
+        # Use the same protected signer pin as the existing resource providers.
+        if akasha_key:
+            require(akasha_key == rotation_key)
         # Preflight before any provider, account or token mutation.
         original_receipt = copy.deepcopy(e.receipt)
         from ansible.module_utils.agent_host_contract import original_writer_declaration
@@ -574,6 +677,8 @@ def main():
         if projection_changed or resource_changed:
             require(not e.changed and not p["reenable_host"])
         e.expressions(users, baselines, p["original_writer_read"], p.get("original_writer_previous_sha256", ""))
+        if akasha_key:
+            e.akasha(users, akasha_key)
         e.receipt = original_receipt
         e.changed = False
         e.check = module.check_mode
@@ -587,6 +692,8 @@ def main():
         # Missing accounts in CHECK need real API-returned PKs at apply time.
         # Validate all baselines even then, but do not render guessed admission.
         e.expressions(users, baselines, p["original_writer_read"], p.get("original_writer_previous_sha256", ""))
+        if akasha_key:
+            e.akasha(users, akasha_key)
         if not module.check_mode:
             # Recheck authoritative account state after the last policy write.
             e.rows = {k: e.api.rows(k) for k in PATHS}

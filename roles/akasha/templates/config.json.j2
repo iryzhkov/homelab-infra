@@ -1,4 +1,9 @@
 {{ {
+  'authentikEnabled': akasha_authentik_enabled | default(false),
+  'authentikIssuer': akasha_authentik_issuer | default('https://auth.ryzhkov.dev/application/o/chaldea-akasha/'),
+  'authentikAudience': akasha_authentik_audience | default('https://akasha.ryzhkov.dev'),
+  'authentikJwksUrl': akasha_authentik_jwks_url | default('https://auth.ryzhkov.dev/application/o/chaldea-akasha/jwks/'),
+  'authentikJwksTtlSeconds': akasha_authentik_jwks_ttl_seconds | default(60),
   'database': akasha_state_root + '/events.db',
   'access_state': chaldea_access_paths.verifier_state,
   'anchors': chaldea_access_trust_anchors,

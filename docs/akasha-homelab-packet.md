@@ -1,5 +1,9 @@
 # Akasha homelab convergence packet
 
+For the current host-v0.2.20 dual-verifier rollout, follow
+[Akasha Authentik coexistence](akasha-authentik.md). The host-v0.2.18 repair
+packet below is retained as the rollback baseline.
+
 The current Akasha repair selects official host-v0.2.18 at source
 72021bafaff39eb8d03ba1ae115b3e59952bffcc, removing Mission Control and fork-era
 features. Archive SHA-256:

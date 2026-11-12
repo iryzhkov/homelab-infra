@@ -78,10 +78,10 @@ def function(source, **context):
 
 class Contract(unittest.TestCase):
     def test_exact_matrix(self):
-        self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab"})
+        self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
         expected = {"laptop": {"jocasta", "ov", "holonet", "shizune"},
                     "omarchy-pc": {"jocasta", "ov", "shizune"}, "agent-a": {"jocasta"},
-                    "agent-b": {"jocasta"}, "homelab": {"holonet", "ha", "homelab"}}
+                    "agent-b": {"jocasta"}, "homelab": {"holonet", "ha", "homelab"}, "normandy": set()}
         for host, services in expected.items():
             self.assertEqual(set(c.MATRIX[host]), services)
         ov = c.MATRIX["laptop"]["ov"]
@@ -120,7 +120,7 @@ class Contract(unittest.TestCase):
 
     def test_declaration_closed(self):
         c.declaration([item()], OWNER, NOW)
-        for value in [dict(item(), host="normandy"), dict(item(), revoked="false"),
+        for value in [dict(item(), host="foreign-host"), dict(item(), revoked="false"),
                       dict(item(), services={"ha": {}}), dict(item(), generation=True),
                       dict(item(), expires="2027-11-12T00:00:00Z")]:
             with self.assertRaises(Exception):
@@ -273,6 +273,84 @@ class Lifecycle(unittest.TestCase):
     def enrollment(self, check=False):
         return e.HostEnrollment(self.api, self.fd, OWNER, check)
 
+
+
+    def test_akasha_resource_claims_admission_idempotence_and_drift(self):
+        original = self.api.request
+        def request(method, path, body=None):
+            if path.startswith("/flows/"):
+                return {"results": [{"pk": slug, "slug": slug} for slug in (
+                    "default-provider-authorization-implicit-consent",
+                    "default-provider-invalidation-flow")], "pagination": {"count": 2, "next": None}}
+            return original(method, path, body)
+        self.api.request = request
+        x = self.enrollment()
+        users, _ = x.users([item(h) for h in sorted(c.AKASHA_HOSTS)])
+        before = copy.deepcopy(self.api.data)
+        calls = len(self.api.calls)
+        checked = self.enrollment(check=True)
+        checked.akasha(users, OWNER)
+        self.assertTrue(checked.changed)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.assertEqual(self.api.data, before)
+        x.akasha(users, OWNER)
+        objects = x.receipt["akasha"]
+        body = objects["provider"]["body"]
+        self.assertEqual(body["allowed_grant_types"], ["client_credentials"])
+        self.assertEqual(body["access_token_validity"], "seconds=300")
+        self.assertEqual(body["signing_key"], OWNER)
+        self.assertEqual(body["property_mappings"], [objects["mapping"]["pk"]])
+        self.assertEqual(objects["mapping"]["body"]["scope_name"], "akasha.ingest")
+        self.assertNotIn("goauthentik.io/api", repr(objects))
+        self.assertEqual(self.api.data["user"], before["user"])
+        self.assertEqual(c.MATRIX["normandy"], {})
+        source = objects["mapping"]["body"]["expression"]
+        policy = objects["policy"]["body"]["expression"]
+        # Execute the emitted expressions with the role guard tested elsewhere.
+        marker = source.index("\nu = user")
+        prefix = source[:source.index("\ndef host_allowed")]
+        mapping = prefix + source[marker:]
+        policy_prefix = policy[:policy.index("\ndef host_allowed")]
+        admission = policy_prefix + policy[policy.index("\nu = request.user"):]
+        provider = NS(client_id=c.AKASHA_CLIENT, application=NS(slug=c.AKASHA_CLIENT))
+        class Post(dict):
+            def getlist(self, key):
+                return self.get(key, [])
+        for row in users:
+            u = NS(**row)
+            context = dict(user=u, provider=provider, token=NS(scope=["akasha.ingest"]),
+                           host_allowed=lambda u, e: u.is_active and u.attributes == e["attributes"])
+            result = function(mapping, **context)
+            self.assertEqual(result, {"aud": c.AKASHA_AUDIENCE, "preferred_username": u.username,
+                                      "host": u.attributes["agent-host"], "run_id": u.username})
+            p = Post(client_id=c.AKASHA_CLIENT, username=u.username, password="SYNTHETIC",
+                     grant_type="client_credentials", resource=[c.AKASHA_AUDIENCE], scope="akasha.ingest")
+            req = NS(user=u, http_request=NS(method="POST", POST=p),
+                     context={"oauth_grant_type": "client_credentials", "oauth_scopes": {"akasha.ingest"}})
+            self.assertTrue(function(admission, request=req, host_allowed=context["host_allowed"]))
+            for change in ({"resource": ["foreign"]}, {"scope": "akasha.ingest goauthentik.io/api"},
+                           {"client_id": "other"}, {"grant_type": "password"}, {"client_secret": "foreign"}):
+                bad = NS(**vars(req))
+                bad.http_request = NS(method="POST", POST=Post(p, **change))
+                self.assertFalse(function(admission, request=bad, host_allowed=context["host_allowed"]))
+            for scopes in ([], ["akasha.ingest", "ov.read"], ["goauthentik.io/api"]):
+                self.assertEqual(function(mapping, **dict(context, token=NS(scope=scopes))), {})
+            u.is_active = False
+            self.assertEqual(function(mapping, **context), {})
+        calls = len(self.api.calls)
+        self.enrollment().akasha(users, OWNER)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        good = copy.deepcopy(self.api.data)
+        for kind, field, value in (("provider", "property_mappings", ["foreign-api"]),
+                                    ("provider", "signing_key", str(uuid.uuid4())),
+                                    ("mapping", "expression", "return {}"),
+                                    ("binding", "negate", True)):
+            self.api.data = copy.deepcopy(good)
+            row = next(r for r in self.api.data[kind] if r["pk"] == objects[kind]["pk"])
+            row[field] = value
+            with self.assertRaises(Exception):
+                self.enrollment().akasha(users, OWNER)
+        self.api.data = good
 
     def test_manual_reenable_only_and_local_tombstone(self):
         self.enrollment().users([item()])

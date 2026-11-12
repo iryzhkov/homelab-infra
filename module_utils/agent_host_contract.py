@@ -248,6 +248,12 @@ MATRIX = {
         }
     }
 }
+# Normandy has only Akasha identity admission; registry supplies its backup grant.
+MATRIX["normandy"] = {}
+AKASHA_HOSTS = frozenset({"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
+AKASHA_AUDIENCE = "https://akasha.ryzhkov.dev"
+AKASHA_CLIENT = "chaldea-akasha"
+
 GROUPS = {
     "ov": "ov-http-a63e197f-machine-identities",
     "holonet": "chaldea-holonet-machine-identities",
@@ -278,7 +284,7 @@ def require(ok):
 
 def declaration(hosts, owner, now, tokens=None):
     require(str(uuid.UUID(owner)) == owner)
-    require(isinstance(hosts, list) and 1 <= len(hosts) <= 5)
+    require(isinstance(hosts, list) and 1 <= len(hosts) <= 6)
     seen = set()
     for item in hosts:
         require(set(item) == {"host", "generation", "expires", "revoked", "destination"})
