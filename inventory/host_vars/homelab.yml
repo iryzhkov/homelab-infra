@@ -1,6 +1,7 @@
 ---
-# Deliberately invalid until the parent publishes and supplies a commit/digest pin.
-shizune_image: "UNSET"
+# Shizune gateway built on homelab from iryzhkov/shizune 3ae4632 (merged in PR #1)
+# and pushed to the Forgejo registry; see docs/shizune.md.
+shizune_image: git.ryzhkov.dev/igor/shizune:3ae46323fea53b69390ed987f32f01f5442f7daf@sha256:a060953cbefb98864978b7fd27cd34ce556fb3c3c6395b2e29b0238999d8a8c8
 observability_host_capabilities:
   - {capability: igpu, mode: passthrough}
 observability_gpu_owners:

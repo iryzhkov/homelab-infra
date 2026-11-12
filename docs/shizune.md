@@ -118,7 +118,12 @@ secrets/google-oauth-client.json, mode 0600 owned by 10001. Absent sources are s
 with a message and preserve existing files. These names match the service defaults
 /run/secrets/actual-session-token and /run/secrets/google-oauth-client.json.
 No backend credentials are generated here. Google authorization state belongs
-in data/google. Actual state belongs in data/actual. Back up these private data
+in data/google: after Igor completes consent with `shizune-google-auth` on his
+desktop, install the resulting single credential file `<url-encoded email>.json`
+once into data/google as a single-link regular file, mode 0600, owner 10001
+(for example `install -m 0600 -o 10001 -g 10001` through sudo on homelab), and
+delete the desktop copy. This is Shizune's own Google grant, not a provider login
+cache, and workspace-mcp refreshes it in place. Actual state belongs in data/actual. Back up these private data
 directories through the owning backup procedure before storing useful data.
 
 ## Rollback
