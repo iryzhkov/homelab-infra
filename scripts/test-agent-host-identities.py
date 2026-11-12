@@ -561,8 +561,13 @@ class Lifecycle(unittest.TestCase):
                 if value:
                     result.append(value)
             return result
-        self.assertEqual(emit(c.ACQUIRE_READ["scopes"]),
-                         [dict(c.ACQUIRE_READ["claims"], aud=c.RESOURCES["holonet"])])
+        self.assertEqual(emit(["holonet.read", "holonet.janitor", "holonet.acquire"]), [{
+            "aud": "https://media.mcp.ryzhkov.dev/mcp",
+            "holonet_server": "3c86e6d7ff6c4a3296522cdf03d22bb0",
+            "holonet_namespace": "managed-janitor", "holonet_libraries": ["3"],
+            "holonet_actions": ["janitor.acquire.read"], "holonet_target_users": [],
+            "holonet_catalog_users": [], "holonet_history_users": [],
+        }])
         for request in [["holonet.read", "holonet.janitor", "holonet.acquire", extra]
                         for extra in ("holonet.acquire.start", "holonet.acquire.media", "holonet.curate", "holonet.torrents")]:
             self.assertEqual(emit(request), [])
