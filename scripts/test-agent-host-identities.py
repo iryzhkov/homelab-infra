@@ -431,6 +431,48 @@ class Lifecycle(unittest.TestCase):
             self.assertTrue(all(method == "GET" for method, _, _ in self.api.calls))
             self.assertEqual(os.listdir(self.fd), [])
 
+    def test_jocasta_preflight_rejects_modified_write_and_api_mapping(self):
+        read = {"pk": "read", "scope_name": "jocasta.read", "expression": "return {}"}
+        write_body = {"name": "jocasta write", "scope_name": "jocasta.write", "description": "",
+                      "expression": "return {}"}
+        write = dict(write_body, pk="write")
+        provider = {"pk": 9, "name": "Jocasta", "property_mappings": ["read", "write"],
+                    "meta_model_name": "authentik_providers_oauth2.oauth2provider"}
+        app_body = {"slug": "jocasta", "provider": 9}
+        app = dict(app_body, pk="japp", backchannel_providers=[])
+        binding_body = {"target": "japp", "policy": "policy", "order": 0}
+        binding = dict(binding_body, pk="jbind", enabled=True, negate=False)
+        # Outside the host receipt directory, which must stay empty here.
+        receipts = tempfile.TemporaryDirectory(dir=os.environ["HOME"])
+        self.addCleanup(receipts.cleanup)
+        receipt_dir = receipts.name + "/jocasta-receipt"
+        os.mkdir(receipt_dir, 0o700)
+        fd = os.open(receipt_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            e.write_private(fd, "receipt.json", {"version": 1, "pending": None, "objects": {
+                "write": {"pk": "write", "body": write_body},
+                "provider": {"pk": 9}, "application": {"pk": "japp", "body": app_body},
+                "binding": {"pk": "jbind", "body": binding_body}}})
+        finally:
+            os.close(fd)
+        baseline = {"kind": "mapping", "pk": "read", "service": "jocasta",
+                    "ownership": {"receipt_dir": receipt_dir}}
+        from unittest.mock import patch
+        with patch.dict(c.MATRIX, {"agent-b": {"jocasta": {}}}):
+            self.api.data.update(mapping=[read, write], provider=[provider], application=[app], binding=[binding])
+            self.enrollment().resources([item("agent-b")], [baseline])
+            good = copy.deepcopy(self.api.data)
+            for drift in ("write", "api"):
+                self.api.data = copy.deepcopy(good)
+                if drift == "write":
+                    self.api.data["mapping"][1]["expression"] = "return {'ov_actions': ['read']}"
+                else:
+                    self.api.data["mapping"].append({"pk": "api", "scope_name": "goauthentik.io/api"})
+                    self.api.data["provider"][0]["property_mappings"].append("api")
+                with self.subTest(drift=drift), self.assertRaises(Exception):
+                    self.enrollment().resources([item("agent-b")], [baseline])
+            self.assertTrue(all(method == "GET" for method, _, _ in self.api.calls))
+
     def test_mid_commit_crash_leaves_explicit_pending(self):
         atomic = d.atomic
         calls = []

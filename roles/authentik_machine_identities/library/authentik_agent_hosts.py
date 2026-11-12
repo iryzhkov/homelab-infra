@@ -58,6 +58,11 @@ class HostEnrollment:
                 require(receipt["pending"] is None)
                 owned = receipt["objects"]
                 ids.add(owned["write"]["pk"])
+                # The host writer leaves jocasta.write alone, so its current body
+                # must still equal the owned receipt; a modified expression could
+                # otherwise inject foreign claims into admitted Jocasta tokens.
+                writes = [m for m in self.rows["mapping"] if m["pk"] == owned["write"]["pk"]]
+                require(len(writes) == 1 and matches(writes[0], owned["write"]["body"]))
                 provider_pk = owned["provider"]["pk"]
                 app_pk = owned["application"]["pk"]
                 providers = [p for p in self.rows["provider"] if p["pk"] == provider_pk]
