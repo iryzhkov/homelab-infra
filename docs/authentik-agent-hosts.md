@@ -128,10 +128,12 @@ worker subject sets, fleet helpers, Akasha or signing-key publication.
 ## Original legacy writer acquisition read projection
 
 The maintained playbook also accepts one default-off
-`authentik_agent_original_writer_read` declaration. It only reconciles owned
-scope expressions through the existing `hosts.json` journal. It does not patch
-the legacy user, token, expiry, membership or credential. It refuses any host
-or rotation change in the same run and suppresses host credential delivery.
+`authentik_agent_original_writer_read` declaration. It reconciles owned scope
+expressions through the existing `hosts.json` journal and can create and attach
+the fixed read mapping when its separate opt-in is enabled. It does not patch
+the legacy user, token, expiry, membership or credential. Only projection
+introduction or change refuses simultaneous host or rotation changes and
+suppresses delivery; a stable projection preserves ordinary host lifecycle.
 Retain the complete existing M3 host cohort, owner, rotation input and journal.
 
 After source review and CI, the parent must establish an exclusive issuer write
@@ -211,7 +213,10 @@ parent-owned prerequisites. Never replay the frozen legacy writer.
 
 Run the CHECK, one REAL, unchanged REAL, CHECK sequence above with this complete
 protected packet. Inspect the first CHECK before REAL. The only intended REAL
-changes are scope expressions and their existing journal records. Unchanged
+changes are scope expressions and their existing journal records, plus the
+single deny-only read mapping and its provider attachment when creation is
+explicitly selected. The attachment PATCH response is an OAuth2 detail body,
+including the client secret, held only in memory and never stored or logged. Unchanged
 REAL and final CHECK must report zero changes. Preserve all 23 legacy identities,
 both coexisting subjects and M3 account/rotation state. Projection introduction
 or change refuses simultaneous host/rotation changes and suppresses delivery.
