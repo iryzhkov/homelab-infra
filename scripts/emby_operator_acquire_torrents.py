@@ -170,7 +170,7 @@ class StageTorrent(TorrentAdapter):
 
     @staticmethod
     def safe_limits(info):
-        return (type(info) is dict and info.get('share_limits_mode') == 'Custom' and
+        return (type(info) is dict and info.get('share_limits_mode') == 'MatchAny' and
                 info.get('share_limit_action') == 'Stop' and
                 all(type(info.get(k)) in (int, float) and info[k] == -1 for k in
                     ('ratio_limit', 'seeding_time_limit', 'inactive_seeding_time_limit')))
@@ -213,7 +213,7 @@ class StageTorrent(TorrentAdapter):
             tags='holonet-acquire,' + self.operation_id, stopped='false',
             autoTMM='false', contentLayout='Original', ratioLimit='-1',
             seedingTimeLimit='-1', inactiveSeedingTimeLimit='-1',
-            shareLimitsMode='Custom', shareLimitAction='Stop')
+            shareLimitsMode='MatchAny', shareLimitAction='Stop')
         body = bytearray()
         for k, v in fields.items():
             body.extend(('--' + self.boundary + '\r\nContent-Disposition: form-data; name="' +

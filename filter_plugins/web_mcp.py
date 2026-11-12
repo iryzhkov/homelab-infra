@@ -79,7 +79,7 @@ HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 OPERATOR_MODULES = {
     "emby_operator_acquire.py": "584cb04f9f0524149391081e248885905d6f0c91ffdf82b4277981ae40b37ad3",
     "emby_operator_acquire_media.py": "8c5969434b52a94a9441daef1e8d6ec47642e222bb23bea5bb2567b4b0384798",
-    "emby_operator_acquire_torrents.py": "6488dfe387e64302a3b29dcba8fffb61aa78b3cfc48eac66a9081b62804432b8",
+    "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "42969569034acde9ad26dff8db9472d8612122183d5bff4a2a79c1fbb59f053e",

@@ -235,7 +235,7 @@ class AcquisitionTests(unittest.TestCase):
                     self.reply(json.dumps([dict(hash=digest, category=a.CATEGORY,
                         save_path=a.PREFIX + '/' + op, download_path='', auto_tmm=False,
                         tags='holonet-acquire,' + op,
-                        share_limits_mode='Custom', share_limit_action='Stop',
+                        share_limits_mode='MatchAny', share_limit_action='Stop',
                         ratio_limit=-1, seeding_time_limit=-1, inactive_seeding_time_limit=-1)]
                         if bodies else []).encode())
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -254,7 +254,7 @@ class AcquisitionTests(unittest.TestCase):
                 self.assertEqual(api.calls, 8)
             self.assertEqual(sum(route.endswith('/add') for _, route in calls), 1)
             self.assertEqual(len(bodies), 1)
-            for value in (b'useDownloadPath', b'downloadPath', b'false', b'shareLimitAction', b'Stop', b'shareLimitsMode', b'Custom',
+            for value in (b'useDownloadPath', b'downloadPath', b'false', b'shareLimitAction', b'Stop', b'shareLimitsMode', b'MatchAny',
                           b'synthetic-torrent-bytes', a.PREFIX.encode(), b'holonet-stage'):
                 self.assertIn(value, bodies[0])
         finally:
@@ -263,10 +263,11 @@ class AcquisitionTests(unittest.TestCase):
             thread.join()
 
     def test_share_limit_fallback_cannot_qualify_download(self):
-        safe = dict(share_limits_mode='Custom', share_limit_action='Stop', ratio_limit=-1,
+        safe = dict(share_limits_mode='MatchAny', share_limit_action='Stop', ratio_limit=-1,
                     seeding_time_limit=-1, inactive_seeding_time_limit=-1)
         self.assertTrue(t.StageTorrent.safe_limits(safe))
-        for field, value in (('share_limits_mode', 'Global'), ('share_limit_action', 'RemoveWithContent'),
+        for field, value in (('share_limits_mode', 'Global'), ('share_limits_mode', 'Default'),
+                             ('share_limits_mode', 'Custom'), ('share_limit_action', 'RemoveWithContent'),
                              ('ratio_limit', 1), ('seeding_time_limit', None),
                              ('inactive_seeding_time_limit', False)):
             self.assertFalse(t.StageTorrent.safe_limits(dict(safe, **{field: value})))

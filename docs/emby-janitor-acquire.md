@@ -21,13 +21,21 @@ permits writes only under that fixed staging prefix and uses existing media grou
 988. The new directory retains worker ownership with group988 access for qBit;
 no CAP_CHOWN or other root capability is added. No cleanup removes it on failure. Add attempts with lost replies remain uncertain; an ACK survives a
 readback/logout failure. Status requires matching hash/category/tag/exact path.
-Add readback and later status also require actual per-torrent Custom/Stop and
+Add readback and later status also require actual per-torrent MatchAny/Stop and
 unlimited ratio/time fields; missing fields or a global/removal fallback refuse
 qualification, without an automatic settings repair or another add.
 Each add explicitly disables the global incomplete path and supplies the same
 operation directory as its per-download path. Readback/status refuse an external
 download_path or enabled auto_tmm; final-savepath isolation alone is insufficient.
-Installed-version behavior still needs isolated qualification before activation.
+An exact-image binary proof found that qBit5.3.0 treats invalid Custom as
+Default. The closed request/readback therefore uses MatchAny with Stop and all
+three explicit limits=-1. A scratch-only actual API probe verified these fields,
+an empty per-download path despite a different global incomplete path, and a
+duplicate HTTP409 with synthetic bytes preserved. Receipt and application-network
+control limits: jocasta:d833c56105f5452a9c3801af8afa4faa@1, corresponding
+contract correction jocasta:cf9f8403ccc2eedb927b3fe0e346bd18@4.
+The frozen public wire remains its accepted version3 snapshot.
+Actual NAS ownership, consumer aliases and concurrent-writer qualification remain.
 Nothing automatically clears an uncertain or effective target reservation.
 
 Verification reads only no-follow, single-link regular staged payloads whose
