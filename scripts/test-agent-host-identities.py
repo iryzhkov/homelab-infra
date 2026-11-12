@@ -329,6 +329,28 @@ class Lifecycle(unittest.TestCase):
         with self.assertRaises(Exception):
             self.enrollment().rotation(signing_key)
 
+    def test_provider_preflight_does_not_write_before_expression_refusal(self):
+        from unittest.mock import patch
+        x = self.enrollment()
+        modes = []
+        x.resources = lambda *a: None
+        x.rotation = lambda *a: modes.append(x.check)
+        def refuse(*a):
+            raise e.Refused()
+        x.expressions = refuse
+        params = dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
+                      baselines=[], api_token="SYNTHETIC", reenable_host="",
+                      rotation_signing_key=OWNER)
+        module = NS(params=params, check_mode=False,
+                    fail_json=lambda **kw: None)
+        with patch.object(e, "AnsibleModule", return_value=module), \
+             patch.object(e, "HostEnrollment", return_value=x):
+            e.main()
+        self.assertEqual(modes, [True])
+        self.assertFalse(any(method != "GET" for method, _, _ in self.api.calls))
+        self.assertNotIn("rotation", e.read_private(self.fd, "hosts.json") if
+                         "hosts.json" in os.listdir(self.fd) else {})
+
     def test_check_then_apply_then_no_change(self):
         x = self.enrollment(True)
         x.users([item()])
@@ -358,6 +380,26 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(self.api.data["user"][0]["is_active"])
         self.assertEqual(self.api.data["token"], [])
         self.assertFalse(any(body and body.get("is_active") is True for method, p, body in self.api.calls if method == "PATCH"))
+
+    def test_revoke_purges_token_minted_after_snapshot_and_reenable(self):
+        self.enrollment().users([item()])
+        x = self.enrollment()
+        original = self.api.request
+        def request(method, path, body=None):
+            if method == "PATCH" and body == {"is_active": False}:
+                self.api.data["token"].append(dict(self.api.data["token"][0],
+                    pk=999, identifier="mid-rotation"))
+            return original(method, path, body)
+        self.api.request = request
+        x.users([item(revoked=True)])
+        self.assertEqual(self.api.data["token"], [])
+        # A leftover from older revocation code must also be purged before enable.
+        self.api.data["token"].append({"pk": 1000, "identifier": "leftover",
+                                      "user": self.api.data["user"][0]["pk"]})
+        newer = dict(item(), generation=2, expires=(dt.datetime.now(dt.timezone.utc)
+                     + dt.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        e.HostEnrollment(self.api, self.fd, OWNER, reenable_host="laptop").users([newer])
+        self.assertEqual([t["identifier"] for t in self.api.data["token"]], ["chaldea-laptop-g2"])
 
     def test_inventory_revocation_prevents_creation(self):
         self.enrollment().users([item(revoked=True)])

@@ -10,6 +10,11 @@ homelab only after the canary passes. PR #172 owns consumer cutover independentl
 Use the existing protected full cohort, receipt and baseline packet. Add
 authentik_agent_rotation_signing_key with an existing reviewed RSA signing-key UUID.
 Run playbooks/authentik-agent-hosts.yml in check mode, apply, repeat and check.
+Immediately after the provider apply, smoke-test resource exchanges for every
+host against every service and scope in its admission matrix. Verify the expected
+host identity and bounded claims, including legacy identity coexistence. This
+apply re-renders every owned resource expression; stop before fleet deployment
+if any exchange or claim differs. Keep tokens private and retain redacted results.
 The host writer journals its separate group/provider/application/binding in
 hosts.json.rotation; name collisions or drift refuse adoption. Its provider
 client_id is chaldea-host-rotation, issuer is
@@ -40,7 +45,7 @@ tombstone. A stale false inventory cannot clear that tombstone. Administrative
 is_active=false independently refuses issuance even before fleet convergence.
 
 The Python standard-library tool shares host.lock and host.generation.json with
-enrollment. It checks expiry daily, rotates within 30 days and requests 60 days.
+enrollment. It checks expiry daily, rotates within 30 days and requests 59 days to allow for host clock skew.
 It persists rotation.json with old/new identifiers before POST, reads back the
 same deterministic generation after a crash, verifies the replacement exchange,
 atomically replaces the 0600 password and marker with fsync, then deletes the old

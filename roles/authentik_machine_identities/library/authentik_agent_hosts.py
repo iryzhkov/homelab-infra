@@ -223,6 +223,17 @@ class HostEnrollment:
             permissions[rid] = result["results"]
         require(managed_role_ok(user, roles, permissions, self.rows["token"]))
 
+    def purge_tokens(self, pk):
+        # Deactivation must precede this fresh authoritative listing. A host may
+        # have minted another token since the enrollment snapshot.
+        for token in self.api.rows("token"):
+            if token.get("user") == pk:
+                self.changed = True
+                if not self.check:
+                    self.api.request("DELETE", "/core/tokens/" + token["identifier"] + "/")
+        if not self.check:
+            require(not any(t.get("user") == pk for t in self.api.rows("token")))
+
     def users(self, hosts):
         require(set(self.receipt["users"]) <= {i["host"] for i in hosts})
         result, delivery = [], []
@@ -245,6 +256,8 @@ class HostEnrollment:
                     now = dt.datetime.now(dt.timezone.utc)
                     expiry = dt.datetime.fromisoformat(item["expires"].replace("Z", "+00:00"))
                     require(now + dt.timedelta(days=1) <= expiry <= now + dt.timedelta(days=60))
+                    require(not user["is_active"])
+                    self.purge_tokens(pk)
                     user = dict(user, is_active=True, attributes=attributes(host, self.owner))
                     self.mutate("PATCH", "/core/users/" + str(pk) + "/",
                                 {"is_active": True, "attributes": user["attributes"]})
@@ -262,11 +275,8 @@ class HostEnrollment:
                 if user and user["is_active"]:
                     self.mutate("PATCH", "/core/users/" + str(pk) + "/", {"is_active": False})
                     self.commit()
-                for token_row in self.rows["token"]:
-                    if token_row.get("user") == pk:
-                        self.changed = True
-                        if not self.check:
-                            self.api.request("DELETE", "/core/tokens/" + token_row["identifier"] + "/")
+                if user:
+                    self.purge_tokens(pk)
                 delivery.append(dict(item, revoked=True))
                 continue
             if not user:
@@ -406,16 +416,18 @@ def main():
         hosts = declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc), e.receipt["tokens"])
         e.resources(hosts, p["baselines"])
         rotation_key = (p["rotation_signing_key"] or e.receipt.get("rotation", {}).get("provider", {}).get("body", {}).get("signing_key"))
-        if rotation_key:
-            e.rotation(rotation_key)
-        # Preflight the entire operation before the first account/token write.
+        # Preflight before any provider, account or token mutation.
         original_receipt = copy.deepcopy(e.receipt)
         e.check = True
+        if rotation_key:
+            e.rotation(rotation_key)
         users, _ = e.users(hosts)
         e.expressions(users, p["baselines"])
         e.receipt = original_receipt
         e.changed = False
         e.check = module.check_mode
+        if rotation_key:
+            e.rotation(rotation_key)
         users, delivery = e.users(hosts)
         # Missing accounts in CHECK need real API-returned PKs at apply time.
         # Validate all baselines even then, but do not render guessed admission.
