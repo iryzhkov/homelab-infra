@@ -81,7 +81,10 @@ class AcquisitionTests(unittest.TestCase):
 
     def test_audio_requires_english_audio_association(self):
         for title in ('Dual Audio', 'DUAL Japanese Russian', 'MULTI Audio', 'English',
-                      'English Subs', 'English subtitles Dual Audio'):
+                      'English Subs', 'English subtitles Dual Audio',
+                      'Dual Audio English Subbed', 'JPN Audio ENG Softsubs',
+                      'Japanese Audio English Subtitled', 'Dual-Audio Eng-Subbed',
+                      'Audio Softsubs English'):
             self.assertNotEqual(a.audio_claim(title), 'english_audio_claimed', title)
         for title in ('English Dub', 'ENG AUDIO', 'DUB English'):
             self.assertEqual(a.audio_claim(title), 'english_audio_claimed')
@@ -115,6 +118,21 @@ class AcquisitionTests(unittest.TestCase):
         self.assertIn('SECRET', next(iter(private.values()))['downloadUrl'])
         other, _ = a.search(self.call, self.block, SyntheticSonarr(self.fixture), SyntheticEmby())
         self.assertEqual(result, other)
+
+    def test_rejected_existing_quality_release_remains_staging_candidate(self):
+        api = SyntheticSonarr(self.fixture)
+        selected = api.selected
+        def rejected(kind, **query):
+            rows = selected(kind, **query)
+            if kind == 'release':
+                rows[0].update(rejected=True, approved=False,
+                    rejections=['Existing file on disk is of equal or higher preference'])
+            return rows
+        api.selected = rejected
+        result, private = a.search(self.call, self.block, api, SyntheticEmby())
+        self.assertEqual(len(result['releases']), 1)
+        self.assertEqual(result['releases'][0]['audio_claim'], 'english_audio_claimed')
+        self.assertEqual(len(private), 1)
 
     def test_wrong_library_and_foreign_series_refuse(self):
         self.call['request']['library_id'] = '1132'
@@ -160,7 +178,9 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(files, [dict(index=0, name='x.mkv', size=3)])
         self.assertEqual(private, 0)
         for bad in (raw + b'extra', raw.replace(b'x.mkv', b'../xx'),
-                    b'd4:info' + info + b'4:info' + info + b'e'):
+                    b'd4:info' + info + b'4:info' + info + b'e',
+                    raw.replace(b'4:name', b'12:meta versioni2e4:name'),
+                    raw.replace(b'd6:length', b'd9:file treede6:length')):
             with self.assertRaises(Refused):
                 t.metainfo(bad)
 

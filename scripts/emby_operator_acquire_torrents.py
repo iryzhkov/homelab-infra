@@ -61,7 +61,8 @@ def metainfo(raw):
     root = parse()
     need(pos == len(raw) and type(root) is dict and info_span is not None)
     info = root.get(b'info')
-    need(type(info) is dict and type(info.get(b'pieces')) is bytes and
+    need(type(info) is dict and b'meta version' not in info and b'file tree' not in info and
+         type(info.get(b'pieces')) is bytes and
          len(info[b'pieces']) > 0 and len(info[b'pieces']) % 20 == 0 and
          integer(info.get(b'piece length'), 1, 1 << 30))
     def component(value):

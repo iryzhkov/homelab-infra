@@ -49,9 +49,9 @@ TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
 # Exact candidate artifact. Independent review, CI and access approval still gate activation.
-HOLONET_ACQUIRE_SOURCE = "3470cc0f3f1e4bfab660a279859537d428a5cd96"
-HOLONET_ACQUIRE_SHA256 = "b6e3f4b33aa27cb1bb60545a1f8aa0353739bf8cd7dbf8bc165969afc2edd3b4"
-HOLONET_ACQUIRE_CONTRACT = "3470cc0f3f1e4bfab660a279859537d428a5cd96"
+HOLONET_ACQUIRE_SOURCE = "4e6f87442b88f61b4017f86e507bf90567ad2c29"
+HOLONET_ACQUIRE_SHA256 = "8516cc4b398c528ba968e3b70f54932000f0c0bca8d8ffee5cf658eec9ca90ed"
+HOLONET_ACQUIRE_CONTRACT = "4e6f87442b88f61b4017f86e507bf90567ad2c29"
 # Stat-only seed/library pair (jocasta:c3070dfe196e7f67732749db4b279689@3).
 # Exact reviewed client/worker pair; publication and CI still gate deployment.
 # Static linux/amd64 artifact: Chaldea b02e84fd-94d4-4491-bfa8-76370db21cc9.
@@ -77,9 +77,9 @@ HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_acquire.py": "e3067e34c668e84151b42323330e901ccab9d0801ac578c25604aa604cc52bf0",
+    "emby_operator_acquire.py": "584cb04f9f0524149391081e248885905d6f0c91ffdf82b4277981ae40b37ad3",
     "emby_operator_acquire_media.py": "8c5969434b52a94a9441daef1e8d6ec47642e222bb23bea5bb2567b4b0384798",
-    "emby_operator_acquire_torrents.py": "76a9adbfe7ce8ecc1d1e2904dfc28c5de38076b4225a64e93a9fe394926c7396",
+    "emby_operator_acquire_torrents.py": "6488dfe387e64302a3b29dcba8fffb61aa78b3cfc48eac66a9081b62804432b8",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "42969569034acde9ad26dff8db9472d8612122183d5bff4a2a79c1fbb59f053e",

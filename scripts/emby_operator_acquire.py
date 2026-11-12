@@ -144,11 +144,12 @@ def base(call, qualification, resource):
 
 def audio_claim(title):
     # Strip subtitle phrases first. Dual/multi alone says nothing about English.
-    cleaned = re.sub(r'(?i)\b(?:eng|english)[-_. ]+sub(?:title)?s?\b', '', title)
+    subtitle = r'(?i)\b(english|eng)[ ._-]*(soft|hard)?sub\w*\b|\b(soft|hard)?sub\w*[ ._-]+(english|eng)\b'
+    cleaned = re.sub(subtitle, '', title)
     if re.search(r'(?i)\b(?:eng|english)[-_. ]+(?:audio|dub(?:bed)?)\b|'
                  r'\b(?:audio|dub(?:bed)?)[-_. ]+(?:eng|english)\b', cleaned):
         return 'english_audio_claimed'
-    if re.search(r'(?i)\b(?:eng|english)[-_. ]+sub(?:title)?s?\b|\bsubbed\b|\bvostfr\b', title):
+    if re.search(subtitle, title):
         return 'subtitle_only_claimed'
     return 'unknown'
 
@@ -302,8 +303,7 @@ def search(call, block, api, emby):
                                seasonNumber=t['season']), 500)
     projected, private = [], {}
     for r in source:
-        if (r.get('protocol') != 'torrent' or r.get('rejected') is not False or
-                r.get('approved') is not True or r.get('fullSeason') is not True or
+        if (r.get('protocol') != 'torrent' or r.get('fullSeason') is not True or
                 r.get('seasonNumber') != t['season'] or
                 r.get('mappedSeriesId') != t['sonarr_series_id']):
             continue
