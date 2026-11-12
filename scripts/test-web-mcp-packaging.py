@@ -2414,7 +2414,10 @@ class PackagingTest(unittest.TestCase):
 
 class CoexistencePackaging(unittest.TestCase):
     def test_exact_subjects_and_purpose_contract(self):
-        config = operator_fixture()["config"]
+        endpoint = operator_fixture()
+        endpoint["artifact"].update(source_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+                                    contract_revision=contract.HOLONET_COEXISTENCE_SOURCE)
+        config = endpoint["config"]
         operator = config["playlist_operator"]
         subjects = [operator["subject"], "chaldea-laptop"]
         operator["subjects"] = subjects
@@ -2430,6 +2433,9 @@ class CoexistencePackaging(unittest.TestCase):
                        "catalog_users": [operator["catalog_user"]], "history_users": [],
                        "target_users": operator["recipients"], "actions": ["catalog.read"]}}
         contract.holonet_purposes(config)
+        rendered = contract.playlist_operator_plan(endpoint)["policy"]
+        self.assertEqual(rendered["subjects"], subjects)
+        self.assertEqual(rendered["caller"]["subject"], operator["subject"])
         for field, value in (("scopes", ["holonet.read", "holonet.janitor"]),
                              ("actions", ["catalog.read", "playlist.manage"]),
                              ("libraries", ["3", "999"]), ("target_users", operator["recipients"])):
