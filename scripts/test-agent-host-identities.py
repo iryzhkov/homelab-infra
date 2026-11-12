@@ -296,7 +296,10 @@ class Lifecycle(unittest.TestCase):
         x.akasha(users, OWNER)
         objects = x.receipt["akasha"]
         body = objects["provider"]["body"]
-        self.assertEqual(body["allowed_grant_types"], ["client_credentials"])
+        self.assertEqual(body["grant_types"], ["client_credentials"])
+        self.assertNotIn("allowed_grant_types", body)
+        self.assertTrue(set(body) <= set(seam.OAUTH_FIELDS))
+        self.assertTrue(e.matches(seam.oauth_provider(dict(body, pk=objects["provider"]["pk"])), body))
         self.assertEqual(body["access_token_validity"], "seconds=300")
         self.assertEqual(body["signing_key"], OWNER)
         self.assertEqual(body["property_mappings"], [objects["mapping"]["pk"]])
@@ -341,7 +344,12 @@ class Lifecycle(unittest.TestCase):
         self.enrollment().akasha(users, OWNER)
         self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
         good = copy.deepcopy(self.api.data)
-        for kind, field, value in (("provider", "property_mappings", ["foreign-api"]),
+        for kind, field, value in (("provider", "grant_types", ["authorization_code"]),
+                                    ("provider", "client_type", "public"),
+                                    ("provider", "access_token_validity", "seconds=301"),
+                                    ("provider", "authorization_flow", "foreign"),
+                                    ("provider", "invalidation_flow", "foreign"),
+                                    ("provider", "property_mappings", ["foreign-api"]),
                                     ("provider", "signing_key", str(uuid.uuid4())),
                                     ("mapping", "expression", "return {}"),
                                     ("binding", "negate", True)):

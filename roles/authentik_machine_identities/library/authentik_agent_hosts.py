@@ -182,7 +182,7 @@ return {'aud': 'https://akasha.ryzhkov.dev',
         policy = owned("policy", {"name": "Chaldea Akasha host admission",
             "expression": guard})
         provider = owned("provider", {"name": AKASHA_CLIENT, "client_id": AKASHA_CLIENT,
-            "client_type": "confidential", "allowed_grant_types": ["client_credentials"],
+            "client_type": "confidential", "grant_types": ["client_credentials"],
             "authorization_flow": flow("default-provider-authorization-implicit-consent"),
             "invalidation_flow": flow("default-provider-invalidation-flow"),
             "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
