@@ -50,8 +50,8 @@
         chaldea_host_sha256: "{{ akasha_host_sha256 }}"
         chaldea_host_artifact_release_root: "{{ akasha_runtime_release_root }}"
         chaldea_host_artifact_cache: "{{ akasha_runtime_cache }}"
-        # Collectors still execute016; newest prior017 is retained implicitly.
-        chaldea_host_artifact_preserve_versions: [host-v0.2.16]
+        # Collectors execute016; retain017 too. Newest prior018 is retained automatically.
+        chaldea_host_artifact_preserve_versions: [host-v0.2.16, host-v0.2.17]
     - role: chaldea_access_trust
       vars:
         chaldea_host_artifact_preserve_versions: "{{ akasha_trust_preserve_versions }}"

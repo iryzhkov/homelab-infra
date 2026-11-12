@@ -2,6 +2,12 @@
 # Definitions only by default. Activation needs the separately reviewed C/F
 # artifacts and adapters; this role never installs or changes credentials.
 akasha_activate: false
+# Root enables JWT admission only after the PKI-only runtime canary.
+akasha_authentik_enabled: false
+akasha_authentik_issuer: https://auth.ryzhkov.dev/application/o/chaldea-akasha/
+akasha_authentik_audience: https://akasha.ryzhkov.dev
+akasha_authentik_jwks_url: https://auth.ryzhkov.dev/application/o/chaldea-akasha/jwks/
+akasha_authentik_jwks_ttl_seconds: 60
 akasha_exec_start: "/opt/chaldea/node/bin/node {{ chaldea_host_artifact_root }}/akasha-service.mjs serve --config /etc/akasha/config.json"
 akasha_environment_file: /etc/akasha/runtime.env
 akasha_trust_bundle: "{{ chaldea_access_paths.bundle }}"

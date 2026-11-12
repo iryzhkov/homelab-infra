@@ -3,7 +3,8 @@
 The sole creation entrypoint is `playbooks/authentik-agent-hosts.yml`. It runs
 the host tasks of `authentik_machine_identities`, bypassing the legacy blueprint
 writer. Legacy playbooks, accounts, credentials, applications, human identities
-and PKI remain in place. Normandy is reserved for P3.3 and is refused here.
+and PKI remain in place. Normandy can now enroll for its existing Akasha producer only.
+See [Akasha coexistence](akasha-authentik.md) for the separate resource provider and deployment packet.
 
 The closed contract in `module_utils/agent_host_contract.py` is the target
 matrix from survey `jocasta:bb2fc17fa5ceaa265efbdb7c4c3d9ac0@1`.

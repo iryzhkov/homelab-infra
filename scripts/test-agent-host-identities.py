@@ -13,6 +13,7 @@ from types import SimpleNamespace as NS
 import unittest
 import traceback
 import uuid
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 assert os.environ["HOME"].startswith(("/home/job", str(ROOT / ".cache"), "/root/.cache", str(ROOT / "authentik-identities-")))
@@ -78,10 +79,10 @@ def function(source, **context):
 
 class Contract(unittest.TestCase):
     def test_exact_matrix(self):
-        self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab"})
+        self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
         expected = {"laptop": {"jocasta", "ov", "holonet", "shizune"},
                     "omarchy-pc": {"jocasta", "ov", "shizune"}, "agent-a": {"jocasta"},
-                    "agent-b": {"jocasta"}, "homelab": {"holonet", "ha", "homelab"}}
+                    "agent-b": {"jocasta"}, "homelab": {"holonet", "ha", "homelab"}, "normandy": set()}
         for host, services in expected.items():
             self.assertEqual(set(c.MATRIX[host]), services)
         ov = c.MATRIX["laptop"]["ov"]
@@ -120,7 +121,7 @@ class Contract(unittest.TestCase):
 
     def test_declaration_closed(self):
         c.declaration([item()], OWNER, NOW)
-        for value in [dict(item(), host="normandy"), dict(item(), revoked="false"),
+        for value in [dict(item(), host="foreign-host"), dict(item(), revoked="false"),
                       dict(item(), services={"ha": {}}), dict(item(), generation=True),
                       dict(item(), expires="2027-11-12T00:00:00Z")]:
             with self.assertRaises(Exception):
@@ -274,6 +275,211 @@ class Lifecycle(unittest.TestCase):
         return e.HostEnrollment(self.api, self.fd, OWNER, check)
 
 
+
+    def test_akasha_resource_claims_admission_idempotence_and_drift(self):
+        original = self.api.request
+        def request(method, path, body=None):
+            if path.startswith("/flows/"):
+                return {"results": [{"pk": slug, "slug": slug} for slug in (
+                    "default-provider-authorization-implicit-consent",
+                    "default-provider-invalidation-flow")], "pagination": {"count": 2, "next": None}}
+            return original(method, path, body)
+        self.api.request = request
+        x = self.enrollment()
+        users, _ = x.users([item(h) for h in sorted(c.AKASHA_HOSTS)])
+        before = copy.deepcopy(self.api.data)
+        calls = len(self.api.calls)
+        checked = self.enrollment(check=True)
+        checked.akasha(users, OWNER)
+        self.assertTrue(checked.changed)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.assertEqual(self.api.data, before)
+        x.akasha(users, OWNER)
+        objects = x.receipt["akasha"]
+        body = objects["provider"]["body"]
+        self.assertEqual(body["grant_types"], ["client_credentials"])
+        self.assertNotIn("allowed_grant_types", body)
+        self.assertTrue(set(body) <= set(seam.OAUTH_FIELDS))
+        self.assertTrue(e.matches(seam.oauth_provider(dict(body, pk=objects["provider"]["pk"])), body))
+        self.assertEqual(body["access_token_validity"], "seconds=300")
+        self.assertEqual(body["sub_mode"], "hashed_user_id")
+        self.assertIsNone(body["encryption_key"])
+        self.assertIs(body["include_claims_in_id_token"], False)
+        self.assertEqual(body["refresh_token_validity"], "seconds=0")
+        self.assertEqual(body["signing_key"], OWNER)
+        self.assertEqual(body["property_mappings"], [objects["mapping"]["pk"]])
+        self.assertEqual(objects["mapping"]["body"]["scope_name"], "akasha.ingest")
+        self.assertNotIn("goauthentik.io/api", repr(objects))
+        self.assertEqual(self.api.data["user"], before["user"])
+        self.assertEqual(c.MATRIX["normandy"], {})
+        source = objects["mapping"]["body"]["expression"]
+        policy = objects["policy"]["body"]["expression"]
+        # Execute the emitted expressions with the role guard tested elsewhere.
+        marker = source.index("\nu = user")
+        prefix = source[:source.index("\ndef host_allowed")]
+        mapping = prefix + source[marker:]
+        policy_prefix = policy[:policy.index("\ndef host_allowed")]
+        admission = policy_prefix + policy[policy.index("\nu = request.user"):]
+        provider = NS(client_id=c.AKASHA_CLIENT, application=NS(slug=c.AKASHA_CLIENT))
+        class Post(dict):
+            def getlist(self, key):
+                return self.get(key, [])
+        registry = yaml.safe_load((ROOT / "vars/akasha-enrollment-registry.yml").read_text())
+        registry_hosts = {entry["host"] for entry in registry["akasha_enrollment_registry_additions"]}
+        self.assertEqual(set(c.AKASHA_REGISTRY_HOSTS), set(c.AKASHA_HOSTS))
+        self.assertEqual(set(c.AKASHA_REGISTRY_HOSTS.values()), registry_hosts)
+        for row in users:
+            u = NS(**row)
+            context = dict(user=u, provider=provider, token=NS(scope=["akasha.ingest"]),
+                           host_allowed=lambda u, e: u.is_active and u.attributes == e["attributes"])
+            result = function(mapping, **context)
+            self.assertEqual(result, {"aud": c.AKASHA_AUDIENCE, "preferred_username": "chaldea-" + c.AKASHA_REGISTRY_HOSTS[u.attributes["agent-host"]],
+                                      "host": c.AKASHA_REGISTRY_HOSTS[u.attributes["agent-host"]], "run_id": u.username})
+            p = Post(client_id=c.AKASHA_CLIENT, username=u.username, password="SYNTHETIC",
+                     grant_type="client_credentials", resource=[c.AKASHA_AUDIENCE], scope="akasha.ingest")
+            req = NS(user=u, http_request=NS(method="POST", POST=p),
+                     context={"oauth_grant_type": "client_credentials", "oauth_scopes": {"akasha.ingest"}})
+            self.assertTrue(function(admission, request=req, host_allowed=context["host_allowed"]))
+            for change in ({"resource": ["foreign"]}, {"scope": "akasha.ingest goauthentik.io/api"},
+                           {"client_id": "other"}, {"grant_type": "password"}, {"client_secret": "foreign"}):
+                bad = NS(**vars(req))
+                bad.http_request = NS(method="POST", POST=Post(p, **change))
+                self.assertFalse(function(admission, request=bad, host_allowed=context["host_allowed"]))
+            for scopes in ([], ["akasha.ingest", "ov.read"], ["goauthentik.io/api"]):
+                self.assertEqual(function(mapping, **dict(context, token=NS(scope=scopes))), {})
+            u.is_active = False
+            self.assertEqual(function(mapping, **context), {})
+        calls = len(self.api.calls)
+        self.enrollment().akasha(users, OWNER)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        good = copy.deepcopy(self.api.data)
+        for kind, field, value in (("provider", "grant_types", ["authorization_code"]),
+                                    ("provider", "jwt_federation_sources", [OWNER]),
+                                    ("provider", "jwt_federation_providers", [113]),
+                                    ("provider", "client_type", "public"),
+                                    ("provider", "sub_mode", "user_username"),
+                                    ("provider", "encryption_key", OWNER),
+                                    ("provider", "include_claims_in_id_token", True),
+                                    ("provider", "refresh_token_validity", "days=30"),
+                                    ("provider", "access_token_validity", "seconds=301"),
+                                    ("provider", "authorization_flow", "foreign"),
+                                    ("provider", "invalidation_flow", "foreign"),
+                                    ("provider", "property_mappings", ["foreign-api"]),
+                                    ("provider", "signing_key", str(uuid.uuid4())),
+                                    ("mapping", "expression", "return {}"),
+                                    ("binding", "negate", True)):
+            self.api.data = copy.deepcopy(good)
+            row = next(r for r in self.api.data[kind] if r["pk"] == objects[kind]["pk"])
+            row[field] = value
+            with self.assertRaises(Exception):
+                self.enrollment().akasha(users, OWNER)
+        self.api.data = good
+
+
+    def akasha_pending_fixture(self):
+        key = self.rotation_fixture()
+        users, _ = self.enrollment().users([item()])
+        request = self.api.request
+        def incompatible_response(method, path, body=None):
+            result = request(method, path, body)
+            if method == "POST" and path == e.PATHS["provider"]:
+                result.pop("grant_types")
+            return result
+        self.api.request = incompatible_response
+        with self.assertRaises(ValueError):
+            self.enrollment().akasha(users, key)
+        self.api.request = request
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertEqual(receipt["pending"]["pk"], self.api.data["provider"][0]["pk"])
+        self.assertNotIn("provider", receipt["akasha"])
+        self.assertEqual(receipt["pending"]["body"]["jwt_federation_sources"], [])
+        self.assertEqual(receipt["pending"]["body"]["jwt_federation_providers"], [])
+        self.api.calls.clear()
+        return key, users, receipt
+
+    def test_akasha_pending_exact_pk_recovery_check_real_and_second_zero(self):
+        key, users, receipt = self.akasha_pending_fixture()
+        checked = self.enrollment(check=True)
+        checked.recover_provider("", key)
+        self.assertTrue(checked.changed)
+        self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+        actual = self.enrollment()
+        actual.recover_provider("", key)
+        self.assertIsNone(actual.receipt["pending"])
+        self.assertEqual(actual.receipt["akasha"]["provider"]["pk"], receipt["pending"]["pk"])
+        self.assertFalse(any(m == "POST" and p == e.PATHS["provider"] for m, p, _ in self.api.calls))
+        self.api.calls.clear()
+        repeated = self.enrollment()
+        repeated.akasha(users, key)
+        self.assertFalse(repeated.changed)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+
+    def test_akasha_main_recovers_before_other_writes_without_check_placeholders(self):
+        from unittest.mock import patch
+        key, _, receipt = self.akasha_pending_fixture()
+        params = dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
+                      baselines=[], api_token="SYNTHETIC-invalid-token", reenable_host="",
+                      rotation_signing_key=key, akasha_signing_key=key, original_writer_read={})
+        for check in (True, False):
+            x = self.enrollment(check)
+            # Resource-baseline and rotation behavior have independent tests.
+            # Keep the real main preflight/REAL orchestration and Akasha recovery.
+            x.resources = lambda *args: None
+            x.rotation = lambda *args: None
+            x.expressions = lambda *args: None
+            result = {}
+            module = NS(params=params, check_mode=check,
+                        fail_json=lambda **kw: result.update(failed=True, traceback=traceback.format_exc(), **kw),
+                        exit_json=lambda **kw: result.update(**kw))
+            with patch.object(e, "AnsibleModule", return_value=module), \
+                 patch.object(e, "HostEnrollment", return_value=x):
+                e.main()
+            self.assertNotIn("failed", result, result)
+            if check:
+                self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+                self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+            else:
+                self.assertIsNone(e.read_private(self.fd, "hosts.json")["pending"])
+            self.assertFalse(any(m == "POST" and p == e.PATHS["provider"]
+                                 for m, p, _ in self.api.calls))
+
+    def test_akasha_pending_mismatch_and_missing_fields_never_write(self):
+        key, _, receipt = self.akasha_pending_fixture()
+        provider = self.api.data["provider"][0]
+        good = copy.deepcopy(provider)
+        # Every compared field must survive readback; no missing-field defaulting.
+        for field in receipt["pending"]["body"]:
+            for check in (True, False):
+                provider.pop(field)
+                with self.assertRaises(Exception):
+                    self.enrollment(check).recover_provider("", key)
+                provider.clear()
+                provider.update(copy.deepcopy(good))
+                self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        for field, value in [("pk", good["pk"] + 1),
+                             ("jwt_federation_sources", [OWNER]),
+                             ("jwt_federation_providers", [113]),
+                             ("access_token_validity", "seconds=301"),
+                             ("property_mappings", ["foreign-api"])]:
+            for check in (True, False):
+                provider[field] = value
+                with self.assertRaises(Exception):
+                    self.enrollment(check).recover_provider("", key)
+                provider.clear()
+                provider.update(copy.deepcopy(good))
+                self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        with self.assertRaises(ValueError):
+            self.enrollment().mutate("POST", e.PATHS["provider"], good)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls))
+        receipt["pending"].pop("pk")
+        e.write_private(self.fd, "hosts.json", receipt)
+        self.api.calls.clear()
+        with self.assertRaises(Exception):
+            self.enrollment().recover_provider("", key)
+        self.assertEqual(self.api.calls, [])
+        self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+
     def test_manual_reenable_only_and_local_tombstone(self):
         self.enrollment().users([item()])
         self.enrollment().users([item(revoked=True)])
@@ -310,6 +516,30 @@ class Lifecycle(unittest.TestCase):
         signing_key = str(uuid.uuid4())
         return signing_key
 
+    def test_normandy_never_admitted_to_initialized_rotation(self):
+        key = self.rotation_fixture()
+        self.enrollment().rotation(key)
+        hosts = [item(h) for h in sorted(c.AKASHA_HOSTS)]
+        users, _ = self.enrollment().users(hosts)
+        receipt = e.read_private(self.fd, "hosts.json")
+        binding = receipt["rotation"]["binding"]["body"]
+        self.assertEqual(binding["target"], receipt["rotation"]["application"]["pk"])
+        for user in users:
+            host = user["attributes"]["agent-host"]
+            admitted = binding["enabled"] and not binding["negate"] and binding["group"] in user["groups"]
+            self.assertEqual(admitted, host in c.ROTATION_HOSTS)
+            if host == "normandy":
+                self.assertEqual(user["groups"], [])
+                self.assertIsNone(user["attributes"]["rotation"])
+                self.assertEqual(user["attributes"]["services"], {})
+            else:
+                self.assertEqual(user["attributes"]["rotation"]["client_id"], "chaldea-host-rotation")
+        repeated = self.enrollment()
+        repeated.users(hosts)
+        self.assertFalse(repeated.changed)
+        with self.assertRaises(ValueError):
+            c.attributes("normandy", OWNER, {"group": binding["group"], "client_id": "chaldea-host-rotation"})
+
     def test_separate_provider_exact_scope_and_binding(self):
         signing_key = self.rotation_fixture()
         api = self.api
@@ -324,6 +554,9 @@ class Lifecycle(unittest.TestCase):
         self.assertNotIn("allowed_grant_types", provider)
         self.assertEqual(provider["grant_types"], ["client_credentials"])
         self.assertEqual(provider["access_token_validity"], "seconds=300")
+        # The rotation body matches the deployed receipt exactly; only the
+        # Akasha provider pins the extra OAuth2 fields.
+        self.assertNotIn("sub_mode", provider)
         binding = api.data["binding"][0]
         self.assertEqual(binding["group"], users[0]["attributes"]["rotation"]["group"])
         self.assertIsNone(binding["policy"])
@@ -334,6 +567,11 @@ class Lifecycle(unittest.TestCase):
         x.rotation(signing_key)
         self.assertFalse(x.changed)
         self.assertFalse(any(method != "GET" for method, _, _ in api.calls[before:]))
+        for field in ("grant_types", "access_token_validity", "signing_key", "client_type"):
+            value = api.data["provider"][0].pop(field)
+            with self.assertRaises(Exception):
+                self.enrollment().rotation(signing_key)
+            api.data["provider"][0][field] = value
         api.data["provider"][0]["property_mappings"].append("foreign")
         with self.assertRaises(Exception):
             self.enrollment().rotation(signing_key)

@@ -1,22 +1,16 @@
 ---
 # Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
-# Official host-v0.2.18 at source72021baf; downloaded archive matches GitHub digest.
-# Shared-root retention lists below are unchanged; the new runtime uses a separate root.
-# The ten shared-root members022/023/024/026/027/028/029/0210/0214/0215 remain.
-# Shared022 keeps eight explicit old023..0214 plus implicit newest prior0215.
-# The legacy runtime preservation list stays for rollback qualification.
-# Service018 uses the independent root/cache; selected + newest prior keeps017.
-# Collectors remain016, explicitly preserved in the runtime role-local list.
-# Require old members016/017, matching cache pairs, and actual newest prior017.
-# After installation require016/017/018, with newest prior017.
-# Fresh release AND matching cache membership, root ownership, no-symlink and
-# directory mtime evidence gate EACH call. STOP on another set or newest prior.
-# Never install missing old versions or alter target mtimes to satisfy retention.
+# Official host-v0.2.20 at abc9c90; verified GitHub release digest.
+# Independent root requires existing016/017/018 and matching cache pairs.
+# Keep collectors016 and explicit rollback018; newest prior018 is retained too.
+# After installation require016/017/018/020; newest prior018.
+# Require fresh root ownership, no-symlink and mtime evidence before every call.
+# Never install missing old versions or alter mtimes to satisfy retention.
 # The trust call uses its own list; never pass the runtime list as extra vars.
 akasha_trust_preserve_versions: [host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9, host-v0.2.10, host-v0.2.14]
 chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4, host-v0.2.6, host-v0.2.7, host-v0.2.8, host-v0.2.9, host-v0.2.10]
 # Independent service/collector root avoids collecting any of the ten old releases.
 akasha_runtime_release_root: /opt/chaldea-akasha-host/releases
 akasha_runtime_cache: /var/cache/chaldea-akasha-host
-akasha_host_version: host-v0.2.18
-akasha_host_sha256: 34d2fd21fc04cd946e6b3bf586d1e47aad22ae2b31f4cc7a797f4dbb28fc4b7c
+akasha_host_version: host-v0.2.20
+akasha_host_sha256: ed967a7d018b4b46e9578fe0b272da9977e04b8f2c81a1fbdfe11cfbaa6a9063

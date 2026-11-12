@@ -6,7 +6,12 @@ import re
 import uuid
 
 def rotation_provider_body(signing_key, authorization_flow, invalidation_flow, api_mapping):
-    """Authentik 2026.8.5 OAuth2ProviderSerializer writable/readable fields."""
+    """Authentik 2026.8.5 OAuth2ProviderSerializer writable/readable fields.
+
+    The deployed rotation receipt records exactly this body; extra pinned
+    fields would make the receipt comparison refuse. The Akasha provider pins
+    sub_mode, encryption_key, id-token claims and refresh lifetime itself.
+    """
     return {
         "name": "chaldea-host-rotation", "client_id": "chaldea-host-rotation",
         "client_type": "confidential", "grant_types": ["client_credentials"],
@@ -259,6 +264,19 @@ MATRIX = {
         }
     }
 }
+# Normandy has only Akasha identity admission; registry supplies its backup grant.
+MATRIX["normandy"] = {}
+AKASHA_HOSTS = frozenset({"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
+# Reviewed agent-host to verifier registry-host identities; never caller supplied.
+AKASHA_REGISTRY_HOSTS = {
+    "laptop": "omarchy-macbook-air-igor", "normandy": "omarchy-normandy",
+    "omarchy-pc": "omarchy-pc", "agent-a": "agent-a", "agent-b": "agent-b",
+    "homelab": "homelab",
+}
+ROTATION_HOSTS = frozenset({"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab"})
+AKASHA_AUDIENCE = "https://akasha.ryzhkov.dev"
+AKASHA_CLIENT = "chaldea-akasha"
+
 GROUPS = {
     "ov": "ov-http-a63e197f-machine-identities",
     "holonet": "chaldea-holonet-machine-identities",
@@ -289,7 +307,7 @@ def require(ok):
 
 def declaration(hosts, owner, now, tokens=None):
     require(str(uuid.UUID(owner)) == owner)
-    require(isinstance(hosts, list) and 1 <= len(hosts) <= 5)
+    require(isinstance(hosts, list) and 1 <= len(hosts) <= 6)
     seen = set()
     for item in hosts:
         require(set(item) == {"host", "generation", "expires", "revoked", "destination"})
@@ -309,6 +327,7 @@ def declaration(hosts, owner, now, tokens=None):
     return copy.deepcopy(hosts)
 
 def attributes(host, owner, rotation=None):
+    require(rotation is None or host in ROTATION_HOSTS)
     return {"agent-host-owner": owner, "agent-host": host, "services": copy.deepcopy(MATRIX[host]),
             "rotation": rotation, "goauthentik.io/user/token-maximum-lifetime": "days=60"}
 
