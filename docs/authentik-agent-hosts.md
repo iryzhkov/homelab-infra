@@ -54,12 +54,16 @@ authentik_agent_host_baselines:
     sha256: SHA256-OF-EXACT-ORIGINAL-EXPRESSION
     service: jocasta
     scope: jocasta.read
+    ownership:
+      receipt_dir: /home/igor/.cache/EXISTING-MANAGED-ENROLLMENT/receipt
   # Include every scope listed below, plus exactly one managed Jocasta policy:
   - kind: policy
     pk: EXACT-MANAGED-JOCASTA-POLICY-UUID
     sha256: SHA256-OF-EXACT-ORIGINAL-POLICY-EXPRESSION
     service: jocasta
     scope: ""
+    ownership:
+      receipt_dir: /home/igor/.cache/EXISTING-MANAGED-ENROLLMENT/receipt
 ```
 
 Required mapping baseline scopes are jocasta.read/write; all four ov resource
@@ -67,6 +71,13 @@ scopes plus the five ov.personal actions; holonet.read/curate/home/janitor/
 torrents/seedjoin; shizune.use; ha.read; homelab.read. Supply exact current
 mapping IDs and hashes from the existing owned applications, using protected
 operator discovery. Hash the expression bytes, without normalizing whitespace.
+Every non-Jocasta mapping also requires an ownership anchor:
+`ownership: {blueprint_pk: EXACT-UUID, content_sha256: EXACT-CONTENT-HASH}`.
+The stored blueprint must still be successful, match that hash and list both
+the exact mapping name and its resource group as present-owned objects.
+Jocasta anchors point to the original private managed enrollment receipt,
+which must have no pending operation and bind the exact object ID/body.
+Expression hashes alone never establish ownership.
 No provider detail or client secret is needed by this writer.
 
 The journal records API-returned IDs and original/rendered expressions.

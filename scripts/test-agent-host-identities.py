@@ -46,6 +46,8 @@ class API:
         return copy.deepcopy(self.data[kind])
     def request(self, method, path, body=None):
         self.calls.append((method, path, copy.deepcopy(body)))
+        if path.startswith("/managed/blueprints/"):
+            return copy.deepcopy(self.blueprint)
         kind = next(k for k, prefix in e.PATHS.items() if path.startswith(prefix))
         if method == "POST":
             self.n += 1
@@ -318,16 +320,36 @@ class Lifecycle(unittest.TestCase):
                   ["ov.personal." + a for a in c.MATRIX["laptop"]["ov"]["ov_personal"]["actions"]],
             "holonet": sorted({s for p in c.MATRIX["laptop"]["holonet"]["purposes"].values() for s in p["scopes"]})}
         baselines = []
+        prior = {"version": 1, "pending": None, "objects": {}}
+        objects = [["group", n, "present"] for n in c.GROUPS.values()]
+        prior_dir = self.temp.name + "/prior"
+        os.mkdir(prior_dir, 0o700)
         for service, values in scopes.items():
             for scope in values:
                 pk = str(len(baselines))
                 original = "return {}"
-                self.api.data["mapping"].append({"pk": pk, "scope_name": scope, "expression": original})
+                self.api.data["mapping"].append({"pk": pk, "name": scope, "scope_name": scope, "expression": original})
+                objects.append(["scopemapping", scope, "present"])
+                if service == "jocasta":
+                    prior["objects"][scope] = {"kind": "mapping", "pk": pk,
+                                              "body": self.api.data["mapping"][-1]}
                 baselines.append({"kind": "mapping", "pk": pk, "service": service, "scope": scope,
-                    "sha256": hashlib.sha256(original.encode()).hexdigest()})
+                    "sha256": hashlib.sha256(original.encode()).hexdigest(), "ownership": {"receipt_dir": prior_dir} if service == "jocasta" else {}})
         self.api.data["policy"].append({"pk": "policy", "expression": "return False"})
         baselines.append({"kind": "policy", "pk": "policy", "service": "jocasta", "scope": "",
-            "sha256": hashlib.sha256(b"return False").hexdigest()})
+            "sha256": hashlib.sha256(b"return False").hexdigest(), "ownership": {"receipt_dir": prior_dir}})
+        prior["objects"]["policy"] = {"kind": "policy", "pk": "policy", "body": self.api.data["policy"][0]}
+        prior_fd = os.open(prior_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            e.write_private(prior_fd, "receipt.json", prior)
+        finally:
+            os.close(prior_fd)
+        content = "# homelab-infra-owned: " + json.dumps({"version": 1, "objects": objects})
+        self.api.blueprint = {"status": "successful", "content": content}
+        for baseline in baselines:
+            if baseline["service"] != "jocasta":
+                baseline["ownership"] = {"blueprint_pk": OWNER,
+                    "content_sha256": hashlib.sha256(content.encode()).hexdigest()}
         x = self.enrollment(True)
         users, _ = x.users([item()])
         calls = len(self.api.calls)

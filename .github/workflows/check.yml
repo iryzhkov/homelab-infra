@@ -222,7 +222,9 @@ jobs:
       - name: Install the deployment templating version
         run: pip install --disable-pip-version-check ansible-core==2.19.13
       - name: Test closed host enrollment, revocation and credential generations
-        run: python3 -B scripts/test-agent-host-identities.py -v
+        run: |
+          mkdir -p "$HOME/tmp"
+          TMPDIR="$HOME/tmp" python3 -B scripts/test-agent-host-identities.py -v
       - name: Test machine identities against the isolated HTTPS fixture
         run: python3 -m unittest discover -s roles/authentik_machine_identities/tests -p test_machine_identities.py -v
 

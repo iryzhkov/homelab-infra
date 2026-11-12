@@ -275,11 +275,45 @@ class HostEnrollment:
             delivery.append(dict(item, revoked=False, token=token))
         return result, delivery
 
+
+    def baseline_owner(self, baseline, current, original):
+        anchor = baseline["ownership"]
+        if baseline["service"] == "jocasta":
+            require(set(anchor) == {"receipt_dir"})
+            fd = secure_dir(anchor["receipt_dir"])
+            try:
+                prior = read_private(fd, "receipt.json")
+            finally:
+                os.close(fd)
+            require(prior["version"] == 1 and prior["pending"] is None)
+            matches_ = [r for r in prior["objects"].values()
+                        if r["kind"] == baseline["kind"] and r["pk"] == baseline["pk"]]
+            require(len(matches_) == 1)
+            recorded = matches_[0]["body"]
+            require(recorded.get("expression") in (original, current["expression"]))
+            for field in ("name", "scope_name"):
+                if field in recorded:
+                    require(recorded[field] == current.get(field))
+        else:
+            require(set(anchor) == {"blueprint_pk", "content_sha256"})
+            require(str(uuid.UUID(anchor["blueprint_pk"])) == anchor["blueprint_pk"])
+            blueprint = self.api.request("GET", "/managed/blueprints/" + anchor["blueprint_pk"] + "/")
+            content = blueprint["content"]
+            require(blueprint["status"] == "successful"
+                    and hashlib.sha256(content.encode()).hexdigest() == anchor["content_sha256"])
+            prefix = "# homelab-infra-owned: "
+            markers = [line[len(prefix):] for line in content.splitlines() if line.startswith(prefix)]
+            require(len(markers) == 1)
+            record = json.loads(markers[0])
+            require(record["version"] == 1)
+            require(["scopemapping", current["name"], "present"] in record["objects"]
+                    and ["group", GROUPS[baseline["service"]], "present"] in record["objects"])
+
     def expressions(self, users, baselines):
         require(isinstance(baselines, list) and baselines)
         keys = set()
         for baseline in baselines:
-            require(set(baseline) == {"kind", "pk", "sha256", "service", "scope"})
+            require(set(baseline) == {"kind", "pk", "sha256", "service", "scope", "ownership"})
             kind, pk, service = baseline["kind"], baseline["pk"], baseline["service"]
             require(kind in ("mapping", "policy") and service in set().union(*(set(x) for x in MATRIX.values())))
             require(kind != "policy" or service == "jocasta")
@@ -297,6 +331,7 @@ class HostEnrollment:
             else:
                 original = current["expression"]
                 require(hashlib.sha256(original.encode()).hexdigest() == baseline["sha256"])
+            self.baseline_owner(baseline, current, original)
             if kind == "mapping":
                 require(current["scope_name"] == baseline["scope"])
                 desired = scope_expression(service, baseline["scope"], users, original)
