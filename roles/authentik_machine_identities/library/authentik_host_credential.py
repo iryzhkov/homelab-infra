@@ -132,7 +132,7 @@ def main():
         check = m.check_mode or p["inspect"]
         fd, changed = directory(p["home"], not check)
         if fd is None:
-            m.exit_json(changed=not p["revoked"], needs_key=not p["revoked"])
+            m.exit_json(changed=True, needs_key=not p["revoked"])
         if not check:
             lock = os.open("host.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=fd)
             st = os.fstat(lock)

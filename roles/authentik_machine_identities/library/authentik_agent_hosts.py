@@ -13,7 +13,7 @@ import urllib.request
 import uuid
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.agent_host_contract import (
-    MATRIX, GROUPS, PATH, attributes, declaration, managed_role_ok,
+    MATRIX, GROUPS, GROUP_IDS, PATH, attributes, declaration, managed_role_ok,
     require, scope_expression,
 )
 
@@ -198,6 +198,7 @@ class HostEnrollment:
             found = [g for g in self.rows["group"] if g["name"] == GROUPS[service]]
             require(len(found) == 1)
             g = found[0]
+            require(g["pk"] == GROUP_IDS[service])
             require(g.get("is_superuser") is False and g.get("roles") == [] and g.get("parents") == [])
             ids.append(g["pk"])
         return sorted(ids)

@@ -255,6 +255,13 @@ GROUPS = {
     "ha": "ha-http-a63e197f-machine-identities",
     "homelab": "homelab-observer-machine-identities",
 }
+GROUP_IDS = {
+    "ov": "dd5ff45b-de3d-4fab-b9cc-82329f9270bf",
+    "holonet": "e1c5af7f-13db-43f3-b3f1-0bab52afb792",
+    "shizune": "6f26e87e-ef44-446c-b6da-719fb8487f17",
+    "ha": "090097b8-18d5-4ef7-a326-2d373f883c31",
+    "homelab": "1b2ce6b9-ad3b-4da0-acb6-0ea305de7f08",
+}
 RESOURCES = {
     "jocasta": "https://jocasta.mcp.ryzhkov.dev/mcp",
     "ov": "https://ov.mcp.ryzhkov.dev/mcp",
@@ -363,6 +370,7 @@ def claims(service, grant, requested):
 
 
 def jocasta_policy(users, original):
+    public_users(users)
     expected = {str(u["pk"]): {"username": u["username"], "attributes": u["attributes"],
                               "groups": u["groups"]} for u in users
                 if "jocasta" in u["attributes"]["services"]}
@@ -387,7 +395,22 @@ if u and u.username.startswith('chaldea-') and u.path == 'homelab-infra/agent-ho
         and set(p.get('scope', '').split()) == {'jocasta.read', 'jocasta.write'})
 """ + original)
 
+def public_users(users):
+    require(isinstance(users, list))
+    seen = set()
+    for user in users:
+        host = user["attributes"]["agent-host"]
+        require(host in MATRIX and host not in seen)
+        seen.add(host)
+        require(user["username"] == "chaldea-" + host and type(user["pk"]) is int and user["pk"] > 0)
+        owner = user["attributes"]["agent-host-owner"]
+        require(str(uuid.UUID(owner)) == owner and user["attributes"] == attributes(host, owner))
+        require(isinstance(user["groups"], list) and len(user["groups"]) == len(set(user["groups"])))
+        require(set(user["groups"]) == {GROUP_IDS[s] for s in MATRIX[host] if s != "jocasta"})
+    return users
+
 def scope_expression(service, scope, users, original):
+    public_users(users)
     expected = {str(u["pk"]): {"username": u["username"], "attributes": u["attributes"],
                               "groups": u["groups"]} for u in users
                 if service in u["attributes"]["services"]}

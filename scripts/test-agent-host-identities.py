@@ -36,7 +36,7 @@ def item(host="laptop", revoked=False):
 class API:
     def __init__(self):
         self.data = {k: [] for k in e.PATHS}
-        self.data["group"] = [{"pk": s, "name": n, "roles": [], "parents": [], "is_superuser": False}
+        self.data["group"] = [{"pk": c.GROUP_IDS[s], "name": n, "roles": [], "parents": [], "is_superuser": False}
                               for s, n in c.GROUPS.items()]
         self.calls = []
         self.n = 100
@@ -131,7 +131,7 @@ class Contract(unittest.TestCase):
             "ov_namespaces": ["viking://resources"], "ov_actions": ["read"]})
 
     def test_emitted_mapping_elects_once_and_falls_back_only_for_old_accounts(self):
-        user = {"pk": 42, "username": "chaldea-laptop", "groups": ["ov", "holonet", "shizune"],
+        user = {"pk": 42, "username": "chaldea-laptop", "groups": [c.GROUP_IDS[s] for s in ("ov", "holonet", "shizune")],
                 "attributes": c.attributes("laptop", OWNER)}
         # Execute the actual generated expression, replacing only the ORM guard
         # with an instrumented predicate. Separate runtime guard tests below.
