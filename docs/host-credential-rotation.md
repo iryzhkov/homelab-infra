@@ -130,8 +130,14 @@ feed post --source feed --severity fail, without exception bodies or secrets.
    chaldea-host-rotation.service and systemctl --user list-timers.
    Run systemctl --user start chaldea-host-rotation.service. A token with more
    than 30 days left must remain unchanged.
-3. In protected administrative tooling, shorten agent-b's token expiry to less
-   than 30 days. Start the service. Check the generation increments once, file
+3. In protected administrative tooling, shorten the host's token expiry to less
+   than 30 days. Do not use a Token API PATCH carrying only `expires`: in
+   Authentik 2026.8.5 TokenSerializer.validate() fills the omitted user with the
+   requesting administrator and the omitted intent with `api`, then resets the
+   expiry (see docs/authentik-audit-2026-10-12.md). Record owner, intent,
+   expiring and expiry first, update only `expires` through the administrative
+   ORM in a transaction guarded on the exact token PK, identifier, owner and
+   intent, and read all four fields back before continuing. Start the service. Check the generation increments once, file
    modes are 0600, directory is 0700, replacement exchanges and old password
    fails. Repeat and confirm no further rotation.
 4. Using a disposable enrolled account and scratch HOME with the same code,
