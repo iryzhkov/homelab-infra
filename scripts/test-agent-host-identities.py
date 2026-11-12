@@ -223,6 +223,24 @@ class Contract(unittest.TestCase):
             role.users.append(43)
             self.assertFalse(check())
 
+
+    def test_ansible_module_packaging_without_network_or_host_writes(self):
+        import subprocess
+        library = str(ROOT / "roles/authentik_machine_identities/library")
+        cases = [
+            ("authentik_agent_hosts", {"hosts": [], "owner": OWNER, "receipt_dir": os.environ["HOME"],
+                "baselines": [], "api_token": "SYNTHETIC-invalid-token"}, "Host enrollment refused"),
+            ("authentik_host_credential", {"host": "laptop", "home": "/home/igor",
+                "hostname": "SYNTHETIC-NOT-THIS-HOST", "uid": 999999, "generation": 1,
+                "revoked": False}, "Host delivery refused"),
+        ]
+        for module, args, message in cases:
+            result = subprocess.run(["ansible", "localhost", "-i", "localhost,", "-c", "local",
+                "-M", library, "-m", module, "-a", json.dumps(args), "--check"],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stdout)
+
 class Lifecycle(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
