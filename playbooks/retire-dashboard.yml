@@ -36,7 +36,12 @@
 
     - name: Remove retired Normandy ingress firewall rules
       ansible.builtin.command:
-        argv: [ufw, --force, delete, allow, from, "{{ item }}", to, any, port, "7393", proto, tcp]
+        # Must repeat the exact creation spec from the retired role
+        # (allow in proto tcp from PEER to 192.168.70.234 port 7393); ufw only
+        # deletes a rule whose destination matches.
+        argv: [ufw, --force, delete, allow, in, proto, tcp, from, "{{ item }}", to, 192.168.70.234, port, "7393"]
+      environment:
+        LC_ALL: C
       loop: ["192.168.20.33", "192.168.20.4"]
       register: mission_control_cleanup_firewall
       changed_when: "'Rule deleted' in mission_control_cleanup_firewall.stdout"

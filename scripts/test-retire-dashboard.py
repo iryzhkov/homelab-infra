@@ -60,8 +60,11 @@ class RetirementTest(unittest.TestCase):
                     if "ansible.builtin.command" in task:
                         argv = task["ansible.builtin.command"]["argv"]
                         if argv[0] == "ufw":
-                            self.assertEqual(argv, ["ufw", "--force", "delete", "allow", "from",
-                                "{{ item }}", "to", "any", "port", "7393", "proto", "tcp"])
+                            # Exact creation spec, including the destination, or ufw
+                            # reports a non-existent rule and the rules stay.
+                            self.assertEqual(argv, ["ufw", "--force", "delete", "allow", "in",
+                                "proto", "tcp", "from", "{{ item }}", "to", "192.168.70.234",
+                                "port", "7393"])
                             self.assertEqual(task["loop"], ["192.168.20.33", "192.168.20.4"])
                             action = "ufw"
                         else:
