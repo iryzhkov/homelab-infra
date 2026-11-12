@@ -409,6 +409,10 @@
           ansible.builtin.include_tasks: qbit.yml
           when: web_mcp_operator.torrent_descriptor is defined
 
+        - name: Stage explicitly selected acquisition descriptors before the root ceiling
+          ansible.builtin.include_tasks: acquire.yml
+          when: web_mcp_operator.acquire_descriptor is defined
+
         - name: Install the root management ceiling from the validated endpoint config
           ansible.builtin.copy:
             content: "{{ web_mcp_operator.policy | to_nice_json }}\n"
