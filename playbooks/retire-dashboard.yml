@@ -1,0 +1,59 @@
+---
+# One-shot retirement on Normandy only. Archive /var/lib/mission-control-reader
+# and /var/cache/mission-control before applying. Keep config, accounts, runtime
+# releases and all state in place; no trust/publisher roles participate.
+- name: Retire the Normandy dashboard
+  hosts: omarchy-normandy
+  gather_facts: false
+  become: true
+  tags: [mission_control_cleanup]
+  vars:
+    mission_control_cleanup_units:
+      - mission-control-ingress.socket
+      - mission-control-ingress.service
+      - mission-control-reader.service
+      - mission-control.service
+  tasks:
+    - name: Inspect retired units including sockets
+      ansible.builtin.command:
+        argv: [systemctl, show, "{{ item }}", --property=LoadState, --value]
+      loop: "{{ mission_control_cleanup_units }}"
+      register: mission_control_cleanup_probe
+      changed_when: false
+      failed_when: mission_control_cleanup_probe.rc not in [0, 4]
+      check_mode: false
+
+    # Stop the socket first so it cannot reactivate the proxy during removal.
+    - name: Stop and disable existing retired units
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        state: stopped
+        enabled: false
+      loop: "{{ mission_control_cleanup_probe.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout | trim != 'not-found' and item.rc == 0
+
+    - name: Remove retired Normandy ingress firewall rules
+      ansible.builtin.command:
+        # Must repeat the exact creation spec from the retired role
+        # (allow in proto tcp from PEER to 192.168.70.234 port 7393); ufw only
+        # deletes a rule whose destination matches.
+        argv: [ufw, --force, delete, allow, in, proto, tcp, from, "{{ item }}", to, 192.168.70.234, port, "7393"]
+      environment:
+        LC_ALL: C
+      loop: ["192.168.20.33", "192.168.20.4"]
+      register: mission_control_cleanup_firewall
+      changed_when: "'Rule deleted' in mission_control_cleanup_firewall.stdout"
+
+    - name: Remove retired unit definitions
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop: "{{ mission_control_cleanup_units }}"
+      register: mission_control_cleanup_removed
+
+    - name: Reload systemd after removing definitions
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: mission_control_cleanup_removed is changed

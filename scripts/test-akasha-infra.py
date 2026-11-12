@@ -112,51 +112,6 @@ class SnapshotTest(unittest.TestCase):
                 self.assertEqual(proc.returncode, expected, name + proc.stdout + proc.stderr)
 
 
-    def test_mission_control_registry_requires_qualified_host_before_writes(self):
-        scratch = Path(os.environ["TMPDIR"]).resolve()
-        self.assertTrue(Path.home().resolve().is_relative_to(scratch))
-        source = yaml.safe_load((ROOT / "playbooks/akasha.yml").read_text())[0]
-        defaults = {}
-        for name in source["vars_files"]:
-            defaults.update(yaml.safe_load((ROOT / "playbooks" / name).read_text()))
-        cases = [(v, "enabled", 0 if v == "host-v0.2.4" else 2)
-                 for v in ["host-v0.2.3", "host-v0.2.4", "host-v0.2.1", "host-v0.2.2", "host-v0.2.5"]]
-        cases += [("host-v0.2.3", "disabled", 0), ("host-v0.2.3", "legacy", 0),
-                  ("host-v0.2.3", "base-only", 2)]
-        with tempfile.TemporaryDirectory(dir=scratch) as directory:
-            root = Path(directory)
-            for index, (version, mode, expected) in enumerate(cases):
-                for tagged in [False, True]:
-                    with self.subTest(version=version, mode=mode, runtime_tags=tagged):
-                        marker = root / f"effect-{index}-{tagged}"
-                        values = {**defaults, "akasha_host_version": version,
-                                  "akasha_enrollment_registry_enabled": mode not in ["disabled", "base-only"]}
-                        if mode == "legacy":
-                            values["akasha_enrollment_registry_additions"] = [
-                                row for row in defaults["akasha_enrollment_registry_additions"]
-                                if "mission_control_read_sources" not in row]
-                        if mode == "base-only":
-                            reader = next(row for row in defaults["akasha_enrollment_registry_additions"]
-                                          if "mission_control_read_sources" in row)
-                            values["akasha_registry"] = defaults["akasha_registry"] + [reader]
-                        play = root / "guard.yml"
-                        # Execute the real ordered pre-tasks; replace all host-writing roles
-                        # with one scratch sentinel selected by the same runtime tag.
-                        play.write_text(yaml.safe_dump([{
-                            "hosts": "localhost", "gather_facts": False, "vars": values,
-                            "pre_tasks": source["pre_tasks"], "tasks": [{
-                                "name": "Fixture artifact or configuration effect",
-                                "ansible.builtin.copy": {"content": "effect", "dest": str(marker), "mode": "0600"},
-                                "tags": ["runtime"]}]}]))
-                        proc = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local",
-                                               str(play), *(["--tags", "runtime"] if tagged else [])],
-                            env={**os.environ, "ANSIBLE_LOCAL_TEMP": str(root / "ansible")},
-                            capture_output=True, text=True)
-                        self.assertEqual(proc.returncode, expected, proc.stdout + proc.stderr)
-                        self.assertEqual(marker.exists(), expected == 0)
-                        if expected:
-                            self.assertNotIn("TASK [Compose explicitly enabled", proc.stdout)
-
     def test_config_only_reload_requires_activation(self):
         tasks = yaml.safe_load((ROOT / "roles/akasha/tasks/main.yml").read_text())
         config = next(t for t in tasks if t.get("name") == "Render Akasha public configuration with exact source registry and anchor")
@@ -426,16 +381,17 @@ class SnapshotTest(unittest.TestCase):
         for name in source["vars_files"]:
             defaults.update(yaml.safe_load((ROOT / "playbooks" / name).read_text()))
         self.assertIs(defaults["akasha_route_canary_enabled"], False)
-        packet = yaml.safe_load((ROOT / "vars/mission-control-homelab.yml").read_text())
-        self.assertIs(packet["akasha_route_canary_enabled"], True)
+        packet = yaml.safe_load((ROOT / "vars/akasha-homelab.yml").read_text())
+        for key in ("akasha_enrollment_registry_enabled", "akasha_pc_global_reader_enabled",
+                    "akasha_pc_quota_events_enabled", "akasha_route_canary_enabled"):
+            self.assertIs(packet[key], True)
         self.assertIs(packet["akasha_activate"], False)
-        # Retain the currently selected MC sources/Operations scope as operator inputs.
+        self.assertIs(packet["akasha_quota_laptop_publisher_enabled"], False)
+        self.assertIs(packet["akasha_quota_pc_reader_enabled"], False)
         values = defaults | packet | {
-            "mission_control_pc_permission": True, "mission_control_agent_b_permission": True,
-            "mission_control_laptop_permission": True, "mission_control_reader_operations_enabled": True,
-            "mission_control_laptop_qualified": True,
-            "mission_control_laptop_host_version": defaults["akasha_host_version"],
-            "mission_control_laptop_host_sha256": defaults["akasha_host_sha256"],
+            "akasha_route_host_qualified": True,
+            "akasha_route_host_version": defaults["akasha_host_version"],
+            "akasha_route_host_sha256": defaults["akasha_host_sha256"],
         }
         expected_routes = [
             dict(issuer="chaldea:homelab", source="route", host="homelab", source_id="route-homelab",
@@ -474,14 +430,8 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             baseline = json.loads(target.read_text())
             old = baseline["registry"]
-            self.assertEqual(len(old), 28)
+            self.assertEqual(len(old), 23)
             self.assertFalse(any(row["source"] == "route" for row in old))
-            reader = next(row for row in old if row["profile"] == "mission-control-reader")
-            self.assertEqual(reader["mission_control_read_sources"], [
-                "agent-a--mission-control", "omarchy-pc--mission-control",
-                "agent-b--mission-control", "omarchy-macbook-air-igor--mission-control"])
-            self.assertEqual(reader["kinds"], ["agent_status", "job_finished", "report"])
-            self.assertIs(reader["mission_control_operations_read"], True)
             before = target.read_bytes()
             for label, check, changed in (("CHECK", True, 1), ("REAL", False, 1), ("SECOND0", False, 0)):
                 proc = run({}, check=check)
@@ -492,16 +442,15 @@ class SnapshotTest(unittest.TestCase):
                 else:
                     config = json.loads(target.read_text())
                     self.assertEqual(config, baseline | {"registry": old + expected_routes})
-                    self.assertEqual(len({(r["issuer"], r["source"]) for r in config["registry"]}), 30)
-                print(f"FATE registry {label}: exact 28 preserved + H append / PC read rows")
+                    self.assertEqual(len({(r["issuer"], r["source"]) for r in config["registry"]}), 25)
+                print(f"FATE registry {label}: exact 23 preserved + H append / PC read rows")
 
             # The fixed comparator rejects any added reader capability, kind or tuple.
             config = json.loads(target.read_text())
             additions = config["registry"][len(defaults["akasha_registry"]):]
             render = root / "enrollment.json"
             command = [sys.executable, str(ROOT / "scripts/check-enrollment-registry.py"),
-                str(render), "--pc-reader", "--pc-quota", "--pc-mission-control",
-                "--agent-b-mission-control", "--laptop-mission-control", "--mission-control-operations"]
+                str(render), "--pc-reader", "--pc-quota"]
 
             def compare(rows, flag=True):
                 render.write_text(json.dumps({"registry": rows}))
@@ -521,7 +470,12 @@ class SnapshotTest(unittest.TestCase):
 
             # Execute the exact documented JSON-typed override against active canary output.
             rollback = '{"akasha_route_canary_enabled": false}'
-            self.assertIn("-e '" + rollback + "'", (ROOT / "docs/mission-control-hosted-packet.md").read_text())
+            procedure = (ROOT / "docs/akasha-homelab-packet.md").read_text()
+            self.assertIn("-e '" + rollback + "'", procedure)
+            self.assertIn("-e @vars/akasha-homelab.yml", procedure)
+            for key in ("akasha_route_host_qualified", "akasha_route_host_version",
+                        "akasha_route_host_sha256"):
+                self.assertIn("-e " + key + "=", procedure)
             for changed in (1, 0):
                 proc = run({}, extra_args=["-e", rollback])
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -533,33 +487,20 @@ class SnapshotTest(unittest.TestCase):
                 {"akasha_route_canary_enabled": "true"},
                 {"akasha_route_canary_enabled": "false"},
                 {"akasha_enrollment_registry_enabled": False},
-                {"mission_control_laptop_qualified": False},
-                {"mission_control_laptop_host_sha256": "b" * 64},
+                {"akasha_route_host_qualified": False},
+                {"akasha_route_host_sha256": "b" * 64},
                 {"akasha_host_version": "host-v0.2.14",
-                 "mission_control_laptop_host_version": "host-v0.2.14"},
+                 "akasha_route_host_version": "host-v0.2.14"},
             ]
             for overrides in refusals:
                 # Always-tagged gates must also protect the artifact-only phase.
                 for runtime in (False, True):
-                    # Isolate this gate so earlier MC checks cannot mask a missing canary clause.
+                    # Exercise the canary gate independently of registry composition.
                     proc = run(overrides, runtime=runtime, canary_only=True)
                     self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                     self.assertIn("FATE canary registrations require enrollment and the exact qualified", proc.stdout)
                     self.assertNotIn("TASK [Compose explicitly enabled", proc.stdout)
                     self.assertEqual(target.read_bytes(), before)
-
-    def test_mission_control_repair_packet_only_selects_existing_runtime(self):
-        packet_path = ROOT / "vars/mission-control-repair-runtime.yml"
-        self.assertEqual(yaml.safe_load(packet_path.read_text()), {
-            "mission_control_runtime_version": "client-v0.4.19",
-            "mission_control_runtime_sha256":
-                "fd5ebe83c26ae2fd72c7443581cf532d39479b4f84eaae177c3e3c0bf874f85a",
-        })
-        # Selection is explicit extra-vars, never an automatic source of authority.
-        play = (ROOT / "playbooks/mission-control.yml").read_text()
-        self.assertNotIn(packet_path.name, play)
-        self.assertIn('name: "{{ mission_control_fleet_checkout }}/roles/mission_control_runtime"', play)
-        self.assertIn('name: "{{ mission_control_fleet_checkout }}/roles/mission_control_reader"', play)
 
     def test_homelab_runtime_pin_is_role_local_and_keeps_trust_on_shared_release(self):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
@@ -690,9 +631,9 @@ class SnapshotTest(unittest.TestCase):
                             "fixture_versions": versions,
                             "fixture_cache_names": [v + suffix for v in versions
                                                     for suffix in (".tar.gz", ".json")],
-                            "mission_control_laptop_qualified": True,
-                            "mission_control_laptop_host_version": pin["akasha_host_version"],
-                            "mission_control_laptop_host_sha256": pin["akasha_host_sha256"]}
+                            "akasha_route_host_qualified": True,
+                            "akasha_route_host_version": pin["akasha_host_version"],
+                            "akasha_route_host_sha256": pin["akasha_host_sha256"]}
             play["vars_files"] = [str((ROOT / "playbooks" / path).resolve())
                                   for path in play["vars_files"]]
             play["post_tasks"] = [{"ansible.builtin.assert": {"that": [

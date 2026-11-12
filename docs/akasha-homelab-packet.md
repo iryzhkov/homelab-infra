@@ -1,4 +1,4 @@
-# Canonical Homelab and Normandy packet
+# Akasha homelab convergence packet
 
 The current Akasha repair selects official host-v0.2.17 at source fe6d5cfd4c4a6fdb2d8530e7c5f2f54894edc0ed:
 archive SHA-256 568aa56c1b28e013e6c3d7c5813795428943b6cc1c2ba78cfd17e8becf9e3747.
@@ -35,12 +35,12 @@ ownership, modes, links and persistent metadata. Require all old assets unchange
 after CHECK/REAL/SECOND0. Source fixtures prove installer scoping, not live state.
 
 The canonical play retains exact qualified-artifact, activation and permission
-guards. The existing mission_control_laptop_* names attest artifact compatibility;
-they do not enable a laptop or grant access. Preserve all existing registration,
+guards. The akasha_route_host_qualified, akasha_route_host_version and
+akasha_route_host_sha256 fields attest exact artifact compatibility. Preserve all existing registration,
 Operations, quota and route-canary selections exactly. The repair adds no
 registrations, grants, enrollment, keys, signer, profile or Node upgrade.
 
-Run with pinned Ansible2.19.14 and the existing private operator activation packet.
+Run on homelab with pinned Ansible2.19.14 and the existing private operator activation packet.
 LIVE below is its absolute private path. It must preserve the current public
 configuration and verified interface/backup flags, and must not override runtime
 roots, pins or preservation lists.
@@ -48,10 +48,10 @@ roots, pins or preservation lists.
 ```sh
 akasha_repair() {
   ansible-playbook -i inventory/hosts.yml playbooks/akasha.yml --limit homelab \
-    -e @"$LIVE" -e @vars/mission-control-homelab.yml \
-    -e mission_control_laptop_qualified=true \
-    -e mission_control_laptop_host_version=host-v0.2.17 \
-    -e mission_control_laptop_host_sha256=568aa56c1b28e013e6c3d7c5813795428943b6cc1c2ba78cfd17e8becf9e3747 \
+    -e @"$LIVE" -e @vars/akasha-homelab.yml \
+    -e akasha_route_host_qualified=true \
+    -e akasha_route_host_version=host-v0.2.17 \
+    -e akasha_route_host_sha256=568aa56c1b28e013e6c3d7c5813795428943b6cc1c2ba78cfd17e8becf9e3747 \
     -e akasha_activate=true "$@"
 }
 akasha_repair --tags runtime --check --diff
@@ -78,17 +78,16 @@ without running an installer or touching the shared root.
 Keep data/access state intact; root owns any subsequent source rollback.
 The existing separately authorized route-canary rollback still uses
 `-e '{"akasha_route_canary_enabled": false}'` to remove its two route rows while
-preserving the original28 registrations. This repair does not select that rollback.
+preserving the 23 remaining non-route registrations. Normal convergence preserves
+those 23 rows plus the two enabled FATE route rows, for 25 total; only the five
+retired dashboard rows are removed from the former 30-row live selection. This repair does not select that rollback.
 
 Collector rollout is owned by the fleet source play
 playbooks/akasha-collector-upgrade.yml. It binds each existing account/host and
 continues to select016 through the canonical artifact installer in the
 independent root. No collector rollout is needed for this service update. It preserves
-the helper, database, spool, lock and Mission Control snapshot inputs. Do not use
+the helper, database, spool and lock. Do not use
 the enrollment play as an upgrade shortcut.
 
-Normandy reader/web remains on the existing qualified client-v0.4.19 repair
-packet vars/mission-control-repair-runtime.yml. This task changes neither that
-runtime nor its permissions. Canonical installer drift checks remain required.
 Historical repair receipts remain in Jocasta:
 tooling/handoffs/akasha-final-runtime-acceptance-20261024.md.

@@ -335,8 +335,8 @@ jobs:
           OBJECTSTORE_TEST_HOME="$HOME" python3 -B scripts/test-garage-storage-preflight.py -v
           OBJECTSTORE_TEST_HOME="$HOME" python3 -B scripts/test-garage-storage-native.py -v
           python3 scripts/test-akasha-ingress.py -v
-          export MC_TEST_HOME="$HOME"
-          python3 scripts/test-mission-control.py -v
+          python3 scripts/test-retire-dashboard.py -v
+          ansible-playbook playbooks/retire-dashboard.yml --syntax-check
           ansible-playbook playbooks/akasha-ingress.yml --syntax-check
           python3 scripts/test-akasha-backup.py -v
           python3 scripts/test-trust-fetcher.py -v
