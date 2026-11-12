@@ -119,7 +119,7 @@ SERIES_CALLER_FIELDS = HISTORY_CALLER_FIELDS | {'series_libraries'}
 POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'})
 # Optional opt-ins: without history_users the policy permits no history read;
 # without series_libraries it permits no Series read or typed list state.
-POLICY_OPTIONAL = frozenset({'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause', 'janitor_custody', 'janitor_torrents', 'janitor_seed_join', 'janitor_acquire'})
+POLICY_OPTIONAL = frozenset({'subjects', 'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause', 'janitor_custody', 'janitor_torrents', 'janitor_seed_join', 'janitor_acquire'})
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
@@ -186,6 +186,12 @@ def validate_policy(value):
         opaque(caller['library'])
     except Refused:
         ok(False)
+    if 'subjects' in value:
+        subjects = value['subjects']
+        ok(type(subjects) is list and 1 <= len(subjects) <= 2 and
+           all(isinstance(s, str) and 1 <= len(s) <= 128 and
+               all(33 <= ord(c) <= 126 for c in s) for s in subjects) and
+           len(set(subjects)) == len(subjects) and caller['subject'] in subjects)
     recipients = value['recipients']
     ok(type(recipients) is dict and 1 <= len(recipients) <= MAX_RECIPIENTS)
     for recipient, path in recipients.items():
@@ -504,7 +510,8 @@ def authorize(call, policy):
     if call['operation'] in ACQUIRE_OPERATIONS:
         block = policy.get('janitor_acquire')
         check(block is not None, 'refused', 'Acquisition not enabled by policy')
-        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+        check(caller['subject'] == policy['caller']['subject'] and
+              all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == block['target_library'] and
               caller['policy_revision'] == block['revision'] and
@@ -522,7 +529,8 @@ def authorize(call, policy):
     if call['operation'] == SEED_JOIN_OPERATION:
         ceiling = policy.get('janitor_seed_join')
         check(ceiling is not None, 'refused', 'Seed join not enabled by policy')
-        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+        check(caller['subject'] in policy.get('subjects', [policy['caller']['subject']]) and
+              all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == ceiling['target_library'] and
               caller['policy_revision'] == ceiling['revision'] and
@@ -532,7 +540,8 @@ def authorize(call, policy):
     if call['operation'] == TORRENT_OPERATION:
         ceiling = policy.get('janitor_torrents')
         check(ceiling is not None, 'refused', 'Torrent read not enabled by policy')
-        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+        check(caller['subject'] in policy.get('subjects', [policy['caller']['subject']]) and
+              all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == ceiling['target_library'] and
               caller['policy_revision'] == ceiling['revision'] and
@@ -544,7 +553,8 @@ def authorize(call, policy):
         custody = policy.get('janitor_custody', {}).get('backends', {})
         check(ceiling is not None and call['request']['backend'] in custody,
               'refused', 'Custody read not enabled by policy')
-        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+        check(caller['subject'] in policy.get('subjects', [policy['caller']['subject']]) and
+              all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == ceiling['target_library'] and
               caller['policy_revision'] == ceiling['revision'] and
@@ -560,7 +570,8 @@ def authorize(call, policy):
             allowed = policy.get('janitor_importers_pause', {}).get('backends', {})
             check(call['request']['list_id'] in allowed.get(call['request']['backend'], []),
                   'refused', 'Importer pause target not enabled by policy')
-        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+        check(caller['subject'] in policy.get('subjects', [policy['caller']['subject']]) and
+              all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == ceiling['target_library'] and
               caller['policy_revision'] == ceiling['revision'] and
@@ -570,7 +581,8 @@ def authorize(call, policy):
     if call['operation'] == JANITOR_OPERATION:
         ceiling = policy.get('janitor')
         check(ceiling is not None, 'refused', 'Janitor read not enabled by policy')
-        check(all(caller[k] == policy['caller'][k] for k in ('issuer', 'subject', 'server')) and
+        check(caller['subject'] in policy.get('subjects', [policy['caller']['subject']]) and
+              all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == ceiling['target_library'] and
               caller['policy_revision'] == ceiling['revision'],
@@ -580,7 +592,8 @@ def authorize(call, policy):
               call['recipient'] in ceiling['protected_users'],
               'refused', 'Recipient outside janitor policy')
         return
-    check(all(caller[k] == policy['caller'][k] for k in PINNED_CALLER),
+    check(caller['subject'] in policy.get('subjects', [policy['caller']['subject']]) and
+          all(caller[k] == policy['caller'][k] for k in PINNED_CALLER if k != 'subject'),
           'refused', 'Caller outside management policy')
     check(call['recipient'] in policy['recipients'],
           'refused', 'Recipient outside management policy')

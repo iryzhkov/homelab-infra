@@ -2412,6 +2412,36 @@ class PackagingTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(module.stat().st_mode), 0o644)
 
 
+class CoexistencePackaging(unittest.TestCase):
+    def test_exact_subjects_and_purpose_contract(self):
+        config = operator_fixture()["config"]
+        operator = config["playlist_operator"]
+        subjects = [operator["subject"], "chaldea-laptop"]
+        operator["subjects"] = subjects
+        with self.assertRaises(AnsibleFilterError):
+            contract.holonet_purposes(config)
+        config["purpose_grants"] = {
+            "catalog": {"subjects": ["old-catalog", "chaldea-laptop", "chaldea-homelab"],
+                        "scopes": ["holonet.read"], "namespace": "movies-catalog",
+                        "libraries": ["3"], "catalog_users": [operator["catalog_user"]],
+                        "history_users": [], "target_users": [], "actions": ["catalog.read"]},
+            "writer": {"subjects": subjects, "scopes": ["holonet.read", "holonet.curate", "holonet.home"],
+                       "namespace": "managed-recommendations", "libraries": ["3"],
+                       "catalog_users": [operator["catalog_user"]], "history_users": [],
+                       "target_users": operator["recipients"], "actions": ["catalog.read"]}}
+        contract.holonet_purposes(config)
+        for field, value in (("scopes", ["holonet.read", "holonet.janitor"]),
+                             ("actions", ["catalog.read", "playlist.manage"]),
+                             ("libraries", ["3", "999"]), ("target_users", operator["recipients"])):
+            bad = copy.deepcopy(config)
+            bad["purpose_grants"]["catalog"][field] = value
+            with self.subTest(field=field), self.assertRaises(AnsibleFilterError):
+                contract.holonet_purposes(bad)
+        for invalid in ([], [operator["subject"]]*2, ["new"], subjects+["third"]):
+            with self.subTest(subjects=invalid), self.assertRaises(AnsibleFilterError):
+                contract.holonet_subjects(dict(operator, subjects=invalid))
+
+
 if __name__ == "__main__":
     expected = ROOT / ".cache/web-mcp-tests/home"
     assert Path(os.environ["HOME"]) == expected

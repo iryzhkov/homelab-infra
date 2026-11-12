@@ -1357,5 +1357,25 @@ class MovieMetadataTests(WorkerCase):
                 worker.validate_policy(dict(copy.deepcopy(good), history_users=value))
 
 
+class CoexistenceCase(unittest.TestCase):
+    def test_subject_sets_and_state_keys(self):
+        ceiling = policy()
+        old = ceiling['caller']['subject']
+        ceiling['subjects'] = [old, 'chaldea-laptop']
+        ceiling = worker.validate_policy(ceiling)
+        for subject in ceiling['subjects']:
+            request = frame(caller={'subject': subject})
+            worker.authorize(request, ceiling)
+        with self.assertRaises(worker.WireError):
+            worker.authorize(frame(caller={'subject': 'unknown'}), ceiling)
+        caller = frame()['caller']
+        before = worker.internal_key(caller, base.R, 'same-key')
+        caller['subject'] = 'chaldea-laptop'
+        self.assertNotEqual(before, worker.internal_key(caller, base.R, 'same-key'))
+        for subjects in ([], [old, old], [old, 'new', 'third'], ['new'], [None]):
+            with self.subTest(subjects=subjects), self.assertRaises(Refused):
+                worker.validate_policy(dict(ceiling, subjects=subjects))
+
+
 if __name__ == '__main__':
     unittest.main()

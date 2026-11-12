@@ -17,6 +17,7 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
+HOLONET_COEXISTENCE_SOURCE = "e97c15b0639f8505a429b1cccc12a7ae3d7d8f27"
 HOLONET_CATALOG_SOURCE_REVISIONS = frozenset({
     SERVICES["holonet"][1],
     "31817f70f7fed5900622bc7274c6a8a31275189b",
@@ -83,7 +84,7 @@ OPERATOR_MODULES = {
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
     "emby_operator_recommendations.py": "42969569034acde9ad26dff8db9472d8612122183d5bff4a2a79c1fbb59f053e",
-    "emby_operator_socket.py": "c034d7423d6dc3a6061f786b80c2fea6c4dbfb92dbc24fd6707768da2bda4b7c",
+    "emby_operator_socket.py": "d3b912f9558c906a5a4d6e0fdfdd85b1776801aad513b85bfff5a8c6e31acc4d",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
     "emby_operator_custody.py": "09bbaf1a9a59ca2a2df533d5fdae669cfda4170cd0d3ecb7250cdcde34c3b79c",
     "emby_operator_seed_join.py": "deb669172df79565cd17a8774c827604432936eb2404e86a49e59b8e68eb21d2",
@@ -296,7 +297,7 @@ def observer_config(config):
 def holonet_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
                   "credential_file", "policy_revision", "policy", "library_guids"),
-         ("recommendations", "playlist_operator", "playback", "janitor"))
+         ("recommendations", "playlist_operator", "playback", "janitor", "purpose_grants"))
     require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
             "HoloNet resource is fixed")
     trust(config, "resource", "issuer", ha_canonical_url)
@@ -331,6 +332,7 @@ def holonet_config(config):
         holonet_recommendations(config["recommendations"], libraries, users)
     if config.get("playlist_operator") is not None:
         holonet_playlist_operator(config, libraries, users)
+    holonet_purposes(config)
     if "janitor" in config:
         holonet_janitor(config)
     if playback:
@@ -375,13 +377,82 @@ def holonet_playback(config):
             "history users must be configured management recipients")
 
 
+def holonet_purposes(config):
+    operator = config.get("playlist_operator")
+    grants = config.get("purpose_grants")
+    require(grants is not None or not operator or len(holonet_subjects(operator)) < 2,
+            "coexistence requires exact purpose grants")
+    if grants is None:
+        return
+    scopes = {
+        "catalog": ["holonet.read"],
+        "writer": ["holonet.read", "holonet.curate", "holonet.home"],
+        "importer": ["holonet.read", "holonet.janitor"],
+        "torrent": ["holonet.read", "holonet.janitor", "holonet.torrents"],
+        "seed_join": ["holonet.read", "holonet.janitor", "holonet.seedjoin"],
+    }
+    require(isinstance(grants, dict) and 1 <= len(grants) <= 5 and set(grants) <= set(scopes),
+            "invalid purpose map")
+    for name, grant in grants.items():
+        keys(grant, ("subjects", "scopes", "namespace", "libraries", "catalog_users",
+                     "history_users", "target_users", "actions"))
+        for field in ("subjects", "scopes", "libraries", "catalog_users", "history_users", "target_users", "actions"):
+            require(isinstance(grant[field], list) and all(isinstance(v, str) for v in grant[field]),
+                    "purpose fields must be string lists")
+            unique(grant[field])
+        require(1 <= len(grant["subjects"]) <= 4 and set(grant["scopes"]) == set(scopes[name]),
+                "invalid purpose subjects or scopes")
+        for subject in grant["subjects"]:
+            match(subject, r"[!-~]{1,128}")
+        require(set(grant["catalog_users"]) <= set(config["policy"]["CatalogUsers"]) and
+                set(grant["history_users"]) <= set(config["policy"]["HistoryUsers"]),
+                "purpose exceeds user ceiling")
+        if name == "catalog":
+            require(grant["namespace"] == "movies-catalog" and grant["actions"] == ["catalog.read"]
+                    and not grant["history_users"] and not grant["target_users"]
+                    and set(grant["libraries"]) <= set(config["policy"]["Libraries"]),
+                    "catalog purpose must remain read only")
+        else:
+            require(operator is not None and set(grant["subjects"]) == holonet_subjects(operator),
+                    "purpose writer subjects differ")
+            if name == "writer":
+                allowed = {"catalog.read", "playlist.read", "playlist.manage", "object.share",
+                           "home.read", "home.manage", "object.delete", "history.read"}
+                require(grant["namespace"] == OPERATOR_NAMESPACE and set(grant["actions"]) <= allowed
+                        and set(grant["target_users"]) <= set(operator["recipients"])
+                        and set(grant["history_users"]) <= set(operator["recipients"])
+                        and set(grant["libraries"]) <= {operator["library"], *operator.get("series_libraries", {})},
+                        "writer purpose exceeds ceiling")
+            else:
+                actions = {"importer": {"janitor.importers.read", "janitor.custody.read"},
+                           "torrent": {"janitor.torrents.read"}, "seed_join": {"janitor.seed_join.read"}}
+                require(grant["namespace"] == "managed-janitor" and grant["libraries"] == [operator["library"]]
+                        and set(grant["actions"]) == actions[name]
+                        and not grant["history_users"] and not grant["target_users"],
+                        "janitor purpose exceeds read ceiling")
+
+
+def holonet_subjects(value):
+    subject = value["subject"]
+    subjects = value.get("subjects", [subject])
+    require(isinstance(subjects, list) and 1 <= len(subjects) <= 2,
+            "invalid bounded coexistence subjects")
+    require(all(isinstance(s, str) and 1 <= len(s) <= 128
+                and all(33 <= ord(c) <= 126 for c in s) for s in subjects),
+            "invalid bounded subject")
+    unique(subjects)
+    require(subject in subjects, "original subject must remain in coexistence set")
+    return set(subjects)
+
+
 def holonet_playlist_operator(config, libraries, users):
     """The Go playlist_operator rules plus homelab's fixed ceiling and cohort."""
     value = config["playlist_operator"]
     require("recommendations" not in config, "playlist_operator excludes legacy recommendations")
     keys(value, ("wire_version", "subject", "namespace", "library", "catalog_user", "recipients"),
-         ("series_libraries",))
+         ("series_libraries", "subjects",))
     integer(value["wire_version"], 1, 1)
+    holonet_subjects(value)
     subject = value["subject"]
     require(isinstance(subject, str) and 1 <= len(subject) <= 128
             and all(33 <= ord(c) <= 126 for c in subject), "invalid bounded subject")
@@ -470,12 +541,13 @@ def holonet_janitor(config):
     value = config["janitor"]
     operator = config.get("playlist_operator")
     keys(value, ("importer_source", "state_directory", "subject",
-                 "library", "protected_users", "recipients", "revision"), ("custody_source", "torrent_source", "torrent_resource_id", "seed_join_source",
+                 "library", "protected_users", "recipients", "revision"), ("subjects", "custody_source", "torrent_source", "torrent_resource_id", "seed_join_source",
                  "acquire_source", "acquire_series_libraries", "acquire_torrent_resource_id"))
     require(operator is not None and ("custody_source" not in value or value["custody_source"] == "arr_custody_v1")
             and value["importer_source"] == "arr_inventory_v2"
             and value["state_directory"] == "/var/lib/holonet/janitor"
             and value["subject"] == operator["subject"]
+            and holonet_subjects(value) == holonet_subjects(operator)
             and value["library"] == operator["library"]
             and value["revision"] == config["policy_revision"],
             "custody requires its fixed independent binding and journal")
@@ -687,11 +759,12 @@ def endpoint_contract(value):
                      and artifact["source_revision"] == HOLONET_ACQUIRE_SOURCE)
     if acquire_build:
         require(artifact["sha256"] == HOLONET_ACQUIRE_SHA256, "unaccepted acquisition binary")
-    seed_join_build = acquire_build or (service == "holonet" and HOLONET_SEED_JOIN_SOURCE is not None
+    coexistence_build = service == "holonet" and artifact["source_revision"] == HOLONET_COEXISTENCE_SOURCE
+    seed_join_build = coexistence_build or acquire_build or (service == "holonet" and HOLONET_SEED_JOIN_SOURCE is not None
                        and HOLONET_SEED_JOIN_CONTRACT is not None
                        and HOLONET_SEED_JOIN_SHA256 is not None
                        and artifact["source_revision"] == HOLONET_SEED_JOIN_SOURCE)
-    if seed_join_build and not acquire_build:
+    if seed_join_build and not acquire_build and not coexistence_build:
         require(artifact["sha256"] == HOLONET_SEED_JOIN_SHA256, "unaccepted seed join binary")
     torrent_build = seed_join_build or (
         service == "holonet" and artifact["source_revision"] == HOLONET_TORRENT_SOURCE)
@@ -712,7 +785,9 @@ def endpoint_contract(value):
     operator_build = playback_build or (
         service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
         and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
-    if acquire_build:
+    if coexistence_build:
+        contract = HOLONET_COEXISTENCE_SOURCE
+    elif acquire_build:
         contract = HOLONET_ACQUIRE_CONTRACT
     elif seed_join_build:
         contract = HOLONET_SEED_JOIN_CONTRACT
@@ -750,6 +825,8 @@ def endpoint_contract(value):
                 "writer configuration requires its exact reviewed artifact")
         require("janitor" not in value["config"] or custody_build,
                 "custody configuration requires its exact reviewed artifact")
+        require(not ("purpose_grants" in value["config"] or "subjects" in (value["config"].get("playlist_operator") or {}) or "subjects" in (value["config"].get("janitor") or {})) or coexistence_build,
+                "coexistence policy requires its exact compatible binary")
         expected = holonet_config(value["config"])
         custody_install_plan(value)
         torrent_install_plan(value)
@@ -842,6 +919,7 @@ def playlist_operator_plan(value):
             **({"janitor_custody": custody["custody"]} if custody and "custody" in custody else {}),
             **({"janitor_seed_join": seed_join["policy"]} if seed_join else {}),
             "version": 1, "enabled": True,
+            **({"subjects": operator["subjects"]} if "subjects" in operator else {}),
             "peer": {"uid": value["uid"], "gid": value["gid"]},
             "caller": {"issuer": config["issuer"], "subject": operator["subject"],
                        "namespace": operator["namespace"], "server": config["server_id"],
