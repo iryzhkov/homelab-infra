@@ -1,12 +1,14 @@
 ---
 # Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
-# Official host-v0.2.17, qualified at source fe6d5cfd, workflow41802158484.
+# Official host-v0.2.18 at source72021baf; downloaded archive matches GitHub digest.
 # Shared-root retention lists below are unchanged; the new runtime uses a separate root.
 # The ten shared-root members022/023/024/026/027/028/029/0210/0214/0215 remain.
 # Shared022 keeps eight explicit old023..0214 plus implicit newest prior0215.
 # The legacy runtime preservation list stays for rollback qualification.
-# Service017 uses the independent root/cache; selected + newest prior keeps016.
-# Collectors remain016. Refuse deployment unless016 is the actual newest prior.
+# Service018 uses the independent root/cache; selected + newest prior keeps017.
+# Collectors remain016, explicitly preserved in the runtime role-local list.
+# Require old members016/017, matching cache pairs, and actual newest prior017.
+# After installation require016/017/018, with newest prior017.
 # Fresh release AND matching cache membership, root ownership, no-symlink and
 # directory mtime evidence gate EACH call. STOP on another set or newest prior.
 # Never install missing old versions or alter target mtimes to satisfy retention.
@@ -16,5 +18,5 @@ chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4,
 # Independent service/collector root avoids collecting any of the ten old releases.
 akasha_runtime_release_root: /opt/chaldea-akasha-host/releases
 akasha_runtime_cache: /var/cache/chaldea-akasha-host
-akasha_host_version: host-v0.2.17
-akasha_host_sha256: 568aa56c1b28e013e6c3d7c5813795428943b6cc1c2ba78cfd17e8becf9e3747
+akasha_host_version: host-v0.2.18
+akasha_host_sha256: 34d2fd21fc04cd946e6b3bf586d1e47aad22ae2b31f4cc7a797f4dbb28fc4b7c
