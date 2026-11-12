@@ -183,7 +183,10 @@ host = registry_hosts[u.attributes['agent-host']]
 return {'aud': 'https://akasha.ryzhkov.dev',
         'preferred_username': 'chaldea-' + host, 'host': host,
         'run_id': u.username}
-""")
+""").rstrip()
+        # Authentik's serializers trim surrounding whitespace on save; send the
+        # stored form so the exact readback in mutate() and owned() matches.
+        guard = guard.rstrip()
         objects = self.receipt.setdefault("akasha", {})
         def owned(kind, body):
             prior = objects.get(kind)
