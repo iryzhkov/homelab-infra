@@ -37,6 +37,8 @@ class RetirementTest(unittest.TestCase):
                     for unit in units:
                         (unitdir / unit).write_text("installed")
                     route.write_text("installed")
+                firewall = root / "firewall"
+                firewall.write_text("192.168.20.33\n192.168.20.4\n" if present else "")
                 events = root / "events"
                 helper = root / "manager.py"
                 helper.write_text(
@@ -44,14 +46,28 @@ class RetirementTest(unittest.TestCase):
                     f"root=pathlib.Path({str(root)!r})\n"
                     "if sys.argv[1] == 'show':\n"
                     " print('loaded' if (root/'units'/sys.argv[2]).exists() else 'not-found')\n"
+                    "elif sys.argv[1] == 'ufw':\n"
+                    " path=root/'firewall'\n"
+                    " rows=path.read_text().splitlines()\n"
+                    " address=sys.argv[2]\n"
+                    " print('Rule deleted' if address in rows else 'Could not delete non-existent rule')\n"
+                    " path.write_text(''.join(row+'\\n' for row in rows if row != address))\n"
                     "else:\n"
                     " with (root/'events').open('a') as out: out.write(sys.argv[1]+'\\n')\n")
                 play = copy.deepcopy(original)
                 play.update(hosts="localhost", become=False)
                 for task in play["tasks"]:
                     if "ansible.builtin.command" in task:
+                        argv = task["ansible.builtin.command"]["argv"]
+                        if argv[0] == "ufw":
+                            self.assertEqual(argv, ["ufw", "--force", "delete", "allow", "from",
+                                "{{ item }}", "to", "any", "port", "7393", "proto", "tcp"])
+                            self.assertEqual(task["loop"], ["192.168.20.33", "192.168.20.4"])
+                            action = "ufw"
+                        else:
+                            action = "show"
                         task["ansible.builtin.command"]["argv"] = [
-                            sys.executable, str(helper), "show", "{{ item }}"]
+                            sys.executable, str(helper), action, "{{ item }}"]
                     if "ansible.builtin.systemd_service" in task:
                         args = task.pop("ansible.builtin.systemd_service")
                         if "name" in args:
@@ -81,8 +97,10 @@ class RetirementTest(unittest.TestCase):
                         self.assertEqual(route.exists(), present)
                         self.assertEqual(len(list(unitdir.iterdir())), len(units) if present else 0)
                         self.assertFalse(events.exists())
+                        self.assertEqual(bool(firewall.read_text()), present)
                     else:
                         self.assertFalse(route.exists())
+                        self.assertEqual(firewall.read_text(), "")
                         self.assertEqual(list(unitdir.iterdir()), [])
                     if not changed:
                         self.assertRegex(proc.stdout, r"changed=0\s")

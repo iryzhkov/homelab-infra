@@ -381,11 +381,14 @@ class SnapshotTest(unittest.TestCase):
         for name in source["vars_files"]:
             defaults.update(yaml.safe_load((ROOT / "playbooks" / name).read_text()))
         self.assertIs(defaults["akasha_route_canary_enabled"], False)
-        values = defaults | {
-            "akasha_enrollment_registry_enabled": True,
-            "akasha_pc_global_reader_enabled": True,
-            "akasha_pc_quota_events_enabled": True,
-            "akasha_route_canary_enabled": True,
+        packet = yaml.safe_load((ROOT / "vars/akasha-homelab.yml").read_text())
+        for key in ("akasha_enrollment_registry_enabled", "akasha_pc_global_reader_enabled",
+                    "akasha_pc_quota_events_enabled", "akasha_route_canary_enabled"):
+            self.assertIs(packet[key], True)
+        self.assertIs(packet["akasha_activate"], False)
+        self.assertIs(packet["akasha_quota_laptop_publisher_enabled"], False)
+        self.assertIs(packet["akasha_quota_pc_reader_enabled"], False)
+        values = defaults | packet | {
             "akasha_route_host_qualified": True,
             "akasha_route_host_version": defaults["akasha_host_version"],
             "akasha_route_host_sha256": defaults["akasha_host_sha256"],
@@ -467,6 +470,12 @@ class SnapshotTest(unittest.TestCase):
 
             # Execute the exact documented JSON-typed override against active canary output.
             rollback = '{"akasha_route_canary_enabled": false}'
+            procedure = (ROOT / "docs/akasha-homelab-packet.md").read_text()
+            self.assertIn("-e '" + rollback + "'", procedure)
+            self.assertIn("-e @vars/akasha-homelab.yml", procedure)
+            for key in ("akasha_route_host_qualified", "akasha_route_host_version",
+                        "akasha_route_host_sha256"):
+                self.assertIn("-e " + key + "=", procedure)
             for changed in (1, 0):
                 proc = run({}, extra_args=["-e", rollback])
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

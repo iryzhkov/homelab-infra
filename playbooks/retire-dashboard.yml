@@ -34,6 +34,13 @@
         label: "{{ item.item }}"
       when: item.stdout | trim != 'not-found' and item.rc == 0
 
+    - name: Remove retired Normandy ingress firewall rules
+      ansible.builtin.command:
+        argv: [ufw, --force, delete, allow, from, "{{ item }}", to, any, port, "7393", proto, tcp]
+      loop: ["192.168.20.33", "192.168.20.4"]
+      register: mission_control_cleanup_firewall
+      changed_when: "'Rule deleted' in mission_control_cleanup_firewall.stdout"
+
     - name: Remove retired unit definitions
       ansible.builtin.file:
         path: "/etc/systemd/system/{{ item }}"
