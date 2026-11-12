@@ -6,14 +6,17 @@ import re
 import uuid
 
 def rotation_provider_body(signing_key, authorization_flow, invalidation_flow, api_mapping):
-    """Authentik 2026.8.5 OAuth2ProviderSerializer writable/readable fields."""
+    """Authentik 2026.8.5 OAuth2ProviderSerializer writable/readable fields.
+
+    The deployed rotation receipt records exactly this body; extra pinned
+    fields would make the receipt comparison refuse. The Akasha provider pins
+    sub_mode, encryption_key, id-token claims and refresh lifetime itself.
+    """
     return {
         "name": "chaldea-host-rotation", "client_id": "chaldea-host-rotation",
         "client_type": "confidential", "grant_types": ["client_credentials"],
         "authorization_flow": authorization_flow, "invalidation_flow": invalidation_flow,
         "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
-        "sub_mode": "hashed_user_id", "encryption_key": None,
-        "include_claims_in_id_token": False, "refresh_token_validity": "seconds=0",
         "redirect_uris": [], "signing_key": signing_key, "property_mappings": [api_mapping],
     }
 

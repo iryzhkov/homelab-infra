@@ -554,10 +554,9 @@ class Lifecycle(unittest.TestCase):
         self.assertNotIn("allowed_grant_types", provider)
         self.assertEqual(provider["grant_types"], ["client_credentials"])
         self.assertEqual(provider["access_token_validity"], "seconds=300")
-        self.assertEqual(provider["sub_mode"], "hashed_user_id")
-        self.assertIsNone(provider["encryption_key"])
-        self.assertIs(provider["include_claims_in_id_token"], False)
-        self.assertEqual(provider["refresh_token_validity"], "seconds=0")
+        # The rotation body matches the deployed receipt exactly; only the
+        # Akasha provider pins the extra OAuth2 fields.
+        self.assertNotIn("sub_mode", provider)
         binding = api.data["binding"][0]
         self.assertEqual(binding["group"], users[0]["attributes"]["rotation"]["group"])
         self.assertIsNone(binding["policy"])
@@ -568,7 +567,7 @@ class Lifecycle(unittest.TestCase):
         x.rotation(signing_key)
         self.assertFalse(x.changed)
         self.assertFalse(any(method != "GET" for method, _, _ in api.calls[before:]))
-        for field in ("sub_mode", "encryption_key", "include_claims_in_id_token", "refresh_token_validity"):
+        for field in ("grant_types", "access_token_validity", "signing_key", "client_type"):
             value = api.data["provider"][0].pop(field)
             with self.assertRaises(Exception):
                 self.enrollment().rotation(signing_key)

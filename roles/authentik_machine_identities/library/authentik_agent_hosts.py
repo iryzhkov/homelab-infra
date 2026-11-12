@@ -757,6 +757,9 @@ def main():
         e.check = True
         saved_rows = copy.deepcopy(e.rows)
         e.recover_provider(rotation_key, akasha_key)
+        # Adopting a pending provider is not a resource change; keep it out of
+        # resource_changed so the isolation guard below only sees resources.
+        e.changed = False
         baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
                                       p.get("create_original_writer_read_mapping", False))
         e.resources(hosts, baselines)
