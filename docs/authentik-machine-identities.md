@@ -1,5 +1,16 @@
 # Authentik machine identities for Chaldea hosts
 
+Shizune's isolated prototype enrollment is declared in
+`playbooks/vars/authentik-shizune-identities.yml` and run only through
+`playbooks/authentik-shizune-identities.yml`. Its closed `shizune` service
+accepts exactly `shizune_owner: igor`, emits `shizune.use` with the fixed
+resource audience, and reuses the existing RS256 keypair. See
+[Shizune](shizune.md) for host bindings, CHECK/REAL/repeat commands,
+credential provisioning and the unresolved first-bootstrap discovery
+qualification. Existing-owned mode requires the independent successful
+provider/application/content baseline; first creation requires an explicit
+bootstrap switch and existing_owned_only=false after that qualification.
+
 The separate default-off shared Igor personal grant and future installer inputs
 are documented in [the personal contract](ov-personal-contract.md).
 

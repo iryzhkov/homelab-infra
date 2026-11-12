@@ -378,7 +378,7 @@ def main():
         "kind": {"type": "str", "choices": ["endpoint", "credential", "route", "binary", "ov-package", "ov-files",
                                              "ov-runtime", "playlist-operator", "torrent-auth"],
                  "required": True},
-        "service": {"type": "str", "choices": [*SERVICES, "ov-http", "jocasta"]},
+        "service": {"type": "str", "choices": [*SERVICES, "ov-http", "jocasta", "shizune"]},
         "uid": {"type": "int"},
         "gid": {"type": "int"},
         "sha256": {"type": "str"},
@@ -414,7 +414,7 @@ def main():
         elif p["kind"] == "ov-runtime":
             ov_runtime()
         else:
-            need(p["service"] in (*SERVICES, "ov-http", "jocasta") if p["kind"] == "route"
+            need(p["service"] in (*SERVICES, "ov-http", "jocasta", "shizune") if p["kind"] == "route"
                  else p["service"] in SERVICES)
             if p["kind"] in ("endpoint", "binary"):
                 import re

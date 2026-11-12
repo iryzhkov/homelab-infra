@@ -1,0 +1,15 @@
+{% set ingress = groups['edge_proxy'] | map('extract', hostvars) | selectattr('mesh_host', 'defined') | map(attribute='mesh_host') | join(',') %}
+[Unit]
+Description=Restrict Shizune backend to edge proxies
+Requires=docker.service nebula.service
+PartOf=docker.service
+After=docker.service nebula.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/shizune-firewall {{ mesh_host }} {{ ingress }}
+ExecReload=/usr/local/sbin/shizune-firewall {{ mesh_host }} {{ ingress }}
+
+[Install]
+WantedBy=multi-user.target

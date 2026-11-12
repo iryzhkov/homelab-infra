@@ -1,0 +1,8 @@
+---
+web_mcp_route_enabled: true
+web_mcp_route:
+  service: shizune
+  state: present
+  directory_uid: 1000
+  resource: https://shizune.mcp.ryzhkov.dev/mcp
+  upstream: http://10.42.0.2:1937

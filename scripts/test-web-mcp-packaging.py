@@ -643,6 +643,18 @@ class PackagingTest(unittest.TestCase):
                 self.assertIn("--listen 192.168.70.240:8787", unit)
                 self.assertIn("--config /etc/" + service + "/config.json", unit)
 
+    def test_shizune_route_acceptance(self):
+        selected = {"service": "shizune", "state": "present", "directory_uid": 1000,
+                    "resource": "https://shizune.mcp.ryzhkov.dev/mcp", "upstream": "http://10.42.0.2:1937"}
+        edge = contract.route_contract(selected)
+        self.assertEqual(edge["host"], "shizune.mcp.ryzhkov.dev")
+        self.assertNotIn("host_rewrite", edge)
+        for key, value in (("resource", "https://foreign.example/mcp"),
+                           ("upstream", "http://10.42.0.2:1935")):
+            with self.assertRaises(AnsibleFilterError):
+                contract.route_contract(dict(selected, **{key: value}))
+        self.assertEqual(contract.route_contract({"service": "shizune", "state": "absent", "directory_uid": 1000})["state"], "absent")
+
     def test_jocasta_route_is_fixed_and_only_it_rewrites_host(self):
         # trim_blocks matches Ansible's template rendering.
         env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True,
@@ -1664,6 +1676,14 @@ class PackagingTest(unittest.TestCase):
             jocasta = dict(jocasta_route(), directory_uid=os.getuid())
             checked_run(command + ["-e", json.dumps({"web_mcp_route": jocasta})], env=env,
                         check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            shizune = {"service": "shizune", "state": "present", "directory_uid": os.getuid(),
+                       "resource": "https://shizune.mcp.ryzhkov.dev/mcp", "upstream": "http://10.42.0.2:1937"}
+            checked_run(command + ["-e", json.dumps({"web_mcp_route": shizune})], env=env,
+                        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            shizune_file = (edge / "web-mcp-shizune.yml").read_text()
+            self.assertIn("Cf-Ray", shizune_file)
+            router = yaml.safe_load(shizune_file)["http"]["routers"]["web-mcp-shizune"]
+            self.assertEqual(router["tls"]["domains"], [{"main": "shizune.mcp.ryzhkov.dev"}])
             jocasta_file = (edge / "web-mcp-jocasta.yml").read_text()
             self.assertTrue(jocasta_file.startswith("# Managed by homelab-infra web-mcp jocasta\n"))
             self.assertEqual(yaml.safe_load(jocasta_file)["http"]["middlewares"], {"web-mcp-jocasta-host": {

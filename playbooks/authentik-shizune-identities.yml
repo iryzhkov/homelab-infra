@@ -1,0 +1,57 @@
+---
+# Isolated enrollment only. See docs/shizune.md for bootstrap qualification.
+- name: Enrol only the Shizune machine identities
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
+  vars_files:
+    - vars/authentik-shizune-identities.yml
+  pre_tasks:
+    - name: Require explicit apply outside check mode
+      ansible.builtin.assert:
+        that: ansible_check_mode or (shizune_identities_apply | default(false) | bool)
+        quiet: true
+
+    - name: Preserve the closed Shizune declaration and destination bindings
+      vars:
+        expected: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/vars/authentik-shizune-identities.yml') | from_yaml }}"
+      ansible.builtin.assert:
+        that:
+          - authentik_machine_identities_enabled | bool
+          - authentik_machine_services == expected.authentik_machine_services
+          - authentik_machine_identities == expected.authentik_machine_identities
+          - authentik_machine_identity_destinations == expected.authentik_machine_identity_destinations
+          - authentik_machine_identities_blueprint_name == expected.authentik_machine_identities_blueprint_name
+          - >-
+            (authentik_machine_identity_existing_owned_only | bool) ==
+            (not (shizune_identities_bootstrap | default(false) | bool))
+        fail_msg: Use the fixed Shizune declaration; bootstrap needs its explicit switch and existing_owned_only=false.
+        quiet: true
+
+    - name: Load only the controller API credential
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/authentik-api.sops.yaml"
+        name: authentik_api
+      no_log: true
+      when: not ansible_check_mode or shizune_identities_online_check | default(false) | bool
+
+    - name: Describe the existing Authentik API
+      ansible.builtin.set_fact:
+        authentik_url: "{{ authentik_api.authentik_api_url }}"
+        authentik_headers:
+          Authorization: "Bearer {{ authentik_api.authentik_api_token }}"
+      no_log: true
+      when: not ansible_check_mode or shizune_identities_online_check | default(false) | bool
+
+    - name: Refuse another Authentik origin
+      ansible.builtin.assert:
+        that: authentik_url | regex_replace('/api/v3/?$', '') == 'https://auth.ryzhkov.dev'
+        quiet: true
+      no_log: true
+      when: not ansible_check_mode or shizune_identities_online_check | default(false) | bool
+  tasks:
+    - name: Enrol through maintained ownership checks and private bound delivery
+      ansible.builtin.include_role:
+        name: authentik_machine_identities

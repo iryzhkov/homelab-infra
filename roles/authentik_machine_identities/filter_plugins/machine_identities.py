@@ -552,7 +552,16 @@ def _bounded_expression(access, service, scope=None):
     return "\n".join(lines)
 
 
+def _shizune_grant(item, name):
+    if item["shizune_owner"] != "igor":
+        _refuse(name + " shizune_owner must be igor")
+    grant = {"shizune_owner": "igor"}
+    return grant, {"chaldea_shizune": grant}
+
+
 SERVICES = {
+    "shizune": {"name": "shizune", "account_keys": {"shizune_owner"}, "scope": "shizune.use",
+                "resource": "https://shizune.mcp.ryzhkov.dev/mcp", "grant": _shizune_grant},
     "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS,
                 "optional_account_keys": {"holonet_janitor", "holonet_torrents", "holonet_seed_join", "holonet_acquire"}, "scope": "holonet.read",
                 "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},

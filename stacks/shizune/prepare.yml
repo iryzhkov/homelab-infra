@@ -1,0 +1,96 @@
+---
+- name: Require a published immutable Shizune commit and digest
+  ansible.builtin.assert:
+    that:
+      - stack.env_extra.SHIZUNE_IMAGE is match('^git[.]ryzhkov[.]dev/igor/shizune:[0-9a-f]{40}@sha256:[0-9a-f]{64}$')
+      - stack.env_extra.HOST_IP == '10.42.0.2'
+    fail_msg: Set shizune_image to git.ryzhkov.dev/igor/shizune:<full-commit>@sha256:<digest> before deploying.
+
+- name: Prepare private Shizune storage
+  ansible.builtin.file:
+    path: "{{ stack_dir }}/{{ item }}"
+    state: directory
+    owner: "10001"
+    group: "10001"
+    mode: "0700"
+  become: true
+  loop: [data, data/actual, data/google, secrets]
+
+- name: Inspect optional protected controller credential sources
+  ansible.builtin.stat:
+    path: "{{ item.source }}"
+    follow: false
+  delegate_to: localhost
+  become: false
+  loop:
+    - {source: "{{ shizune_actual_token_source | default('') }}", dest: actual-session-token}
+    - {source: "{{ shizune_google_client_source | default('') }}", dest: google-oauth-client.json}
+  when: item.source | length > 0
+  register: shizune_credential_sources
+  no_log: true
+
+- name: Require private regular credential sources when present
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+      - item.stat.mode == '0600'
+      - item.stat.nlink == 1
+    quiet: true
+  loop: "{{ shizune_credential_sources.results }}"
+  when: item.stat.exists | default(false)
+  no_log: true
+
+- name: Install available backend credentials
+  ansible.builtin.copy:
+    src: "{{ item.item.source }}"
+    dest: "{{ stack_dir }}/secrets/{{ item.item.dest }}"
+    owner: "10001"
+    group: "10001"
+    mode: "0600"
+  become: true
+  loop: "{{ shizune_credential_sources.results }}"
+  when: item.stat.exists | default(false)
+  no_log: true
+  diff: false
+
+- name: Explain skipped optional credentials
+  ansible.builtin.debug:
+    msg: "No controller source for {{ item.item.dest }}; skipping provisioning and preserving any installed file."
+  loop: "{{ shizune_credential_sources.results }}"
+  loop_control:
+    label: "{{ item.item.dest }}"
+  when: not (item.stat.exists | default(false))
+
+- name: Install Shizune firewall
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../stacks/shizune/files/shizune-firewall"
+    dest: /usr/local/sbin/shizune-firewall
+    mode: "0755"
+  become: true
+  register: shizune_firewall_script
+
+- name: Install mesh-ordered Shizune units
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../stacks/shizune/templates/{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  become: true
+  loop: [shizune-firewall.service, shizune-container.service]
+  register: shizune_units
+
+- name: Restrict backend before publishing
+  ansible.builtin.systemd_service:
+    name: shizune-firewall.service
+    state: "{{ 'restarted' if shizune_units is changed or shizune_firewall_script is changed else 'started' }}"
+    enabled: true
+    daemon_reload: true
+  become: true
+  when: not ansible_check_mode
+
+- name: Enable mesh-ordered startup
+  ansible.builtin.systemd_service:
+    name: shizune-container.service
+    enabled: true
+  become: true
+  when: not ansible_check_mode

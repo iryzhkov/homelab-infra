@@ -1,4 +1,7 @@
 ---
+# Shizune gateway built on homelab from iryzhkov/shizune 3ae4632 (merged in PR #1)
+# and pushed to the Forgejo registry; see docs/shizune.md.
+shizune_image: git.ryzhkov.dev/igor/shizune:3ae46323fea53b69390ed987f32f01f5442f7daf@sha256:a060953cbefb98864978b7fd27cd34ce556fb3c3c6395b2e29b0238999d8a8c8
 observability_host_capabilities:
   - {capability: igpu, mode: passthrough}
 observability_gpu_owners:
@@ -221,6 +224,19 @@ host_stacks:
         monitor_url: https://jocasta.ryzhkov.dev/healthz
         health_check:
           path: /healthz
+  - name: shizune
+    prepare_tasks: prepare.yml
+    pull: missing
+    env_extra:
+      HOST_IP: "{{ mesh_host }}"
+      SHIZUNE_IMAGE: "{{ shizune_image }}"
+      SHIZUNE_RESOURCE: https://shizune.mcp.ryzhkov.dev/mcp
+      SHIZUNE_ISSUER: https://auth.ryzhkov.dev/application/o/shizune-mcp/
+      SHIZUNE_JWKS_URL: https://auth.ryzhkov.dev/application/o/shizune-mcp/jwks/
+      SHIZUNE_CLIENT_ID: shizune-mcp-machine
+      SHIZUNE_OWNER: igor
+      ACTUAL_SERVER_URL: http://192.168.70.223:5006
+      ACTUAL_BUDGET_SYNC_ID: 14006e95-593a-4d01-ae63-f6638bb0ea9a
   - name: kiwix
     routes:
       - host: wiki.ryzhkov.dev

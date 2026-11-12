@@ -77,6 +77,7 @@ jobs:
           test "$HOME" = "$PWD/.cache/jocasta-mcp-tests/home"
           mkdir -p "$TMPDIR"
           python3 scripts/test-jocasta-mcp-config.py
+          SHIZUNE_TEST_HOME="$HOME" python3 scripts/test-shizune-config.py
       - name: Install the Compose module for OV source syntax checks
         # Exact commit of the verified upstream 5.4.0 tag; avoids its broken Galaxy artifact.
         run: ansible-galaxy collection install git+https://github.com/ansible-collections/community.docker.git,6be1a09bebd60cb5d07e4f4753b2f393e44fe0e2
@@ -232,6 +233,7 @@ jobs:
         suite:
           - test_service_profiles.py
           - test_ov_http_identities.py
+          - test_shizune_identities.py
           - test_ov_full_rollback.py
           - test_holonet_catalog_identities.py
           - test_holonet_writer_grants.py
@@ -255,6 +257,7 @@ jobs:
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME" "$TMPDIR"
           pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0
+          ansible-galaxy collection install community.sops:2.5.1
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
             -s roles/authentik_machine_identities/tests -p test_holonet_catalog_identities.py \
             -k test_source_declaration_is_exact_isolated_and_unbound -v
