@@ -443,9 +443,10 @@ Neither online check nor enrollment is authorized by this source change.
 A second real run is intended to change nothing. The ownership, refusal and
 recovery rules above apply unchanged: never replay an uncertain apply.
 
-All six declarations expire at 2026-11-23T00:00:00Z. Manual rotation
-remains due before November 22; this change preserves all three laptop
-accounts at generation 1, their `tooling` grants, expiry and credential paths.
+All six declarations expire at 2027-02-15T00:00:00Z. On 2026-11-12 their
+expiry was extended from 2026-11-23 at generation 1, so the existing keys,
+`tooling` grants and credential paths are unchanged. Renew again before
+2027-02-14, because the role refuses to run within one day of expiry.
 An expiry extension preserves the existing key; a higher generation rotates
 it. No extension or rotation is performed here.
 

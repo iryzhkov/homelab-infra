@@ -48,35 +48,35 @@ authentik_machine_identities:
     profile: jocasta-tooling-codex
     project: tooling
     generation: 1
-    expires: "2026-11-23T00:00:00Z"
+    expires: "2027-02-15T00:00:00Z"
     state: present
   - host: laptop
     profile: jocasta-tooling-claude
     project: tooling
     generation: 1
-    expires: "2026-11-23T00:00:00Z"
+    expires: "2027-02-15T00:00:00Z"
     state: present
   - host: laptop
     profile: jocasta-tooling-opencode
     project: tooling
     generation: 1
-    expires: "2026-11-23T00:00:00Z"
+    expires: "2027-02-15T00:00:00Z"
     state: present
   - host: agent-a
     profile: jocasta-tooling-opencode
     project: tooling
     generation: 1
-    expires: "2026-11-23T00:00:00Z"
+    expires: "2027-02-15T00:00:00Z"
     state: present
   - host: agent-b
     profile: jocasta-tooling-opencode
     project: tooling
     generation: 1
-    expires: "2026-11-23T00:00:00Z"
+    expires: "2027-02-15T00:00:00Z"
     state: present
   - host: omarchy-pc
     profile: jocasta-tooling-opencode
     project: tooling
     generation: 1
-    expires: "2026-11-23T00:00:00Z"
+    expires: "2027-02-15T00:00:00Z"
     state: present

@@ -869,7 +869,7 @@ class ToolingDeclarationTest(unittest.TestCase):
                  ("agent-b", "jocasta-tooling-opencode"), ("omarchy-pc", "jocasta-tooling-opencode")]
         items = config["authentik_machine_identities"]
         self.assertEqual(items, [{"host": host, "profile": profile, "project": "tooling",
-                                 "generation": 1, "expires": "2026-11-23T00:00:00Z", "state": "present"}
+                                 "generation": 1, "expires": "2027-02-15T00:00:00Z", "state": "present"}
                                 for host, profile in pairs])
         self.assertIs(config["authentik_machine_identity_existing_owned_only"], True)
         self.assertNotIn("authentik_machine_identity_existing_provider_baseline", config)
