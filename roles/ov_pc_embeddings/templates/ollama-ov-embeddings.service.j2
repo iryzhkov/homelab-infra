@@ -1,0 +1,26 @@
+# Managed by homelab-infra roles/ov_pc_embeddings. OpenViking embedding pool member.
+[Unit]
+Description=Ollama embedding runtime for OpenViking (f16 KV cache, port {{ ov_pc_embeddings_port }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ollama
+Group=ollama
+ExecStart={{ ov_pc_embeddings_binary }} serve
+Environment=HOME={{ ov_pc_embeddings_root }}
+Environment=OLLAMA_MODELS={{ ov_pc_embeddings_root }}
+Environment=OLLAMA_HOST=0.0.0.0:{{ ov_pc_embeddings_port }}
+Environment=OLLAMA_KV_CACHE_TYPE=f16
+Environment=OLLAMA_FLASH_ATTENTION=0
+Environment=OLLAMA_CONTEXT_LENGTH=4096
+Environment=OLLAMA_NUM_PARALLEL={{ ov_pc_embeddings_parallel }}
+Environment=OLLAMA_MAX_QUEUE={{ ov_pc_embeddings_parallel * 2 }}
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_KEEP_ALIVE=30m
+Environment=OLLAMA_NOPRUNE=1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

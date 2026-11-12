@@ -1,0 +1,81 @@
+---
+- name: Require the exact host
+  ansible.builtin.assert:
+    that: inventory_hostname == 'gaming-pc'
+    quiet: true
+
+- name: Read the installed Ollama version
+  ansible.builtin.command:
+    argv: ["{{ ov_pc_embeddings_binary }}", --version]
+  register: ov_pc_embeddings_binary_version
+  changed_when: false
+  check_mode: false
+
+- name: Require the measured runtime version
+  ansible.builtin.assert:
+    that: ("version is " ~ ov_pc_embeddings_version) in ov_pc_embeddings_binary_version.stdout
+    fail_msg: The PC Ollama binary changed. Re-measure the canary before using another version.
+    quiet: true
+
+- name: Load the shared matched embedding recipe
+  ansible.builtin.set_fact:
+    ov_recipe: "{{ (lookup('file', swarm_stack_src ~ '/recipes/models.json') | from_json).embeddings }}"
+
+- name: Install only the pinned embedding model into the dedicated store
+  ansible.builtin.include_tasks:
+    file: "{{ swarm_stack_src }}/model-prepare.yml"
+  vars:
+    ov_model_root: "{{ ov_pc_embeddings_root }}"
+    ov_model_owner: ollama
+    ov_model_host: gaming-pc
+    ov_model_source: "{{ ov_pc_embeddings_model_source }}"
+
+- name: Install the canary used to verify the runtime
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/recipes/embedding-canary.json"
+    dest: /etc/ollama-ov-embeddings-canary.json
+    owner: root
+    group: root
+    mode: "0444"
+
+- name: Install the dedicated service
+  ansible.builtin.template:
+    src: ollama-ov-embeddings.service.j2
+    dest: /etc/systemd/system/ollama-ov-embeddings.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: ov_pc_embeddings_unit
+
+- name: Start the dedicated service and restart it when its unit changes
+  ansible.builtin.systemd_service:
+    name: ollama-ov-embeddings
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if ov_pc_embeddings_unit.changed else 'started' }}"
+  when: not ansible_check_mode
+
+- name: Allow only the adapter host to reach the runtime
+  ansible.builtin.command:
+    argv: [ufw, allow, proto, tcp, from, "{{ ov_pc_embeddings_client }}", to, any, port,
+           "{{ ov_pc_embeddings_port }}", comment, OpenViking embeddings from homelab adapter]
+  register: ov_pc_embeddings_ufw
+  changed_when: "'Skipping' not in ov_pc_embeddings_ufw.stdout"
+  when: not ansible_check_mode
+
+- name: Wait for the runtime API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ov_pc_embeddings_port }}/api/version"
+    timeout: 3
+  register: ov_pc_embeddings_ready
+  retries: 15
+  delay: 2
+  until: ov_pc_embeddings_ready.status == 200
+  when: not ansible_check_mode
+
+- name: Require the runtime to reproduce the CPU canary vector
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/verify-canary.py {{ ov_pc_embeddings_port }} /etc/ollama-ov-embeddings-canary.json"
+    executable: /usr/bin/python3
+  changed_when: false
+  when: not ansible_check_mode

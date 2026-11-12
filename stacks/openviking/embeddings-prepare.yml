@@ -58,6 +58,16 @@
   delegate_to: homelab
   become: true
 
+- name: Install the pinned embedding canary checked against every pool runtime
+  ansible.builtin.copy:
+    src: "{{ swarm_stack_src }}/recipes/embedding-canary.json"
+    dest: "{{ swarm_state_root }}/openviking/inference/cpu-tokenizer/embedding-canary.json"
+    owner: root
+    group: root
+    mode: "0444"
+  delegate_to: homelab
+  become: true
+
 - name: Add adapter revision and path to the stack interpolation environment
   ansible.builtin.set_fact:
     swarm_stack_env: >-

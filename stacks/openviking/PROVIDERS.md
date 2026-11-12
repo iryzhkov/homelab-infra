@@ -167,14 +167,15 @@ Root supplied this evidence from the fresh accepted offline migration:
 
 * PC generation: `http://inference-adapter:8000/pc/v1/chat/completions`, `local:latest`.
 * CPU generation: `http://inference-adapter:8000/cpu/v1/chat/completions`, `ov-gen-4k`.
-* Embeddings: overlay `http://embedding-adapter:8000/cpu/v1/embeddings`, Normandy CPU
-  only. There is no PC embedding route in production.
+* Embeddings: overlay `http://embedding-adapter:8000/cpu/v1/embeddings`. The route keeps
+  its historical name; behind it the adapter spreads requests over the embedding pool
+  described in "Embedding pool" below.
 * `http://embedding-adapter:8000/pc/v1/embeddings` answers HTTP 410
   `embedding_route_disabled` without contacting the PC, so a stale configuration
-  fails clearly instead of mixing vectors (see "Why embeddings are CPU only").
+  naming the PC's main Ollama service fails clearly instead of mixing vectors.
 * `embedding-adapter` remains a network alias for the renamed `inference-adapter` service.
-* Upstreams are fixed in source. Embeddings use `/api/embed` on `embeddings:11434`
-  only. Chat uses `/v1/chat/completions` on the existing PC and `generation:11434`. Caller URLs, redirects and arbitrary routes are unsupported.
+* Upstreams are fixed in source. Embeddings use `/api/embed` on the pool members
+  listed in `EMBEDDING_BACKENDS`. Chat uses `/v1/chat/completions` on the existing PC and `generation:11434`. Caller URLs, redirects and arbitrary routes are unsupported.
   The adapter publishes no ports, accepts no URLs or arbitrary prefix, and ignores
   authorization headers. Only members of the provider overlay can reach it.
 * The adapter process uses the same pinned official OV 0.5.2 image as OV, a read-only
@@ -188,10 +189,11 @@ CPU runtimes. Swarm prepare installs adapter/tokenizer assets under
 starts or recreates a CPU runtime. Existing matching generation aliases are
 retained; missing or drifted aliases are recreated only by that explicit playbook.
 
-The CPU runtimes are two scoped Compose projects, on homelab and Normandy, attached
-to `openviking-providers`. They have no published ports. Both use the pinned
-Ollama 0.40.10 image, 2 CPUs, 2 GiB memory, memory-swap=memory, one loaded model,
-one parallel request and keepalive=-1. Swarm does not support the required swap
+The CPU runtimes are three scoped Compose projects (Normandy embeddings, homelab
+embeddings, homelab generation) attached to `openviking-providers`. They have no
+published ports. All use the pinned Ollama 0.40.10 image, memory-swap=memory, one
+loaded model and keepalive=-1; CPUs, memory and parallel requests are set per
+project in inventory/group_vars/swarm/openviking-inference.yml. Swarm does not support the required swap
 cap and Normandy has active zram. Inspect the resulting HostConfig limits.
 The adapter stays in Swarm. OV joins its ordinary network and the provider overlay.
 
@@ -293,11 +295,48 @@ settings. The root owns that operation and the reviewed credential helper.
 Do not use embedding metadata override to retain vectors from the old model.
 Rebuild the complete vector index and test real-note retrieval first.
 
-Production embeddings use one credential, the Normandy CPU route. There is no
-embedding failover: when the CPU runtime is unavailable, embedding and search
-fail visibly rather than using vectors from another runtime. The fragment's
-failback settings have no effect with one credential. Requests specify float
-format and query/document type.
+Production embeddings use one OV credential, the adapter's pool route. Failover
+happens inside the adapter, between runtimes that pass the canary; when none is
+available, embedding and search fail visibly. The fragment's failback settings
+have no effect with one credential. Requests specify float format and
+query/document type. OV's embedding.max_concurrent is 6, below the pool's seven
+slots; requests beyond the free slots wait in the adapter for up to two minutes.
+
+## Embedding pool
+
+Added 2026-11-11 so that OV writes, which hold a global lock while their vectors
+are computed, stop waiting on one 2-CPU runtime. Members, in preference order
+(`EMBEDDING_BACKENDS` in files/inference-adapter.py):
+
+| Member | Where | Slots | Notes |
+|---|---|---|---|
+| pc | gaming-pc 192.168.90.212:11435, native `ollama-ov-embeddings.service` | 4 | RTX 4090, f16 KV cache, Ollama 0.40.5; absent while the PC sleeps |
+| normandy | overlay alias `embeddings`, Compose project on Normandy | 2 | 3 CPUs, 3 GiB, OLLAMA_NUM_PARALLEL=2 |
+| homelab | overlay alias `embeddings-homelab`, Compose project on homelab | 1 | 2 CPUs, 2 GiB |
+
+Each request takes the first member with a free slot. A member that fails to
+connect, times out or returns an error is skipped for 60 seconds and the request
+moves to the next member; each member is tried at most once per request. An
+input the model cannot fit is a permanent 400 and is never retried elsewhere.
+
+All members serve the same pinned GGUF with an f16 KV cache. Before a member
+serves traffic, after any failure, and at least every 15 minutes, the adapter
+embeds the text in recipes/embedding-canary.json and requires cosine >= 0.999
+against the stored Normandy CPU vector. A member below that is excluded for 10
+minutes. The canary file is pinned by SHA-256 in the adapter and the adapter
+refuses to start without it. Measured on 2026-11-11: the PC f16 runtime scored
+0.99958 to 0.99977 on eight probes with and without flash attention; the PC's
+main q4_0 service scored 0.877 on 2026-10-24 and remains excluded.
+`GET /health` reports each member as unverified, verified, failed or mismatch,
+prefixed `down:` while it is excluded.
+
+The PC runtime is provisioned by `ansible-playbook playbooks/ov-pc-embeddings.yml`.
+It copies the pinned blobs by digest from the PC's existing model store into
+/var/lib/ollama-ov-embeddings, runs as the ollama user, never touches the main
+`ollama.service`, and opens port 11435 in ufw only for homelab (192.168.70.223).
+The CPU members are provisioned by `playbooks/ov-inference.yml` as before; their
+slots in the adapter must equal their `parallel` value in
+inventory/group_vars/swarm/openviking-inference.yml, which a source test checks.
 The exact Qwen retrieval instruction is added once, only for query input.
 Already-prefixed queries are rejected. Documents remain plain. Responses require
 one finite normalized vector of exactly 1024 floats and valid native usage.
@@ -329,7 +368,7 @@ Normandy queries took 376–411 ms, 512 tokens 5.66 s, 2048 tokens 35.84 s and
 4095 tokens 74.73 s under 2 GiB without swap or OOM. Batch and concurrency above
 one are unqualified. Synthetic agreement does not establish real-note quality.
 
-### Why embeddings are CPU only
+### Why the PC's main Ollama service is not an embedding source
 
 The matched evidence above used an isolated GPU runtime with an f16 KV cache. The
 live PC service runs Ollama 0.40.5 with a global OLLAMA_KV_CACHE_TYPE=q4_0, which
@@ -341,10 +380,9 @@ adopted Normandy CPU embeddings as the steady state. PC generation, and the
 ordered PC then homelab generation fallback, are unchanged.
 
 Vectors from a matched f16 GPU runtime remain valid for the CPU index, within the
-same 4096-token limit. A temporary isolated f16 GPU runtime may therefore be used
-only for a fresh migration's bulk re-embedding, and is removed afterwards. No
-permanent extra runtime, process or network is added, and the PC's global KV
-setting is not changed.
+same 4096-token limit. Since 2026-11-11 a permanent dedicated f16 runtime on the PC
+is a pool member (see "Embedding pool"); the PC's global KV setting for its main
+service is not changed.
 
 Generation credentials are ordered PC local:latest then homelab ov-gen-4k.
 PC uses reasoning_effort=none, presence_penalty=0 and max_tokens=512. CPU alias

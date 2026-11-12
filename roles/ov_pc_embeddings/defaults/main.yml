@@ -1,0 +1,12 @@
+---
+# Dedicated runtime: its own port, model store and f16 KV cache. The PC's main
+# Ollama service on 11434 keeps its q4_0 cache and is never an embedding source.
+ov_pc_embeddings_port: 11435
+ov_pc_embeddings_root: /var/lib/ollama-ov-embeddings
+ov_pc_embeddings_binary: /opt/ollama/bin/ollama
+ov_pc_embeddings_version: 0.40.5
+ov_pc_embeddings_parallel: 4
+# Only the homelab node running the inference adapter may connect.
+ov_pc_embeddings_client: 192.168.70.223
+# The main service's store already holds the pinned GGUF; blobs are copied by digest.
+ov_pc_embeddings_model_source: file:///var/lib/ollama
