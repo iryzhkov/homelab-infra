@@ -130,7 +130,7 @@ Each selected account is `chaldea-HOST`. Resource memberships are exactly the
 existing non-superuser resource groups; Jocasta uses its existing expression
 policy. Account attributes contain only the closed host services map and owner.
 The only allowed role is Authentik's own managed per-user role, with exact
-name/managed owner, no global permissions and only object-level view_token_key
+name/owner, no global permissions and only object-level view_token_key
 on that user's own tokens. Membership and permission shape are checked during
 enrollment and again inside issued-claim and Jocasta policy expressions. The
 ORM names follow Authentik 2026.8.5's guardian RoleModelPermission and

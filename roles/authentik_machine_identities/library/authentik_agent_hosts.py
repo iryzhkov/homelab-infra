@@ -27,7 +27,20 @@ class Refused(Exception):
     pass
 
 def matches(seen, body):
-    return all(seen.get(k) == v for k, v in body.items())
+    for key, value in body.items():
+        actual = seen.get(key)
+        if key == "expires":
+            try:
+                if dt.datetime.fromisoformat(actual.replace("Z", "+00:00")) != dt.datetime.fromisoformat(value.replace("Z", "+00:00")):
+                    return False
+            except (ValueError, AttributeError):
+                return False
+        elif key == "groups":
+            if not isinstance(actual, list) or sorted(actual) != sorted(value):
+                return False
+        elif actual != value:
+            return False
+    return True
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):

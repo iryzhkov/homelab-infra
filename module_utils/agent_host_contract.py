@@ -308,7 +308,10 @@ def managed_role_ok(user, roles, permissions, tokens):
         return False
     role = roles.get(user["roles"][0], {})
     name = "ak-managed-role--user-" + str(user["pk"])
-    if role.get("name") != name or role.get("managed") != name:
+    # The 2026.8.5 Role API exposes only pk/name; validate its owner via
+    # complete user/group memberships in the enrollment caller. The issuance
+    # ORM guard independently checks the non-serialized managed marker.
+    if role.get("name") != name:
         return False
     own = {str(t["pk"]) for t in tokens if t.get("user") == user["pk"]}
     if user["roles"][0] not in permissions:
@@ -425,7 +428,7 @@ grant = u.attributes['services'][SERVICE]
 """
     import inspect
     pure = inspect.getsource(claims).replace("def claims(", "def selected_claims(")
-    pure = pure.replace("copy.deepcopy(", "(")
+    pure = "import copy\n" + pure
     branch = ("u = user\n"
               "if u and u.username.startswith('chaldea-') and u.path == 'homelab-infra/agent-hosts':\n"
               "    e = expected.get(str(u.pk))\n"

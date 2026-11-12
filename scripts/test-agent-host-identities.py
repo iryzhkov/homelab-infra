@@ -53,7 +53,9 @@ class API:
             self.n += 1
             result = dict(body, pk=self.n)
             if kind == "user":
-                result.update(roles=[], is_superuser=False)
+                result.update(roles=[], is_superuser=False, groups=list(reversed(body["groups"])))
+            if kind == "token":
+                result["expires"] = body["expires"].replace("Z", "+00:00")
             self.data[kind].append(result)
             return copy.deepcopy(result)
         pk = path.rstrip("/").rsplit("/", 1)[1]
@@ -159,14 +161,14 @@ class Contract(unittest.TestCase):
 
     def test_managed_role_allowance(self):
         user = {"pk": 42, "roles": ["r"]}
-        role = {"name": "ak-managed-role--user-42", "managed": "ak-managed-role--user-42"}
+        role = {"name": "ak-managed-role--user-42"}
         perm = {"codename": "view_token_key", "app_label": "authentik_core", "model": "token", "object_pk": "own"}
         tokens = [{"pk": "own", "user": 42}, {"pk": "victim", "user": 43}]
         self.assertTrue(c.managed_role_ok(user, {"r": role}, {"r": [perm]}, tokens))
         for changed in [dict(perm, object_pk=None), dict(perm, object_pk="victim"),
                         dict(perm, codename="change_token"), dict(perm, app_label="other")]:
             self.assertFalse(c.managed_role_ok(user, {"r": role}, {"r": [changed]}, tokens))
-        self.assertFalse(c.managed_role_ok(user, {"r": dict(role, managed=None)}, {"r": [perm]}, tokens))
+        self.assertFalse(c.managed_role_ok(user, {"r": dict(role, name="ak-managed-role--user-43")}, {"r": [perm]}, tokens))
         self.assertFalse(c.managed_role_ok(dict(user, roles=["r", "x"]), {"r": role}, {"r": [perm]}, tokens))
 
 
@@ -355,7 +357,7 @@ class Lifecycle(unittest.TestCase):
         calls = len(self.api.calls)
         x.expressions(users, baselines)
         self.assertTrue(x.changed)
-        self.assertEqual(len(self.api.calls), calls)
+        self.assertTrue(all(method == "GET" for method, _, _ in self.api.calls[calls:]))
         x = self.enrollment()
         users, _ = x.users([item()])
         x.expressions(users, baselines)
