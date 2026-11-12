@@ -223,8 +223,9 @@ jobs:
         run: pip install --disable-pip-version-check ansible-core==2.19.13
       - name: Test closed host enrollment, revocation and credential generations
         run: |
-          mkdir -p "$HOME/tmp"
-          TMPDIR="$HOME/tmp" python3 -B scripts/test-agent-host-identities.py -v
+          host_fixture_home=/root/.cache/agent-host-tests/home
+          install -d -m 0700 "$host_fixture_home" "$host_fixture_home/tmp"
+          env HOME="$host_fixture_home" TMPDIR="$host_fixture_home/tmp" python3 -B scripts/test-agent-host-identities.py -v
       - name: Test machine identities against the isolated HTTPS fixture
         run: python3 -m unittest discover -s roles/authentik_machine_identities/tests -p test_machine_identities.py -v
 
