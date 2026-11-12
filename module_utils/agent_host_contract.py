@@ -297,9 +297,9 @@ def declaration(hosts, owner, now, tokens=None):
         require(type(dest["uid"]) is int and dest["uid"] > 0)
     return copy.deepcopy(hosts)
 
-def attributes(host, owner):
+def attributes(host, owner, rotation=None):
     return {"agent-host-owner": owner, "agent-host": host, "services": copy.deepcopy(MATRIX[host]),
-            "rotation": None, "goauthentik.io/user/token-maximum-lifetime": "days=60"}
+            "rotation": rotation, "goauthentik.io/user/token-maximum-lifetime": "days=60"}
 
 def managed_role_ok(user, roles, permissions, tokens):
     if not user.get("roles"):
@@ -423,9 +423,17 @@ def public_users(users):
         seen.add(host)
         require(user["username"] == "chaldea-" + host and type(user["pk"]) is int and user["pk"] > 0)
         owner = user["attributes"]["agent-host-owner"]
-        require(str(uuid.UUID(owner)) == owner and user["attributes"] == attributes(host, owner))
+        rotation = user["attributes"].get("rotation")
+        if rotation is not None:
+            require(set(rotation) == {"group", "client_id"}
+                    and rotation["client_id"] == "chaldea-host-rotation"
+                    and str(uuid.UUID(rotation["group"])) == rotation["group"])
+        require(str(uuid.UUID(owner)) == owner and user["attributes"] == attributes(host, owner, rotation))
         require(isinstance(user["groups"], list) and len(user["groups"]) == len(set(user["groups"])))
-        require(set(user["groups"]) == {GROUP_IDS[s] for s in MATRIX[host] if s != "jocasta"})
+        resource_groups = {GROUP_IDS[s] for s in MATRIX[host] if s != "jocasta"}
+        # An optional rotation group is pinned by the enrollment receipt, and
+        # exact current groups are embedded into each issuance guard.
+        require(set(user["groups"]) == resource_groups | ({rotation["group"]} if rotation else set()))
     return users
 
 def scope_expression(service, scope, users, original):

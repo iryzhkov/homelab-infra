@@ -27,7 +27,8 @@ from ansible.module_utils.authentik_enrollment import (
 
 
 class HostEnrollment:
-    def __init__(self, api, fd, owner, check=False):
+    def __init__(self, api, fd, owner, check=False, reenable_host=""):
+        self.reenable_host = reenable_host
         self.api, self.fd, self.owner, self.check = api, fd, owner, check
         try:
             self.receipt = read_private(fd, "hosts.json")
@@ -40,6 +41,61 @@ class HostEnrollment:
         self.changed = False
         api.require_superuser()
         self.rows = {k: api.rows(k) for k in PATHS}
+
+
+    def rotation(self, signing_key):
+        """Own a separate group/provider/application; never touch resource scopes."""
+        require(str(uuid.UUID(signing_key)) == signing_key)
+        mappings = [m for m in self.rows["mapping"] if m.get("scope_name") == "goauthentik.io/api"]
+        require(len(mappings) == 1)
+        flows = self.api.request("GET", "/flows/instances/?page_size=500")
+        require(not flows["pagination"].get("next") and flows["pagination"]["count"] == len(flows["results"]))
+        def flow(slug):
+            found = [f["pk"] for f in flows["results"] if f["slug"] == slug]
+            require(len(found) == 1)
+            return found[0]
+        objects = self.receipt.setdefault("rotation", {})
+        def owned(kind, name, body):
+            prior = objects.get(kind)
+            found = [r for r in self.rows[kind] if r.get("slug" if kind == "application" else "name") == name]
+            if kind == "binding":
+                found = [r for r in self.rows[kind] if r.get("target") == body["target"]]
+            if prior:
+                require(len(found) == 1 and found[0]["pk"] == prior["pk"])
+                actual = found[0]
+                if kind == "provider":
+                    actual = self.api.request("GET", PATHS[kind] + str(prior["pk"]) + "/")
+                require(matches(actual, prior["body"]) and prior["body"] == body)
+                return prior["pk"]
+            require(not found)
+            if self.check:
+                self.changed = True
+                return None
+            result = self.mutate("POST", PATHS[kind], body)
+            objects[kind] = {"pk": result["pk"], "body": body}
+            self.commit()
+            return result["pk"]
+        group = owned("group", "chaldea-host-accounts", {
+            "name": "chaldea-host-accounts", "is_superuser": False, "roles": [], "parents": []})
+        provider = owned("provider", "chaldea-host-rotation", {
+            "name": "chaldea-host-rotation", "client_id": "chaldea-host-rotation",
+            "client_type": "confidential", "allowed_grant_types": ["client_credentials"],
+            "authorization_flow": flow("default-provider-authorization-implicit-consent"),
+            "invalidation_flow": flow("default-provider-invalidation-flow"),
+            "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
+            "redirect_uris": [], "signing_key": signing_key,
+            "property_mappings": [mappings[0]["pk"]]})
+        if group is None or provider is None:
+            return
+        app = owned("application", "chaldea-host-rotation", {
+            "name": "Chaldea host rotation", "slug": "chaldea-host-rotation",
+            "provider": provider, "backchannel_providers": [], "policy_engine_mode": "all"})
+        if app is None:
+            return
+        owned("binding", "", {"target": app, "group": group, "order": 0,
+                              "enabled": True, "negate": False, "policy": None, "user": None})
+        require(not any(a.get("provider") == provider and a["pk"] != app
+                        or provider in a.get("backchannel_providers", []) for a in self.rows["application"]))
 
     def resources(self, hosts, baselines):
         # Inspect public provider bodies only. Never open an OAuth2 secret.
@@ -133,6 +189,15 @@ class HostEnrollment:
             require(g["pk"] == GROUP_IDS[service])
             require(g.get("is_superuser") is False and g.get("roles") == [] and g.get("parents") == [])
             ids.append(g["pk"])
+        if self.receipt.get("rotation", {}).get("group"):
+            record = self.receipt["rotation"]["group"]
+            found = [g for g in self.rows["group"] if g["pk"] == record["pk"]]
+            # The newly created group is not in the initial snapshot yet.
+            if found:
+                require(len(found) == 1 and matches(found[0], record["body"]))
+            require(not any(record["pk"] in u.get("groups", []) and
+                            u["pk"] not in self.receipt["users"].values() for u in self.rows["user"]))
+            ids.append(record["pk"])
         return sorted(ids)
 
     def validate_user(self, user, host, groups):
@@ -141,7 +206,11 @@ class HostEnrollment:
         expected = attributes(host, self.owner)
         actual = copy.deepcopy(user["attributes"])
         actual.pop("revoked", None)
-        require(actual == expected and sorted(user["groups"]) == groups)
+        rotation_group = self.receipt.get("rotation", {}).get("group", {}).get("pk")
+        legacy_groups = [g for g in groups if g != rotation_group]
+        rotation = {"group": rotation_group, "client_id": "chaldea-host-rotation"} if rotation_group else None
+        require(actual in (expected, attributes(host, self.owner, rotation))
+                and sorted(user["groups"]) in (groups, legacy_groups))
         roles, permissions = {}, {}
         for rid in user["roles"]:
             roles[rid] = self.api.request("GET", "/rbac/roles/" + rid + "/")
@@ -153,6 +222,17 @@ class HostEnrollment:
                     and result["pagination"]["count"] == len(result["results"]))
             permissions[rid] = result["results"]
         require(managed_role_ok(user, roles, permissions, self.rows["token"]))
+
+    def purge_tokens(self, pk):
+        # Deactivation must precede this fresh authoritative listing. A host may
+        # have minted another token since the enrollment snapshot.
+        for token in self.api.rows("token"):
+            if token.get("user") == pk:
+                self.changed = True
+                if not self.check:
+                    self.api.request("DELETE", "/core/tokens/" + token["identifier"] + "/")
+        if not self.check:
+            require(not any(t.get("user") == pk for t in self.api.rows("token")))
 
     def users(self, hosts):
         require(set(self.receipt["users"]) <= {i["host"] for i in hosts})
@@ -168,6 +248,23 @@ class HostEnrollment:
             user = found[0] if found else None
             if user:
                 self.validate_user(user, host, groups)
+            if host == self.reenable_host:
+                require(not item["revoked"] and user is not None)
+                prior = self.receipt["tokens"].get(host)
+                if not user["is_active"] or host in self.receipt["revoked"]:
+                    require(prior is None or item["generation"] > prior["generation"])
+                    now = dt.datetime.now(dt.timezone.utc)
+                    expiry = dt.datetime.fromisoformat(item["expires"].replace("Z", "+00:00"))
+                    require(now + dt.timedelta(days=1) <= expiry <= now + dt.timedelta(days=60))
+                    require(not user["is_active"])
+                    self.purge_tokens(pk)
+                    user = dict(user, is_active=True, attributes=attributes(host, self.owner))
+                    self.mutate("PATCH", "/core/users/" + str(pk) + "/",
+                                {"is_active": True, "attributes": user["attributes"]})
+                    if host in self.receipt["revoked"]:
+                        self.receipt["revoked"].remove(host)
+                    self.receipt["tokens"].pop(host, None)
+                    self.commit()
             revoked = (item["revoked"] or host in self.receipt["revoked"]
                        or bool(user and (not user["is_active"] or user["attributes"].get("revoked"))))
             if revoked:
@@ -178,6 +275,8 @@ class HostEnrollment:
                 if user and user["is_active"]:
                     self.mutate("PATCH", "/core/users/" + str(pk) + "/", {"is_active": False})
                     self.commit()
+                if user:
+                    self.purge_tokens(pk)
                 delivery.append(dict(item, revoked=True))
                 continue
             if not user:
@@ -190,6 +289,13 @@ class HostEnrollment:
                     delivery.append(dict(item, revoked=False))
                     continue
                 self.receipt["users"][host] = user["pk"]
+                self.commit()
+            rotation_group = self.receipt.get("rotation", {}).get("group", {}).get("pk")
+            rotation = {"group": rotation_group, "client_id": "chaldea-host-rotation"} if rotation_group else None
+            desired = {"groups": groups, "attributes": attributes(host, self.owner, rotation)}
+            if sorted(user["groups"]) != groups or user["attributes"] != desired["attributes"]:
+                updated = self.mutate("PATCH", "/core/users/" + str(user["pk"]) + "/", desired)
+                user = dict(user, **desired) if self.check else updated
                 self.commit()
             result.append(user)
             token = username + "-g" + str(item["generation"])
@@ -291,6 +397,8 @@ def main():
         "owner": {"type": "str", "required": True},
         "receipt_dir": {"type": "path", "required": True},
         "baselines": {"type": "list", "elements": "dict", "required": True},
+        "reenable_host": {"type": "str", "default": ""},
+        "rotation_signing_key": {"type": "str", "default": ""},
         "api_token": {"type": "str", "no_log": True, "required": True},
     }, supports_check_mode=True)
     fd = lock = None
@@ -304,17 +412,22 @@ def main():
             require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
                     and st.st_nlink == 1 and stat.S_IMODE(st.st_mode) == 0o600)
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        e = HostEnrollment(APIClient(p["api_token"], PATHS), fd, p["owner"], module.check_mode)
+        e = HostEnrollment(APIClient(p["api_token"], PATHS), fd, p["owner"], module.check_mode, p["reenable_host"])
         hosts = declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc), e.receipt["tokens"])
         e.resources(hosts, p["baselines"])
-        # Preflight the entire operation before the first account/token write.
+        rotation_key = (p["rotation_signing_key"] or e.receipt.get("rotation", {}).get("provider", {}).get("body", {}).get("signing_key"))
+        # Preflight before any provider, account or token mutation.
         original_receipt = copy.deepcopy(e.receipt)
         e.check = True
+        if rotation_key:
+            e.rotation(rotation_key)
         users, _ = e.users(hosts)
         e.expressions(users, p["baselines"])
         e.receipt = original_receipt
         e.changed = False
         e.check = module.check_mode
+        if rotation_key:
+            e.rotation(rotation_key)
         users, delivery = e.users(hosts)
         # Missing accounts in CHECK need real API-returned PKs at apply time.
         # Validate all baselines even then, but do not render guessed admission.

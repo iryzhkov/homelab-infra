@@ -15,10 +15,18 @@ def require(ok):
 
 from ansible.module_utils.authentik_enrollment import read_file, atomic
 
-def credential(fd, host, uid, generation, revoked, password=None, check=False):
+def credential(fd, host, uid, generation, revoked, password=None, check=False, reenable=False):
     raw = read_file(fd, "host.generation.json")
     secret = read_file(fd, "host.app-password")
     marker = json.loads(raw) if raw is not None else None
+    if marker:
+        require(marker["host"] == host and marker["uid"] == uid)
+    if reenable and marker and marker["status"] == "revoked":
+        require(not revoked and generation > marker["generation"] and secret is None)
+        if not check:
+            os.unlink("host.generation.json", dir_fd=fd)
+            os.fsync(fd)
+        marker = None
     if marker:
         require(marker["host"] == host and marker["uid"] == uid
                 and type(marker["generation"]) is int and marker["generation"] > 0)
@@ -28,13 +36,23 @@ def credential(fd, host, uid, generation, revoked, password=None, check=False):
         # An orphaned key must never be adopted or overwritten.
         require(False)
     if revoked:
-        changed = secret is not None or marker is None or marker["status"] != "revoked"
+        # Rotation leftovers count as change too, so an interrupted cleanup
+        # after the tombstone was written still removes a staged credential.
+        leftovers = [name for name in ("rotation.json", "host.app-password.stage")
+                     if read_file(fd, name) is not None]
+        tombstoned = marker is not None and marker["status"] == "revoked"
+        changed = secret is not None or not tombstoned or bool(leftovers)
         if not check and changed:
-            tombstone = {"host": host, "uid": uid, "generation": max(generation, marker["generation"] if marker else 0),
-                         "status": "revoked"}
-            atomic(fd, "host.generation.json", json.dumps(tombstone).encode())
+            if not tombstoned:
+                tombstone = {"host": host, "uid": uid,
+                             "generation": max(generation, marker["generation"] if marker else 0),
+                             "status": "revoked"}
+                atomic(fd, "host.generation.json", json.dumps(tombstone).encode())
             if secret is not None:
                 os.unlink("host.app-password", dir_fd=fd)
+                os.fsync(fd)
+            for name in leftovers:
+                os.unlink(name, dir_fd=fd)
                 os.fsync(fd)
         return changed, False
     if marker:
@@ -103,6 +121,7 @@ def main():
         "revoked": {"type": "bool", "required": True},
         "password": {"type": "str", "no_log": True},
         "inspect": {"type": "bool", "default": False},
+        "reenable": {"type": "bool", "default": False},
     }, supports_check_mode=True)
     fd = lock = None
     try:
@@ -120,7 +139,7 @@ def main():
                     and stat.S_IMODE(st.st_mode) == 0o600)
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         updated, needs_key = credential(fd, p["host"], p["uid"], p["generation"],
-                                        p["revoked"], p["password"], check)
+                                        p["revoked"], p["password"], check, p["reenable"])
         m.exit_json(changed=changed or updated, needs_key=needs_key)
     except Exception:
         m.fail_json(msg="Host delivery refused. Inspect host binding, private custody and generation marker; do not replay a pending operation.")

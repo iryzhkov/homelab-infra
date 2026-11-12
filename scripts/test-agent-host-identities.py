@@ -60,8 +60,12 @@ class API:
             self.data[kind].append(result)
             return copy.deepcopy(result)
         pk = path.rstrip("/").rsplit("/", 1)[1]
-        result = next(x for x in self.data[kind] if str(x["pk"]) == pk)
-        result.update(body)
+        result = next(x for x in self.data[kind] if str(x["pk"]) == pk or x.get("identifier") == pk)
+        if method == "DELETE":
+            self.data[kind].remove(result)
+            return {}
+        if body is not None:
+            result.update(body)
         return copy.deepcopy(result)
 
 def function(source, **context):
@@ -166,6 +170,12 @@ class Contract(unittest.TestCase):
         self.assertEqual(function(expression, user=NS(**user, path=c.PATH), token=NS(scope=["ha.read"])), {})
         self.assertEqual(function(expression, user=NS(username="old", path="legacy")), {"old": True})
 
+    def test_api_scope_emits_no_resource_grants(self):
+        for host, services in c.MATRIX.items():
+            for service, grant in services.items():
+                self.assertEqual(c.claims(service, grant, ["goauthentik.io/api"]), {})
+                self.assertEqual(c.claims(service, grant, ["goauthentik.io/api", "jocasta.read"]), {})
+
     def test_managed_role_allowance(self):
         user = {"pk": 42, "roles": ["r"]}
         role = {"name": "ak-managed-role--user-42"}
@@ -260,6 +270,87 @@ class Lifecycle(unittest.TestCase):
     def enrollment(self, check=False):
         return e.HostEnrollment(self.api, self.fd, OWNER, check)
 
+
+    def test_manual_reenable_only_and_local_tombstone(self):
+        self.enrollment().users([item()])
+        self.enrollment().users([item(revoked=True)])
+        x = e.HostEnrollment(self.api, self.fd, OWNER, reenable_host="laptop")
+        with self.assertRaises(Exception):
+            x.users([item()])
+        newer = dict(item(), generation=2, expires=(dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        users, _ = x.users([newer])
+        self.assertTrue(users[0]["is_active"])
+        self.assertNotIn("laptop", x.receipt["revoked"])
+        # Repeat within the same operation never rotates the bootstrap again.
+        x.rows = {k: self.api.rows(k) for k in e.PATHS}
+        x.users([newer])
+        d.credential(self.fd, "laptop", os.getuid(), 1, True)
+        self.assertEqual(d.credential(self.fd, "laptop", os.getuid(), 2, False,
+                                     "SYNTHETIC-reenabled-password", reenable=True), (True, False))
+
+    def test_separate_provider_exact_scope_and_binding(self):
+        import uuid
+        api = self.api
+        original = api.request
+        api.data["mapping"] = [{"pk": str(uuid.uuid4()), "scope_name": "goauthentik.io/api"}]
+        flows = [{"pk": str(uuid.uuid4()), "slug": slug} for slug in
+                 ("default-provider-authorization-implicit-consent", "default-provider-invalidation-flow")]
+        def request(method, path, body=None):
+            if path.startswith("/flows/"):
+                return {"results": flows, "pagination": {"count": 2, "next": None}}
+            result = original(method, path, body)
+            if method == "POST" and path == "/core/groups/":
+                result["pk"] = str(uuid.uuid4())
+                api.data["group"][-1]["pk"] = result["pk"]
+            return result
+        api.request = request
+        signing_key = str(uuid.uuid4())
+        x = self.enrollment()
+        x.rotation(signing_key)
+        x.rows = {k: api.rows(k) for k in e.PATHS}
+        users, _ = x.users([item()])
+        self.assertEqual(users[0]["attributes"]["rotation"]["client_id"], "chaldea-host-rotation")
+        c.public_users(users)
+        provider = api.data["provider"][0]
+        self.assertEqual(provider["property_mappings"], [api.data["mapping"][0]["pk"]])
+        self.assertEqual(provider["allowed_grant_types"], ["client_credentials"])
+        self.assertEqual(provider["access_token_validity"], "seconds=300")
+        binding = api.data["binding"][0]
+        self.assertEqual(binding["group"], users[0]["attributes"]["rotation"]["group"])
+        self.assertIsNone(binding["policy"])
+        self.assertIsNone(binding["user"])
+        # No resource provider is changed, no broad RBAC assignment occurs.
+        before = len(api.calls)
+        x = self.enrollment()
+        x.rotation(signing_key)
+        self.assertFalse(x.changed)
+        self.assertFalse(any(method != "GET" for method, _, _ in api.calls[before:]))
+        api.data["provider"][0]["property_mappings"].append("foreign")
+        with self.assertRaises(Exception):
+            self.enrollment().rotation(signing_key)
+
+    def test_provider_preflight_does_not_write_before_expression_refusal(self):
+        from unittest.mock import patch
+        x = self.enrollment()
+        modes = []
+        x.resources = lambda *a: None
+        x.rotation = lambda *a: modes.append(x.check)
+        def refuse(*a):
+            raise e.Refused()
+        x.expressions = refuse
+        params = dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
+                      baselines=[], api_token="SYNTHETIC-invalid-token", reenable_host="",
+                      rotation_signing_key=OWNER)
+        module = NS(params=params, check_mode=False,
+                    fail_json=lambda **kw: None)
+        with patch.object(e, "AnsibleModule", return_value=module), \
+             patch.object(e, "HostEnrollment", return_value=x):
+            e.main()
+        self.assertEqual(modes, [True])
+        self.assertFalse(any(method != "GET" for method, _, _ in self.api.calls))
+        self.assertNotIn("rotation", e.read_private(self.fd, "hosts.json") if
+                         "hosts.json" in os.listdir(self.fd) else {})
+
     def test_check_then_apply_then_no_change(self):
         x = self.enrollment(True)
         x.users([item()])
@@ -287,7 +378,28 @@ class Lifecycle(unittest.TestCase):
         self.api.data["user"][0]["is_active"] = True  # latch still wins
         self.enrollment().users([item()])
         self.assertFalse(self.api.data["user"][0]["is_active"])
+        self.assertEqual(self.api.data["token"], [])
         self.assertFalse(any(body and body.get("is_active") is True for method, p, body in self.api.calls if method == "PATCH"))
+
+    def test_revoke_purges_token_minted_after_snapshot_and_reenable(self):
+        self.enrollment().users([item()])
+        x = self.enrollment()
+        original = self.api.request
+        def request(method, path, body=None):
+            if method == "PATCH" and body == {"is_active": False}:
+                self.api.data["token"].append(dict(self.api.data["token"][0],
+                    pk=999, identifier="mid-rotation"))
+            return original(method, path, body)
+        self.api.request = request
+        x.users([item(revoked=True)])
+        self.assertEqual(self.api.data["token"], [])
+        # A leftover from older revocation code must also be purged before enable.
+        self.api.data["token"].append({"pk": 1000, "identifier": "leftover",
+                                      "user": self.api.data["user"][0]["pk"]})
+        newer = dict(item(), generation=2, expires=(dt.datetime.now(dt.timezone.utc)
+                     + dt.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        e.HostEnrollment(self.api, self.fd, OWNER, reenable_host="laptop").users([newer])
+        self.assertEqual([t["identifier"] for t in self.api.data["token"]], ["chaldea-laptop-g2"])
 
     def test_inventory_revocation_prevents_creation(self):
         self.enrollment().users([item(revoked=True)])
@@ -308,6 +420,21 @@ class Lifecycle(unittest.TestCase):
         e.write_private(self.fd, "hosts.json", {"version": 1, "owner": OWNER, "pending": {"method": "POST"}})
         with self.assertRaises(Exception):
             self.enrollment()
+
+    def test_revocation_retry_removes_rotation_leftovers_after_tombstone(self):
+        key = "SYNTHETIC-bootstrap-password"
+        d.credential(self.fd, "laptop", 1000, 1, False, key)
+        d.atomic(self.fd, "rotation.json", b"{}")
+        d.atomic(self.fd, "host.app-password.stage", b"SYNTHETIC-staged-password")
+        # Simulate an interruption after the tombstone and password unlink.
+        marker = json.loads(d.read_file(self.fd, "host.generation.json"))
+        marker["status"] = "revoked"
+        d.atomic(self.fd, "host.generation.json", json.dumps(marker).encode())
+        os.unlink("host.app-password", dir_fd=self.fd)
+        self.assertEqual(d.credential(self.fd, "laptop", 1000, 1, True, check=True), (True, False))
+        self.assertEqual(d.credential(self.fd, "laptop", 1000, 1, True), (True, False))
+        self.assertEqual(sorted(os.listdir(self.fd)), ["host.generation.json"])
+        self.assertEqual(d.credential(self.fd, "laptop", 1000, 1, True), (False, False))
 
     def test_generation_guard_and_tombstone(self):
         key = "SYNTHETIC-bootstrap-password"

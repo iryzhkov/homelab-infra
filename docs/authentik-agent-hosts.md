@@ -9,8 +9,8 @@ The closed contract in `module_utils/agent_host_contract.py` is the target
 matrix from survey `jocasta:bb2fc17fa5ceaa265efbdb7c4c3d9ac0@1`.
 It includes the live seven HoloNet recipient IDs, rather than optional public
 declaration defaults. Protected input selects hosts and lifecycle metadata; it
-cannot add grants. No rotation provider is created. The `rotation: null`
-attribute reserves its schema slot.
+cannot add grants. The optional separate rotation provider and its reserved
+attribute slot are described in [host credential rotation](host-credential-rotation.md).
 
 | Host | Grants |
 | --- | --- |
@@ -161,7 +161,8 @@ account and controller journal, choose a new credential generation, remove only
 that host's controller revocation latch and immutable bootstrap token record,
 and reconcile/remove its local tombstone under the same lock before explicitly
 reactivating the account. Record actual IDs and revoke obsolete tokens. There is
-no automated re-enable flag. Do not clear pending operations as a shortcut.
+no automatic re-enable. The explicit administrative reenable_host operation is
+documented in [host credential rotation](host-credential-rotation.md). Do not clear pending operations as a shortcut.
 
 Offline resource JWTs remain valid through their existing bounded expiry;
 deactivation prevents subsequent issuance. S1's native JWKS overlap limitation
