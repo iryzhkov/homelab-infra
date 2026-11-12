@@ -36,6 +36,17 @@
     group: root
     mode: "0700"
   loop: [victoriametrics, config]
+
+  delegate_to: "{{ observability_owner }}"
+  become: true
+
+- name: Create public JWKS directory without publishing or enabling routes
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/observability/jwks"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
   delegate_to: "{{ observability_owner }}"
   become: true
 

@@ -32,6 +32,19 @@
     mode: "0644"
   when: observability_enabled | default(false) | bool
 
+- name: Render opt-in exact cohort JWKS routes
+  ansible.builtin.template:
+    src: authentik-jwks.yml.j2
+    dest: "{{ traefik_dynamic_dir }}/authentik-jwks.yml"
+    mode: "0644"
+  when: authentik_signer_routes_enabled | default(false) | bool
+
+- name: Remove disabled cohort JWKS routes
+  ansible.builtin.file:
+    path: "{{ traefik_dynamic_dir }}/authentik-jwks.yml"
+    state: absent
+  when: not (authentik_signer_routes_enabled | default(false) | bool)
+
 - name: Render the generated dynamic configuration
   ansible.builtin.template:
     src: generated.yml.j2

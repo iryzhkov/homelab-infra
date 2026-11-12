@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Authentik signer rotation check
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+Unit=authentik-signer.service
+[Install]
+WantedBy=timers.target

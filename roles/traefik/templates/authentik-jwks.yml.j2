@@ -1,0 +1,19 @@
+# {{ ansible_managed }}. Opt-in per edge after publishing the original key.
+http:
+  routers:
+    cohort-jwks:
+      entryPoints: [{{ traefik_entrypoint }}]
+      rule: 'Host(`auth.ryzhkov.dev`) && Method(`GET`, `HEAD`) && (Path(`/application/o/chaldea-jocasta/jwks/`) || Path(`/application/o/jocasta-managed-interactive/jwks/`) || Path(`/application/o/jocasta-laptop-interactive/jwks/`) || Path(`/application/o/ov-http-a63e197f/jwks/`) || Path(`/application/o/chaldea-holonet/jwks/`) || Path(`/application/o/shizune-mcp/jwks/`) || Path(`/application/o/ha-http-a63e197f/jwks/`) || Path(`/application/o/homelab-observer/jwks/`) || Path(`/application/o/chaldea-host-rotation/jwks/`){% if authentik_signer_akasha_enrolled | default(false) | bool %} || Path(`/application/o/chaldea-akasha/jwks/`){% endif %})'
+      priority: 10000
+      service: cohort-jwks
+      middlewares: [cohort-jwks-file]
+{% include 'router-tls.j2' %}
+  middlewares:
+    cohort-jwks-file:
+      replacePath:
+        path: /signer-jwks.json
+  services:
+    cohort-jwks:
+      loadBalancer:
+        servers:
+          - url: "http://{{ hostvars['homelab'].ansible_host }}:{{ observability_ingest_backend_port }}"

@@ -1,0 +1,11 @@
+[Unit]
+Description=Rotate the Authentik resource cohort signer
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+Environment=TMPDIR=/var/lib/authentik-signer
+ExecStart=/usr/local/sbin/authentik-signer rotate
+TimeoutStartSec=45min

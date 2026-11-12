@@ -46,6 +46,10 @@ services:
         source: ${SWARM_STATE_ROOT}/observability/config/nginx.conf
         target: /etc/nginx/nginx.conf
         read_only: true
+      - type: bind
+        source: ${SWARM_STATE_ROOT}/observability/jwks
+        target: /srv/jwks
+        read_only: true
     environment:
       INGEST_CONFIG_SHA256: ${INGEST_CONFIG_SHA256:?set by env_extra}
     secrets: [ingest_users]
