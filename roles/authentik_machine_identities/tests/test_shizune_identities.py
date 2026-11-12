@@ -66,13 +66,19 @@ class ShizuneTest(unittest.TestCase):
             inventory.write_text(yaml.safe_dump({"all": {"hosts": {
                 "omarchy-pc": {"ssh_user": "igor"},
                 "laptop": {"ssh_user": "igor"}}}}))
+            # Offline CHECK skips the SOPS task, but Ansible still resolves its
+            # module name; a parse-only stub keeps CI independent of the collection.
+            plugins = Path(directory) / "collections/ansible_collections/community/sops/plugins/modules"
+            plugins.mkdir(parents=True)
+            (plugins / "load_vars.py").write_text("")
+            env = dict(os.environ, ANSIBLE_COLLECTIONS_PATH=str(Path(directory) / "collections"))
             command = ["ansible-playbook", "-i", str(inventory),
                        "playbooks/authentik-shizune-identities.yml", "--check"]
-            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, env=env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("failed=0", result.stdout)
             result = subprocess.run(command + ["-e", '{"authentik_machine_identities": []}'],
-                                    cwd=ROOT, text=True, capture_output=True)
+                                    cwd=ROOT, text=True, capture_output=True, env=env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Preserve the closed Shizune", result.stdout)
 
