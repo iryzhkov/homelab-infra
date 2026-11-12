@@ -1,0 +1,85 @@
+---
+# Discover existing keys without changing another application's configuration.
+# Only the generated Janitorr file is written; credentials never enter Git.
+- name: Janitorr | require its configured source host to hold the pin
+  ansible.builtin.command:
+    argv: [docker, node, inspect, "{{ janitorr_source_host }}", --format, '{{ "{{" }} index .Spec.Labels "pin.janitorr" {{ "}}" }}']
+  register: janitorr_pin
+  changed_when: false
+  check_mode: false
+  failed_when: not ansible_check_mode and janitorr_pin.stdout | trim != 'true'
+
+- name: Janitorr | read existing application API keys
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import json
+        import sqlite3
+        import xml.etree.ElementTree as ET
+
+        keys = {}
+        for name, stack in (("sonarr", "sonarr-tv"), ("radarr", "radarr-movie")):
+            value = ET.parse(f"/srv/swarm/{stack}/config/config.xml").getroot().findtext("ApiKey")
+            if not value or not value.strip():
+                raise SystemExit(f"{name}: missing API key")
+            keys[name] = value.strip()
+
+        db = sqlite3.connect("file:/srv/swarm/ombi/config/OmbiSettings.db?mode=ro", uri=True)
+        db.execute("PRAGMA query_only=ON")
+        rows = db.execute("SELECT Content FROM GlobalSettings WHERE SettingsName = ?", ("EmbySettings",)).fetchall()
+        if len(rows) != 1:
+            raise SystemExit("Expected exactly one Ombi EmbySettings record")
+        settings = json.loads(rows[0][0])
+        servers = settings.get("Servers", [])
+        if settings.get("Enable") is False or len(servers) != 1:
+            raise SystemExit("Expected exactly one enabled Ombi Emby server")
+        if servers[0].get("Enable") is False or not servers[0].get("ApiKey"):
+            raise SystemExit("Expected an enabled Ombi Emby server with an API key")
+        keys["emby"] = servers[0]["ApiKey"]
+        db.close()
+        print(json.dumps(keys))
+  delegate_to: "{{ janitorr_source_host }}"
+  become: true
+  register: janitorr_key_discovery
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Janitorr | retain keys only in protected Ansible facts
+  ansible.builtin.set_fact:
+    janitorr_discovered_keys: "{{ janitorr_key_discovery.stdout | from_json }}"
+  no_log: true
+
+- name: Janitorr | render observation configuration in memory
+  ansible.builtin.set_fact:
+    janitorr_rendered_config: "{{ lookup('ansible.builtin.template', swarm_stack_src ~ '/templates/application.yml.j2') }}"
+  no_log: true
+
+- name: Janitorr | create its private configuration directory
+  ansible.builtin.file:
+    path: "{{ swarm_state_root }}/janitorr"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  delegate_to: "{{ janitorr_source_host }}"
+  become: true
+
+- name: Janitorr | install its private observation configuration
+  ansible.builtin.copy:
+    content: "{{ janitorr_rendered_config }}"
+    dest: "{{ swarm_state_root }}/janitorr/application.yml"
+    owner: "1000"
+    group: "1000"
+    mode: "0400"
+  delegate_to: "{{ janitorr_source_host }}"
+  become: true
+  no_log: true
+  diff: false
+
+- name: Janitorr | replace the service when configuration changes
+  ansible.builtin.set_fact:
+    swarm_stack_env: "{{ swarm_stack_env | combine({'JANITORR_CONFIG_SHA256': janitorr_rendered_config | hash('sha256')}) }}"
+  no_log: true

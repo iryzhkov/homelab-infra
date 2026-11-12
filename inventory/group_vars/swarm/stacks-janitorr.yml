@@ -1,0 +1,11 @@
+---
+# Observation only: see docs/janitorr.md. No public route or media mounts.
+swarm_stacks_janitorr:
+  - name: janitorr
+    pin: homelab
+    prepare_tasks: swarm-prepare.yml
+
+janitorr_source_host: homelab
+janitorr_sonarr_url: "http://{{ hostvars[janitorr_source_host].ansible_host }}:8989"
+janitorr_radarr_url: "http://{{ hostvars[janitorr_source_host].ansible_host }}:7878"
+janitorr_emby_url: "http://{{ hostvars[janitorr_source_host].ansible_host }}:8096"
