@@ -2,15 +2,19 @@
 # Included for embeddings and generation, never touches OV config/data.
 - name: Name this runtime
   ansible.builtin.set_fact:
-    ov_recipe: "{{ ov_inference_recipes[ov_provider.key] }}"
+    ov_recipe: "{{ ov_inference_recipes[ov_provider.value.recipe] }}"
     ov_runtime_root: "{{ swarm_state_root }}/{{ ov_provider.value.state_dir }}"
 
 - name: Check the scoped destination
   ansible.builtin.assert:
     that:
       - ov_provider.value.host in groups['swarm_workers']
-      - ov_provider.value.state_dir in ['openviking-embeddings', 'openviking-generation']
-      - ov_provider.key in ['embeddings', 'generation']
+      - ov_provider.value.state_dir in ['openviking-embeddings', 'openviking-embeddings-homelab', 'openviking-generation']
+      - ov_provider.key in ['embeddings', 'embeddings-homelab', 'generation']
+      - ov_provider.value.recipe == ('generation' if ov_provider.key == 'generation' else 'embeddings')
+      - ov_provider.value.parallel | int >= 1
+      - ov_provider.value.memory | int >= 2147483648
+      - ov_provider.value.cpus | int >= 1
       - ov_provider.value.source == 'registry' or ov_provider.value.source is match('^file:///')
     quiet: true
 
@@ -72,9 +76,9 @@
 - name: Refuse a runtime without the measured memory CPU and swap limits
   ansible.builtin.assert:
     that:
-      - (ov_runtime_limits.stdout | from_json).Memory == 2147483648
-      - (ov_runtime_limits.stdout | from_json).MemorySwap == 2147483648
-      - (ov_runtime_limits.stdout | from_json).NanoCpus == 2000000000
+      - (ov_runtime_limits.stdout | from_json).Memory == ov_provider.value.memory | int
+      - (ov_runtime_limits.stdout | from_json).MemorySwap == ov_provider.value.memory | int
+      - (ov_runtime_limits.stdout | from_json).NanoCpus == (ov_provider.value.cpus | int) * 1000000000
     quiet: true
   when: not ansible_check_mode
 

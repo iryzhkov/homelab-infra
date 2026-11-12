@@ -135,13 +135,20 @@ class Protocol(unittest.TestCase):
         self.upstream: Any = runtime(
             (200, {"embeddings": [[1 / 32] * 1024], "prompt_eval_count": 17}))
         self.primary: Any = None
-        self.old = adapter.UPSTREAMS
-        adapter.UPSTREAMS = {"cpu": ("127.0.0.1", self.upstream.server_port, 1)}
+        self.old = adapter.EMBEDDING_BACKENDS
+        self.old_timing = (adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER)
+        # One fixture runtime with one slot keeps the single-runtime contracts exact.
+        adapter.EMBEDDING_BACKENDS = (("cpu", "127.0.0.1", self.upstream.server_port, 1, 1, 2, -1),)
+        adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER = 0, 0
         self.old_generation = adapter.GENERATION_UPSTREAMS
         adapter.GENERATION_UPSTREAMS = {route: ("127.0.0.1", self.upstream.server_port, 1)
                                         for route in ("pc", "cpu")}
-        self.bridge = start(adapter.Server(("127.0.0.1", 0), tokenizer_dir=TOKENIZER_DIR))
+        self.bridge = start(adapter.Server(("127.0.0.1", 0), tokenizer_dir=TOKENIZER_DIR, canary=None))
         self.base = f"http://127.0.0.1:{self.bridge.server_port}"
+
+    def set_embedding(self, port, read_timeout: float = 1):
+        self.bridge.pool = adapter.EmbeddingPool(
+            (("cpu", "127.0.0.1", port, read_timeout, 1, 2, -1),), None)
 
     def tearDown(self):
         self.upstream.release.set()
@@ -150,7 +157,8 @@ class Protocol(unittest.TestCase):
         if self.primary is not None:
             self.primary.release.set()
             stop(self.primary)
-        adapter.UPSTREAMS = self.old
+        adapter.EMBEDDING_BACKENDS = self.old
+        adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER = self.old_timing
         adapter.GENERATION_UPSTREAMS = self.old_generation
 
     def request(self, data=None, route="cpu", raw=None, method="POST", path=None, headers=None):
@@ -181,9 +189,14 @@ class Protocol(unittest.TestCase):
                 "model": adapter.MODEL, "truncate": False, "keep_alive": -1,
                 "options": {"num_ctx": 4096, "num_thread": 2}})
 
-    def test_embeddings_are_cpu_only_and_pc_route_fails_clearly(self):
-        # The source destinations, not the test fixture, must contain only the CPU runtime.
-        self.assertEqual(self.old, {"cpu": ("embeddings", 11434, 180)})
+    def test_embedding_pool_sources_and_pc_main_route_fails_clearly(self):
+        # The source destinations, not the test fixture: the dedicated f16 PC runtime
+        # on 11435 first, then the two CPU runtimes. Never the PC main 11434 service.
+        self.assertEqual(self.old, (
+            ("pc", "192.168.90.212", 11435, 60, 4, 2, "30m"),
+            ("normandy", "embeddings", 11434, 180, 2, 2, -1),
+            ("homelab", "embeddings-homelab", 11434, 180, 1, 2, -1)))
+        self.assertNotIn(("192.168.90.212", 11434), {(item[1], item[2]) for item in self.old})
         for kind in ("query", "document"):
             body = self.body()
             body["input_type"] = kind
@@ -249,11 +262,11 @@ class Protocol(unittest.TestCase):
         unused.bind(("127.0.0.1", 0))
         port = unused.getsockname()[1]
         unused.close()
-        adapter.UPSTREAMS["cpu"] = ("127.0.0.1", port, 1)
+        self.set_embedding(port)
         began = time.monotonic()
         self.assertEqual(self.request()[0], 503)
         self.assertLess(time.monotonic() - began, 1)
-        adapter.UPSTREAMS["cpu"] = ("127.0.0.1", self.upstream.server_port, 0.03)
+        self.set_embedding(self.upstream.server_port, 0.03)
         self.upstream.delay = 0.15
         self.assertEqual(self.request(route="cpu")[0], 504)
 
@@ -261,7 +274,7 @@ class Protocol(unittest.TestCase):
         with patch.object(adapter.http.client, "HTTPConnection") as connection:
             connection.return_value.connect.side_effect = socket.timeout()
             with self.assertRaises(adapter.Rejected) as caught:
-                adapter.embed("cpu", adapter.payload(self.body()))
+                adapter.embed_upstream("embeddings", 11434, 180, adapter.payload(self.body()))
             self.assertEqual(caught.exception.status, 504)
             self.assertEqual(connection.call_args.kwargs["timeout"], 2)
 
@@ -502,6 +515,192 @@ class Protocol(unittest.TestCase):
 
 
 
+GOOD_VECTOR = [1 / 32] * 1024
+OTHER_VECTOR = [(1 if index % 2 else -1) / 32 for index in range(1024)]
+
+
+def vector_reply(vector):
+    return (200, {"embeddings": [vector], "prompt_eval_count": 17})
+
+
+class Pool(unittest.TestCase):
+    """Embedding pool: preference order, per-runtime slots, failover and the canary."""
+
+    def setUp(self):
+        self.runtimes: list[Any] = []
+        self.old_timing = (adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER, adapter.MISMATCH_RETRY_AFTER,
+                           adapter.REQUEST_BUDGET)
+        adapter.POOL_WAIT = 1
+        self.request = adapter.payload(dict(model=adapter.MODEL, input="note", input_type="document",
+                                            encoding_format="float"))
+
+    def tearDown(self):
+        for server in self.runtimes:
+            server.release.set()
+            stop(server)
+        (adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER, adapter.MISMATCH_RETRY_AFTER,
+         adapter.REQUEST_BUDGET) = self.old_timing
+
+    def runtime(self, reply=None):
+        server = runtime(reply or vector_reply(GOOD_VECTOR))
+        self.runtimes.append(server)
+        return server
+
+    def pool(self, *entries, canary=None):
+        return adapter.EmbeddingPool(
+            [(name, "127.0.0.1", port, 1, slots, 2, -1) for name, port, slots in entries], canary)
+
+    def calls(self, server):
+        return [call for call in server.calls if call[1]["input"] != "canary"]
+
+    def test_prefers_first_runtime_and_spills_to_the_next_when_its_slots_are_full(self):
+        fast, slow = self.runtime(), self.runtime()
+        pool = self.pool(("pc", fast.server_port, 1), ("normandy", slow.server_port, 1))
+        self.assertEqual(len(pool.embed(self.request)["data"][0]["embedding"]), 1024)
+        self.assertEqual((len(fast.calls), len(slow.calls)), (1, 0))
+        fast.release.clear()
+        fast.entered.clear()
+        held = threading.Thread(target=pool.embed, args=(self.request,))
+        held.start()
+        try:
+            self.assertTrue(fast.entered.wait(1))
+            began = time.monotonic()
+            pool.embed(self.request)
+            self.assertEqual(len(slow.calls), 1)
+            # It waited briefly for the preferred member before spilling.
+            self.assertGreaterEqual(time.monotonic() - began, adapter.SPILL_AFTER * 0.9)
+        finally:
+            fast.release.set()
+            held.join(3)
+        # Per-runtime options: keep_alive and num_thread come from the backend entry.
+        self.assertEqual(slow.calls[0][1]["options"], {"num_ctx": 4096, "num_thread": 2})
+
+    def test_waits_for_a_slot_then_answers_busy(self):
+        only = self.runtime()
+        only.release.clear()
+        pool = self.pool(("normandy", only.server_port, 1))
+        held = threading.Thread(target=pool.embed, args=(self.request,))
+        held.start()
+        try:
+            self.assertTrue(only.entered.wait(1))
+            adapter.POOL_WAIT = 0.3
+            began = time.monotonic()
+            with self.assertRaises(adapter.Rejected) as caught:
+                pool.embed(self.request)
+            self.assertEqual((caught.exception.status, caught.exception.code), (429, "busy"))
+            self.assertGreaterEqual(time.monotonic() - began, 0.25)
+            # A waiting request proceeds as soon as the slot frees.
+            adapter.POOL_WAIT = 3
+            waiter = threading.Thread(target=pool.embed, args=(self.request,))
+            waiter.start()
+            time.sleep(0.2)
+            only.release.set()
+            waiter.join(3)
+            self.assertFalse(waiter.is_alive())
+            self.assertEqual(len(only.calls), 2)
+        finally:
+            only.release.set()
+            held.join(3)
+
+    def test_unreachable_runtime_is_skipped_and_marked_down(self):
+        unused = socket.socket()
+        unused.bind(("127.0.0.1", 0))
+        port = unused.getsockname()[1]
+        unused.close()
+        good = self.runtime()
+        adapter.BACKEND_RETRY_AFTER = 60
+        pool = self.pool(("pc", port, 4), ("normandy", good.server_port, 1))
+        pool.embed(self.request)
+        self.assertEqual(pool.states(), {"pc": "down:failed", "normandy": "unverified"})
+        began = time.monotonic()
+        pool.embed(self.request)
+        self.assertLess(time.monotonic() - began, 0.5)
+        self.assertEqual(len(good.calls), 2)
+
+    def test_every_runtime_failing_surfaces_the_last_error_and_each_is_tried_once(self):
+        first = self.runtime((500, {"error": "private"}))
+        second = self.runtime((503, {"error": "private"}))
+        pool = self.pool(("pc", first.server_port, 1), ("normandy", second.server_port, 1))
+        with self.assertRaises(adapter.Rejected) as caught:
+            pool.embed(self.request)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual((len(first.calls), len(second.calls)), (1, 1))
+        with self.assertRaises(adapter.Rejected) as caught:
+            pool.embed(self.request)
+        self.assertEqual(caught.exception.code, "upstream_unavailable")
+        self.assertEqual((len(first.calls), len(second.calls)), (1, 1))
+
+    def test_failover_never_starts_a_member_that_would_overrun_the_request_budget(self):
+        first = self.runtime((500, {"error": "private"}))
+        second = self.runtime()
+        adapter.REQUEST_BUDGET = 0.5
+        pool = adapter.EmbeddingPool([("pc", "127.0.0.1", first.server_port, 1, 1, 2, -1),
+                                      ("normandy", "127.0.0.1", second.server_port, 5, 1, 2, -1)], None)
+        with self.assertRaises(adapter.Rejected) as caught:
+            pool.embed(self.request)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(second.calls, [])
+
+    def test_oversize_input_is_not_retried_on_another_runtime(self):
+        first = self.runtime((400, {"error": "the input length exceeds the context length"}))
+        second = self.runtime()
+        pool = self.pool(("pc", first.server_port, 1), ("normandy", second.server_port, 1))
+        with self.assertRaises(adapter.Rejected) as caught:
+            pool.embed(self.request)
+        self.assertEqual((caught.exception.status, caught.exception.code), (400, "input_too_large"))
+        self.assertEqual(second.calls, [])
+        self.assertEqual(pool.states()["pc"], "unverified")
+
+    def test_canary_mismatch_excludes_a_runtime_and_a_match_is_cached(self):
+        drifted = self.runtime(vector_reply(OTHER_VECTOR))
+        matched = self.runtime()
+        canary = ("canary", GOOD_VECTOR)  # already unit length: 1024 * (1/32)^2 == 1
+        pool = self.pool(("pc", drifted.server_port, 4), ("normandy", matched.server_port, 1), canary=canary)
+        for _ in range(3):
+            pool.embed(self.request)
+        # The drifted runtime answered only its canary and never served a vector.
+        self.assertEqual([call[1]["input"] for call in drifted.calls], ["canary"])
+        self.assertEqual(pool.states(), {"pc": "down:mismatch", "normandy": "verified"})
+        # The matched runtime ran its canary once, then served all three requests.
+        self.assertEqual([call[1]["input"] for call in matched.calls], ["canary", "note", "note", "note"])
+
+    def test_failure_forces_a_new_canary_before_serving_again(self):
+        only = self.runtime()
+        canary = ("canary", GOOD_VECTOR)
+        adapter.BACKEND_RETRY_AFTER = 0
+        pool = self.pool(("normandy", only.server_port, 1), canary=canary)
+        pool.embed(self.request)
+        only.reply = (500, {"error": "private"})
+        with self.assertRaises(adapter.Rejected):
+            pool.embed(self.request)
+        only.reply = vector_reply(GOOD_VECTOR)
+        pool.embed(self.request)
+        self.assertEqual([call[1]["input"] for call in only.calls],
+                         ["canary", "note", "note", "canary", "note"])
+
+    def test_source_canary_is_pinned_installed_and_fails_closed(self):
+        source = STACK / "recipes" / adapter.CANARY_FILE
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), adapter.CANARY_SHA256)
+        text, vector = adapter.load_canary(source.parent)
+        self.assertTrue(text.startswith("OpenViking embedding canary"))
+        self.assertAlmostEqual(math.sqrt(sum(value * value for value in vector)), 1, places=6)
+        prepare = (STACK / "embeddings-prepare.yml").read_text()
+        self.assertIn("recipes/" + adapter.CANARY_FILE, prepare)
+        self.assertIn("cpu-tokenizer/" + adapter.CANARY_FILE, prepare)
+        directory = Path(tempfile.mkdtemp())
+        try:
+            (directory / adapter.CANARY_FILE).write_bytes(source.read_bytes().replace(b"0.0", b"0.1", 1))
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                adapter.load_canary(directory)
+            # The production server refuses to start without the verified canary.
+            for name in adapter.TOKENIZER_ASSETS:
+                shutil.copyfile(TOKENIZER_DIR / name, directory / name)
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                adapter.Server(("127.0.0.1", 0), tokenizer_dir=directory)
+        finally:
+            shutil.rmtree(directory)
+
+
 class SourceContracts(unittest.TestCase):
 
     def test_tokenizer_assets_fail_closed_and_provisioning_pins_match(self):
@@ -548,8 +747,22 @@ class SourceContracts(unittest.TestCase):
             service = yaml.safe_load(rendered)["services"][name]
             self.assertNotIn("ports", service)
             self.assertEqual(service["mem_limit"], service["memswap_limit"])
-            self.assertEqual(service["mem_limit"], 2 * 1024 ** 3)
-            self.assertEqual(service["cpus"], 2)
+            self.assertEqual(service["mem_limit"], value["memory"])
+            self.assertGreaterEqual(value["memory"], 2 * 1024 ** 3)
+            self.assertEqual(service["cpus"], value["cpus"])
+            self.assertEqual(service["networks"]["providers"]["aliases"], [name])
+            self.assertEqual(service["environment"]["OLLAMA_NUM_PARALLEL"], str(value["parallel"]))
+            self.assertEqual(service["environment"]["OLLAMA_KEEP_ALIVE"], "-1")
+            self.assertNotIn("OLLAMA_KV_CACHE_TYPE", service["environment"])
+        # Every CPU embedding runtime is an adapter pool member with matching slots.
+        slots = {backend[1]: backend[4] for backend in adapter.EMBEDDING_BACKENDS}
+        embedding = {name: value for name, value in variables["openviking_inference"].items()
+                     if value["recipe"] == "embeddings"}
+        self.assertEqual(set(embedding), {"embeddings", "embeddings-homelab"})
+        for name, value in embedding.items():
+            self.assertEqual(slots[name], value["parallel"], name)
+        self.assertEqual(CONFIG["embedding"]["max_concurrent"], 6)
+        self.assertLessEqual(CONFIG["embedding"]["max_concurrent"], sum(slots.values()))
         stack = yaml.safe_load((STACK / "stack.yml").read_text())
         self.assertEqual(set(stack["services"]), {"openviking", "inference-adapter"})
         self.assertNotIn("ports", stack["services"]["inference-adapter"])
@@ -872,14 +1085,14 @@ class NativeOV(Protocol):
         self.assertEqual(self.upstream.calls[-1][1]["input"], "document")
         self.assertEqual(len(self.upstream.calls), 2)
         # With no peer, an unavailable or failing CPU runtime surfaces as an error.
-        adapter.UPSTREAMS["cpu"] = ("127.0.0.1", 1, 1)
+        self.set_embedding(1)
         self.upstream.calls.clear()
         with self.assertRaises(Exception):
             embedder.embed("unreachable")
         with self.assertRaises(Exception):
             asyncio.run(embedder.embed_async("unreachable"))
         self.assertEqual(self.upstream.calls, [])
-        adapter.UPSTREAMS["cpu"] = ("127.0.0.1", self.upstream.server_port, 1)
+        self.set_embedding(self.upstream.server_port)
         self.upstream.reply = (500, {"error": "private runtime failure"})
         with self.assertRaises(Exception):
             embedder.embed("failing")

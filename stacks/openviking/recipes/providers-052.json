@@ -1,6 +1,6 @@
 {
   "embedding": {
-    "max_concurrent": 1,
+    "max_concurrent": 6,
     "max_retries": 0,
     "max_input_tokens": 65536,
     "text_source": "content_only",

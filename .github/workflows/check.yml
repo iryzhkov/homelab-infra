@@ -166,6 +166,7 @@ jobs:
         run: |
           ansible-playbook playbooks/ov-inference.yml --syntax-check
           ansible-playbook playbooks/ov-pc-coexistence.yml --syntax-check
+          ansible-playbook playbooks/ov-pc-embeddings.yml --syntax-check
 
   jocasta-operator:
     runs-on: ubuntu-24.04

@@ -7,19 +7,46 @@ import json
 import math
 import socket
 import threading
+import time
 from typing import Any, cast
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL = "qwen3-embedding:0.6b"
 PREFIX = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
 # Source-managed destinations only. Never read upstream addresses from a request or environment.
-# Embeddings use only the Normandy CPU runtime. The PC's Ollama 0.40.5 applies its
-# global OLLAMA_KV_CACHE_TYPE=q4_0 to the embedding runner, with no per-request or
-# per-model override, and its live vectors measured cosine 0.877 against CPU ones.
-# The PC route answers with an explicit error so a stale configuration can never
-# write or search with vectors that do not match the index.
-UPSTREAMS = {"cpu": ("embeddings", 11434, 180)}
+# Embeddings go to a pool of separate Ollama runtimes that all serve the same pinned
+# GGUF with an f16 KV cache, so their vectors share one index. Order is preference:
+# the PC GPU runtime first (milliseconds per note), then the Normandy and homelab CPU
+# runtimes. Fields: name, host, port, read timeout, concurrent slots, num_thread,
+# keep_alive. The PC entry is the dedicated ollama-ov-embeddings service on port
+# 11435, never the PC's main 11434 service, whose global q4_0 KV cache produced
+# vectors at cosine 0.877 against the CPU ones.
+EMBEDDING_BACKENDS = (
+    ("pc", "192.168.90.212", 11435, 60, 4, 2, "30m"),
+    ("normandy", "embeddings", 11434, 180, 2, 2, -1),
+    ("homelab", "embeddings-homelab", 11434, 180, 1, 2, -1),
+)
+# The route keeps its historical name so the private ov.conf credential is unchanged.
+EMBEDDING_ROUTE = "/cpu/v1/embeddings"
+# The PC main runtime is never an embedding destination. A stale configuration
+# naming it fails clearly instead of mixing vectors.
 DISABLED_EMBEDDING_ROUTES = {"/pc/v1/embeddings"}
+# Every backend must reproduce a stored Normandy CPU reference vector before it
+# serves traffic, again after any failure and at least every CANARY_TTL seconds.
+# Matched f16 runtimes measured cosine >= 0.9995; the q4_0 PC cache measured 0.877.
+CANARY_FILE = "embedding-canary.json"
+CANARY_SHA256 = "8dc9f348ee61e97c19d1b060b34de26de33303bfd5f19d8c989d70435ccc72fe"
+CANARY_MIN_COSINE = 0.999
+CANARY_TTL = 900
+BACKEND_RETRY_AFTER = 60
+MISMATCH_RETRY_AFTER = 600
+# How long a request waits for a free slot before answering 429 busy.
+POOL_WAIT = 120
+# How long a request waits for the preferred member before spilling to the next one.
+SPILL_AFTER = 0.5
+# Total budget per request, below the OpenAI SDK's 600-second default that OV uses.
+# Failover never starts a member whose read timeout would overrun it.
+REQUEST_BUDGET = 480
 CONNECT_TIMEOUT = 2
 BODY_LIMIT = 65536
 RESPONSE_LIMIT = 131072
@@ -55,8 +82,7 @@ def payload(body):
             "keep_alive": -1, "options": {"num_ctx": 4096, "num_thread": 2}}
 
 
-def embed(route, request):
-    host, port, read_timeout = UPSTREAMS[route]
+def embed_upstream(host, port, read_timeout, request):
     connection = http.client.HTTPConnection(host, port, timeout=CONNECT_TIMEOUT)
     try:
         connection.connect()
@@ -105,6 +131,106 @@ def embed(route, request):
         raise Rejected(502, "invalid_upstream", "Invalid embedding response") from None
     finally:
         connection.close()
+
+
+def load_canary(directory):
+    raw = (directory / CANARY_FILE).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != CANARY_SHA256:
+        raise ValueError("Embedding canary checksum mismatch")
+    data = json.loads(raw)
+    vector = data["embedding"]
+    if data.get("model") != MODEL or data.get("input_type") != "document" or len(vector) != DIMENSION:
+        raise ValueError("Embedding canary does not describe this model")
+    return data["text"], vector
+
+
+class Backend:
+    def __init__(self, name, host, port, read_timeout, slots, num_thread, keep_alive):
+        self.name, self.host, self.port, self.read_timeout = name, host, port, read_timeout
+        self.num_thread, self.keep_alive = num_thread, keep_alive
+        self.slots = threading.BoundedSemaphore(slots)
+        self.down_until = 0.0
+        self.verified_until = 0.0
+        self.failures = 0
+        self.state = "unverified"
+
+    def embed(self, request):
+        native = dict(request, keep_alive=self.keep_alive,
+                      options=dict(request["options"], num_thread=self.num_thread))
+        return embed_upstream(self.host, self.port, self.read_timeout, native)
+
+
+class EmbeddingPool:
+    """Spread embedding requests over matched runtimes, skipping unavailable or drifted ones."""
+
+    def __init__(self, backends, canary):
+        self.backends = [Backend(*backend) for backend in backends]
+        self.canary = canary
+        self.changed = threading.Condition()
+
+    def states(self):
+        now = time.monotonic()
+        return {backend.name: backend.state if backend.down_until <= now else "down:" + backend.state
+                for backend in self.backends}
+
+    def verify(self, backend):
+        if self.canary is None or time.monotonic() < backend.verified_until:
+            return
+        text, reference = self.canary
+        failures = backend.failures
+        vector = backend.embed(payload({"model": MODEL, "input": text, "input_type": "document",
+                                        "encoding_format": "float"}))["data"][0]["embedding"]
+        cosine = sum(a * b for a, b in zip(vector, reference))
+        if cosine < CANARY_MIN_COSINE:
+            backend.state = "mismatch"
+            backend.down_until = time.monotonic() + MISMATCH_RETRY_AFTER
+            raise Rejected(502, "embedding_mismatch", "Embedding runtime does not match the index")
+        with self.changed:
+            # A failure recorded while this check ran wins; the next use re-checks.
+            if backend.failures == failures:
+                backend.state = "verified"
+                backend.verified_until = time.monotonic() + CANARY_TTL
+
+    def embed(self, request):
+        began = time.monotonic()
+        deadline = began + POOL_WAIT
+        tried, last = set(), None
+        while True:
+            now = time.monotonic()
+            untried = [backend for backend in self.backends if backend.name not in tried]
+            usable = [backend for backend in untried if backend.down_until <= now
+                      and (not tried or now + backend.read_timeout <= began + REQUEST_BUDGET)]
+            if not usable:
+                raise last or Rejected(503, "upstream_unavailable", "No embedding runtime is available")
+            # Briefly prefer the first usable member: a GPU slot frees in milliseconds,
+            # while a CPU member takes seconds for the same text.
+            candidates = usable if now - began >= SPILL_AFTER else usable[:1]
+            backend = next((item for item in candidates if item.slots.acquire(blocking=False)), None)
+            if backend is None:
+                if time.monotonic() >= deadline:
+                    raise Rejected(429, "busy", "Every embedding runtime is busy")
+                with self.changed:
+                    self.changed.wait(0.25)
+                continue
+            tried.add(backend.name)
+            try:
+                self.verify(backend)
+                return backend.embed(request)
+            except Rejected as error:
+                # A too-large input fails the same way everywhere; never retry it.
+                if error.status == 400:
+                    raise
+                last = error
+                with self.changed:
+                    backend.failures += 1
+                    if error.code != "embedding_mismatch":
+                        backend.state = "failed"
+                        backend.down_until = time.monotonic() + BACKEND_RETRY_AFTER
+                    backend.verified_until = 0.0
+            finally:
+                backend.slots.release()
+                with self.changed:
+                    self.changed.notify_all()
 
 
 # Generation stays in this process and never accepts an upstream URL.
@@ -323,7 +449,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self.send_json(200, {"status": "ok"})
+            self.send_json(200, {"status": "ok",
+                                 "embedding_backends": cast("Server", self.server).pool.states()})
         else:
             self.send_json(404, {"error": {"code": "not_found", "message": "Unknown endpoint"}})
 
@@ -331,13 +458,12 @@ class Handler(BaseHTTPRequestHandler):
         acquired = False
         permit = None
         try:
-            routes = {"/" + key + "/v1/embeddings": key for key in UPSTREAMS}
             chat_routes = {"/" + key + "/v1/chat/completions": key for key in GENERATION_UPSTREAMS}
             if self.path in DISABLED_EMBEDDING_ROUTES:
                 raise Rejected(410, "embedding_route_disabled",
                                "PC embeddings are disabled because they do not match the CPU index; "
                                "use /cpu/v1/embeddings")
-            if self.path not in routes and self.path not in chat_routes:
+            if self.path != EMBEDDING_ROUTE and self.path not in chat_routes:
                 raise Rejected(404, "not_found", "Unknown endpoint")
             if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) != 1:
                 raise Rejected(400, "invalid_length", "One Content-Length is required")
@@ -360,12 +486,14 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, UnicodeError, RecursionError):
                 raise Rejected(400, "invalid_json", "Invalid JSON body") from None
             server = cast("Server", self.server)
-            permit = server.chat if self.path in chat_routes else server.embedding
-            acquired = permit.acquire(blocking=False)
-            if not acquired:
-                raise Rejected(429, "busy", "One request of this inference kind may run at a time")
-            result = (generate(chat_routes[self.path], request) if self.path in chat_routes
-                      else embed(routes[self.path], request))
+            if self.path in chat_routes:
+                permit = server.chat
+                acquired = permit.acquire(blocking=False)
+                if not acquired:
+                    raise Rejected(429, "busy", "One chat request may run at a time")
+                result = generate(chat_routes[self.path], request)
+            else:
+                result = server.pool.embed(request)
             self.send_json(200, result)
         except Rejected as error:
             self.send_json(error.status, {"error": {"code": error.code, "message": error.message,
@@ -379,14 +507,17 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
-    request_queue_size = 8
+    request_queue_size = 16
 
-    def __init__(self, address, tokenizer_dir=None):
-        self.guard = PromptGuard(tokenizer_dir or Path(__file__).parent / "cpu-tokenizer")
-        self.workers = threading.BoundedSemaphore(8)
+    def __init__(self, address, tokenizer_dir=None, canary=load_canary):
+        directory = tokenizer_dir or Path(__file__).parent / "cpu-tokenizer"
+        self.guard = PromptGuard(directory)
+        self.workers = threading.BoundedSemaphore(16)
         # Embeddings and generation run on distinct physical Ollama runtimes.
-        # PC and CPU generation still share one admission bound across failover.
-        self.embedding = threading.BoundedSemaphore(1)
+        # The embedding pool bounds each runtime by its own slots. PC and CPU
+        # generation still share one admission bound across failover.
+        # Tests may pass canary=None or an explicit (text, vector) fixture.
+        self.pool = EmbeddingPool(EMBEDDING_BACKENDS, canary(directory) if callable(canary) else canary)
         self.chat = threading.BoundedSemaphore(1)
         super().__init__(address, Handler)
 
