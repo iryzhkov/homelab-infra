@@ -42,6 +42,11 @@ BACKEND_RETRY_AFTER = 60
 MISMATCH_RETRY_AFTER = 600
 # How long a request waits for a free slot before answering 429 busy.
 POOL_WAIT = 120
+# How long a request waits for the preferred member before spilling to the next one.
+SPILL_AFTER = 0.5
+# Total budget per request, below the OpenAI SDK's 600-second default that OV uses.
+# Failover never starts a member whose read timeout would overrun it.
+REQUEST_BUDGET = 480
 CONNECT_TIMEOUT = 2
 BODY_LIMIT = 65536
 RESPONSE_LIMIT = 131072
@@ -146,6 +151,7 @@ class Backend:
         self.slots = threading.BoundedSemaphore(slots)
         self.down_until = 0.0
         self.verified_until = 0.0
+        self.failures = 0
         self.state = "unverified"
 
     def embed(self, request):
@@ -171,6 +177,7 @@ class EmbeddingPool:
         if self.canary is None or time.monotonic() < backend.verified_until:
             return
         text, reference = self.canary
+        failures = backend.failures
         vector = backend.embed(payload({"model": MODEL, "input": text, "input_type": "document",
                                         "encoding_format": "float"}))["data"][0]["embedding"]
         cosine = sum(a * b for a, b in zip(vector, reference))
@@ -178,19 +185,27 @@ class EmbeddingPool:
             backend.state = "mismatch"
             backend.down_until = time.monotonic() + MISMATCH_RETRY_AFTER
             raise Rejected(502, "embedding_mismatch", "Embedding runtime does not match the index")
-        backend.state = "verified"
-        backend.verified_until = time.monotonic() + CANARY_TTL
+        with self.changed:
+            # A failure recorded while this check ran wins; the next use re-checks.
+            if backend.failures == failures:
+                backend.state = "verified"
+                backend.verified_until = time.monotonic() + CANARY_TTL
 
     def embed(self, request):
-        deadline = time.monotonic() + POOL_WAIT
+        began = time.monotonic()
+        deadline = began + POOL_WAIT
         tried, last = set(), None
         while True:
             now = time.monotonic()
             untried = [backend for backend in self.backends if backend.name not in tried]
-            usable = [backend for backend in untried if backend.down_until <= now]
+            usable = [backend for backend in untried if backend.down_until <= now
+                      and (not tried or now + backend.read_timeout <= began + REQUEST_BUDGET)]
             if not usable:
                 raise last or Rejected(503, "upstream_unavailable", "No embedding runtime is available")
-            backend = next((item for item in usable if item.slots.acquire(blocking=False)), None)
+            # Briefly prefer the first usable member: a GPU slot frees in milliseconds,
+            # while a CPU member takes seconds for the same text.
+            candidates = usable if now - began >= SPILL_AFTER else usable[:1]
+            backend = next((item for item in candidates if item.slots.acquire(blocking=False)), None)
             if backend is None:
                 if time.monotonic() >= deadline:
                     raise Rejected(429, "busy", "Every embedding runtime is busy")
@@ -206,10 +221,12 @@ class EmbeddingPool:
                 if error.status == 400:
                     raise
                 last = error
-                if error.code != "embedding_mismatch":
-                    backend.state = "failed"
-                    backend.down_until = time.monotonic() + BACKEND_RETRY_AFTER
-                backend.verified_until = 0.0
+                with self.changed:
+                    backend.failures += 1
+                    if error.code != "embedding_mismatch":
+                        backend.state = "failed"
+                        backend.down_until = time.monotonic() + BACKEND_RETRY_AFTER
+                    backend.verified_until = 0.0
             finally:
                 backend.slots.release()
                 with self.changed:

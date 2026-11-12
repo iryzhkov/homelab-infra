@@ -4,17 +4,32 @@
     that: inventory_hostname == 'gaming-pc'
     quiet: true
 
-- name: Read the installed Ollama version
+- name: Read the installed Ollama binary version, not a running server's
   ansible.builtin.command:
     argv: ["{{ ov_pc_embeddings_binary }}", --version]
+  environment:
+    # An unreachable host makes the CLI report only its own client version.
+    OLLAMA_HOST: 127.0.0.1:1
   register: ov_pc_embeddings_binary_version
   changed_when: false
   check_mode: false
 
 - name: Require the measured runtime version
   ansible.builtin.assert:
-    that: ("version is " ~ ov_pc_embeddings_version) in ov_pc_embeddings_binary_version.stdout
+    that: ("client version is " ~ ov_pc_embeddings_version) in (ov_pc_embeddings_binary_version.stdout ~ ov_pc_embeddings_binary_version.stderr)
     fail_msg: The PC Ollama binary changed. Re-measure the canary before using another version.
+    quiet: true
+
+- name: Read the firewall state
+  ansible.builtin.command:
+    argv: [ufw, status]
+  register: ov_pc_embeddings_ufw_status
+  changed_when: false
+  check_mode: false
+
+- name: Require an active firewall, since the runtime listens on all interfaces
+  ansible.builtin.assert:
+    that: "'Status: active' in ov_pc_embeddings_ufw_status.stdout"
     quiet: true
 
 - name: Load the shared matched embedding recipe

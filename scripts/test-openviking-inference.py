@@ -528,7 +528,8 @@ class Pool(unittest.TestCase):
 
     def setUp(self):
         self.runtimes: list[Any] = []
-        self.old_timing = (adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER, adapter.MISMATCH_RETRY_AFTER)
+        self.old_timing = (adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER, adapter.MISMATCH_RETRY_AFTER,
+                           adapter.REQUEST_BUDGET)
         adapter.POOL_WAIT = 1
         self.request = adapter.payload(dict(model=adapter.MODEL, input="note", input_type="document",
                                             encoding_format="float"))
@@ -537,7 +538,8 @@ class Pool(unittest.TestCase):
         for server in self.runtimes:
             server.release.set()
             stop(server)
-        adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER, adapter.MISMATCH_RETRY_AFTER = self.old_timing
+        (adapter.POOL_WAIT, adapter.BACKEND_RETRY_AFTER, adapter.MISMATCH_RETRY_AFTER,
+         adapter.REQUEST_BUDGET) = self.old_timing
 
     def runtime(self, reply=None):
         server = runtime(reply or vector_reply(GOOD_VECTOR))
@@ -562,8 +564,11 @@ class Pool(unittest.TestCase):
         held.start()
         try:
             self.assertTrue(fast.entered.wait(1))
+            began = time.monotonic()
             pool.embed(self.request)
             self.assertEqual(len(slow.calls), 1)
+            # It waited briefly for the preferred member before spilling.
+            self.assertGreaterEqual(time.monotonic() - began, adapter.SPILL_AFTER * 0.9)
         finally:
             fast.release.set()
             held.join(3)
@@ -624,6 +629,17 @@ class Pool(unittest.TestCase):
             pool.embed(self.request)
         self.assertEqual(caught.exception.code, "upstream_unavailable")
         self.assertEqual((len(first.calls), len(second.calls)), (1, 1))
+
+    def test_failover_never_starts_a_member_that_would_overrun_the_request_budget(self):
+        first = self.runtime((500, {"error": "private"}))
+        second = self.runtime()
+        adapter.REQUEST_BUDGET = 0.5
+        pool = adapter.EmbeddingPool([("pc", "127.0.0.1", first.server_port, 1, 1, 2, -1),
+                                      ("normandy", "127.0.0.1", second.server_port, 5, 1, 2, -1)], None)
+        with self.assertRaises(adapter.Rejected) as caught:
+            pool.embed(self.request)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(second.calls, [])
 
     def test_oversize_input_is_not_retried_on_another_runtime(self):
         first = self.runtime((400, {"error": "the input length exceeds the context length"}))
