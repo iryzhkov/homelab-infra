@@ -8,6 +8,7 @@
     generation: "{{ agent_host.generation }}"
     revoked: "{{ agent_host.revoked }}"
     inspect: true
+    reenable: "{{ (reenable_host | default('')) == agent_host.host }}"
   delegate_to: "{{ agent_host.host }}"
   connection: "{{ hostvars[agent_host.host].ansible_connection | default('ssh') }}"
   become: false
