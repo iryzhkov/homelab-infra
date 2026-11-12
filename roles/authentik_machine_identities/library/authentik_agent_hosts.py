@@ -11,7 +11,7 @@ import uuid
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.agent_host_contract import (
     MATRIX, GROUPS, GROUP_IDS, PATH, attributes, declaration, managed_role_ok,
-    require, scope_expression, writer_user_readback, writer_token_readback,
+    require, scope_expression, writer_user_readback, writer_token_readback, rotation_provider_body,
 )
 
 ORIGIN = "https://auth.ryzhkov.dev"
@@ -26,13 +26,35 @@ from ansible.module_utils.authentik_enrollment import (
 )
 
 
+class RotationReconciliationRefused(Refused):
+    """Fixed public diagnostic; never includes an API body or credential."""
+
+
+ROTATION_REFUSAL = (
+    "Rotation provider reconciliation refused: retain the pending POST; "
+    "require its exact returned pk and a live body matching the corrected contract "
+    "(including grant_types). No provider POST was retried. "
+    "The legacy pending POST has no pk; provider 113 requires operator reconciliation."
+)
+
+
 class HostEnrollment:
     def __init__(self, api, fd, owner, check=False, reenable_host=""):
         self.reenable_host = reenable_host
         self.api, self.fd, self.owner, self.check = api, fd, owner, check
         try:
             self.receipt = read_private(fd, "hosts.json")
-            require(self.receipt["owner"] == owner and self.receipt["pending"] is None)
+            require(self.receipt["owner"] == owner)
+            pending = self.receipt["pending"]
+            if pending is not None:
+                require(pending.get("method") == "POST" and pending.get("path") == PATHS["provider"])
+            if pending is not None and not (
+                pending.get("method") == "POST" and pending.get("path") == PATHS["provider"]
+                and type(pending.get("pk")) is int and pending["pk"] > 0
+                and "provider" not in self.receipt.get("rotation", {})
+                and "group" in self.receipt.get("rotation", {})
+            ):
+                raise RotationReconciliationRefused()
             require(self.receipt["version"] == 1)
         except FileNotFoundError:
             require(set(os.listdir(fd)) <= {"host.lock"})
@@ -67,6 +89,26 @@ class HostEnrollment:
                     actual = self.api.request("GET", PATHS[kind] + str(prior["pk"]) + "/")
                 require(matches(actual, prior["body"]) and prior["body"] == body)
                 return prior["pk"]
+            pending = self.receipt["pending"]
+            if kind == "provider" and pending is not None:
+                old_body = dict(body)
+                old_body.pop("grant_types")
+                old_body["allowed_grant_types"] = ["client_credentials"]
+                if len(found) != 1 or found[0]["pk"] != pending["pk"]:
+                    raise RotationReconciliationRefused()
+                try:
+                    actual = self.api.request("GET", PATHS[kind] + str(pending["pk"]) + "/")
+                except Exception:
+                    raise RotationReconciliationRefused() from None
+                if not (pending["body"] in (body, old_body)
+                        and actual.get("pk") == pending["pk"]
+                        and len(found) == 1 and found[0]["pk"] == pending["pk"]
+                        and all(key in actual for key in body) and matches(actual, body)):
+                    raise RotationReconciliationRefused()
+                objects[kind] = {"pk": pending["pk"], "body": body}
+                self.changed = True
+                self.commit()
+                return actual["pk"]
             require(not found)
             if self.check:
                 self.changed = True
@@ -77,14 +119,9 @@ class HostEnrollment:
             return result["pk"]
         group = owned("group", "chaldea-host-accounts", {
             "name": "chaldea-host-accounts", "is_superuser": False, "roles": [], "parents": []})
-        provider = owned("provider", "chaldea-host-rotation", {
-            "name": "chaldea-host-rotation", "client_id": "chaldea-host-rotation",
-            "client_type": "confidential", "allowed_grant_types": ["client_credentials"],
-            "authorization_flow": flow("default-provider-authorization-implicit-consent"),
-            "invalidation_flow": flow("default-provider-invalidation-flow"),
-            "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
-            "redirect_uris": [], "signing_key": signing_key,
-            "property_mappings": [mappings[0]["pk"]]})
+        provider = owned("provider", "chaldea-host-rotation", rotation_provider_body(
+            signing_key, flow("default-provider-authorization-implicit-consent"),
+            flow("default-provider-invalidation-flow"), mappings[0]["pk"]))
         if group is None or provider is None:
             return
         app = owned("application", "chaldea-host-rotation", {
@@ -333,12 +370,18 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             write_private(self.fd, "hosts.json", self.receipt)
 
     def mutate(self, method, path, body):
+        require(self.receipt["pending"] is None)
         self.changed = True
         if self.check:
             return body
         self.receipt["pending"] = {"method": method, "path": path, "body": body}
         self.save()
         result = self.api.request(method, path, body)
+        # Preserve the returned identity even when a readback field is incompatible.
+        if method == "POST" and path == PATHS["provider"]:
+            require(type(result.get("pk")) is int and result["pk"] > 0)
+            self.receipt["pending"]["pk"] = result["pk"]
+            self.save()
         require(matches(result, body))
         # Caller records actual IDs before clearing the pending journal.
         return result
@@ -665,6 +708,10 @@ def main():
         from ansible.module_utils.agent_host_contract import original_writer_declaration
         projection_changed = original_writer_declaration(p["original_writer_read"]) != e.receipt.get("original_writer", {})
         e.check = True
+        if e.receipt["pending"] is not None:
+            if not rotation_key:
+                raise RotationReconciliationRefused()
+            e.rotation(rotation_key)
         saved_rows = copy.deepcopy(e.rows)
         baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
                                       p.get("create_original_writer_read_mapping", False))
@@ -704,6 +751,8 @@ def main():
             delivery = []
         module.exit_json(changed=e.changed, delivery=delivery,
                          public_host_users=users, predicted_pks=False)
+    except RotationReconciliationRefused:
+        module.fail_json(msg=ROTATION_REFUSAL)
     except Exception:
         module.fail_json(msg="Host enrollment refused or unconfirmed. Reconcile hosts.json and its pending operation; no automatic replay.")
     finally:
