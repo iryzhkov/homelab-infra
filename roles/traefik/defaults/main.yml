@@ -7,6 +7,11 @@ mission_control_route_enabled: false
 # Dashboard reads also accept authenticated private-mesh connection peers.
 # This does not extend Akasha's API allowlist below.
 mission_control_nebula_cidrs: [10.42.0.0/24]
+# Opt-in LAN canary for https://jocasta.mcp.ryzhkov.dev/mcp; see
+# docs/jocasta-mcp-canary.md. jocasta_mcp_canary_backend_url and
+# jocasta_mcp_canary_upstream_host deliberately have no defaults: enabling the
+# route without both fails instead of guessing a backend.
+jocasta_mcp_canary_route_enabled: false
 traefik_wildcard_domain: ryzhkov.dev
 
 # Existing LAN VLANs for management, services, clients, and agent workers.
