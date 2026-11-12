@@ -124,6 +124,85 @@ every granted resource/purpose before switching host consumers. This PR does
 not claim native-client acceptance or update OV personal subject pins, HoloNet
 worker subject sets, fleet helpers, Akasha or signing-key publication.
 
+
+## Original legacy writer acquisition read projection
+
+The maintained playbook also accepts one default-off
+`authentik_agent_original_writer_read` declaration. It only reconciles owned
+scope expressions through the existing `hosts.json` journal. It does not patch
+the legacy user, token, expiry, membership or credential. It refuses any host
+or rotation change in the same run and suppresses host credential delivery.
+Retain the complete existing M3 host cohort, owner, rotation input and journal.
+
+After source review and CI, the parent must establish an exclusive issuer write
+window and fresh protected existing-only GET readbacks. Neither source tests nor
+an old subject receipt qualify live use. Do not run
+`playbooks/authentik-holonet-catalog.yml` or rebuild ownership journals.
+
+Read the complete users and token metadata inventories through existing approved
+administrative custody, without requesting token keys. Exactly one user must
+match username `chaldea-laptop-holonet-recommendations`, its approved original
+hashed subject and PK. Require service_account, active, non-superuser, legacy
+path `homelab-infra/machine-identities`, existing HoloNet group, and no host
+attributes. Require the existing application `chaldea-holonet` provider to use
+`hashed_user_id`, so the user's API `uid` equals the approved original subject.
+A duplicate PK, username or uid is a refusal, not an account to adopt.
+
+Read exactly its existing app-password metadata, identifier
+`chaldea-laptop-holonet-recommendations-g1`, generation 1, existing unmodified
+expiry and token PK. There must be no second app password for that principal.
+Never fetch, log or copy its key. Compare the readback to the approved protected
+existing-writer evidence before preparing this input:
+
+```yaml
+authentik_agent_original_writer_read:
+  username: chaldea-laptop-holonet-recommendations
+  pk: EXACT-EXISTING-USER-PK
+  subject: EXACT-APPROVED-ORIGINAL-64-HEX-SUBJECT
+  generation: 1
+  expires: EXACT-EXISTING-UTC-EXPIRY
+  user_sha256: SHA256-OF-NORMALIZED-PUBLIC-USER-READBACK
+  token_sha256: SHA256-OF-NORMALIZED-TOKEN-METADATA-READBACK
+```
+
+Compute hashes with the maintained contract functions
+`readback_sha256(writer_user_readback(user))` and
+`readback_sha256(writer_token_readback(token))`. User fields are pk, uid,
+username, path, type, is_active, is_superuser, attributes, sorted string group
+IDs and sorted string role IDs. Token fields are pk, identifier, user, intent,
+expiring and expires normalized by datetime.fromisoformat to isoformat.
+The hash encoder is UTF-8 JSON with sorted keys and separators comma/colon.
+Store only protected metadata inputs, never credentials, in the operation packet.
+The module compares these against fresh authoritative inventories on each run
+and after reconciliation. Issuance also checks the pinned public user state.
+
+Supply the complete normal mapping/policy baseline set plus exactly the existing
+`holonet.acquire` scope mapping. Pin original expression SHA256 values and
+existing ownership anchors, while retaining the current rendered bytes in
+`hosts.json`. The existing resource provider must already attach the exact
+complete mapping set. Missing acquisition mapping/ownership, extra mappings,
+pending operations or changed rendered bytes stop before writes. This path
+does not create or adopt a missing mapping or reset a provider. If fresh
+discovery finds that prerequisite absent, retain it as a parent-owned source
+or operational dependency; do not run the frozen legacy blueprint to fill it.
+
+Run the CHECK, one REAL, unchanged REAL, CHECK sequence above with this complete
+protected packet. Inspect the first CHECK before REAL. The only intended REAL
+changes are scope expressions and their existing journal records. Unchanged
+REAL and final CHECK must report zero changes. Preserve all 23 legacy identities,
+both coexisting subjects and M3 account/rotation state. Do not refresh hashes to
+accept drift without reconciling its cause.
+
+Only the exact request `holonet.read holonet.janitor holonet.acquire` emits
+library 3, server 3c86e6d7ff6c4a3296522cdf03d22bb0, namespace managed-janitor,
+action janitor.acquire.read, and empty catalog/history/target users. The
+acquisition mapping emits once. Other mappings return empty dictionaries for
+that request. Old writer requests retain the original expression bytes.
+Acquisition unions, start/media, sibling purposes and other subjects receive no
+acquisition claims. No new M3 grants are added. Start/media and SR05 remain
+withheld; native read acceptance and denied sibling probes belong to the parent
+after the separately qualified write window.
+
 ## Credential custody and revocation
 
 Each selected account is `chaldea-HOST`. Resource memberships are exactly the

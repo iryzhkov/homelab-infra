@@ -5,3 +5,5 @@ authentik_agent_hosts: []
 authentik_agent_host_owner: ""
 authentik_agent_host_receipt_dir: ""
 authentik_agent_host_baselines: []
+# Closed existing legacy writer read-purpose projection, absent by default.
+authentik_agent_original_writer_read: {}

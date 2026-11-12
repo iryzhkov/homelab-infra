@@ -436,7 +436,54 @@ def public_users(users):
         require(set(user["groups"]) == resource_groups | ({rotation["group"]} if rotation else set()))
     return users
 
-def scope_expression(service, scope, users, original):
+
+# The only legacy exception. Protected input pins current existing-only readback;
+# it cannot select a grant or another account.
+ORIGINAL_WRITER = "chaldea-laptop-holonet-recommendations"
+ACQUIRE_READ = {
+    "scopes": ["holonet.read", "holonet.janitor", "holonet.acquire"],
+    "claims": {
+        "holonet_server": "3c86e6d7ff6c4a3296522cdf03d22bb0",
+        "holonet_namespace": "managed-janitor", "holonet_libraries": ["3"],
+        "holonet_actions": ["janitor.acquire.read"],
+        "holonet_target_users": [], "holonet_catalog_users": [], "holonet_history_users": [],
+    },
+}
+
+def original_writer_declaration(value):
+    require(isinstance(value, dict))
+    if not value:
+        return {}
+    require(set(value) == {"username", "pk", "subject", "generation", "expires",
+                           "user_sha256", "token_sha256"})
+    require(value["username"] == ORIGINAL_WRITER and type(value["generation"]) is int
+            and value["generation"] == 1 and type(value["pk"]) is int and value["pk"] > 0)
+    require(isinstance(value["subject"], str) and re.fullmatch(r"[0-9a-f]{64}", value["subject"]))
+    require(all(isinstance(value[k], str) and re.fullmatch(r"[0-9a-f]{64}", value[k])
+                for k in ("user_sha256", "token_sha256")))
+    expiry = dt.datetime.fromisoformat(value["expires"].replace("Z", "+00:00"))
+    require(value["expires"].endswith("Z") and expiry > dt.datetime.now(dt.timezone.utc))
+    return canonical(value)
+
+
+def writer_user_readback(user):
+    fields = ("pk", "uid", "username", "path", "type", "is_active", "is_superuser", "attributes")
+    result = {k: user[k] for k in fields}
+    result.update(groups=sorted(str(g) for g in user["groups"]),
+                  roles=sorted(str(r) for r in user["roles"]))
+    return result
+
+def writer_token_readback(token):
+    result = {k: token[k] for k in ("pk", "identifier", "user", "intent", "expiring")}
+    result["expires"] = dt.datetime.fromisoformat(token["expires"].replace("Z", "+00:00")).isoformat()
+    return result
+
+def readback_sha256(value):
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+def scope_expression(service, scope, users, original, original_writer=None):
     public_users(users)
     expected = expected_users(users, service)
     # All host-shaped accounts, including ungranted hosts, are denied before the
@@ -465,6 +512,31 @@ grant = u.attributes['services'][SERVICE]
     if service == "jocasta":
         selected += "result['webmcp_identity'] = u.username\n"
     selected += "return result\n"
+
+    legacy = ""
+    if service == "holonet" and original_writer:
+        pinned = original_writer_declaration(original_writer)
+        # Any acquisition-shaped request is terminal, including unions and
+        # unsupported future scopes. Never fall through to old writer grants.
+        guard_source = inspect.getsource(writer_user_readback) + "\n" + inspect.getsource(readback_sha256)
+        legacy = (guard_source + "\noriginal_writer = " + repr(pinned) + "\n"
+                  "requested = token.scope\n"
+                  "if isinstance(requested, list) and any(s.startswith('holonet.acquire') for s in requested):\n"
+                  "    if (not u or u.username != original_writer['username']\n"
+                  "            or u.pk != original_writer['pk'] or str(u.uid) != original_writer['subject']\n"
+                  "            or u.path != 'homelab-infra/machine-identities'\n"
+                  "            or not u.is_active or u.type != 'service_account' or u.is_superuser\n"
+                  "            or len(requested) != 3 or set(requested) != " + "set(" + repr(ACQUIRE_READ["scopes"]) + ")" + "):\n"
+                  "        return {}\n"
+                  "    actual = {k: getattr(u, k) for k in (\'pk\', \'uid\', \'username\', \'path\', \'type\', \'is_active\', \'is_superuser\', \'attributes\')}\n"
+                  "    actual[\'uid\'] = str(actual[\'uid\'])\n"
+                  "    actual[\'groups\'] = [str(g.pk) for g in u.all_groups()]\n"
+                  "    actual[\'roles\'] = [str(r.pk) for r in u.all_roles()]\n"
+                  "    if readback_sha256(writer_user_readback(actual)) != original_writer[\'user_sha256\']:\n"
+                  "        return {}\n"
+                  "    if " + repr(scope) + " != 'holonet.acquire':\n"
+                  "        return {}\n"
+                  "    return " + repr(dict(ACQUIRE_READ["claims"], aud=RESOURCES["holonet"])) + "\n")
     return ("# M3 host coexistence; original expression follows\nexpected = " + repr(expected)
             + "\n" + RUNTIME_GUARD + "\n" + pure + "\n" + branch
-            + "".join("    " + line + "\n" for line in selected.splitlines()) + original)
+            + "".join("    " + line + "\n" for line in selected.splitlines()) + legacy + original)

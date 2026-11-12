@@ -11,7 +11,7 @@ import uuid
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.agent_host_contract import (
     MATRIX, GROUPS, GROUP_IDS, PATH, attributes, declaration, managed_role_ok,
-    require, scope_expression,
+    require, scope_expression, writer_user_readback, writer_token_readback,
 )
 
 ORIGIN = "https://auth.ryzhkov.dev"
@@ -348,7 +348,50 @@ class HostEnrollment:
             require(["scopemapping", current["name"], "present"] in record["objects"]
                     and ["group", GROUPS[baseline["service"]], "present"] in record["objects"])
 
-    def expressions(self, users, baselines):
+
+    def original_writer(self, value):
+        from ansible.module_utils.agent_host_contract import (
+            original_writer_declaration, readback_sha256, ORIGINAL_WRITER,
+        )
+        value = original_writer_declaration(value)
+        prior = self.receipt.get("original_writer")
+        # An empty declaration uses the default closed mapping set. Existing
+        # acquisition receipts still require explicit ownership reconciliation.
+        if not value:
+            return {}
+        require(not prior or prior == value)
+        users = [u for u in self.rows["user"]
+                 if u["username"] == ORIGINAL_WRITER or u["pk"] == value["pk"]
+                 or u.get("uid") == value["subject"]]
+        require(len(users) == 1)
+        user = users[0]
+        require(user["username"] == ORIGINAL_WRITER and user["pk"] == value["pk"]
+                and user["uid"] == value["subject"]
+                and user["path"] == "homelab-infra/machine-identities"
+                and user["type"] == "service_account" and user["is_active"] is True
+                and user["is_superuser"] is False
+                and GROUP_IDS["holonet"] in user["groups"]
+                and "agent-host" not in user["attributes"])
+        require(readback_sha256(writer_user_readback(user)) == value["user_sha256"])
+        identifier = ORIGINAL_WRITER + "-g1"
+        tokens = [t for t in self.rows["token"] if t["identifier"] == identifier
+                  or (t["user"] == user["pk"] and t["intent"] == "app_password")]
+        require(len(tokens) == 1)
+        token = tokens[0]
+        require(token["identifier"] == identifier and token["user"] == user["pk"]
+                and token["intent"] == "app_password" and token["expiring"] is True
+                and matches(token, {"expires": value["expires"]}))
+        require(readback_sha256(writer_token_readback(token)) == value["token_sha256"])
+        # The protected subject is Authentik's hashed-user-id, never a host PK.
+        apps = [a for a in self.rows["application"] if a["slug"] == "chaldea-holonet"]
+        require(len(apps) == 1)
+        providers = [p for p in self.rows["provider"] if p["pk"] == apps[0]["provider"]]
+        require(len(providers) == 1 and providers[0]["sub_mode"] == "hashed_user_id")
+        return value
+
+    def expressions(self, users, baselines, original_writer=None):
+        original_writer = self.original_writer(original_writer or {})
+        planned = []
         require(isinstance(baselines, list) and baselines)
         keys = set()
         for baseline in baselines:
@@ -373,14 +416,11 @@ class HostEnrollment:
             self.baseline_owner(baseline, current, original)
             if kind == "mapping":
                 require(current["scope_name"] == baseline["scope"])
-                desired = scope_expression(service, baseline["scope"], users, original)
+                desired = scope_expression(service, baseline["scope"], users, original, original_writer)
             else:
                 from ansible.module_utils.agent_host_contract import jocasta_policy
                 desired = jocasta_policy(users, original)
-            if desired != current["expression"]:
-                self.mutate("PATCH", PATHS[kind] + pk + "/", {"expression": desired})
-            self.receipt["expressions"][key] = {"original": original, "rendered": desired}
-            self.commit()
+            planned.append((kind, pk, key, current["expression"], original, desired))
         # Every resource scope needs coexistence. Missing a row is not a partial rollout.
         expected = {("jocasta", "jocasta.read"),
                     ("shizune", "shizune.use"), ("ha", "ha.read"), ("homelab", "homelab.read")}
@@ -388,8 +428,19 @@ class HostEnrollment:
         expected |= {("ov", "ov." + a) for a in matrix["laptop"]["ov"]["ov_actions"]}
         expected |= {("ov", "ov.personal." + a) for a in matrix["laptop"]["ov"]["ov_personal"]["actions"]}
         expected |= {("holonet", s) for p in matrix["laptop"]["holonet"]["purposes"].values() for s in p["scopes"]}
+        if original_writer:
+            expected.add(("holonet", "holonet.acquire"))
         require({(b["service"], b["scope"]) for b in baselines if b["kind"] == "mapping"} == expected)
         require(sum(b["kind"] == "policy" for b in baselines) == 1)
+        require(len(baselines) == len(expected) + 1)
+        require(set(self.receipt["expressions"]) <= keys)
+        for kind, pk, key, current, original, desired in planned:
+            if desired != current:
+                self.mutate("PATCH", PATHS[kind] + pk + "/", {"expression": desired})
+            self.receipt["expressions"][key] = {"original": original, "rendered": desired}
+            self.commit()
+        self.receipt["original_writer"] = original_writer
+        self.save()
 
 def main():
     module = AnsibleModule(argument_spec={
@@ -397,6 +448,7 @@ def main():
         "owner": {"type": "str", "required": True},
         "receipt_dir": {"type": "path", "required": True},
         "baselines": {"type": "list", "elements": "dict", "required": True},
+        "original_writer_read": {"type": "dict", "default": {}},
         "reenable_host": {"type": "str", "default": ""},
         "rotation_signing_key": {"type": "str", "default": ""},
         "api_token": {"type": "str", "no_log": True, "required": True},
@@ -414,6 +466,8 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         e = HostEnrollment(APIClient(p["api_token"], PATHS), fd, p["owner"], module.check_mode, p["reenable_host"])
         hosts = declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc), e.receipt["tokens"])
+        if p["original_writer_read"]:
+            require(any("holonet" in MATRIX[h["host"]] for h in hosts))
         e.resources(hosts, p["baselines"])
         rotation_key = (p["rotation_signing_key"] or e.receipt.get("rotation", {}).get("provider", {}).get("body", {}).get("signing_key"))
         # Preflight before any provider, account or token mutation.
@@ -422,7 +476,9 @@ def main():
         if rotation_key:
             e.rotation(rotation_key)
         users, _ = e.users(hosts)
-        e.expressions(users, p["baselines"])
+        if p["original_writer_read"]:
+            require(not e.changed and not p["reenable_host"])
+        e.expressions(users, p["baselines"], p["original_writer_read"])
         e.receipt = original_receipt
         e.changed = False
         e.check = module.check_mode
@@ -431,11 +487,15 @@ def main():
         users, delivery = e.users(hosts)
         # Missing accounts in CHECK need real API-returned PKs at apply time.
         # Validate all baselines even then, but do not render guessed admission.
-        e.expressions(users, p["baselines"])
+        e.expressions(users, p["baselines"], p["original_writer_read"])
         if not module.check_mode:
             # Recheck authoritative account state after the last policy write.
             e.rows = {k: e.api.rows(k) for k in PATHS}
             users, delivery = e.users(hosts)
+            e.original_writer(p["original_writer_read"])
+        # Projection-only enrollment never reads/delivers any host credential.
+        if p["original_writer_read"]:
+            delivery = []
         module.exit_json(changed=e.changed, delivery=delivery,
                          public_host_users=users, predicted_pks=False)
     except Exception:
