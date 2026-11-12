@@ -291,7 +291,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(d.credential(self.fd, "laptop", os.getuid(), 2, False,
                                      "SYNTHETIC-reenabled-password", reenable=True), (True, False))
 
-    def test_separate_provider_exact_scope_and_binding(self):
+    def rotation_fixture(self):
         import uuid
         api = self.api
         original = api.request
@@ -308,6 +308,11 @@ class Lifecycle(unittest.TestCase):
             return result
         api.request = request
         signing_key = str(uuid.uuid4())
+        return signing_key
+
+    def test_separate_provider_exact_scope_and_binding(self):
+        signing_key = self.rotation_fixture()
+        api = self.api
         x = self.enrollment()
         x.rotation(signing_key)
         x.rows = {k: api.rows(k) for k in e.PATHS}
@@ -316,7 +321,8 @@ class Lifecycle(unittest.TestCase):
         c.public_users(users)
         provider = api.data["provider"][0]
         self.assertEqual(provider["property_mappings"], [api.data["mapping"][0]["pk"]])
-        self.assertEqual(provider["allowed_grant_types"], ["client_credentials"])
+        self.assertNotIn("allowed_grant_types", provider)
+        self.assertEqual(provider["grant_types"], ["client_credentials"])
         self.assertEqual(provider["access_token_validity"], "seconds=300")
         binding = api.data["binding"][0]
         self.assertEqual(binding["group"], users[0]["attributes"]["rotation"]["group"])
@@ -331,6 +337,95 @@ class Lifecycle(unittest.TestCase):
         api.data["provider"][0]["property_mappings"].append("foreign")
         with self.assertRaises(Exception):
             self.enrollment().rotation(signing_key)
+
+    def pending_provider_fixture(self):
+        key = self.rotation_fixture()
+        x = self.enrollment()
+        x.rotation(key)
+        receipt = e.read_private(self.fd, "hosts.json")
+        provider = receipt["rotation"].pop("provider")
+        receipt["rotation"].pop("application")
+        receipt["rotation"].pop("binding")
+        body = copy.deepcopy(provider["body"])
+        body.pop("grant_types")
+        body["allowed_grant_types"] = ["client_credentials"]
+        receipt["pending"] = dict(method="POST", path=e.PATHS["provider"],
+                                  body=body, pk=provider["pk"])
+        e.write_private(self.fd, "hosts.json", receipt)
+        self.api.data["application"] = []
+        self.api.data["binding"] = []
+        self.api.calls.clear()
+        return key, receipt
+
+    def test_pending_provider_exact_pk_adoption_check_and_real_no_duplicate_post(self):
+        key, receipt = self.pending_provider_fixture()
+        x = self.enrollment(check=True)
+        x.rotation(key)
+        self.assertTrue(x.changed)
+        self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        self.assertFalse(any(m != "GET" for m, _, _ in self.api.calls))
+        x = self.enrollment()
+        x.rotation(key)
+        self.assertEqual(x.receipt["rotation"]["provider"]["pk"], receipt["pending"]["pk"])
+        self.assertIsNone(x.receipt["pending"])
+        self.assertFalse(any(m == "POST" and p == e.PATHS["provider"]
+                             for m, p, _ in self.api.calls))
+        self.assertIn(("GET", e.PATHS["provider"] + str(receipt["pending"]["pk"]) + "/", None),
+                      self.api.calls)
+        self.api.calls.clear()
+        self.enrollment().rotation(key)
+        self.assertFalse(any(m != "GET" for m, _, _ in self.api.calls))
+
+    def test_pending_provider_mismatch_preserves_journal_and_never_posts(self):
+        key, receipt = self.pending_provider_fixture()
+        actual = self.api.data["provider"][0]
+        for field, value in [
+            ("grant_types", []), ("access_token_validity", "hours=1"),
+            ("signing_key", OWNER), ("property_mappings", ["foreign"]),
+            ("client_type", "public"), ("authorization_flow", OWNER),
+            ("invalidation_flow", OWNER), ("issuer_mode", "global"),
+            ("redirect_uris", [{"url": "https://foreign.invalid"}]),
+            ("pk", actual["pk"] + 1),
+        ]:
+            with self.subTest(field=field):
+                saved = copy.deepcopy(actual)
+                actual[field] = value
+                for check in (True, False):
+                    with self.assertRaises(e.RotationReconciliationRefused):
+                        self.enrollment(check=check).rotation(key)
+                actual.clear()
+                actual.update(saved)
+                self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+        self.assertFalse(any(m != "GET" for m, _, _ in self.api.calls))
+
+    def test_legacy_pending_without_pk_refuses_without_discovery_or_write(self):
+        key, receipt = self.pending_provider_fixture()
+        receipt["pending"].pop("pk")
+        e.write_private(self.fd, "hosts.json", receipt)
+        with self.assertRaises(e.RotationReconciliationRefused):
+            self.enrollment().rotation(key)
+        self.assertEqual(self.api.calls, [])
+        self.assertEqual(e.read_private(self.fd, "hosts.json"), receipt)
+
+    def test_failed_provider_readback_retains_returned_pk(self):
+        key = self.rotation_fixture()
+        original = self.api.request
+        def request(method, path, body=None):
+            result = original(method, path, body)
+            if method == "POST" and path == e.PATHS["provider"]:
+                result.pop("grant_types")
+            return result
+        self.api.request = request
+        with self.assertRaises(ValueError):
+            self.enrollment().rotation(key)
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertEqual(receipt["pending"]["pk"], self.api.data["provider"][0]["pk"])
+        self.assertNotIn("provider", receipt["rotation"])
+        self.api.request = original
+        self.api.calls.clear()
+        self.enrollment().rotation(key)
+        self.assertFalse(any(m == "POST" and p == e.PATHS["provider"]
+                             for m, p, _ in self.api.calls))
 
     def test_provider_preflight_does_not_write_before_expression_refusal(self):
         from unittest.mock import patch
