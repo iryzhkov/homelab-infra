@@ -185,5 +185,8 @@ def atomic(fd, name, content):
     os.fsync(fd)
 
 def write_private(fd, name, value):
-    read_file(fd, name, 1048576)
+    try:
+        read_private(fd, name)
+    except FileNotFoundError:
+        pass
     atomic(fd, name, json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
