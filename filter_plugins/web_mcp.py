@@ -779,7 +779,7 @@ def playlist_operator_plan(value):
 
 
 # Route-only services: packaged elsewhere, routed by this contract.
-ROUTE_ONLY = ("ov-http", "jocasta")
+ROUTE_ONLY = ("ov-http", "jocasta", "shizune")
 # Jocasta's canonical resource and its existing Compose backend on homelab's
 # mesh address (stacks/jocasta). Both are fixed so a route cannot send
 # Jocasta-audience bearer tokens anywhere else.
@@ -797,6 +797,10 @@ def route_contract(value):
     if value["service"] == "jocasta" and value["state"] == "present":
         require(all(value.get(key) == fixed for key, fixed in JOCASTA_ROUTE.items()),
                 "Jocasta route resource and upstream are fixed")
+    if value["service"] == "shizune" and value["state"] == "present":
+        require(value.get("resource") == "https://shizune.mcp.ryzhkov.dev/mcp"
+                and value.get("upstream") == "http://10.42.0.2:1937",
+                "Shizune route resource and upstream are fixed")
     if value["state"] == "absent":
         return value
     require("resource" in value and "upstream" in value, "explicit route addresses required")

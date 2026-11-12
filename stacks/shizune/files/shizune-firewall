@@ -1,0 +1,11 @@
+#!/bin/sh
+# Filter only Shizune's original published destination.
+set -eu
+host_ip="$1"
+ingress_ips="$2"
+iptables -w -N SHIZUNE 2>/dev/null || true
+iptables -w -F SHIZUNE
+iptables -w -A SHIZUNE -s "$ingress_ips" -j RETURN
+iptables -w -A SHIZUNE -j DROP
+iptables -w -C DOCKER-USER -p tcp -m conntrack --ctorigdst "$host_ip" --ctorigdstport 1937 --ctdir ORIGINAL -j SHIZUNE 2>/dev/null ||
+    iptables -w -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdst "$host_ip" --ctorigdstport 1937 --ctdir ORIGINAL -j SHIZUNE

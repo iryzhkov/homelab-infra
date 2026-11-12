@@ -1,0 +1,41 @@
+services:
+  shizune:
+    image: ${SHIZUNE_IMAGE:?set immutable SHIZUNE_IMAGE}
+    container_name: shizune
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 2
+    ports:
+      - "${HOST_IP}:1937:8080"
+    environment:
+      SHIZUNE_RESOURCE: ${SHIZUNE_RESOURCE}
+      SHIZUNE_ISSUER: ${SHIZUNE_ISSUER}
+      SHIZUNE_JWKS_URL: ${SHIZUNE_JWKS_URL}
+      SHIZUNE_CLIENT_ID: ${SHIZUNE_CLIENT_ID}
+      SHIZUNE_OWNER: ${SHIZUNE_OWNER}
+      ACTUAL_SERVER_URL: ${ACTUAL_SERVER_URL}
+      ACTUAL_BUDGET_SYNC_ID: ${ACTUAL_BUDGET_SYNC_ID}
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./secrets
+        target: /run/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

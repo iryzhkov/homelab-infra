@@ -1,0 +1,36 @@
+---
+authentik_machine_identities_enabled: true
+# First creation requires explicit bootstrap; repeats use a confirmed baseline.
+authentik_machine_identity_existing_owned_only: true
+authentik_machine_identities_blueprint_name: homelab-infra shizune mcp identities
+authentik_machine_services:
+  shizune:
+    state: present
+    slug: shizune-mcp
+    name: Shizune MCP machine access
+    group: shizune-mcp-machine-identities
+    client_id: shizune-mcp-machine
+    resource: https://shizune.mcp.ryzhkov.dev/mcp
+    signing_key: 8bbd6516-af33-4e64-a73b-caa39e692c29
+    scope: shizune.use
+    token_seconds: 300
+    issuer: https://auth.ryzhkov.dev/application/o/shizune-mcp/
+    jwks_url: https://auth.ryzhkov.dev/application/o/shizune-mcp/jwks/
+authentik_machine_identity_destinations:
+  omarchy-pc: {hostname: omarchy-pc, uid: 1000}
+  laptop: {hostname: omarchy-macbook-air-igor, uid: 1001}
+authentik_machine_identities:
+  - host: omarchy-pc
+    profile: shizune-interactive
+    service: shizune
+    shizune_owner: igor
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
+  - host: laptop
+    profile: shizune-interactive
+    service: shizune
+    shizune_owner: igor
+    generation: 1
+    expires: "2027-01-15T00:00:00Z"
+    state: present
