@@ -17,7 +17,7 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-HOLONET_COEXISTENCE_SOURCE = "e97c15b0639f8505a429b1cccc12a7ae3d7d8f27"
+HOLONET_COEXISTENCE_SOURCE = "dec8b52fb87aa189ddfc512db5f4c79480d5bb40"
 HOLONET_CATALOG_SOURCE_REVISIONS = frozenset({
     SERVICES["holonet"][1],
     "31817f70f7fed5900622bc7274c6a8a31275189b",
@@ -400,7 +400,7 @@ def holonet_purposes(config):
             require(isinstance(grant[field], list) and all(isinstance(v, str) for v in grant[field]),
                     "purpose fields must be string lists")
             unique(grant[field])
-        require(1 <= len(grant["subjects"]) <= 4 and set(grant["scopes"]) == set(scopes[name]),
+        require(1 <= len(grant["subjects"]) <= 5 and set(grant["scopes"]) == set(scopes[name]),
                 "invalid purpose subjects or scopes")
         for subject in grant["subjects"]:
             match(subject, r"[!-~]{1,128}")
