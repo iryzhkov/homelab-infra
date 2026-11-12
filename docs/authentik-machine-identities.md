@@ -26,6 +26,59 @@ identities, each run only by its own entrypoint; see
 Complete infra identity creation and host credential delivery before enabling the
 fleet enrollment.
 
+## Expiry inventory
+
+Public source declarations as of 2026-11-12; these are desired values, not a
+live Authentik readback or proof of enrollment. All listed accounts use generation
+**1**. Account names below use the role's `chaldea-<host>-<profile>` convention.
+
+| Identity group | Owning playbook; vars file (under `playbooks/`) | Accounts | Declared expiry (UTC) |
+| --- | --- | --- | --- |
+| Jocasta tooling | `authentik-jocasta-tooling.yml`; `vars/authentik-jocasta-tooling.yml` | `chaldea-laptop-jocasta-tooling-codex`, `chaldea-laptop-jocasta-tooling-claude`, `chaldea-laptop-jocasta-tooling-opencode`, `chaldea-agent-a-jocasta-tooling-opencode`, `chaldea-agent-b-jocasta-tooling-opencode`, `chaldea-omarchy-pc-jocasta-tooling-opencode` | 2027-02-15T00:00:00Z (six declarations) |
+| OV HTTP read-only | `authentik-ov-http-identities.yml`; `vars/authentik-ov-http-identities.yml` | `chaldea-controller-ov-http-a63e197f-reader`, `chaldea-laptop-ov-tooling-codex`, `chaldea-laptop-ov-interactive-codex` | 2027-01-15T00:00:00Z (three declarations) |
+| OV full interactive option | `authentik-ov-http-identities.yml`; `vars/authentik-ov-http-full-interactive.yml` | The same three OV accounts, plus `chaldea-laptop-ov-full-interactive` and `chaldea-omarchy-pc-ov-full-interactive` | 2027-01-15T00:00:00Z (five declarations; three repeat the read-only file) |
+| Shizune | `authentik-shizune-identities.yml`; `vars/authentik-shizune-identities.yml` | `chaldea-omarchy-pc-shizune-interactive`, `chaldea-laptop-shizune-interactive` | 2027-01-15T00:00:00Z (two declarations) |
+| HoloNet catalog and optional interactive reader | `authentik-holonet-catalog.yml`; `vars/authentik-holonet-catalog.yml` | `chaldea-homelab-holonet-movies-catalog`, `chaldea-laptop-holonet-movies-catalog-claude`, optional `chaldea-laptop-holonet-interactive` | 2026-11-20T00:00:00Z (three references to `holonet_catalog_identity_expires`) |
+| HoloNet optional recommendation writer | Same HoloNet playbook and vars file | `chaldea-laptop-holonet-recommendations` | Empty `expires`: supplied through protected operator input when enabled; not monitored from source |
+
+The five files contain 20 `expires` keys: 19 dated declarations (including
+repeated OV accounts and optional HoloNet reader) and one empty writer input.
+The shared HoloNet deadline is also a top-level public variable.
+
+Coverage boundary: `authentik-agent-hosts.yml` and its matching vars file
+declare an empty host list; `authentik-webmcp-interactive.yml` and its matching
+vars file declare an empty managed-host list and disabled enrollment. Their
+accounts, generations and expiries come from protected operator inputs, so none
+can be established or monitored from these public defaults. The
+`authentik-jocasta-operator.yml` defaults likewise declare no expiry.
+No credential files, private receipts or SOPS inputs are part of this inventory.
+
+### Expiry alert
+
+`.github/workflows/authentik-expiry.yml` runs daily at 08:17 UTC on the default
+branch and supports `workflow_dispatch`. It runs
+`scripts/check-authentik-expiry.py` over public YAML in `playbooks/vars/` and
+`vars/`, resolving simple same-file variable references. Every `expires`
+key is checked, including optional declarations; malformed timestamps or
+unresolved references fail closed. Empty operator inputs are reported as
+unmonitored. It never connects to Authentik, opens secret directories or renews
+anything. No existing source-expiry alert was found to reuse.
+
+The job fails for an expired value or one within **22 days**, giving at least
+21 days' notice at the normal daily cadence (GitHub schedules can be delayed).
+Igor receives failed-workflow notifications through GitHub Actions notifications;
+email delivery depends on his GitHub notification preferences. The scheduled
+workflow's notification recipient follows GitHub's schedule actor rules; keep
+Igor as the schedule actor. PR and main CI run the deterministic parser tests,
+while the clock-based alert runs separately so an overdue credential does not
+block unrelated infrastructure fixes.
+
+At inventory time the HoloNet source deadline is already inside the alert
+window. A failed alert is expected until its owner reconciles that declaration.
+No expiry is extended here. Per Igor's 2026-11-12 decision this change ships
+inventory and alerts only; unattended renewal belongs to
+`jocasta:d6133e69762bdf0123ef7d5d8e6ff608`, M3 P3.2.
+
 ## What it manages
 
 One OAuth2 provider and application per declared service, and for each declared

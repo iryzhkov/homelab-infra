@@ -31,6 +31,10 @@ jobs:
         run: apt-get update -qq && apt-get install -y --no-install-recommends shellcheck git
       - run: python3 scripts/test-upkeeper-drift.py
       - run: python3 scripts/test-authentik-drift.py
+      - name: Test expiry declaration parser
+        run: |
+          pip install --disable-pip-version-check PyYAML==6.0.2
+          python3 scripts/test-authentik-expiry.py
       - run: python3 scripts/test-helper-backups.py
       - run: python3 scripts/test-jocasta-backup.py
       - run: python3 scripts/test-swarm-snapshot.py
