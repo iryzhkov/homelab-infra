@@ -257,6 +257,7 @@ jobs:
           test "$HOME" = "$TMPDIR/.scratch-home"
           mkdir -p "$HOME" "$TMPDIR"
           pip install --disable-pip-version-check ansible-core==2.19.13 deepmerge==2.1.0
+          ansible-galaxy collection install community.sops:2.5.1
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
             -s roles/authentik_machine_identities/tests -p test_holonet_catalog_identities.py \
             -k test_source_declaration_is_exact_isolated_and_unbound -v
