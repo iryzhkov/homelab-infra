@@ -96,7 +96,7 @@ openviking_local_release:
 # 40146155685, retained artifact 12581331195, published without a rebuild.
 # This is desired source state, not a receipt of homelab/native convergence.
 # The old a3e83c5 image remains allowed for limited-only rollback; docs/jocasta.md.
-jocasta_image: git.ryzhkov.dev/igor/jocasta:d473d2be609b27b4b229eb6d077352850e3b4a57@sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9
+jocasta_image: git.ryzhkov.dev/igor/jocasta:3707213a5fc180e9822d49667776b8eb8d6b198e@sha256:33fa8460398097524d1bb89427bda283fe58e1ff3f6e425763b61e56a67b4330
 
 # PREPARED conditional verifier selection. Native qualification is OPEN.
 # Keep off main until root passes actual laptop Codex AND Claude full managed

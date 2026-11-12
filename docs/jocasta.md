@@ -27,6 +27,24 @@ needed here. SQLite-aware immutable recovery points live under
 All document content and history are in the database; Docker images and
 credentials alone are not a recovery copy.
 
+## Current search release
+
+Jocasta v0.1.7 fixes separated path-word candidate matching, including degraded
+index operation, archived names and limited project scans. Source
+`3707213a5fc180e9822d49667776b8eb8d6b198e` passed CI run 43252245885 and
+Chaldea check, race tests and cross builds. PR6 merged as
+`00b9cc919c2107b6fdb6349b1e154eda6c40884b` with an identical application tree.
+The checked CI image archive SHA256 is
+`459ac34c77596aebef312adb4beae755648d61b27e03e1b5327f1db8f97c9dfc`.
+Inventory and the source filter require its exact source tag and registry digest
+`sha256:33fa8460398097524d1bb89427bda283fe58e1ff3f6e425763b61e56a67b4330`.
+The capacity-fix publication below is historical evidence. Existing verifier,
+enrollment, route and storage settings are retained.
+
+From omarchy-pc, use the targeted deployment command below with
+`--check --diff`, inspect it, then apply without those flags and repeat the
+identical apply. Require the repeat to report changed=0, failed=0, unreachable=0.
+
 ## Deploy
 
 The current desired capacity-fix image is already published from exact retained
