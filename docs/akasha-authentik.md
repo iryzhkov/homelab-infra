@@ -63,10 +63,11 @@ ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -
 ```
 
 3. Verify current artifact roots and caches before each Akasha invocation.
-   The independent runtime root must contain 016/017/018 with matching cache pairs,
-   newest prior018 excluding selected020. After installation expect016/017/018/020.
-   Explicit016 keeps collectors, explicit017 keeps the older rollback, and newest
-   prior018 is retained automatically. Never change
+   The independent runtime root must contain 017/018 with matching cache pairs,
+   newest prior018 excluding selected020. After installation expect017/018/020.
+   Explicit018 keeps the fleet collectors (akasha_collector_version runs from this
+   root) and is also the newest prior release; explicit017 keeps the older
+   rollback. 016 was pruned before this packet and is not required. Never change
    mtimes or install missing versions to pass retention. Shared022 and clock012 stay pinned.
    Use the existing reviewed activation packet and exact artifact attestation:
 
