@@ -1,0 +1,75 @@
+---
+# Prompt overrides use upstream configuration and existing state mounts.
+- name: Install concise OV summary prompts
+  hosts: homelab
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create prompt override directory
+      ansible.builtin.file:
+        path: /srv/swarm/openviking/data/prompt-templates/semantic
+        state: directory
+        mode: "0755"
+
+    - name: Install factual summary overrides
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../stacks/openviking/files/prompts/semantic/{{ item }}.yaml"
+        dest: "/srv/swarm/openviking/data/prompt-templates/semantic/{{ item }}.yaml"
+        mode: "0644"
+      loop: [file_summary, document_summary, overview_generation]
+      register: ov_prompt_files
+
+    - name: Select override directory while preserving all existing configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json, os, pathlib, shutil, tempfile
+            p = pathlib.Path("/srv/swarm/openviking/config/ov.conf")
+            assert p.is_file() and not p.is_symlink()
+            before = p.read_bytes()
+            config = json.loads(before)
+            prompts = config.setdefault("prompts", {})
+            target = "/app/data/prompt-templates"
+            if prompts.get("templates_dir") == target:
+                print("unchanged")
+                raise SystemExit(0)
+            if os.environ["OV_CHECK"] == "1":
+                print("changed")
+                raise SystemExit(0)
+            prompts["templates_dir"] = target
+            backup = p.with_name("ov.conf.before-concise-abstracts")
+            if not backup.exists():
+                with backup.open("xb") as out:
+                    os.fchmod(out.fileno(), 0o600)
+                    out.write(before)
+            fd, name = tempfile.mkstemp(prefix=".ov-conf-", dir=p.parent)
+            try:
+                with os.fdopen(fd, "w") as out:
+                    json.dump(config, out, ensure_ascii=False, indent=2)
+                    out.write("\n")
+                    out.flush()
+                    os.fsync(out.fileno())
+                shutil.copystat(p, name)
+                os.chown(name, p.stat().st_uid, p.stat().st_gid)
+                assert p.read_bytes() == before
+                os.replace(name, p)
+            finally:
+                if os.path.exists(name):
+                    os.unlink(name)
+            print("changed")
+      environment:
+        OV_CHECK: "{{ '1' if ansible_check_mode else '0' }}"
+        TMPDIR: /srv/swarm/openviking/data/temp
+      check_mode: false
+      register: ov_prompt_config
+      changed_when: ov_prompt_config.stdout == 'changed'
+      no_log: true
+      diff: false
+
+    - name: Restart OV to discard cached templates when inputs change
+      ansible.builtin.command:
+        argv: [docker, service, update, --force, --detach=false, openviking_openviking]
+      when: ov_prompt_files.changed or ov_prompt_config.changed
+      changed_when: true

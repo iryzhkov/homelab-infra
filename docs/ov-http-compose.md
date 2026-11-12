@@ -119,16 +119,16 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:ce94410e1002fbaaa6fd9f06dd0e3bf90ed7db6e98cb8515f01b189e5c80a696
-source_revision: 7d833b8d51b2d8074be1ef376140cd08a9190a9d
+reference: sha256:42d9a69d630b772ffd73c7f67380dfff7fa37d368ef8bee2d5ee217e8f41770b
+source_revision: 6ded162b66b8b3af7bf9e151dbbb068bd7947ec9
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/41204069205
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/43253872788
 ```
 
 All five fields must match together. The contract revision remains the existing
-full-resource envelope pin. Publication source 7d833b8d51b2d8074be1ef376140cd08a9190a9d
-identifies reviewed tree 0b75cef82d3703d675e1a74f5bf7774dc988e7e0,
-equivalent to reviewed source dbcacc9272a12e57cd2344646a3c0d755c406fb8.
+full-resource envelope pin. Publication source 6ded162b66b8b3af7bf9e151dbbb068bd7947ec9
+identifies reviewed tree 67defb96caffe02a8f455dea48ff52f10dcbe583,
+with current-note filtering and protected sidecar mutations qualified on disposable fixtures.
 The closed object and image label use the publication revision. The distribution
 source allowlist, roles, templates, namespace ceiling and grants stay unchanged.
 
