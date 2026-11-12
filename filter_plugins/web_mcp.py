@@ -17,8 +17,8 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-HOLONET_COEXISTENCE_SOURCE = "3d4dcb35cab58a02aee7fa3dc7804d5a1790b7d0"
-HOLONET_COEXISTENCE_SHA256 = "189717cc9c16df3bf1842ece8f3312306ea55d526278d6c54424992a6348210d"
+HOLONET_COEXISTENCE_SOURCE = "9230187a4cf3058f316f0c06cfcac0a848fc910c"
+HOLONET_COEXISTENCE_SHA256 = "d94092107039ffe8cb2c79926952a38922c383b9d006503f49231f0254bb66e1"
 HOLONET_CATALOG_SOURCE_REVISIONS = frozenset({
     SERVICES["holonet"][1],
     "31817f70f7fed5900622bc7274c6a8a31275189b",
@@ -50,10 +50,14 @@ HOLONET_TORRENT_SHA256 = "d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848
 TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
-# Exact candidate artifact. Independent review, CI and access approval still gate activation.
-HOLONET_ACQUIRE_SOURCE = "4e6f87442b88f61b4017f86e507bf90567ad2c29"
-HOLONET_ACQUIRE_SHA256 = "8516cc4b398c528ba968e3b70f54932000f0c0bca8d8ffee5cf658eec9ca90ed"
-HOLONET_ACQUIRE_CONTRACT = "4e6f87442b88f61b4017f86e507bf90567ad2c29"
+# One purpose-compatible consumer artifact satisfies acquisition and coexistence.
+# CLI 9230187 extends main 8350d751 (PR54 + PR55) with the exact original-writer
+# acquisition tuples. Installed 189717cc lacks those mappings and needs replacement
+# for this input. The acquisition wire fixture and helper 9a9455ee are unchanged.
+# Review, CI and conditional packet gates still precede activation.
+HOLONET_ACQUIRE_SOURCE = HOLONET_COEXISTENCE_SOURCE
+HOLONET_ACQUIRE_SHA256 = HOLONET_COEXISTENCE_SHA256
+HOLONET_ACQUIRE_CONTRACT = HOLONET_COEXISTENCE_SOURCE
 # Stat-only seed/library pair (jocasta:c3070dfe196e7f67732749db4b279689@3).
 # Exact reviewed client/worker pair; publication and CI still gate deployment.
 # Static linux/amd64 artifact: Chaldea b02e84fd-94d4-4491-bfa8-76370db21cc9.
@@ -386,13 +390,16 @@ def holonet_purposes(config):
     if grants is None:
         return
     scopes = {
+        "acquire_read": ["holonet.read", "holonet.janitor", "holonet.acquire"],
+        "acquire_start": ["holonet.read", "holonet.janitor", "holonet.acquire", "holonet.acquire.start"],
+        "acquire_media": ["holonet.read", "holonet.janitor", "holonet.acquire", "holonet.acquire.media"],
         "catalog": ["holonet.read"],
         "writer": ["holonet.read", "holonet.curate", "holonet.home"],
         "importer": ["holonet.read", "holonet.janitor"],
         "torrent": ["holonet.read", "holonet.janitor", "holonet.torrents"],
         "seed_join": ["holonet.read", "holonet.janitor", "holonet.seedjoin"],
     }
-    require(isinstance(grants, dict) and 1 <= len(grants) <= 5 and set(grants) <= set(scopes),
+    require(isinstance(grants, dict) and 1 <= len(grants) <= len(scopes) and set(grants) <= set(scopes),
             "invalid purpose map")
     for name, grant in grants.items():
         keys(grant, ("subjects", "scopes", "namespace", "libraries", "catalog_users",
@@ -413,6 +420,20 @@ def holonet_purposes(config):
                     and not grant["history_users"] and not grant["target_users"]
                     and set(grant["libraries"]) <= set(config["policy"]["Libraries"]),
                     "catalog purpose must remain read only")
+        elif name in ("acquire_read", "acquire_start", "acquire_media"):
+            janitor = config.get("janitor")
+            actions = {"acquire_read": {"janitor.acquire.read"},
+                       "acquire_start": {"janitor.acquire.read", "janitor.acquire.start"},
+                       "acquire_media": {"janitor.acquire.read", "janitor.acquire.media"}}
+            require(operator is not None and janitor is not None
+                    and operator["subject"] == janitor["subject"]
+                    and operator["library"] == janitor["library"] == "3"
+                    and grant["subjects"] == [operator["subject"]]
+                    and grant["namespace"] == "managed-janitor" and grant["libraries"] == ["3"]
+                    and not grant["catalog_users"] and not grant["history_users"] and not grant["target_users"]
+                    and set(grant["actions"]) == actions[name]
+                    and set(grant["actions"]) <= set(config["policy"]["Actions"]),
+                    "acquisition purpose exceeds original writer tuple")
         else:
             require(operator is not None and set(grant["subjects"]) == holonet_subjects(operator),
                     "purpose writer subjects differ")
@@ -758,9 +779,10 @@ def endpoint_contract(value):
     acquire_build = (service == "holonet" and HOLONET_ACQUIRE_SOURCE is not None
                      and HOLONET_ACQUIRE_SHA256 is not None and HOLONET_ACQUIRE_CONTRACT is not None
                      and artifact["source_revision"] == HOLONET_ACQUIRE_SOURCE)
-    if acquire_build:
-        require(artifact["sha256"] == HOLONET_ACQUIRE_SHA256, "unaccepted acquisition binary")
     coexistence_build = service == "holonet" and artifact["source_revision"] == HOLONET_COEXISTENCE_SOURCE
+    # The shared coexistence build is checked once below against the same pin.
+    if acquire_build and not coexistence_build:
+        require(artifact["sha256"] == HOLONET_ACQUIRE_SHA256, "unaccepted acquisition binary")
     seed_join_build = coexistence_build or acquire_build or (service == "holonet" and HOLONET_SEED_JOIN_SOURCE is not None
                        and HOLONET_SEED_JOIN_CONTRACT is not None
                        and HOLONET_SEED_JOIN_SHA256 is not None

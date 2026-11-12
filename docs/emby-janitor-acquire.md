@@ -53,10 +53,29 @@ existing guarded qBit credential. It never reads or copies the credential in
 Ansible and never creates a new login. start_enabled/media_enabled are explicit
 booleans and independent of purpose grants. The three acquisition scopes project
 separate flat managed-janitor grants on the existing Anime writer; old grants and
-request branches remain separate. Defaults are false. The exact candidate consumer artifact is source4e6f87442b88f61b4017f86e507bf90567ad2c29,
-SHA2568516cc4b398c528ba968e3b70f54932000f0c0bca8d8ffee5cf658eec9ca90ed,
-interface4e6f87442b88f61b4017f86e507bf90567ad2c29. It remains a candidate until
-independent source review and CI pass; no live configuration selects it.
+request branches remain separate. Defaults are false. The consumer artifact is
+purpose-compatible coexistence build: source/interface
+9230187a4cf3058f316f0c06cfcac0a848fc910c, tree
+ffd527ad214ac8a279f6ee19981e160d9a42a800,
+SHA256 d94092107039ffe8cb2c79926952a38922c383b9d006503f49231f0254bb66e1,
+built with `package.sh` and Go 1.25.0. It extends merged main 8350d751,
+which already contains acquisition PR54 and coexistence PR55. Both gates accept
+this same new artifact. The installed 189717cc build contains acquisition and
+coexistence but lacks these purpose mappings and is superseded for this input. The earlier pre-coexistence candidate (source
+4e6f8744, SHA256 8516cc4b) is no longer admissible because installing it would
+drop configured subjects. No live configuration selects acquisition.
+
+Under coexistence, purpose_grants is mandatory. Alongside the existing catalog,
+writer, importer, torrent and seed_join purposes, this validator and the Go
+consumer admit exactly acquire_read, acquire_start and acquire_media. Each has
+the packet's exact scopes/actions, namespace managed-janitor, library 3, empty
+catalog/history/target users, and only the original playlist_operator.subject
+matching janitor.subject. A second subject, foreign purpose or start/media union
+is refused. authorizeAcquire also binds the requested operation to its configured
+purpose. Configuration support enrolls no grants: initial enrollment is read
+only, with start/media projections withheld until their independent gates pass.
+No inventory opt-in or worker default changes. Reuse the existing 9a9455ee helper,
+which already contains Shizune and all acquisition modes; no helper rebuild.
 
 The Sonarr acquisition descriptor extends the existing importer shape only with
 acquire_download_origins=[https://prowlarr.ryzhkov.dev]. The worker validates this
