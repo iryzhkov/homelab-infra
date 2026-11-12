@@ -36,18 +36,24 @@ def credential(fd, host, uid, generation, revoked, password=None, check=False, r
         # An orphaned key must never be adopted or overwritten.
         require(False)
     if revoked:
-        changed = secret is not None or marker is None or marker["status"] != "revoked"
+        # Rotation leftovers count as change too, so an interrupted cleanup
+        # after the tombstone was written still removes a staged credential.
+        leftovers = [name for name in ("rotation.json", "host.app-password.stage")
+                     if read_file(fd, name) is not None]
+        tombstoned = marker is not None and marker["status"] == "revoked"
+        changed = secret is not None or not tombstoned or bool(leftovers)
         if not check and changed:
-            tombstone = {"host": host, "uid": uid, "generation": max(generation, marker["generation"] if marker else 0),
-                         "status": "revoked"}
-            atomic(fd, "host.generation.json", json.dumps(tombstone).encode())
+            if not tombstoned:
+                tombstone = {"host": host, "uid": uid,
+                             "generation": max(generation, marker["generation"] if marker else 0),
+                             "status": "revoked"}
+                atomic(fd, "host.generation.json", json.dumps(tombstone).encode())
             if secret is not None:
                 os.unlink("host.app-password", dir_fd=fd)
                 os.fsync(fd)
-            for name in ("rotation.json", "host.app-password.stage"):
-                if read_file(fd, name) is not None:
-                    os.unlink(name, dir_fd=fd)
-                    os.fsync(fd)
+            for name in leftovers:
+                os.unlink(name, dir_fd=fd)
+                os.fsync(fd)
         return changed, False
     if marker:
         require(secret is not None and hashlib.sha256(secret).hexdigest() == marker["sha256"])

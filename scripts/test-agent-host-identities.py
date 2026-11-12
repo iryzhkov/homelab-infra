@@ -421,6 +421,21 @@ class Lifecycle(unittest.TestCase):
         with self.assertRaises(Exception):
             self.enrollment()
 
+    def test_revocation_retry_removes_rotation_leftovers_after_tombstone(self):
+        key = "SYNTHETIC-bootstrap-password"
+        d.credential(self.fd, "laptop", 1000, 1, False, key)
+        d.atomic(self.fd, "rotation.json", b"{}")
+        d.atomic(self.fd, "host.app-password.stage", b"SYNTHETIC-staged-password")
+        # Simulate an interruption after the tombstone and password unlink.
+        marker = json.loads(d.read_file(self.fd, "host.generation.json"))
+        marker["status"] = "revoked"
+        d.atomic(self.fd, "host.generation.json", json.dumps(marker).encode())
+        os.unlink("host.app-password", dir_fd=self.fd)
+        self.assertEqual(d.credential(self.fd, "laptop", 1000, 1, True, check=True), (True, False))
+        self.assertEqual(d.credential(self.fd, "laptop", 1000, 1, True), (True, False))
+        self.assertEqual(sorted(os.listdir(self.fd)), ["host.generation.json"])
+        self.assertEqual(d.credential(self.fd, "laptop", 1000, 1, True), (False, False))
+
     def test_generation_guard_and_tombstone(self):
         key = "SYNTHETIC-bootstrap-password"
         self.assertEqual(d.credential(self.fd, "laptop", 1000, 1, False, check=True), (True, True))
