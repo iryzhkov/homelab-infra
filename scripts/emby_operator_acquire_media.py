@@ -125,6 +125,8 @@ def verify(call, block, sonarr, emby, torrent):
             # Unknown payloads cannot be silently called harmless sidecars.
             need(extension in ('nfo', 'txt', 'srt', 'ass', 'ssa', 'jpg', 'png'))
             continue
+        # Samples/extras cannot satisfy episode coverage, even if episode-named.
+        need(not re.search(r'(?i)(?<![A-Za-z0-9])(samples?|extras?)(?![A-Za-z0-9])', name))
         match = re.findall(r'(?i)(?<![A-Za-z0-9])S([0-9]{1,2})E([0-9]{1,4})(?![0-9])', name)
         need(len(match) == 1 and int(match[0][0]) == q['target']['season'])
         number = int(match[0][1])

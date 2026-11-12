@@ -16,8 +16,7 @@ labels are insufficient. No Sonarr grab/import or library change is exposed.
 Start adds uploaded torrent bytes once to the fixed holonet-stage category and
 an exclusive operation directory under /mnt/shared/downloads/staging/holonet.
 The directory is created empty without adopting any existing name. This is a
-preparation effect and not global writer exclusion. No cleanup removes it on
-failure. Add attempts with lost replies remain uncertain; an ACK survives a
+preparation effect and not global writer exclusion. With start selected, the unit\npermits writes only under that fixed staging prefix and uses existing media group\n988. The new directory retains worker ownership with group988 access for qBit;\nno CAP_CHOWN or other root capability is added. No cleanup removes it on failure. Add attempts with lost replies remain uncertain; an ACK survives a
 readback/logout failure. Status requires matching hash/category/tag/exact path.
 Add readback and later status also require actual per-torrent Custom/Stop and
 unlimited ratio/time fields; missing fields or a global/removal fallback refuse
@@ -43,9 +42,9 @@ existing guarded qBit credential. It never reads or copies the credential in
 Ansible and never creates a new login. start_enabled/media_enabled are explicit
 booleans and independent of purpose grants. The three acquisition scopes project
 separate flat managed-janitor grants on the existing Anime writer; old grants and
-request branches remain separate. Defaults are false. The exact candidate consumer artifact is source22be0abe26ea5418021a47ace69e2f51e64db300,
-SHA25628a4542455871b52e13155a4201d5de46a6bd1c8f7f916f7bc43a26c78860c33,
-interface22be0abe26ea5418021a47ace69e2f51e64db300. It remains a candidate until
+request branches remain separate. Defaults are false. The exact candidate consumer artifact is source3470cc0f3f1e4bfab660a279859537d428a5cd96,
+SHA256b6e3f4b33aa27cb1bb60545a1f8aa0353739bf8cd7dbf8bc165969afc2edd3b4,
+interface3470cc0f3f1e4bfab660a279859537d428a5cd96. It remains a candidate until
 independent source review and CI pass; no live configuration selects it.
 
 The Sonarr acquisition descriptor extends the existing importer shape only with

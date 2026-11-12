@@ -49,9 +49,9 @@ TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
 # Exact candidate artifact. Independent review, CI and access approval still gate activation.
-HOLONET_ACQUIRE_SOURCE = "22be0abe26ea5418021a47ace69e2f51e64db300"
-HOLONET_ACQUIRE_SHA256 = "28a4542455871b52e13155a4201d5de46a6bd1c8f7f916f7bc43a26c78860c33"
-HOLONET_ACQUIRE_CONTRACT = "22be0abe26ea5418021a47ace69e2f51e64db300"
+HOLONET_ACQUIRE_SOURCE = "3470cc0f3f1e4bfab660a279859537d428a5cd96"
+HOLONET_ACQUIRE_SHA256 = "b6e3f4b33aa27cb1bb60545a1f8aa0353739bf8cd7dbf8bc165969afc2edd3b4"
+HOLONET_ACQUIRE_CONTRACT = "3470cc0f3f1e4bfab660a279859537d428a5cd96"
 # Stat-only seed/library pair (jocasta:c3070dfe196e7f67732749db4b279689@3).
 # Exact reviewed client/worker pair; publication and CI still gate deployment.
 # Static linux/amd64 artifact: Chaldea b02e84fd-94d4-4491-bfa8-76370db21cc9.
@@ -77,8 +77,8 @@ HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_acquire.py": "f18a4f13779f0964faca3d781508572a5e9d55bbc72ec4f89034afab184d5002",
-    "emby_operator_acquire_media.py": "26155b478d0aaf27fe56c82461d51f851ab74b2dac9fa4f7bdebbeb98733a2f9",
+    "emby_operator_acquire.py": "e3067e34c668e84151b42323330e901ccab9d0801ac578c25604aa604cc52bf0",
+    "emby_operator_acquire_media.py": "8c5969434b52a94a9441daef1e8d6ec47642e222bb23bea5bb2567b4b0384798",
     "emby_operator_acquire_torrents.py": "76a9adbfe7ce8ecc1d1e2904dfc28c5de38076b4225a64e93a9fe394926c7396",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",

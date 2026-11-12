@@ -920,6 +920,26 @@ class PackagingTest(unittest.TestCase):
             changed.pop("acquire")
             self.rejected(changed)
 
+    def test_acquire_unit_write_path_is_fixed_and_start_only(self):
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+        template = env.from_string((ROOT /
+            "roles/web_mcp_endpoint/templates/holonet-playlists-worker@.service.j2").read_text())
+        value = self.acquire_fixture()
+        value["artifact"].update(source_revision=contract.HOLONET_ACQUIRE_SOURCE,
+            contract_revision=contract.HOLONET_ACQUIRE_CONTRACT, sha256=contract.HOLONET_ACQUIRE_SHA256)
+        for enabled in (False, True):
+            value["acquire"]["start_enabled"] = enabled
+            plan = contract.playlist_operator_plan(value)
+            rendered = template.render(web_mcp_operator=plan)
+            writable = [line for line in rendered.splitlines() if line.startswith("ReadWritePaths=")]
+            expected = ["ReadWritePaths=" + " ".join(plan["journals"])]
+            if enabled:
+                expected.append("ReadWritePaths=/mnt/shared/downloads/staging/holonet")
+            self.assertEqual(writable, expected)
+            self.assertIn("ProtectSystem=strict", rendered)
+            self.assertIn("CapabilityBoundingSet=\n", rendered)
+            self.assertEqual("SupplementaryGroups=988" in rendered, enabled)
+
     def seed_join_fixture(self, root=None):
         value = custody_fixture()
         value["artifact"].update(source_revision=contract.HOLONET_TORRENT_SOURCE,

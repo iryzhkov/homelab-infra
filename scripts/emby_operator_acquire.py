@@ -386,7 +386,10 @@ def stage_directory(operation_id):
         os.mkdir(operation_id, mode=0o700, dir_fd=fd)
         child = os.open(operation_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
         try:
-            os.fchown(child, owner.st_uid, owner.st_gid)
+            # The worker owns the new directory. A member may select the existing
+            # media group without CAP_CHOWN; qBit uses group access, not uid adoption.
+            need(owner.st_gid in os.getgroups())
+            os.fchown(child, -1, owner.st_gid)
             os.fchmod(child, 0o770)
             need(os.listdir(child) == [])
         finally:

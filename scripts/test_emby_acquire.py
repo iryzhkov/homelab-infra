@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import emby_operator_acquire as a
 import emby_operator_acquire_torrents as t
+import emby_operator_acquire_media as media
 import emby_operator_socket as s
 from emby_operator_recommendations import Refused
 
@@ -250,6 +251,25 @@ class AcquisitionTests(unittest.TestCase):
                              ('inactive_seeding_time_limit', False)):
             self.assertFalse(t.StageTorrent.safe_limits(dict(safe, **{field: value})))
         self.assertFalse(t.StageTorrent.safe_limits({}))
+
+    def test_episode_named_sample_never_qualifies_coverage(self):
+        from types import SimpleNamespace
+        call = copy.deepcopy(self.call)
+        observed = self.fixture['inspect']['result']
+        call['request'] = dict(target=a.binding(observed),
+            expected_episodes=a.episode_set(observed), operation_id='f' * 32)
+        q = call['request']
+        for name in ('Sample/S01E01.mkv', 'S01E01.sample.mp4', 'Extras/S01E01.mkv'):
+            inventory = dict(tags_match_operation=True, client_reports_complete=True,
+                save_path=a.PREFIX + '/' + q['operation_id'],
+                files=[dict(name=name, size=100)])
+            torrent = SimpleNamespace(status=lambda caller: inventory)
+            with self.subTest(name=name), patch.object(media, 'inspect', return_value=observed), \
+                 patch.object(media, 'open_payload') as opened:
+                with self.assertRaises(Refused):
+                    media.verify(call, self.block, SyntheticSonarr(self.fixture),
+                                 SyntheticEmby(), torrent)
+                opened.assert_not_called()
 
     def test_only_one_add_send(self):
         api = object.__new__(t.StageTorrent)
