@@ -214,6 +214,10 @@ return {'aud': 'https://akasha.ryzhkov.dev',
                             and body["include_claims_in_id_token"] is True):
                         self.mutate("PATCH", PATHS[kind] + str(prior["pk"]) + "/",
                                     {"include_claims_in_id_token": True})
+                        if self.check:
+                            # Predicted change only; the receipt and readback
+                            # follow the real PATCH.
+                            return prior["pk"]
                         actual = self.api.request("GET", PATHS[kind] + str(prior["pk"]) + "/")
                         require(actual.get("pk") == prior["pk"] and matches(actual, body))
                         prior["body"] = body

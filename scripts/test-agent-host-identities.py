@@ -384,6 +384,15 @@ class Lifecycle(unittest.TestCase):
         row = next(r for r in self.api.data["provider"] if r["pk"] == objects["provider"]["pk"])
         row["include_claims_in_id_token"] = False
         objects["provider"]["body"]["include_claims_in_id_token"] = False
+        x.save()
+        old = copy.deepcopy(self.api.data)
+        calls = len(self.api.calls)
+        checked = self.enrollment(check=True)
+        checked.akasha(users, OWNER)
+        self.assertTrue(checked.changed)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.assertEqual(self.api.data, old)
+        self.assertIs(self.enrollment(check=True).receipt["akasha"]["provider"]["body"]["include_claims_in_id_token"], False)
         calls = len(self.api.calls)
         x.akasha(users, OWNER)
         writes = [(m, b) for m, _, b in self.api.calls[calls:] if m != "GET"]
