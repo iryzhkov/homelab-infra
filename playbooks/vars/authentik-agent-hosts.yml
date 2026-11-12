@@ -1,0 +1,7 @@
+---
+# Protected operator inputs: explicit cohort, node/UID bindings, receipt UUID/path,
+# and exact old mapping/policy PKs + expression hashes. No speculative defaults.
+authentik_agent_hosts: []
+authentik_agent_host_owner: ""
+authentik_agent_host_receipt_dir: ""
+authentik_agent_host_baselines: []

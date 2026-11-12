@@ -1,0 +1,45 @@
+---
+- name: Inspect the bound destination and generation without retrieving a key
+  authentik_host_credential: &host_credential
+    host: "{{ agent_host.host }}"
+    home: "{{ '/home/iryzhkov' if agent_host.host == 'homelab' else '/home/igor' }}"
+    hostname: "{{ agent_host.destination.hostname }}"
+    uid: "{{ agent_host.destination.uid }}"
+    generation: "{{ agent_host.generation }}"
+    revoked: "{{ agent_host.revoked }}"
+    inspect: true
+  delegate_to: "{{ agent_host.host }}"
+  connection: "{{ hostvars[agent_host.host].ansible_connection | default('ssh') }}"
+  become: false
+  vars:
+    ansible_user: "{{ 'iryzhkov' if agent_host.host == 'homelab' else 'igor' }}"
+  register: agent_host_custody
+  no_log: true
+
+- name: Retrieve only a still-needed bootstrap key on the controller
+  ansible.builtin.uri:
+    url: "https://auth.ryzhkov.dev/api/v3/core/tokens/{{ agent_host.token | urlencode }}/view_key/"
+    headers:
+      Authorization: "Bearer {{ authentik_api.authentik_api_token }}"
+    follow_redirects: none
+  register: agent_host_key
+  when: not ansible_check_mode and not agent_host.revoked and agent_host_custody.needs_key
+  no_log: true
+
+- name: Commit delivery or a revocation tombstone under the generation lock
+  authentik_host_credential:
+    <<: *host_credential
+    inspect: false
+    password: "{{ agent_host_key.json.key | default(omit) }}"
+  delegate_to: "{{ agent_host.host }}"
+  connection: "{{ hostvars[agent_host.host].ansible_connection | default('ssh') }}"
+  become: false
+  vars:
+    ansible_user: "{{ 'iryzhkov' if agent_host.host == 'homelab' else 'igor' }}"
+  no_log: true
+  diff: false
+
+- name: Forget the bootstrap key
+  ansible.builtin.set_fact:
+    agent_host_key: {}
+  no_log: true

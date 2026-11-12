@@ -8,6 +8,7 @@
     laptop_qualified: "{{ webmcp_managed_laptop_qualified }}"
     state: "{{ webmcp_managed_state }}"
     api_token: "{{ authentik_api.authentik_api_token | default('') }}"
+    host_users: "{{ webmcp_managed_host_users | default([]) }}"
   # The module writes protected controller delivery files directly. It never
   # returns keys, API responses or credential-bearing errors to Ansible.
   no_log: true

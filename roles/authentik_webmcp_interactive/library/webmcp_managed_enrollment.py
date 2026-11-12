@@ -88,7 +88,7 @@ def declaration(hosts, owner, qualified, now):
     return hosts
 
 
-def expressions(users, owner):
+def expressions(users, owner, host_users=None):
     # Keys are exact API-returned integer PKs, values exact enrolled usernames.
     allowed = {str(u["pk"]): u["username"] for u in users}
     identity = (
@@ -122,6 +122,11 @@ def expressions(users, owner):
         "    and len(p.get('scope', '').split()) == 2\n"
         "    and set(p.get('scope', '').split()) == {'jocasta.read', 'jocasta.write'})"
     )
+    if host_users:
+        # Reuse API-returned host accounts; this role never owns or edits them.
+        from ansible.module_utils.agent_host_contract import scope_expression, jocasta_policy
+        identity = scope_expression("jocasta", "jocasta.read", host_users, identity)
+        policy = jocasta_policy(host_users, policy)
     return identity, policy
 
 
@@ -251,8 +256,9 @@ def write_private(fd, name, value):
 
 
 class Enrollment:
-    def __init__(self, api, fd, owner):
+    def __init__(self, api, fd, owner, host_users=None):
         self.api, self.fd, self.owner = api, fd, owner
+        self.host_users = host_users or []
         try:
             self.receipt = read_private(fd, "receipt.json")
             require(set(self.receipt) == {"version", "owner", "objects", "pending", "generations"})
@@ -276,6 +282,17 @@ class Enrollment:
     def verify_owned(self):
         for key, record in self.receipt["objects"].items():
             found = [x for x in self.rows[record["kind"]] if x.get("pk") == record["pk"]]
+            if len(found) == 1 and self.host_users and not matches(found[0], record["body"]):
+                # Exact coexistence expressions may have been installed by the
+                # sole host writer. Never adopt arbitrary expression drift.
+                from ansible.module_utils.agent_host_contract import scope_expression, jocasta_policy
+                body = copy.deepcopy(record["body"])
+                if key == "read":
+                    body["expression"] = scope_expression("jocasta", "jocasta.read", self.host_users, body["expression"])
+                elif key == "policy":
+                    body["expression"] = jocasta_policy(self.host_users, body["expression"])
+                require(matches(found[0], body))
+                record["body"] = body
             require(len(found) == 1 and matches(found[0], record["body"]))
             if record["kind"] == "user":
                 require(found[0].get("is_superuser") is False)
@@ -405,7 +422,7 @@ class Enrollment:
         by_pk = {user["pk"]: user for user in self.rows["user"]}
         users = [by_pk[self.receipt["objects"]["user:" + item["host"]]["pk"]]
                  for item in hosts if item["state"] == "present" and state == "present"]
-        identity, policy = expressions(users, self.owner)
+        identity, policy = expressions(users, self.owner, getattr(self, "host_users", None))
         # Bootstrap without resource mappings. No valid Jocasta token can exist
         # before the deny policy is attached. Passwords are retrieved only last.
         if state == "present" and "policy" not in self.receipt["objects"]:
@@ -516,6 +533,7 @@ def main():
         "laptop_qualified": {"type": "bool", "default": False},
         "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
         "api_token": {"type": "str", "no_log": True, "default": ""},
+        "host_users": {"type": "list", "elements": "dict", "default": []},
     }, supports_check_mode=True)
     fd = lock = None
     try:
@@ -529,7 +547,8 @@ def main():
         st = os.fstat(lock)
         require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_nlink == 1 and stat.S_IMODE(st.st_mode) == 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        enrollment = Enrollment(APIClient(p["api_token"]), fd, p["owner"])
+        enrollment = Enrollment(APIClient(p["api_token"]), fd, p["owner"], p["host_users"])
+        enrollment.host_users = p["host_users"]
         changed = enrollment.converge(hosts, p["state"])
         module.exit_json(changed=changed, issuer=ISSUER, credential_paths=[p["receipt_dir"] + "/" + i["host"] + ".json" for i in hosts if i["state"] == "present" and p["state"] == "present"])
     except Exception:
