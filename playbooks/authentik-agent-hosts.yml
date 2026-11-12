@@ -1,0 +1,36 @@
+---
+# Sole creation entrypoint. Not imported by site.yml or any legacy identity play.
+- name: Create resource-bounded host identities beside the legacy accounts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ssh_user: "{{ lookup('ansible.builtin.env', 'USER') }}"
+  vars_files:
+    - vars/authentik-agent-hosts.yml
+  pre_tasks:
+    - name: Require explicit protected host enrollment
+      ansible.builtin.assert:
+        that:
+          - authentik_agent_hosts | length > 0
+          - authentik_agent_host_owner is match('^[0-9a-f-]{36}$')
+          - authentik_agent_host_receipt_dir is match('^/')
+          - authentik_agent_host_baselines | length > 0
+        quiet: true
+    # CHECK is online read-only, so it can report existing-state drift accurately.
+    - name: Load the existing controller API credential for read-only preflight
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../secrets/authentik-api.sops.yaml"
+        name: authentik_api
+      no_log: true
+      check_mode: false
+    - name: Pin the administrative origin
+      ansible.builtin.assert:
+        that: authentik_api.authentik_api_url | regex_replace('/api/v3/?$', '') == 'https://auth.ryzhkov.dev'
+        quiet: true
+      no_log: true
+  tasks:
+    - name: Run only host enrollment, never the legacy blueprint writer
+      ansible.builtin.include_role:
+        name: authentik_machine_identities
+        tasks_from: agent_hosts

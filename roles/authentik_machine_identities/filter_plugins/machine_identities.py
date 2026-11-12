@@ -751,6 +751,9 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         if not HOME.match(home) or posixpath.normpath(home) != home or "/.." in home or "/./" in home:
             _refuse(name + " home is not a normalized absolute path")
         username = f"chaldea-{host}-{profile}"
+        if username in {"chaldea-laptop", "chaldea-omarchy-pc", "chaldea-agent-a",
+                        "chaldea-agent-b", "chaldea-homelab", "chaldea-normandy"}:
+            _refuse("host accounts are written only by authentik-agent-hosts.yml")
         if (host, profile) in seen_pairs or username in seen_users:
             _refuse(name + " is declared twice or its account name collides with another")
         seen_pairs.add((host, profile))

@@ -1,0 +1,18 @@
+---
+- name: Enroll the closed host cohort through its sole account writer
+  authentik_agent_hosts:
+    hosts: "{{ authentik_agent_hosts }}"
+    owner: "{{ authentik_agent_host_owner }}"
+    receipt_dir: "{{ authentik_agent_host_receipt_dir }}"
+    baselines: "{{ authentik_agent_host_baselines }}"
+    api_token: "{{ authentik_api.authentik_api_token }}"
+  register: agent_host_enrollment
+  no_log: true
+  diff: false
+
+- name: Deliver one bound host credential
+  ansible.builtin.include_tasks: agent_host_delivery.yml
+  loop: "{{ agent_host_enrollment.delivery }}"
+  loop_control:
+    loop_var: agent_host
+    label: "{{ agent_host.host }}"

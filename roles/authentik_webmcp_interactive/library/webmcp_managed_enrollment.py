@@ -34,40 +34,10 @@ PATHS = {
 }
 
 
-class Refused(Exception):
-    pass
-
-
-def require(ok):
-    if not ok:
-        raise Refused()
-
-
-def stable(value):
-    if isinstance(value, list):
-        return sorted((stable(x) for x in value), key=lambda x: json.dumps(x, sort_keys=True))
-    if isinstance(value, dict):
-        return {k: stable(v) for k, v in value.items()}
-    return value
-
-
-def matches(seen, body):
-    for k, v in body.items():
-        got = seen.get(k)
-        if k == "expires":
-            try:
-                if timestamp(got) != timestamp(v):
-                    return False
-            except Exception:
-                return False
-        elif stable(got) != stable(v):
-            return False
-    return True
-
-
-def timestamp(value):
-    require(isinstance(value, str) and value.endswith("Z"))
-    return dt.datetime.fromisoformat(value[:-1] + "+00:00")
+from ansible.module_utils.authentik_enrollment import (
+    APIClient, Refused, require, stable, matches, timestamp,
+    secure_dir, read_private, write_private,
+)
 
 
 def declaration(hosts, owner, qualified, now):
@@ -88,7 +58,7 @@ def declaration(hosts, owner, qualified, now):
     return hosts
 
 
-def expressions(users, owner):
+def expressions(users, owner, host_users=None):
     # Keys are exact API-returned integer PKs, values exact enrolled usernames.
     allowed = {str(u["pk"]): u["username"] for u in users}
     identity = (
@@ -122,137 +92,18 @@ def expressions(users, owner):
         "    and len(p.get('scope', '').split()) == 2\n"
         "    and set(p.get('scope', '').split()) == {'jocasta.read', 'jocasta.write'})"
     )
+    if host_users:
+        # Reuse API-returned host accounts; this role never owns or edits them.
+        from ansible.module_utils.agent_host_contract import scope_expression, jocasta_policy
+        identity = scope_expression("jocasta", "jocasta.read", host_users, identity)
+        policy = jocasta_policy(host_users, policy)
     return identity, policy
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        raise Refused()
-
-
-class APIClient:
-    def __init__(self, token):
-        require(isinstance(token, str) and 16 <= len(token) <= 4096 and "\n" not in token and "\r" not in token)
-        self.token = token
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-
-    def request(self, method, path, body=None, public=False):
-        require(isinstance(path, str) and path.startswith("/") and not path.startswith("//"))
-        endpoint = ORIGIN + path if public else API + path
-        data = None if body is None else json.dumps(body).encode()
-        headers = {"Accept": "application/json"}
-        if not public:
-            headers["Authorization"] = "Bearer " + self.token
-        if data is not None:
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(endpoint, data=data, headers=headers, method=method)
-        try:
-            with self.opener.open(request, timeout=8) as response:
-                require(response.status in (200, 201, 204))
-                raw = response.read(2 * 1024 * 1024 + 1)
-                require(len(raw) <= 2 * 1024 * 1024)
-                return json.loads(raw) if raw else {}
-        except Exception:
-            raise Refused() from None
-
-    def require_superuser(self):
-        # Both collection and used_by views can silently filter non-admin reads.
-        actor = self.request("GET", "/core/users/me/")
-        require(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
-                and actor["user"].get("is_superuser") is True)
-
-    def mapping_uses(self, pk):
-        require(isinstance(pk, str) and str(uuid.UUID(pk)) == pk)
-        # Check authority here, independent of any previous application load.
-        self.require_superuser()
-        result = self.request("GET", "/propertymappings/all/" + pk + "/used_by/")
-        require(isinstance(result, list) and len(result) <= 500)
-        fields = {"app", "model_name", "pk", "name", "action"}
-        require(all(isinstance(row, dict) and set(row) == fields
-                    and all(isinstance(value, str) and 1 <= len(value) <= 1024
-                            for value in row.values()) for row in result))
-        return result
-
-    def rows(self, kind, owned=None):
-        # Complete public discovery; never list secret-bearing OAuth2 bodies.
-        path = ("/providers/all/" if kind == "provider" else PATHS[kind]) + "?page_size=500"
-        if kind == "provider":
-            self.require_superuser()
-        if kind == "application":
-            # A matching pagination count is not completeness evidence when
-            # Authentik silently filters applications for a non-superuser.
-            self.require_superuser()
-            path += "&superuser_full_list=true"
-        result = self.request("GET", path)
-        require(isinstance(result, dict) and isinstance(result.get("results"), list))
-        rows = result["results"]
-        require(len(rows) <= 500 and not result.get("pagination", {}).get("next"))
-        require(result.get("pagination", {}).get("count") == len(rows))
-        if kind == "provider":
-            # Only the original receipt ID permits an OAuth2 detail read.
-            # Check all public name/ID collisions before opening any such body.
-            records = [r for r in (owned or {}).values() if r["kind"] == kind]
-            for record in records:
-                pk = record["pk"]
-                require(type(pk) is int and pk > 0 and record["lookup"] == pk)
-                found = [r for r in rows if r.get("pk") == pk]
-                named = [r for r in rows if r.get("name") == record["body"]["name"]]
-                require(len(found) == len(named) == 1 and found[0] == named[0])
-            for record in records:
-                detail = self.request("GET", PATHS[kind] + str(record["pk"]) + "/")
-                require(isinstance(detail, dict) and detail.get("pk") == record["pk"]
-                        and matches(detail, record["body"]))
-                rows = [detail if r.get("pk") == record["pk"] else r for r in rows]
-        return rows
-
-
-def secure_dir(path):
-    require(isinstance(path, str) and path.startswith("/") and os.path.normpath(path) == path)
-    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        for part in path[1:].split("/"):
-            st = os.fstat(fd)
-            require(st.st_uid in (0, os.getuid()) and not st.st_mode & 0o022)
-            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = next_fd
-        st = os.fstat(fd)
-        require(st.st_uid == os.getuid() and stat.S_IMODE(st.st_mode) == 0o700)
-        return fd
-    except Exception:
-        os.close(fd)
-        raise Refused() from None
-
-
-def read_private(fd, name):
-    leaf = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
-    with os.fdopen(leaf) as stream:
-        st = os.fstat(stream.fileno())
-        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_nlink == 1 and stat.S_IMODE(st.st_mode) == 0o600 and st.st_size <= 1048576)
-        raw = stream.read(1048577)
-        require(len(raw) <= 1048576)
-        return json.loads(raw)
-
-
-def write_private(fd, name, value):
-    # Only a named receipt or a fixed host file in a held private directory.
-    try:
-        read_private(fd, name)
-    except FileNotFoundError:
-        pass
-    temp = ".new-" + str(uuid.uuid4())
-    leaf = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=fd)
-    with os.fdopen(leaf, "w") as stream:
-        json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.rename(temp, name, src_dir_fd=fd, dst_dir_fd=fd)
-    os.fsync(fd)
-
-
 class Enrollment:
-    def __init__(self, api, fd, owner):
+    def __init__(self, api, fd, owner, host_users=None):
         self.api, self.fd, self.owner = api, fd, owner
+        self.host_users = host_users or []
         try:
             self.receipt = read_private(fd, "receipt.json")
             require(set(self.receipt) == {"version", "owner", "objects", "pending", "generations"})
@@ -276,6 +127,17 @@ class Enrollment:
     def verify_owned(self):
         for key, record in self.receipt["objects"].items():
             found = [x for x in self.rows[record["kind"]] if x.get("pk") == record["pk"]]
+            if len(found) == 1 and self.host_users and not matches(found[0], record["body"]):
+                # Exact coexistence expressions may have been installed by the
+                # sole host writer. Never adopt arbitrary expression drift.
+                from ansible.module_utils.agent_host_contract import scope_expression, jocasta_policy
+                body = copy.deepcopy(record["body"])
+                if key == "read":
+                    body["expression"] = scope_expression("jocasta", "jocasta.read", self.host_users, body["expression"])
+                elif key == "policy":
+                    body["expression"] = jocasta_policy(self.host_users, body["expression"])
+                require(matches(found[0], body))
+                record["body"] = body
             require(len(found) == 1 and matches(found[0], record["body"]))
             if record["kind"] == "user":
                 require(found[0].get("is_superuser") is False)
@@ -405,7 +267,7 @@ class Enrollment:
         by_pk = {user["pk"]: user for user in self.rows["user"]}
         users = [by_pk[self.receipt["objects"]["user:" + item["host"]]["pk"]]
                  for item in hosts if item["state"] == "present" and state == "present"]
-        identity, policy = expressions(users, self.owner)
+        identity, policy = expressions(users, self.owner, self.host_users)
         # Bootstrap without resource mappings. No valid Jocasta token can exist
         # before the deny policy is attached. Passwords are retrieved only last.
         if state == "present" and "policy" not in self.receipt["objects"]:
@@ -516,6 +378,7 @@ def main():
         "laptop_qualified": {"type": "bool", "default": False},
         "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
         "api_token": {"type": "str", "no_log": True, "default": ""},
+        "host_users": {"type": "list", "elements": "dict", "default": []},
     }, supports_check_mode=True)
     fd = lock = None
     try:
@@ -529,7 +392,7 @@ def main():
         st = os.fstat(lock)
         require(stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_nlink == 1 and stat.S_IMODE(st.st_mode) == 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        enrollment = Enrollment(APIClient(p["api_token"]), fd, p["owner"])
+        enrollment = Enrollment(APIClient(p["api_token"]), fd, p["owner"], p["host_users"])
         changed = enrollment.converge(hosts, p["state"])
         module.exit_json(changed=changed, issuer=ISSUER, credential_paths=[p["receipt_dir"] + "/" + i["host"] + ".json" for i in hosts if i["state"] == "present" and p["state"] == "present"])
     except Exception:

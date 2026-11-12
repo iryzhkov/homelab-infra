@@ -6,6 +6,9 @@ webmcp_managed_owner: ""
 webmcp_managed_receipt_dir: ""
 webmcp_managed_state: present
 webmcp_managed_hosts: []
+# Optional exact public API readbacks from the sole host enrollment writer.
+# Keeps both generations admitted without granting this role account ownership.
+webmcp_managed_host_users: []
 # Root supplies a protected private vars file with a random UUID owner, existing
 # controller-owned 0700 receipt_dir and hosts with host/generation/expires/state.
 # Start with laptop. agent-a/agent-b/omarchy-pc require actual laptop acceptance.
