@@ -97,6 +97,77 @@ class HostEnrollment:
         require(not any(a.get("provider") == provider and a["pk"] != app
                         or provider in a.get("backchannel_providers", []) for a in self.rows["application"]))
 
+    def acquire_mapping(self, hosts, baselines, value, create=False):
+        """One bounded resource effect, using the existing write-ahead journal."""
+        record = self.receipt.get("acquire_mapping")
+        if not record and not create:
+            return baselines
+        require(value)
+        name = "M3 original writer acquisition READ"
+        body = {"name": name, "scope_name": "holonet.acquire", "expression": "return {}"}
+        selected = [m for m in self.rows["mapping"]
+                    if m["scope_name"].startswith("holonet.acquire") or m["name"] == name]
+        apps = [a for a in self.rows["application"] if a["slug"] == "chaldea-holonet"]
+        require(len(apps) == 1)
+        providers = [p for p in self.rows["provider"] if p["pk"] == apps[0]["provider"]]
+        require(len(providers) == 1)
+        provider = providers[0]
+        require(not any(b["service"] == "holonet" and b["scope"] == "holonet.acquire"
+                        for b in baselines))
+        if record:
+            require(record["provider"] == provider["pk"] and record["body"] == body)
+            require(len(selected) == 1 and selected[0]["pk"] == record["pk"]
+                    and selected[0]["name"] == name and selected[0]["scope_name"] == "holonet.acquire")
+            expected = sorted(record["before"] + [record["pk"]])
+            require(sorted(provider["property_mappings"]) in (record["before"], expected))
+            require(not record["attached"] or sorted(provider["property_mappings"]) == expected)
+            if not record["attached"]:
+                require(selected[0]["expression"] == body["expression"])
+            # Validate all existing resource ownership before a resumable attach.
+            original_rows = copy.deepcopy(self.rows)
+            provider["property_mappings"] = record["before"]
+            try:
+                self.resources(hosts, baselines)
+            finally:
+                self.rows = original_rows
+        else:
+            require(create and not selected)
+            self.resources(hosts, baselines)
+            record = {"provider": provider["pk"], "before": sorted(provider["property_mappings"]),
+                      "body": body, "attached": False}
+            require(len(record["before"]) == len(set(record["before"])))
+            if self.check:
+                self.changed = True
+                record["pk"] = "pending-holonet-acquire"
+            else:
+                # mutate persists pending BEFORE POST. An unknown outcome cannot
+                # be adopted by name or automatically retried on a later run.
+                result = self.mutate("POST", PATHS["mapping"], body)
+                require(isinstance(result["pk"], str) and str(uuid.UUID(result["pk"])) == result["pk"])
+                record["pk"] = result["pk"]
+            self.receipt["acquire_mapping"] = record
+            self.commit()
+            self.rows["mapping"].append(dict(body, pk=record["pk"]))
+        if not record["attached"]:
+            if self.check:
+                self.changed = True
+            else:
+                fresh = self.api.rows("provider")
+                found = [p for p in fresh if p["pk"] == record["provider"]]
+                require(len(found) == 1 and sorted(found[0]["property_mappings"]) == record["before"])
+                self.mutate("PATCH", PATHS["provider"] + str(record["provider"]) + "/",
+                            {"property_mappings": record["before"] + [record["pk"]]})
+            record["attached"] = True
+            self.commit()
+        # CHECK uses only an in-memory hypothetical PK, never a guessed grant.
+        for row in self.rows["provider"]:
+            if row["pk"] == record["provider"]:
+                row["property_mappings"] = record["before"] + [record["pk"]]
+        return baselines + [{"kind": "mapping", "pk": record["pk"], "service": "holonet",
+                             "scope": "holonet.acquire",
+                             "sha256": hashlib.sha256(body["expression"].encode()).hexdigest(),
+                             "ownership": {"host_owner": self.owner}}]
+
     def resources(self, hosts, baselines):
         # Inspect public provider bodies only. Never open an OAuth2 secret.
         for service in set().union(*(set(MATRIX[h["host"]]) for h in hosts)):
@@ -317,6 +388,13 @@ class HostEnrollment:
 
     def baseline_owner(self, baseline, current, original):
         anchor = baseline["ownership"]
+        if anchor == {"host_owner": self.owner}:
+            record = self.receipt["acquire_mapping"]
+            require(record["attached"] and baseline["kind"] == "mapping"
+                    and baseline["service"] == "holonet" and baseline["scope"] == "holonet.acquire"
+                    and current["pk"] == record["pk"] and current["name"] == record["body"]["name"]
+                    and original == record["body"]["expression"])
+            return
         if baseline["service"] == "jocasta":
             require(set(anchor) == {"receipt_dir"})
             fd = secure_dir(anchor["receipt_dir"])
@@ -349,7 +427,7 @@ class HostEnrollment:
                     and ["group", GROUPS[baseline["service"]], "present"] in record["objects"])
 
 
-    def original_writer(self, value):
+    def original_writer(self, value, previous_sha256=""):
         from ansible.module_utils.agent_host_contract import (
             original_writer_declaration, readback_sha256, ORIGINAL_WRITER,
         )
@@ -359,7 +437,13 @@ class HostEnrollment:
         # acquisition receipts still require explicit ownership reconciliation.
         if not value:
             return {}
-        require(not prior or prior == value)
+        if prior and prior != value:
+            require(previous_sha256 == readback_sha256(prior))
+            require(all(prior[k] == value[k] for k in ("username", "pk", "subject", "generation")))
+        if value.get("state") == "disabled":
+            require(prior is not None)
+            require(all(prior[k] == value[k] for k in prior if k != "state"))
+            return value
         users = [u for u in self.rows["user"]
                  if u["username"] == ORIGINAL_WRITER or u["pk"] == value["pk"]
                  or u.get("uid") == value["subject"]]
@@ -386,11 +470,13 @@ class HostEnrollment:
         apps = [a for a in self.rows["application"] if a["slug"] == "chaldea-holonet"]
         require(len(apps) == 1)
         providers = [p for p in self.rows["provider"] if p["pk"] == apps[0]["provider"]]
-        require(len(providers) == 1 and providers[0]["sub_mode"] == "hashed_user_id")
+        # Public /providers/all/ has no sub_mode. Issuance binds str(u.uid)
+        # to the protected subject, also pinned by the consumer; no detail GET.
+        require(len(providers) == 1)
         return value
 
-    def expressions(self, users, baselines, original_writer=None):
-        original_writer = self.original_writer(original_writer or {})
+    def expressions(self, users, baselines, original_writer=None, previous_sha256=""):
+        original_writer = self.original_writer(original_writer or {}, previous_sha256)
         planned = []
         require(isinstance(baselines, list) and baselines)
         keys = set()
@@ -449,6 +535,8 @@ def main():
         "receipt_dir": {"type": "path", "required": True},
         "baselines": {"type": "list", "elements": "dict", "required": True},
         "original_writer_read": {"type": "dict", "default": {}},
+        "create_original_writer_read_mapping": {"type": "bool", "default": False},
+        "original_writer_previous_sha256": {"type": "str", "default": ""},
         "reenable_host": {"type": "str", "default": ""},
         "rotation_signing_key": {"type": "str", "default": ""},
         "api_token": {"type": "str", "no_log": True, "required": True},
@@ -468,33 +556,44 @@ def main():
         hosts = declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc), e.receipt["tokens"])
         if p["original_writer_read"]:
             require(any("holonet" in MATRIX[h["host"]] for h in hosts))
-        e.resources(hosts, p["baselines"])
         rotation_key = (p["rotation_signing_key"] or e.receipt.get("rotation", {}).get("provider", {}).get("body", {}).get("signing_key"))
         # Preflight before any provider, account or token mutation.
         original_receipt = copy.deepcopy(e.receipt)
+        from ansible.module_utils.agent_host_contract import original_writer_declaration
+        projection_changed = original_writer_declaration(p["original_writer_read"]) != e.receipt.get("original_writer", {})
         e.check = True
+        saved_rows = copy.deepcopy(e.rows)
+        baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
+                                      p.get("create_original_writer_read_mapping", False))
+        e.resources(hosts, baselines)
+        resource_changed = e.changed
+        e.changed = False
         if rotation_key:
             e.rotation(rotation_key)
         users, _ = e.users(hosts)
-        if p["original_writer_read"]:
+        if projection_changed or resource_changed:
             require(not e.changed and not p["reenable_host"])
-        e.expressions(users, p["baselines"], p["original_writer_read"])
+        e.expressions(users, baselines, p["original_writer_read"], p.get("original_writer_previous_sha256", ""))
         e.receipt = original_receipt
         e.changed = False
         e.check = module.check_mode
+        e.rows = saved_rows
+        baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
+                                      p.get("create_original_writer_read_mapping", False))
+        e.resources(hosts, baselines)
         if rotation_key:
             e.rotation(rotation_key)
         users, delivery = e.users(hosts)
         # Missing accounts in CHECK need real API-returned PKs at apply time.
         # Validate all baselines even then, but do not render guessed admission.
-        e.expressions(users, p["baselines"], p["original_writer_read"])
+        e.expressions(users, baselines, p["original_writer_read"], p.get("original_writer_previous_sha256", ""))
         if not module.check_mode:
             # Recheck authoritative account state after the last policy write.
             e.rows = {k: e.api.rows(k) for k in PATHS}
             users, delivery = e.users(hosts)
             e.original_writer(p["original_writer_read"])
         # Projection-only enrollment never reads/delivers any host credential.
-        if p["original_writer_read"]:
+        if projection_changed or resource_changed:
             delivery = []
         module.exit_json(changed=e.changed, delivery=delivery,
                          public_host_users=users, predicted_pks=False)

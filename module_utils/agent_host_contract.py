@@ -454,15 +454,19 @@ def original_writer_declaration(value):
     require(isinstance(value, dict))
     if not value:
         return {}
-    require(set(value) == {"username", "pk", "subject", "generation", "expires",
-                           "user_sha256", "token_sha256"})
+    require(set(value) in ({"username", "pk", "subject", "generation", "expires",
+                           "user_sha256", "token_sha256"},
+                          {"username", "pk", "subject", "generation", "expires",
+                           "user_sha256", "token_sha256", "state"}))
+    require(value.get("state", "enabled") in ("enabled", "disabled"))
     require(value["username"] == ORIGINAL_WRITER and type(value["generation"]) is int
             and value["generation"] == 1 and type(value["pk"]) is int and value["pk"] > 0)
     require(isinstance(value["subject"], str) and re.fullmatch(r"[0-9a-f]{64}", value["subject"]))
     require(all(isinstance(value[k], str) and re.fullmatch(r"[0-9a-f]{64}", value[k])
                 for k in ("user_sha256", "token_sha256")))
     expiry = dt.datetime.fromisoformat(value["expires"].replace("Z", "+00:00"))
-    require(value["expires"].endswith("Z") and expiry > dt.datetime.now(dt.timezone.utc))
+    require(value["expires"].endswith("Z") and
+            (value.get("state") == "disabled" or expiry > dt.datetime.now(dt.timezone.utc)))
     return canonical(value)
 
 
@@ -522,7 +526,7 @@ grant = u.attributes['services'][SERVICE]
         legacy = (guard_source + "\noriginal_writer = " + repr(pinned) + "\n"
                   "requested = token.scope\n"
                   "if isinstance(requested, list) and any(s.startswith('holonet.acquire') for s in requested):\n"
-                  "    if (not u or u.username != original_writer['username']\n"
+                  "    if (original_writer.get('state') == 'disabled' or not u or u.username != original_writer['username']\n"
                   "            or u.pk != original_writer['pk'] or str(u.uid) != original_writer['subject']\n"
                   "            or u.path != 'homelab-infra/machine-identities'\n"
                   "            or not u.is_active or u.type != 'service_account' or u.is_superuser\n"

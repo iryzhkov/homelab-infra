@@ -144,8 +144,10 @@ administrative custody, without requesting token keys. Exactly one user must
 match username `chaldea-laptop-holonet-recommendations`, its approved original
 hashed subject and PK. Require service_account, active, non-superuser, legacy
 path `homelab-infra/machine-identities`, existing HoloNet group, and no host
-attributes. Require the existing application `chaldea-holonet` provider to use
-`hashed_user_id`, so the user's API `uid` equals the approved original subject.
+attributes. The approved original subject must equal the user API `uid` and
+remain pinned by the consumer. Issuance checks `str(u.uid)` against that pin.
+The public provider serializer has no `sub_mode`; this module never opens the
+secret-bearing OAuth2 detail to inspect it.
 A duplicate PK, username or uid is a refusal, not an account to adopt.
 
 Read exactly its existing app-password metadata, identifier
@@ -176,22 +178,61 @@ Store only protected metadata inputs, never credentials, in the operation packet
 The module compares these against fresh authoritative inventories on each run
 and after reconciliation. Issuance also checks the pinned public user state.
 
-Supply the complete normal mapping/policy baseline set plus exactly the existing
-`holonet.acquire` scope mapping. Pin original expression SHA256 values and
-existing ownership anchors, while retaining the current rendered bytes in
-`hosts.json`. The existing resource provider must already attach the exact
-complete mapping set. Missing acquisition mapping/ownership, extra mappings,
-pending operations or changed rendered bytes stop before writes. This path
-does not create or adopt a missing mapping or reset a provider. If fresh
-discovery finds that prerequisite absent, retain it as a parent-owned source
-or operational dependency; do not run the frozen legacy blueprint to fill it.
+Fresh complete live discovery at 2026-11-12T17:37:28Z established that no
+`holonet.acquire` mapping exists. The earlier implementation had no maintained
+producer. The maintained host owner now provides a narrow opt-in producer:
+`authentik_agent_create_original_writer_read_mapping: true`. Supply the complete
+normal mapping/policy baselines with their existing protected ownership anchors;
+do not add an acquisition baseline for this producer. It derives that baseline
+only from its own `hosts.json` provenance. Previously existing blueprint-owned
+acquisition baselines remain supported when this producer is not selected.
+
+Before the first write, the actual main preflight validates the full cohort,
+original writer metadata, every original/rendered expression, all resource
+relationships, ownership anchors and the complete original provider attachment
+set. A complete scope inventory must contain neither an acquisition-shaped
+scope nor the fixed name `M3 original writer acquisition READ`. Foreign existing
+objects are refused, never adopted. The sole POST creates exactly
+`holonet.acquire` with `return {}`. Its returned PK, deny body, provider and
+original attachment list are recorded in the existing journal. A public provider
+inventory recheck must still equal that original list before a PATCH appends
+only the new PK. It preserves all existing attachments. Only after this does
+the qualified projection replace expressions. No start/media mappings or
+attachments are admitted. No OAuth2 detail GET is added.
+
+Every effect first persists the existing pending operation. Unknown create or
+attach outcomes leave pending intact and block every later run before API
+effects; never clear pending to retry POST or adopt by name. Reconcile the exact
+pending operation and returned object evidence under the exclusive owner before
+resuming. A confirmed creation checkpoint before attachment can safely resume
+only with the original attachment list and unchanged deny expression. A repeated
+completed run has zero changes. Ownership and write-window qualification remain
+parent-owned prerequisites. Never replay the frozen legacy writer.
 
 Run the CHECK, one REAL, unchanged REAL, CHECK sequence above with this complete
 protected packet. Inspect the first CHECK before REAL. The only intended REAL
 changes are scope expressions and their existing journal records. Unchanged
 REAL and final CHECK must report zero changes. Preserve all 23 legacy identities,
-both coexisting subjects and M3 account/rotation state. Do not refresh hashes to
-accept drift without reconciling its cause.
+both coexisting subjects and M3 account/rotation state. Projection introduction
+or change refuses simultaneous host/rotation changes and suppresses delivery.
+An unchanged retained projection allows normal M3 revoke, token purge, rotation,
+reenable and delivery.
+
+To withdraw acquisition, retain the entire declaration and add `state: disabled`.
+Provide `authentik_agent_original_writer_previous_sha256` as
+`readback_sha256(previous_declaration)` from the current protected journal.
+Disable requires unchanged pins and retains the mapping, ownership, original
+expression bytes and journal. Acquisition-shaped requests then return terminal
+empty claims, including requests that the legacy suffix might otherwise admit.
+Do not omit the declaration or baselines to disable it. Ordinary M3 convergence
+continues with the retained disabled declaration, even after its old expiry.
+
+Reenable or repin also requires that exact prior-declaration hash, unchanged
+username, PK, subject and generation, all current-rendered and original ownership
+guards, and fresh complete metadata matching the new protected input. A hash
+refresh without investigating drift is not an approved repin. This module never
+renews the legacy expiry or changes its credentials. Split a projection transition
+from host lifecycle work. Repeating a completed transition is idempotent.
 
 Only the exact request `holonet.read holonet.janitor holonet.acquire` emits
 library 3, server 3c86e6d7ff6c4a3296522cdf03d22bb0, namespace managed-janitor,

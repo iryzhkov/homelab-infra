@@ -11,6 +11,8 @@ import sys
 import tempfile
 from types import SimpleNamespace as NS
 import unittest
+import traceback
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 assert os.environ["HOME"].startswith(("/home/job", str(ROOT / ".cache"), "/root/.cache", str(ROOT / "authentik-identities-")))
@@ -27,6 +29,7 @@ load("ansible.module_utils.authentik_enrollment", "module_utils/authentik_enroll
 c = load("ansible.module_utils.agent_host_contract", "module_utils/agent_host_contract.py")
 e = load("host_enrollment", "roles/authentik_machine_identities/library/authentik_agent_hosts.py")
 d = load("host_delivery", "roles/authentik_machine_identities/library/authentik_host_credential.py")
+seam = load("provider_inventory_seam", "roles/authentik_webmcp_interactive/tests/provider_inventory_seam.py")
 OWNER = "00000000-0000-4000-8000-000000000000"
 NOW = dt.datetime(2026, 11, 12, tzinfo=dt.timezone.utc)
 
@@ -52,7 +55,7 @@ class API:
         kind = next(k for k, prefix in e.PATHS.items() if path.startswith(prefix))
         if method == "POST":
             self.n += 1
-            result = dict(body, pk=self.n)
+            result = dict(body, pk=str(uuid.UUID(int=self.n)) if kind in ("mapping", "group") else self.n)
             if kind == "user":
                 result.update(roles=[], is_superuser=False, groups=list(reversed(body["groups"])))
             if kind == "token":
@@ -528,6 +531,211 @@ class Lifecycle(unittest.TestCase):
             self.enrollment(True).expressions(users, baselines)
 
 
+    def resource_fixture(self, baselines):
+        """Real public provider serializer and actual resources() preflight."""
+        objects = json.loads(self.api.blueprint["content"].split(": ", 1)[1])["objects"]
+        for index, service in enumerate(["jocasta"] + list(c.GROUPS)):
+            selected = [b for b in baselines if b["service"] == service and b["kind"] == "mapping"]
+            ids = [b["pk"] for b in selected]
+            pk = 99 if service == "holonet" else 200 + index
+            name = slug = "chaldea-" + service
+            app = {"pk": service, "slug": slug, "provider": pk,
+                   "backchannel_providers": [], "policy_engine_mode": "any"}
+            binding = {"pk": service, "target": service, "group": c.GROUP_IDS.get(service),
+                       "policy": None, "user": None, "order": 0, "enabled": True, "negate": False}
+            if service == "jocasta":
+                fd = e.secure_dir(selected[0]["ownership"]["receipt_dir"])
+                prior = e.read_private(fd, "receipt.json")
+                write = {"pk": "write", "name": "write", "scope_name": "jocasta.write", "expression": "return {}"}
+                self.api.data["mapping"].append(write)
+                ids.append("write")
+                for key, kind, body in (("write", "mapping", write),
+                                        ("provider", "provider", {"pk": pk}),
+                                        ("application", "application", app),
+                                        ("binding", "binding", binding)):
+                    prior["objects"][key] = {"kind": kind, "pk": body["pk"], "body": body}
+                e.write_private(fd, "receipt.json", prior)
+                os.close(fd)
+            provider = seam.public_provider({"pk": pk, "name": name, "property_mappings": ids,
+                        "meta_model_name": "authentik_providers_oauth2.oauth2provider",
+                        "sub_mode": "hashed_user_id", "client_secret": "MUST-NOT-APPEAR"})
+            self.assertNotIn("sub_mode", provider)
+            self.assertNotIn("client_secret", provider)
+            self.api.data["provider"].append(provider)
+            self.api.data["application"].append(app)
+            self.api.data["binding"].append(binding)
+            objects += [["provider", name, "present"], ["application", slug, "present"]]
+        content = "# homelab-infra-owned: " + json.dumps({"version": 1, "objects": objects})
+        self.api.blueprint["content"] = content
+        for b in baselines:
+            if b["service"] != "jocasta":
+                b["ownership"]["content_sha256"] = hashlib.sha256(content.encode()).hexdigest()
+
+    def main_run(self, params, check=False):
+        from unittest.mock import patch
+        result = {}
+        module = NS(params=params, check_mode=check,
+                    fail_json=lambda **kw: result.update(failed=True, traceback=traceback.format_exc(), **kw),
+                    exit_json=lambda **kw: result.update(**kw))
+        with patch.object(e, "AnsibleModule", return_value=module), \
+             patch.object(e, "APIClient", return_value=self.api):
+            e.main()
+        return result
+
+    def projection_params(self):
+        baselines = self.mapping_fixture()
+        self.resource_fixture(baselines)
+        pinned = self.writer_fixture()
+        return dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
+                    baselines=baselines, api_token="SYNTHETIC-invalid-token",
+                    reenable_host="", rotation_signing_key="", original_writer_read=pinned,
+                    create_original_writer_read_mapping=True, original_writer_previous_sha256="")
+
+    def test_missing_mapping_create_attach_and_closed_lifecycle(self):
+        params = self.projection_params()
+        before = copy.deepcopy(next(p for p in self.api.data["provider"] if p["pk"] == 99)["property_mappings"])
+        calls = len(self.api.calls)
+        self.assertNotIn("failed", self.main_run(params, True))
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        applied = self.main_run(params)
+        self.assertNotIn("failed", applied)
+        self.assertEqual(applied["delivery"], [])
+        effects = [(m, p, b) for m, p, b in self.api.calls[calls:] if m != "GET"]
+        self.assertEqual(sum(m == "POST" for m, _, _ in effects), 1)
+        self.assertEqual(effects[0][2]["expression"], "return {}")
+        record = e.read_private(self.fd, "hosts.json")["acquire_mapping"]
+        self.assertEqual(set(next(p for p in self.api.data["provider"] if p["pk"] == 99)["property_mappings"]),
+                         set(before + [record["pk"]]))
+        for p in self.api.data["provider"]:
+            p["property_mappings"].reverse()
+        self.assertFalse(self.main_run(params)["changed"])
+        # Retained projection permits revocation, authoritative token purge and delivery.
+        params["hosts"] = [item(revoked=True)]
+        self.assertNotIn("failed", self.main_run(params))
+        host_pk = e.read_private(self.fd, "hosts.json")["users"]["laptop"]
+        self.assertFalse(any(t["user"] == host_pk for t in self.api.data["token"]))
+        params["hosts"] = [item()]
+        self.assertFalse(self.main_run(params)["changed"])
+        prior = copy.deepcopy(params["original_writer_read"])
+        params["original_writer_read"] = dict(prior, state="disabled")
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        params["original_writer_previous_sha256"] = c.readback_sha256(prior)
+        self.assertNotIn("failed", self.main_run(params))
+        self.assertFalse(self.main_run(params)["changed"])
+        for row in self.api.data["mapping"]:
+            if row["scope_name"].startswith("holonet."):
+                self.assertEqual(function(row["expression"], user=None, token=NS(scope=c.ACQUIRE_READ["scopes"])), {})
+        # Explicit protected repin after owner metadata change; blind drift fails.
+        disabled = copy.deepcopy(params["original_writer_read"])
+        token = next(t for t in self.api.data["token"] if t["user"] == 23)
+        token["expires"] = "2027-02-16T00:00:00Z"
+        params["original_writer_read"] = dict(prior, expires=token["expires"],
+            token_sha256=c.readback_sha256(c.writer_token_readback(token)))
+        self.assertTrue(self.main_run(params)["failed"])
+        params["original_writer_previous_sha256"] = c.readback_sha256(disabled)
+        self.assertNotIn("failed", self.main_run(params))
+        # Stable projection permits the existing guarded host reenable workflow.
+        params["reenable_host"] = "laptop"
+        params["hosts"] = [dict(item(), generation=2)]
+        self.assertNotIn("failed", self.main_run(params))
+
+    def test_retained_projection_allows_rotation_provider_convergence(self):
+        import uuid
+        params = self.projection_params()
+        self.assertNotIn("failed", self.main_run(params))
+        self.api.data["mapping"].append({"pk": str(uuid.uuid4()), "name": "API",
+                                        "scope_name": "goauthentik.io/api", "expression": "return {}"})
+        flows = [{"pk": str(uuid.uuid4()), "slug": slug} for slug in
+                 ("default-provider-authorization-implicit-consent", "default-provider-invalidation-flow")]
+        original = self.api.request
+        def request(method, path, body=None):
+            if path.startswith("/flows/"):
+                return {"results": flows, "pagination": {"count": 2, "next": None}}
+            return original(method, path, body)
+        self.api.request = request
+        params["rotation_signing_key"] = str(uuid.uuid4())
+        self.assertNotIn("failed", self.main_run(params))
+        self.assertFalse(self.main_run(params)["changed"])
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertIn("provider", receipt["rotation"])
+        self.assertEqual(receipt["original_writer"], params["original_writer_read"])
+
+    def test_confirmed_create_checkpoint_resumes_only_unchanged_deny(self):
+        params = self.projection_params()
+        from unittest.mock import patch
+        commit = e.HostEnrollment.commit
+        def crash(x):
+            commit(x)
+            record = x.receipt.get("acquire_mapping")
+            if not x.check and record and not record["attached"]:
+                raise OSError("crash after confirmed create checkpoint")
+        with patch.object(e.HostEnrollment, "commit", crash):
+            self.assertTrue(self.main_run(params)["failed"])
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertIsNone(receipt["pending"])
+        self.assertFalse(receipt["acquire_mapping"]["attached"])
+        created = next(m for m in self.api.data["mapping"] if m["pk"] == receipt["acquire_mapping"]["pk"])
+        created["expression"] = "return {'drift': True}"
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        created["expression"] = "return {}"
+        self.assertNotIn("failed", self.main_run(params))
+        self.assertEqual(sum(m == "POST" and p == e.PATHS["mapping"] for m, p, _ in self.api.calls), 1)
+
+    def test_mapping_creation_preflight_and_unknown_outcomes(self):
+        params = self.projection_params()
+        good = copy.deepcopy(self.api.data)
+        calls = len(self.api.calls)
+        for kind in ("name", "scope", "attachment", "baseline", "principal"):
+            self.api.data = copy.deepcopy(good)
+            changed = copy.deepcopy(params)
+            if kind in ("name", "scope"):
+                self.api.data["mapping"].append({"pk": "foreign",
+                    "name": "M3 original writer acquisition READ" if kind == "name" else "foreign",
+                    "scope_name": "other" if kind == "name" else "holonet.acquire", "expression": "return {}"})
+            elif kind == "attachment":
+                next(p for p in self.api.data["provider"] if p["pk"] == 99)["property_mappings"].append("foreign")
+            elif kind == "baseline":
+                changed["baselines"][-1]["sha256"] = "0" * 64
+            else:
+                changed["original_writer_read"]["token_sha256"] = "0" * 64
+            self.assertTrue(self.main_run(changed)["failed"], kind)
+            self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.api.data = copy.deepcopy(good)
+        original = self.api.request
+        def unknown(method, path, body=None):
+            result = original(method, path, body)
+            if method == "POST" and path == e.PATHS["mapping"]:
+                raise OSError("unknown create outcome")
+            return result
+        self.api.request = unknown
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertIsNotNone(e.read_private(self.fd, "hosts.json")["pending"])
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertEqual(len(self.api.calls), calls)
+
+    def test_unknown_mapping_attachment_is_never_replayed(self):
+        params = self.projection_params()
+        original = self.api.request
+        def unknown(method, path, body=None):
+            result = original(method, path, body)
+            if method == "PATCH" and path == e.PATHS["provider"] + "99/":
+                raise OSError("unknown attachment outcome")
+            return result
+        self.api.request = unknown
+        self.assertTrue(self.main_run(params)["failed"])
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertIsNotNone(receipt["pending"])
+        mapping = next(m for m in self.api.data["mapping"] if m["pk"] == receipt["acquire_mapping"]["pk"])
+        self.assertEqual(mapping["expression"], "return {}")
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertEqual(len(self.api.calls), calls)
+
     def writer_fixture(self):
         user = {"pk": 23, "uid": "a" * 64, "username": c.ORIGINAL_WRITER,
                 "path": "homelab-infra/machine-identities", "type": "service_account",
@@ -538,8 +746,9 @@ class Lifecycle(unittest.TestCase):
                  "expires": "2027-02-15T00:00:00Z"}
         self.api.data["user"].append(user)
         self.api.data["token"].append(token)
-        self.api.data["application"].append({"pk": "holonet", "slug": "chaldea-holonet", "provider": 99})
-        self.api.data["provider"].append({"pk": 99, "sub_mode": "hashed_user_id"})
+        if not any(a["slug"] == "chaldea-holonet" for a in self.api.data["application"]):
+            self.api.data["application"].append({"pk": "holonet", "slug": "chaldea-holonet", "provider": 99})
+            self.api.data["provider"].append(seam.public_provider({"pk": 99, "sub_mode": "hashed_user_id"}))
         return {"username": c.ORIGINAL_WRITER, "pk": 23, "subject": "a" * 64,
                 "generation": 1, "expires": token["expires"],
                 "user_sha256": c.readback_sha256(c.writer_user_readback(user)),
@@ -592,6 +801,9 @@ class Lifecycle(unittest.TestCase):
             other = copy.copy(runtime)
             setattr(other, field, value)
             self.assertEqual(emit(c.ACQUIRE_READ["scopes"], other), [])
+        for scope in c.ACQUIRE_READ["scopes"]:
+            disabled = c.scope_expression("holonet", scope, [], old, dict(pinned, state="disabled"))
+            self.assertEqual(function(disabled, user=runtime, token=NS(scope=c.ACQUIRE_READ["scopes"])), {})
         # All 23 unrelated legacy identities still execute their old expressions.
         for index in range(23):
             legacy = NS(username="legacy-" + str(index), path="legacy")
@@ -646,18 +858,16 @@ class Lifecycle(unittest.TestCase):
     def test_projection_main_is_existing_only_and_has_no_delivery(self):
         from unittest.mock import patch
         baselines = self.mapping_fixture(acquire=True)
+        self.resource_fixture(baselines)
         pinned = self.writer_fixture()
         params = dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
                       baselines=baselines, api_token="SYNTHETIC-invalid-token",
                       reenable_host="", rotation_signing_key="", original_writer_read=pinned)
         def run(check=False):
             x = self.enrollment(check)
-            # Resource ownership itself is tested separately; exercise the actual
-            # main preflight, user/token checks, expression CAS and delivery result.
-            x.resources = lambda *args: None
             result = {}
             module = NS(params=params, check_mode=check,
-                        fail_json=lambda **kw: result.update(failed=True, **kw),
+                        fail_json=lambda **kw: result.update(failed=True, traceback=traceback.format_exc(), **kw),
                         exit_json=lambda **kw: result.update(**kw))
             with patch.object(e, "AnsibleModule", return_value=module), \
                  patch.object(e, "HostEnrollment", return_value=x):
@@ -680,6 +890,12 @@ class Lifecycle(unittest.TestCase):
                             any(path.startswith(e.PATHS[k]) for k in ("mapping", "policy")))
                             for m, path, _ in self.api.calls[calls:]))
         self.assertFalse(run()["changed"])
+        params["hosts"] = [item(revoked=True)]
+        revoked = run()
+        self.assertNotIn("failed", revoked)
+        self.assertTrue(revoked["delivery"][0]["revoked"])
+        self.assertFalse(any(t["user"] == revoked_pk for t in self.api.data["token"]
+                             for revoked_pk in e.read_private(self.fd, "hosts.json")["users"].values()))
 
     def test_resource_preflight_rejects_extra_api_mapping_and_relationship_drift(self):
         scope = {"pk": "read", "scope_name": "ha.read"}
