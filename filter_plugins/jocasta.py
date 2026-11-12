@@ -29,13 +29,13 @@ KNOWN_KEYS = ("JOCASTA_IMAGE",) + MCP_KEYS + OPERATOR_KEYS
 # 37ce657 has no MCP support and is still refused.
 MCP_IMAGE_REVISIONS = frozenset({"a3e83c55e73661fc50d92a9ca328236a86f291fd"})
 
-# Reviewed capacity-fix source: independent Opus/Sol ACCEPT, exact-head CI SUCCESS
-# 40146155685, retained image artifact 12581331195, published without a rebuild.
+# Path-word search source, Jocasta v0.1.7: exact-head CI 43252245885 SUCCESS.
+# The retained CI image was published without a rebuild; see docs/jocasta.md.
 # These are source/image receipts, not native/runtime qualification or authority
 # to apply. Require this exact published tag/digest even with operator trust off.
-OPERATOR_IMAGE_REVISIONS = frozenset({"d473d2be609b27b4b229eb6d077352850e3b4a57"})
+OPERATOR_IMAGE_REVISIONS = frozenset({"3707213a5fc180e9822d49667776b8eb8d6b198e"})
 OPERATOR_IMAGE_REPOSITORY = "git.ryzhkov.dev/igor/jocasta"
-OPERATOR_IMAGE_PIN = "git.ryzhkov.dev/igor/jocasta:d473d2be609b27b4b229eb6d077352850e3b4a57@sha256:3b920d2e3f225757fe01752297a7c9ce3a365205a70084a9faf7600cfd22ccd9"
+OPERATOR_IMAGE_PIN = "git.ryzhkov.dev/igor/jocasta:3707213a5fc180e9822d49667776b8eb8d6b198e@sha256:33fa8460398097524d1bb89427bda283fe58e1ff3f6e425763b61e56a67b4330"
 OPERATOR_ISSUER = "https://auth.ryzhkov.dev/application/o/jocasta-laptop-interactive/"
 OPERATOR_JWKS = OPERATOR_ISSUER + "jwks/"
 OPERATOR_CLIENT_ID = "jocasta-laptop-interactive"
