@@ -405,8 +405,9 @@ def main():
         e = HostEnrollment(APIClient(p["api_token"], PATHS), fd, p["owner"], module.check_mode, p["reenable_host"])
         hosts = declaration(p["hosts"], p["owner"], dt.datetime.now(dt.timezone.utc), e.receipt["tokens"])
         e.resources(hosts, p["baselines"])
-        if p["rotation_signing_key"]:
-            e.rotation(p["rotation_signing_key"])
+        rotation_key = (p["rotation_signing_key"] or e.receipt.get("rotation", {}).get("provider", {}).get("body", {}).get("signing_key"))
+        if rotation_key:
+            e.rotation(rotation_key)
         # Preflight the entire operation before the first account/token write.
         original_receipt = copy.deepcopy(e.receipt)
         e.check = True
