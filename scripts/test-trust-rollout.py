@@ -16,6 +16,7 @@ import yaml
 from jinja2 import Environment, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
+INTERACTIVE_READERS = {"agent-a", "agent-b", "omarchy-macbook-air-igor"}
 
 class RolloutTest(unittest.TestCase):
     def setUp(self):
@@ -75,7 +76,13 @@ class RolloutTest(unittest.TestCase):
                 assert isinstance(rendered, list)
                 self.assertEqual(rendered[:len(base)], base)
                 self.assertEqual(len({r["source_id"] for r in rendered}), len(rendered))
-                optional = [r for r in rendered if r.get("global_read") or r["source"] == "chaldea-quota"]
+                # The interactive hosts' fleet-reader rows are fixed additions (approved
+                # 2026-11-12); only the PC rows remain optional.
+                fixed = [r for r in rendered if r.get("global_read") and r["host"] in INTERACTIVE_READERS]
+                self.assertEqual({r["host"] for r in fixed}, INTERACTIVE_READERS)
+                self.assertTrue(all(r["source"] == "fleet-reader" for r in fixed))
+                optional = [r for r in rendered if (r.get("global_read") or r["source"] == "chaldea-quota")
+                            and r["host"] not in INTERACTIVE_READERS]
                 self.assertEqual(len(optional), int(reader) + int(quota))
                 self.assertTrue(all(r["host"] == "omarchy-pc" for r in optional))
         self.assertNotIn("public_key", json.dumps(extra))
@@ -112,7 +119,7 @@ class RolloutTest(unittest.TestCase):
                                  ("quota-service", "chaldea", "service", ["quota_headroom_snapshot"]))
                 self.assertNotIn("global_read", row)
                 self.assertEqual(row.get("quota_fleet_read", False), row["host"] == "omarchy-pc")
-            self.assertEqual(len([r for r in rendered if r.get("global_read")]), int(operator))
+            self.assertEqual(len([r for r in rendered if r.get("global_read")]), int(operator) + len(INTERACTIVE_READERS))
             self.assertEqual(len([r for r in rendered if r["source"] == "chaldea-quota"]), int(seven))
 
     def test_normandy_consumer_path_is_disabled_and_requires_exact_host(self):

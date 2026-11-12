@@ -438,7 +438,8 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             baseline = json.loads(target.read_text())
             old = baseline["registry"]
-            self.assertEqual(len(old), 23)
+            # 23 before the three interactive fleet-reader rows were added on 2026-11-12.
+            self.assertEqual(len(old), 26)
             self.assertFalse(any(row["source"] == "route" for row in old))
             before = target.read_bytes()
             for label, check, changed in (("CHECK", True, 1), ("REAL", False, 1), ("SECOND0", False, 0)):
@@ -450,8 +451,8 @@ class SnapshotTest(unittest.TestCase):
                 else:
                     config = json.loads(target.read_text())
                     self.assertEqual(config, baseline | {"registry": old + expected_routes})
-                    self.assertEqual(len({(r["issuer"], r["source"]) for r in config["registry"]}), 25)
-                print(f"FATE registry {label}: exact 23 preserved + H append / PC read rows")
+                    self.assertEqual(len({(r["issuer"], r["source"]) for r in config["registry"]}), 28)
+                print(f"FATE registry {label}: exact 26 preserved + H append / PC read rows")
 
             # The fixed comparator rejects any added reader capability, kind or tuple.
             config = json.loads(target.read_text())
