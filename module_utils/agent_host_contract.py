@@ -1,9 +1,20 @@
-"""Closed M3 host contract. Survey bb2fc17f@1; no rotation provider or PKI."""
+"""Closed M3 host and rotation contract. Survey bb2fc17f@1; no PKI."""
 import copy
 import datetime as dt
 import json
 import re
 import uuid
+
+def rotation_provider_body(signing_key, authorization_flow, invalidation_flow, api_mapping):
+    """Authentik 2026.8.5 OAuth2ProviderSerializer writable/readable fields."""
+    return {
+        "name": "chaldea-host-rotation", "client_id": "chaldea-host-rotation",
+        "client_type": "confidential", "grant_types": ["client_credentials"],
+        "authorization_flow": authorization_flow, "invalidation_flow": invalidation_flow,
+        "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
+        "redirect_uris": [], "signing_key": signing_key, "property_mappings": [api_mapping],
+    }
+
 
 MATRIX = {
     "laptop": {

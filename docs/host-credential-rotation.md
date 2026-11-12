@@ -32,6 +32,72 @@ expressions. Keep legacy blueprint writers frozen during coexistence. A provider
 write interrupted before its receipt commit requires administrative reconciliation,
 as with enrollment; host rotation itself has automatic recovery.
 
+## Authentik 2026.8.5 readback and pending POST recovery
+
+The versioned [OAuth2 provider serializer](https://github.com/goauthentik/authentik/blob/version/2026.8.5/authentik/providers/oauth2/api/providers.py#L67-L92)
+accepts and returns `grant_types`, not `allowed_grant_types`.
+The [token request parser](https://github.com/goauthentik/authentik/blob/version/2026.8.5/authentik/providers/oauth2/token/base.py#L58-L70)
+requires the requested grant to be in that list; an empty list does not enable
+client credentials. The [credential handler](https://github.com/goauthentik/authentik/blob/version/2026.8.5/authentik/providers/oauth2/token/client_credentials.py#L27-L65)
+accepts the service account username and app password, then checks application
+access. S1's successful disposable provider used `grant_types: [client_credentials]`.
+
+The shared `rotation_provider_body` contract sends exactly name, client_id,
+client_type=confidential, grant_types=[client_credentials], authorization_flow,
+invalidation_flow, access_token_validity=seconds=300, issuer_mode=per_provider,
+redirect_uris=[], the reviewed signing_key and the sole API property mapping.
+Every field remains compared at readback; scopes are constrained by that exact
+mapping attachment. Extra serializer metadata and the client secret are not
+part of the comparison and are never logged.
+
+Read-only evidence on 2026-11-12: GET /api/v3/providers/oauth2/113/ returned
+grant_types=[] and omitted allowed_grant_types. All other requested fields
+matched the deployment packet. GET /api/v3/schema/?format=json confirmed
+grant_types in both OAuth2Provider and OAuth2ProviderRequest, and no
+allowed_grant_types. Schema response SHA-256:
+54bb252f11fcda0a41dcb401ec4e2b8fc8c4eaddfadff5e643c3c2d750bf56a8.
+The operator receipt is jocasta:3a99b9af89ea1f2f48a5bbb302e60b9f@1;
+the S1 receipt is jocasta:102f05bb838d3158574916e42c3698a4@1.
+
+New provider POSTs persist their returned PK before comparing the response.
+A pending provider can be adopted only by GET of that journaled PK, a unique
+matching inventory entry and equality of every corrected contract field.
+The pending request body must equal the corrected body or its exact old form
+with allowed_grant_types instead of grant_types. No name-based adoption,
+PATCH repair or repeated provider POST occurs. CHECK verifies adoption without
+writing the journal. Other uncertain operations still refuse.
+
+The preserved production pending operation has **no PK**; it contains only
+method, path and body. Provider 113 also has the wrong grant_types. Therefore
+this source deliberately refuses the current journal and does not claim that
+a retry alone will repair production. The operator must retain the original
+journal and separately reconcile the proven exact provider 113: establish its
+PK in the protected pending provenance and correct its grant configuration
+under separate write authority. Do not clear pending, reconstruct ownership,
+or create another provider. If its body still differs, stop.
+
+After that reconciliation and source review/merge, pin the reviewed source,
+retain the full five-host packet, original owner, baseline anchors and original
+receipt directory. In a protected controller environment with on-disk TMPDIR:
+
+```sh
+ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -e @"$PROTECTED_AGENT_HOSTS" --check
+# Require successful exact-PK readback and inspect every predicted change.
+ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -e @"$PROTECTED_AGENT_HOSTS"
+ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -e @"$PROTECTED_AGENT_HOSTS"
+# Require changed=0 on the repeat.
+ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -e @"$PROTECTED_AGENT_HOSTS" --check
+# Require changed=0 and no failures.
+```
+
+Then require per-host resource and legacy smoke gates for laptop (8 resource
+tuples), omarchy-pc (3), agent-a (1), agent-b (1) and homelab (3): normal consumer
+tools/list admission plus RS256 signature, pinned issuer/JWKS, resource
+audience, scope sets, subject and bounded resource claims, no foreign claims,
+and exp-iat <=300 seconds. Retain all 23 distinct legacy subjects and compare
+against the protected pre-apply baseline. Stop fleet opt-in on any failure.
+No play, journal update or Authentik write was performed for this source fix.
+
 ## Fleet deployment
 
 Converge only the new host_credential_rotation role as the existing fleet user,
