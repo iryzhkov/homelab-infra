@@ -163,6 +163,13 @@ class TorrentTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertNotIn('result', result)
 
+    def test_coexistence_torrent_read(self):
+        self.policy['subjects'] = [self.policy['caller']['subject'], 'chaldea-laptop']
+        self.policy = worker.validate_policy(self.policy)
+        call = self.request()
+        call['caller']['subject'] = 'chaldea-laptop'
+        self.assertEqual(self.call(call), FIXTURE['response'])
+
     def test_fixture_and_exact_requests(self):
         with patch.dict(os.environ, {'http_proxy': 'http://invalid:1', 'https_proxy': 'http://invalid:1'}):
             self.assertEqual(self.call(), FIXTURE['response'])

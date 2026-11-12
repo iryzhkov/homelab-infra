@@ -34,7 +34,12 @@ Writer retains managed-recommendations, libraries 3/615/1132 and the existing
 seven target/history users, with Series and playback opt-ins unchanged.
 The three janitor purposes retain managed-janitor, library 3 and their separate
 read actions, with no history/targets. Do not add acquisition/start/media or
-series-acquisition grants.
+series-acquisition grants. Importer pause and the base janitor/intent tuple
+remain restricted to the original subject in the worker, even when their policy
+blocks are enabled. Only the writer and three read purposes use dual admission.
+
+Preserve the exact reviewed CLI commit through a merge commit rather than a
+squash: the packaging source and checksum pins depend on its retrievability.
 
 Admission does not alias journal ownership. Calls keep the actual signed
 subject, so internal keys and pending operations stay distinct. Finish or

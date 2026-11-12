@@ -160,6 +160,11 @@ class AcquisitionTests(unittest.TestCase):
             s.authorize(call, policy)
         policy['janitor_acquire'] = self.block
         s.authorize(call, policy)
+        policy['subjects'] = [policy['caller']['subject'], 'chaldea-laptop']
+        changed = copy.deepcopy(call)
+        changed['caller']['subject'] = 'chaldea-laptop'
+        with self.assertRaises(s.WireError):
+            s.authorize(changed, policy)
         for actions in ([a.READ, a.START], ['janitor.torrents.read'], [a.READ, a.MEDIA]):
             call['caller']['actions'] = actions
             with self.assertRaises(s.WireError):

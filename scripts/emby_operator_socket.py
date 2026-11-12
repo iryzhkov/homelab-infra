@@ -567,6 +567,8 @@ def authorize(call, policy):
               'refused', 'Importer read not enabled by policy')
         pause = call['operation'] == IMPORTER_PAUSE
         if pause:
+            check(caller['subject'] == policy['caller']['subject'],
+                  'refused', 'Caller outside importer pause policy')
             allowed = policy.get('janitor_importers_pause', {}).get('backends', {})
             check(call['request']['list_id'] in allowed.get(call['request']['backend'], []),
                   'refused', 'Importer pause target not enabled by policy')
@@ -581,7 +583,7 @@ def authorize(call, policy):
     if call['operation'] == JANITOR_OPERATION:
         ceiling = policy.get('janitor')
         check(ceiling is not None, 'refused', 'Janitor read not enabled by policy')
-        check(caller['subject'] in policy.get('subjects', [policy['caller']['subject']]) and
+        check(caller['subject'] == policy['caller']['subject'] and
               all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == 'managed-janitor' and
               caller['target_library'] == ceiling['target_library'] and

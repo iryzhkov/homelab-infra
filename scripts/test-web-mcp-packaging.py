@@ -2414,9 +2414,11 @@ class PackagingTest(unittest.TestCase):
 
 class CoexistencePackaging(unittest.TestCase):
     def test_exact_subjects_and_purpose_contract(self):
-        endpoint = operator_fixture()
+        endpoint = PackagingTest.seed_join_fixture(self)
+        endpoint["config"]["playlist_operator"]["series_libraries"] = copy.deepcopy(SERIES_LIBRARIES)
         endpoint["artifact"].update(source_revision=contract.HOLONET_COEXISTENCE_SOURCE,
-                                    contract_revision=contract.HOLONET_COEXISTENCE_SOURCE)
+                                    contract_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+                                    sha256=contract.HOLONET_COEXISTENCE_SHA256)
         config = endpoint["config"]
         operator = config["playlist_operator"]
         subjects = [operator["subject"], "chaldea-laptop"]
@@ -2432,7 +2434,37 @@ class CoexistencePackaging(unittest.TestCase):
                        "namespace": "managed-recommendations", "libraries": ["3"],
                        "catalog_users": [operator["catalog_user"]], "history_users": [],
                        "target_users": operator["recipients"], "actions": ["catalog.read"]}}
+        config["janitor"]["subjects"] = subjects
+        recipients = operator["recipients"]
+        config["policy"]["HistoryUsers"] = list(recipients)
+        config["policy"]["Actions"].insert(1, "history.read")
+        playback = playback_fixture()
+        config["playback"] = playback["config"]["playback"]
+        endpoint["credentials"].append(playback["credentials"][-1])
+        writer = config["purpose_grants"]["writer"]
+        writer.update(libraries=["3", "615", "1132"], history_users=list(recipients),
+                      actions=["catalog.read", "playlist.read", "playlist.manage", "object.share",
+                               "home.read", "home.manage", "object.delete", "history.read"])
+        for name, scopes, actions in (
+                ("importer", ["holonet.read", "holonet.janitor"],
+                 ["janitor.importers.read", "janitor.custody.read"]),
+                ("torrent", ["holonet.read", "holonet.janitor", "holonet.torrents"],
+                 ["janitor.torrents.read"]),
+                ("seed_join", ["holonet.read", "holonet.janitor", "holonet.seedjoin"],
+                 ["janitor.seed_join.read"])):
+            config["purpose_grants"][name] = dict(subjects=subjects, scopes=scopes,
+                namespace="managed-janitor", libraries=["3"],
+                catalog_users=[operator["catalog_user"]], history_users=[], target_users=[], actions=actions)
         contract.holonet_purposes(config)
+        contract.endpoint_contract(endpoint)
+        bad_sha = copy.deepcopy(endpoint)
+        bad_sha["artifact"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(AnsibleFilterError, "unaccepted coexistence binary"):
+            contract.endpoint_contract(bad_sha)
+        bad_subjects = copy.deepcopy(endpoint)
+        bad_subjects["config"]["janitor"]["subjects"] = [operator["subject"], "foreign-host"]
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(bad_subjects)
         rendered = contract.playlist_operator_plan(endpoint)["policy"]
         self.assertEqual(rendered["subjects"], subjects)
         self.assertEqual(rendered["caller"]["subject"], operator["subject"])
