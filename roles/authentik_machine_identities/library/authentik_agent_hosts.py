@@ -609,6 +609,9 @@ def main():
             if not rotation_key:
                 raise RotationReconciliationRefused()
             e.rotation(rotation_key)
+            # Adopting the pending provider is not a resource change; keep it out
+            # of resource_changed so the isolation guard below only sees resources.
+            e.changed = False
         saved_rows = copy.deepcopy(e.rows)
         baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
                                       p.get("create_original_writer_read_mapping", False))
