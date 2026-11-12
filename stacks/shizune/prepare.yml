@@ -23,8 +23,8 @@
   delegate_to: localhost
   become: false
   loop:
-    - {source: "{{ shizune_actual_token_source | default('') }}", dest: actual-token}
-    - {source: "{{ shizune_google_client_source | default('') }}", dest: google-client.json}
+    - {source: "{{ shizune_actual_token_source | default('') }}", dest: actual-session-token}
+    - {source: "{{ shizune_google_client_source | default('') }}", dest: google-oauth-client.json}
   when: item.source | length > 0
   register: shizune_credential_sources
   no_log: true

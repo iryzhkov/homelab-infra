@@ -113,10 +113,10 @@ done
 
 Data directories data/actual and data/google and secrets are mode 0700,
 owned by 10001. Optional sources must be single-link regular mode-0600 files.
-They are copied under no_log without diff to secrets/actual-token and
-secrets/google-client.json, mode 0600 owned by 10001. Absent sources are skipped
-with a message and preserve existing files. The service repository must consume
-those mounted paths; confirm its runtime configuration before deployment.
+They are copied under no_log without diff to secrets/actual-session-token and
+secrets/google-oauth-client.json, mode 0600 owned by 10001. Absent sources are skipped
+with a message and preserve existing files. These names match the service defaults
+/run/secrets/actual-session-token and /run/secrets/google-oauth-client.json.
 No backend credentials are generated here. Google authorization state belongs
 in data/google. Actual state belongs in data/actual. Back up these private data
 directories through the owning backup procedure before storing useful data.

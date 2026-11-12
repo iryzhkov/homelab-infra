@@ -55,8 +55,8 @@ class PrepareTest(unittest.TestCase):
                 self.assertIn("skipping provisioning", result.stdout)
                 if n:
                     self.assertRegex(result.stdout, r"changed=0\s+unreachable=0\s+failed=0")
-            self.assertEqual((stack / "secrets/actual-token").read_text(), "synthetic-only")
-            self.assertEqual((stack / "secrets/actual-token").stat().st_mode & 0o777, 0o600)
+            self.assertEqual((stack / "secrets/actual-session-token").read_text(), "synthetic-only")
+            self.assertEqual((stack / "secrets/actual-session-token").stat().st_mode & 0o777, 0o600)
             for pin in ("UNSET", "git.ryzhkov.dev/igor/shizune:latest", PIN.split("@")[0]):
                 variables["stack"]["env_extra"]["SHIZUNE_IMAGE"] = pin
                 play.write_text(yaml.safe_dump([{"hosts": "localhost", "connection": "local",
