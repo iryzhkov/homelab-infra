@@ -54,6 +54,9 @@ class API:
         if path.startswith("/managed/blueprints/"):
             return copy.deepcopy(self.blueprint)
         kind = next(k for k, prefix in e.PATHS.items() if path.startswith(prefix))
+        if body is not None and isinstance(body.get("expression"), str):
+            # Authentik 2026.8.5 CharFields trim surrounding whitespace on save.
+            body = dict(body, expression=body["expression"].strip())
         if method == "POST":
             self.n += 1
             result = dict(body, pk=str(uuid.UUID(int=self.n)) if kind in ("mapping", "group") else self.n)
