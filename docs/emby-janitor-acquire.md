@@ -54,20 +54,28 @@ Ansible and never creates a new login. start_enabled/media_enabled are explicit
 booleans and independent of purpose grants. The three acquisition scopes project
 separate flat managed-janitor grants on the existing Anime writer; old grants and
 request branches remain separate. Defaults are false. The consumer artifact is
-the subject-coexistence build: source 3d4dcb35cab58a02aee7fa3dc7804d5a1790b7d0,
-SHA256 189717cc9c16df3bf1842ece8f3312306ea55d526278d6c54424992a6348210d, interface
-3d4dcb35cab58a02aee7fa3dc7804d5a1790b7d0. That source contains acquisition PR54 and
-has the same tree as merged homelab-cli main 8350d751, which reproduces the same
-bytes with `package.sh` and Go 1.25.0. The acquisition and coexistence gates
-therefore accept one artifact. The earlier pre-coexistence candidate (source
+purpose-compatible coexistence build: source/interface
+9230187a4cf3058f316f0c06cfcac0a848fc910c, tree
+ffd527ad214ac8a279f6ee19981e160d9a42a800,
+SHA256 d94092107039ffe8cb2c79926952a38922c383b9d006503f49231f0254bb66e1,
+built with `package.sh` and Go 1.25.0. It extends merged main 8350d751,
+which already contains acquisition PR54 and coexistence PR55. Both gates accept
+this same new artifact. The installed 189717cc build contains acquisition and
+coexistence but lacks these purpose mappings and is superseded for this input. The earlier pre-coexistence candidate (source
 4e6f8744, SHA256 8516cc4b) is no longer admissible because installing it would
 drop configured subjects. No live configuration selects acquisition.
 
-Under coexistence, purpose_grants is mandatory and admits only the catalog,
-writer, importer, torrent and seed_join purposes, in both this validator and the
-Go consumer. An acquisition token matches none of them and is refused at token
-verification. Enabling acquisition alongside two subjects therefore needs a
-separately reviewed purpose extension; this artifact pin does not provide one.
+Under coexistence, purpose_grants is mandatory. Alongside the existing catalog,
+writer, importer, torrent and seed_join purposes, this validator and the Go
+consumer admit exactly acquire_read, acquire_start and acquire_media. Each has
+the packet's exact scopes/actions, namespace managed-janitor, library 3, empty
+catalog/history/target users, and only the original playlist_operator.subject
+matching janitor.subject. A second subject, foreign purpose or start/media union
+is refused. authorizeAcquire also binds the requested operation to its configured
+purpose. Configuration support enrolls no grants: initial enrollment is read
+only, with start/media projections withheld until their independent gates pass.
+No inventory opt-in or worker default changes. Reuse the existing 9a9455ee helper,
+which already contains Shizune and all acquisition modes; no helper rebuild.
 
 The Sonarr acquisition descriptor extends the existing importer shape only with
 acquire_download_origins=[https://prowlarr.ryzhkov.dev]. The worker validates this

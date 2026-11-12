@@ -2536,14 +2536,37 @@ class CoexistencePackaging(unittest.TestCase):
                 with self.subTest(source=source, sha256=sha256), \
                         self.assertRaises(AnsibleFilterError):
                     contract.endpoint_contract(changed)
-        # Purposes are not widened: no acquisition purpose exists under coexistence.
-        for name in ("acquire", "acquire_read"):
-            bad = copy.deepcopy(config)
-            bad["purpose_grants"][name] = dict(config["purpose_grants"]["importer"],
-                scopes=["holonet.read", "holonet.janitor", "holonet.acquire"],
-                actions=["janitor.acquire.read"])
-            with self.subTest(purpose=name), self.assertRaises(AnsibleFilterError):
-                contract.holonet_purposes(bad)
+        # Configuration expresses separate conditional projections; enrollment is separate.
+        for name, extra in (("acquire_read", None), ("acquire_start", "start"), ("acquire_media", "media")):
+            scopes = ["holonet.read", "holonet.janitor", "holonet.acquire"]
+            actions = ["janitor.acquire.read"]
+            if extra:
+                scopes.append("holonet.acquire." + extra)
+                actions.append("janitor.acquire." + extra)
+            self.assertTrue(set(actions) <= set(config["policy"]["Actions"]))
+            grant = dict(subjects=[operator["subject"]], scopes=scopes,
+                         namespace="managed-janitor", libraries=["3"], catalog_users=[],
+                         history_users=[], target_users=[], actions=actions)
+            config["purpose_grants"][name] = grant
+            self.assertEqual(contract.endpoint_contract(endpoint), endpoint)
+            for field, value in (
+                    ("subjects", ["chaldea-laptop"]), ("subjects", subjects), ("subjects", ["foreign"]),
+                    ("namespace", "managed-recommendations"), ("libraries", ["615"]),
+                    ("catalog_users", [user]), ("history_users", [user]), ("target_users", [user]),
+                    ("scopes", ["holonet.read", "holonet.janitor", "holonet.acquire",
+                                "holonet.acquire.start", "holonet.acquire.media"]),
+                    ("actions", ["janitor.acquire.read", "janitor.acquire.start", "janitor.acquire.media"])):
+                bad = copy.deepcopy(config)
+                bad["purpose_grants"][name][field] = value
+                with self.subTest(purpose=name, field=field, value=value), self.assertRaises(AnsibleFilterError):
+                    contract.holonet_purposes(bad)
+        bad = copy.deepcopy(config)
+        bad["purpose_grants"]["acquire"] = dict(grant)
+        with self.assertRaises(AnsibleFilterError):
+            contract.holonet_purposes(bad)
+        policy = contract.playlist_operator_plan(endpoint)["policy"]
+        self.assertFalse(policy["janitor_acquire"]["start_enabled"])
+        self.assertFalse(policy["janitor_acquire"]["media_enabled"])
 
 
 if __name__ == "__main__":
