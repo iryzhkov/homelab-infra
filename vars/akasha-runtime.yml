@@ -1,5 +1,5 @@
 ---
-# Homelab Akasha runtime; shared host is also021, independent clock stays0212.
+# Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
 # Official host-v0.2.21 at b5656fa; manifest digest verified against the downloaded archive.
 # Independent root requires existing017/018 and matching cache pairs.
 # Fleet collector also advances to021. Preserve existing017/018 rollback entries;

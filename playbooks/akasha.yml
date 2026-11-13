@@ -50,8 +50,8 @@
         chaldea_host_sha256: "{{ akasha_host_sha256 }}"
         chaldea_host_artifact_release_root: "{{ akasha_runtime_release_root }}"
         chaldea_host_artifact_cache: "{{ akasha_runtime_cache }}"
-        # Fleet akasha_collector_version runs 018 from this root; keep it explicitly
-        # so a later Akasha upgrade cannot prune it. 017 is the older rollback.
+        # Retain 017 and 018 as rollback releases in this shared Akasha root.
+        # The fleet collector moves to 021 with fleet-config #185.
         chaldea_host_artifact_preserve_versions: [host-v0.2.17, host-v0.2.18]
     - role: chaldea_access_trust
       vars:
