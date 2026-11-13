@@ -43,7 +43,7 @@ class Fixture:
         self.c = dict(providers=[dict(pk=i+1, slug=s, body=copy.deepcopy(body), canary_audience=s)
                                  for i,s in enumerate(m.SLUGS[:-1])],
                       cache_ceiling=300, max_inflight=60, edges=["1.1.1.1", "2.2.2.2"], replicas=["https://replica"])
-        body["name"] = "stage"
+        body.update(name="stage", grant_types=["authorization_code"])
         self.c["stage"] = dict(provider=900, application="app", slug="stage", policy="deny",
                               policy_name="deny", binding="binding", body=body)
         self.providers = {p["pk"]: dict(copy.deepcopy(p["body"]), pk=p["pk"], signing_key=m.ORIGINAL)
@@ -147,6 +147,38 @@ class Fixture:
     def restart(self):
         self.s = copy.deepcopy(self.persisted)
         self.crash_at = None
+
+
+class BootstrapFixture:
+    def __init__(self):
+        f=Fixture()
+        self.c=f.c
+        for field in ("jwt_federation_sources","jwt_federation_providers"):
+            self.c["providers"][0]["body"][field]=["foreign"]
+            f.providers[1][field]=["foreign"]
+        self.initial=f
+        self.objects={}
+        self.posts=[]
+        self.gets=[]
+    def authority(self): pass
+    def key(self,pk): return OLD["jwk"]
+    def rows(self,path):
+        self.gets.append(path)
+        return [v for (p,k),v in self.objects.items() if p==path.split("?")[0]]
+    def request(self,method,path,body=None):
+        if method=="POST":
+            self.posts.append(path)
+            pk=900 if path=="/providers/oauth2/" else "uuid-"+str(len(self.posts))
+            value=dict(body,pk=pk)
+            lookup=body["slug"] if path=="/core/applications/" else str(pk)
+            self.objects[(path,lookup)]=value
+            return value
+        for (prefix,lookup),value in self.objects.items():
+            if path==prefix+lookup+"/": return value
+        self.gets.append(path)
+        if path.startswith("/core/applications/"):
+            raise m.urllib.error.HTTPError(path,404,"absent",{},None)
+        return self.initial.request(method,path,body)
 
 
 class ControllerTests(unittest.TestCase):
@@ -312,7 +344,8 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual({k["kid"] for k in f.keys},{"old","new"})
 
     def test_staging_bound_or_grant_enabled_refuses(self):
-        for field,value in (("grant_types",["client_credentials"]),("encryption_key","foreign")):
+        for field,value in (("grant_types",[]),("grant_types",["client_credentials"]),
+                            ("redirect_uris",[{"url":"https://foreign"}]),("encryption_key","foreign")):
             f=Fixture(); f.providers[900][field]=value
             with self.assertRaises(RuntimeError): f.run()
             self.assertEqual(f.generated,[])
@@ -392,33 +425,8 @@ class ControllerTests(unittest.TestCase):
 
 
     def test_bootstrap_crash_boundaries_never_duplicate_provider(self):
-        class Setup:
-            def __init__(self):
-                f=Fixture()
-                self.c=f.c
-                for field in ("jwt_federation_sources","jwt_federation_providers"):
-                    self.c["providers"][0]["body"][field]=["foreign"]
-                    f.providers[1][field]=["foreign"]
-                self.initial=f
-                self.objects={}
-                self.posts=[]
-            def authority(self): pass
-            def key(self,pk): return OLD["jwk"]
-            def rows(self,path):
-                return [v for (p,k),v in self.objects.items() if p==path]
-            def request(self,method,path,body=None):
-                if method=="POST":
-                    self.posts.append(path)
-                    pk=900 if path=="/providers/oauth2/" else "uuid-"+str(len(self.posts))
-                    value=dict(body,pk=pk)
-                    lookup=body["slug"] if path=="/core/applications/" else str(pk)
-                    self.objects[(path,lookup)]=value
-                    return value
-                for (prefix,lookup),value in self.objects.items():
-                    if path==prefix+lookup+"/": return value
-                return self.initial.request(method,path,body)
         for boundary in range(1,11):
-            io=Setup(); state={}; persisted={}; count=0
+            io=BootstrapFixture(); state={}; persisted={}; count=0
             def save(s):
                 nonlocal persisted,count
                 persisted=copy.deepcopy(s); count+=1
@@ -434,7 +442,7 @@ class ControllerTests(unittest.TestCase):
             self.assertLessEqual(io.posts.count("/providers/oauth2/"),1)
             for (path,lookup),value in io.objects.items():
                 if path=="/providers/oauth2/":
-                    self.assertEqual(value["grant_types"],[])
+                    self.assertEqual(value["grant_types"],["authorization_code"])
                     self.assertEqual(value["property_mappings"],[])
                     self.assertEqual(value["jwt_federation_sources"],[])
                     self.assertEqual(value["jwt_federation_providers"],[])
@@ -442,6 +450,50 @@ class ControllerTests(unittest.TestCase):
                 stage=state["stage"]
                 self.assertEqual(stage["provider"],900)
                 self.assertTrue(stage["binding"])
+
+    def test_bootstrap_pending_create_reconciliation(self):
+        slug="homelab-cohort-signer-staging"
+        for outcome in ("absent", "adopt", "adopt_application", "mismatch", "duplicate", "foreign_app", "legacy_found", "recorded_provider"):
+            with self.subTest(outcome=outcome):
+                io=BootstrapFixture(); state={}
+                def crash(s):
+                    if s.get("pending",{}).get("kind")=="provider": raise Crash()
+                with self.assertRaises(Crash): m.bootstrap(io,crash,state)
+                pending=copy.deepcopy(state["pending"])
+                if outcome=="absent":
+                    # Exact installed receipt @7: no body, no returned ID.
+                    state["pending"]={"kind":"provider","path":"/providers/oauth2/"}
+                else:
+                    provider=dict(pending["body"],pk=900)
+                    io.objects[("/providers/oauth2/","900")]=provider
+                    if outcome=="mismatch": provider["grant_types"]=["client_credentials"]
+                    if outcome=="duplicate": io.objects[("/providers/oauth2/","901")]=dict(provider,pk=901)
+                    if outcome=="foreign_app":
+                        io.objects[("/core/applications/",slug)]=dict(pk="foreign",slug=slug,provider=999)
+                    if outcome=="legacy_found": state["pending"].pop("body")
+                    if outcome=="recorded_provider": state["stage"]["provider"]=900
+                    if outcome=="adopt_application":
+                        # Provider is already journaled; app POST loses its reply.
+                        def lose_app(method,path,body=None):
+                            result=request(method,path,body)
+                            if method=="POST" and path=="/core/applications/": raise Crash()
+                            return result
+                        request=io.request; io.request=lose_app
+                        with self.assertRaises(Crash): m.bootstrap(io,lambda s:None,state)
+                        io.request=request
+                before=copy.deepcopy(state)
+                if outcome in ("mismatch","duplicate","foreign_app","legacy_found","recorded_provider"):
+                    with self.assertRaises(RuntimeError): m.bootstrap(io,lambda s:None,state)
+                    self.assertEqual(state,before)
+                    self.assertEqual(io.posts,[])
+                else:
+                    m.bootstrap(io,lambda s:None,state)
+                    self.assertEqual(state["phase"],"idle")
+                    self.assertIsNone(state["pending"])
+                    self.assertEqual(io.posts.count("/providers/oauth2/"),1 if outcome=="absent" else 0)
+                    self.assertEqual(io.posts.count("/core/applications/"),1)
+                    self.assertIn("/providers/oauth2/?name="+slug,io.gets)
+                    self.assertIn("/core/applications/"+slug+"/",io.gets)
 
     def test_publication_command_quotes_python_as_one_argument(self):
         import shlex

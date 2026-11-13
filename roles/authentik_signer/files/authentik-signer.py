@@ -118,7 +118,7 @@ class IO:
     def rows(self, path):
         out, page = [], 1
         while True:
-            data = self.request("GET", path + "?superuser_full_list=true&page_size=100&page=" + str(page))
+            data = self.request("GET", path + ("&" if "?" in path else "?") + "superuser_full_list=true&page_size=100&page=" + str(page))
             out.extend(data["results"])
             if not data["pagination"]["next"]:
                 return out
@@ -275,7 +275,7 @@ class Controller:
             require(app["provider"] == p["pk"] and app["slug"] == p["slug"])
         stage = c["stage"]
         provider = self.io.request("GET", "/providers/oauth2/" + str(stage["provider"]) + "/")
-        require(provider["pk"] == stage["provider"] and projection(provider) == stage["body"] and provider["grant_types"] == []
+        require(provider["pk"] == stage["provider"] and projection(provider) == stage["body"] and provider["grant_types"] == ["authorization_code"] and provider["redirect_uris"] == []
                 and provider["encryption_key"] is None)
         app = self.io.request("GET", "/core/applications/" + stage["slug"] + "/")
         require(app["pk"] == stage["application"] and app["slug"] == stage["slug"]
@@ -468,11 +468,11 @@ def bootstrap(io, save, state):
                      next=None, retiring=None, alert=False, rotated=time.time())
         save(state)
     require(state["phase"] == "bootstrap" and state["contracts"] == io.c["providers"])
-    require(not state.get("pending"))
     stage = state["stage"]
+    require(not state.get("pending") or state["pending"]["kind"] not in stage)
     slug = "homelab-cohort-signer-staging"
     body = copy.deepcopy(io.c["providers"][0]["body"])
-    body.update(name=slug, client_id=slug, grant_types=[], encryption_key=None,
+    body.update(name=slug, client_id=slug, grant_types=["authorization_code"], encryption_key=None,
                 access_token_validity="seconds=300", refresh_token_validity="seconds=0",
                 redirect_uris=[], property_mappings=[],
                 jwt_federation_sources=[], jwt_federation_providers=[])
@@ -488,7 +488,6 @@ def bootstrap(io, save, state):
     ]
     # Recompute dependent bodies after each persisted returned ID.
     for name, path, request in objects:
-        require(not state.get("pending"))
         if name == "application":
             request["provider"] = stage["provider"]
         if name == "binding":
@@ -498,11 +497,39 @@ def bootstrap(io, save, state):
             actual = io.request("GET", path + lookup + "/")
             require(actual["pk"] == stage[name] and all(actual[k] == v for k, v in request.items()))
             continue
+        pending = state.get("pending")
+        if pending:
+            require(name in ("provider", "application") and pending["kind"] == name
+                    and pending["path"] == path and set(pending) <= {"kind", "path", "body"})
+            providers = [p for p in io.rows("/providers/oauth2/?name=" + slug) if p["name"] == slug]
+            try:
+                app = io.request("GET", "/core/applications/" + slug + "/")
+            except urllib.error.HTTPError as exc:
+                require(exc.code == 404)
+                app = None
+            if name == "provider":
+                require(app is None)
+                found = providers
+            else:
+                require(len(providers) == 1 and providers[0]["pk"] == stage["provider"])
+                found = [app] if app is not None else []
+            require(len(found) <= 1)
+            if found:
+                # The installed legacy intent has no body: only proven absence
+                # permits retry. New intents can adopt exact-body GET evidence.
+                require(pending.get("body") == request)
+                actual = io.request("GET", path + (slug if name == "application" else str(found[0]["pk"])) + "/")
+                require(actual["pk"] == found[0]["pk"] and all(actual[k] == v for k, v in request.items()))
+                stage[name] = actual["pk"]
+            state["pending"] = None
+            save(state)
+            if found:
+                continue
         if name == "provider":
             require(not any(p["name"] == slug for p in io.rows(path)))
         if name == "application":
             require(not any(p["slug"] == slug for p in io.rows(path)))
-        state["pending"] = {"kind": name, "path": path}
+        state["pending"] = {"kind": name, "path": path, "body": copy.deepcopy(request)}
         save(state)
         result = io.request("POST", path, request)
         stage[name] = result["pk"]

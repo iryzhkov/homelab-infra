@@ -58,8 +58,14 @@ Never log complete API responses, SOPS plaintext, credentials, JWTs or private k
    on omarchy-pc. Never run those writers from another controller.
    Disable stored cohort blueprint instances, or retain this explicit warning:
    manually applying a frozen instance reverts its providers to the original key.
-   Bootstrap journals one reused grantless staging provider, its application,
-   deny policy and binding. Uncertain creates require exact-ID reconciliation.
+   Bootstrap journals one reused staging provider allowing only authorization_code
+   with no redirect URIs, plus its application and deny policy/binding.
+   For the stopped bootstrap in receipt jocasta:aad3d1c9f7944f6eff51256b37522842@7,
+   rerun this same bootstrap command after installing the reviewed fix. It checks
+   the exact provider name and application slug with GETs before retrying a create.
+   A legacy intent without a body retries only when both are absent. New intents
+   journal their body and can adopt an exact match; collisions or drift refuse.
+   Never manually clear the pending entry or unfreeze writers.
 3. Run sudo /usr/local/sbin/authentik-signer publish to publish the original key
    only. An edge check can fail until routes are enabled; signing stays original.
 4. Set authentik_signer_routes_enabled=true on one edge at a time and apply
@@ -107,7 +113,8 @@ for retry; partial switches restore old signing while retaining overlap.
 Manual rollback uses sudo /usr/local/sbin/authentik-signer rollback.
 It refuses prune, delete and idle before changing signers: once public-key
 removal starts, even an unfinished retirement cannot roll back to that key.
-Never clear pending state or reconstruct ownership to bypass an uncertain create.
+Only bootstrap reconciles pending staging provider/application creates as above;
+other uncertain creates still require operator reconciliation.
 
 Use sudo /usr/local/sbin/authentik-signer enrollment ansible-playbook
 playbooks/authentik-agent-hosts.yml -e @"$PROTECTED_AGENT_HOSTS" from the checkout.
