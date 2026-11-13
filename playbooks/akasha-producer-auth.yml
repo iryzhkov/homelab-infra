@@ -22,14 +22,14 @@
         owner: root
         group: root
         mode: "0644"
-      when: chaldea_akasha_authentik_enabled | default(false) | bool
+      when: chaldea_token_helper_authentik_enabled | default(false) | bool
       notify: Reload systemd
     - name: Remove namespace exception on PKI rollback
       become: true
       ansible.builtin.file:
         path: /etc/systemd/system/chaldea-route-scores.service.d/akasha-authentik.conf
         state: absent
-      when: not (chaldea_akasha_authentik_enabled | default(false) | bool)
+      when: not (chaldea_token_helper_authentik_enabled | default(false) | bool)
       notify: Reload systemd
   handlers:
     - name: Reload systemd
