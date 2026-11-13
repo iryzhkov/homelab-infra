@@ -380,7 +380,9 @@ class SnapshotTest(unittest.TestCase):
                 "sha256": hashlib.sha256(candidate_archive.read_bytes()).hexdigest()}))
             before = snapshot()
             for phase, check in (("CHECK", True), ("REAL", False), ("SECOND0", False)):
-                proc = run(pin["akasha_host_version"], ["host-v0.2.17", "host-v0.2.18"], check, independent=True)
+                proc = run(pin["akasha_host_version"],
+                           ["host-v0.2.17", "host-v0.2.18", "host-v0.2.20", "host-v0.2.21"],
+                           check, independent=True)
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                 if phase == "SECOND0":
                     self.assertRegex(proc.stdout, r"changed=0\s+unreachable=0\s+failed=0")
@@ -581,8 +583,8 @@ class SnapshotTest(unittest.TestCase):
             "chaldea_host_artifact": [
                 "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.22')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
-                "chaldea_host_artifact_preserve_versions == (fixture_old_versions[1:] if fixture_artifact_calls | default([]) | length else ['host-v0.2.17', 'host-v0.2.18'])",
-                "chaldea_host_artifact_preserve_versions | length == (8 if fixture_artifact_calls | default([]) | length else 2)",
+                "chaldea_host_artifact_preserve_versions == (fixture_old_versions[1:] if fixture_artifact_calls | default([]) | length else ['host-v0.2.17', 'host-v0.2.18', 'host-v0.2.20', 'host-v0.2.21'])",
+                "chaldea_host_artifact_preserve_versions | length == (8 if fixture_artifact_calls | default([]) | length else 4)",
                 "chaldea_host_artifact_release_root == ('/opt/chaldea-host/releases' if fixture_artifact_calls | default([]) | length else akasha_runtime_release_root)",
                 "chaldea_host_artifact_cache == ('/var/cache/chaldea-host' if fixture_artifact_calls | default([]) | length else akasha_runtime_cache)",
                 "chaldea_host_artifact_root == chaldea_host_artifact_release_root ~ '/' ~ chaldea_host_version ~ '/host'"],
