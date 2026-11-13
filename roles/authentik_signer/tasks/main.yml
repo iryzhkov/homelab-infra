@@ -10,7 +10,8 @@
           - authentik_signer_config_source is match('^/')
         quiet: true
     # Arch's package module needs community.general, which this repository does
-    # not install; the controller only needs the module importable.
+    # not install; the controller only needs the module importable by the
+    # interpreter its shebang pins (/usr/bin/python3).
     - name: Require the public certificate parsing dependency
       ansible.builtin.command: /usr/bin/python3 -c "import cryptography"
       changed_when: false
