@@ -493,7 +493,12 @@ class ControllerTests(unittest.TestCase):
                     self.assertEqual(state,before)
                     self.assertEqual(io.posts,[])
                 else:
-                    m.bootstrap(io,lambda s:None,state)
+                    # Empty mutable-selector lookups never clear the intent by
+                    # themselves; the operator must pass --clear-pending.
+                    with self.assertRaises(RuntimeError): m.bootstrap(io,lambda s:None,state)
+                    self.assertEqual(state,before)
+                    self.assertEqual(io.posts,[])
+                    m.bootstrap(io,lambda s:None,state,clear_pending=True)
                     self.assertEqual(state["phase"],"idle")
                     self.assertIsNone(state["pending"])
                     self.assertEqual(io.posts.count("/providers/oauth2/"),1)

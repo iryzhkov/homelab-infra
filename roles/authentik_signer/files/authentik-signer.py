@@ -461,7 +461,7 @@ class Controller:
 
 
 
-def bootstrap(io, save, state):
+def bootstrap(io, save, state, clear_pending=False):
     """Write-ahead setup. Uncertain creates refuse rather than adopt by name."""
     io.authority()
     require(set(p["slug"] for p in io.c["providers"]) <= set(SLUGS))
@@ -521,6 +521,13 @@ def bootstrap(io, save, state):
             # Public-body equality cannot prove creator ownership or permissions.
             # Preserve every uncertain intent for exact-PK operator reconciliation.
             require(not providers and not clients and not linked and app is None)
+            # Name, client_id and slug are mutable, so empty lookups cannot prove
+            # the create failed. Only an operator who has established that (for
+            # example from the recorded HTTP error) may clear the intent.
+            if not clear_pending:
+                print("Pending staging " + name + " create is uncertain; reconcile it in Authentik, "
+                      "then run: authentik-signer bootstrap --clear-pending", file=sys.stderr)
+                require(False)
             state["pending"] = None
             save(state)
         if name == "provider":
@@ -608,7 +615,8 @@ def main():
         public = {k: s[k] for k in ("phase", "contracts", "current", "history")}
         atomic(Path("/etc/authentik-signer-generation.json"), public, 0o644)
     if args.command == "bootstrap":
-        bootstrap(io, save, state)
+        require(args.enrollment_args in ([], ["--clear-pending"]))
+        bootstrap(io, save, state, clear_pending=args.enrollment_args == ["--clear-pending"])
         return 0
     io.c["stage"] = state["stage"]
     controller = Controller(io, state, save)
