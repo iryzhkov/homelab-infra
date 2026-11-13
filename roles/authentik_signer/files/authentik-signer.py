@@ -615,8 +615,10 @@ def main():
         public = {k: s[k] for k in ("phase", "contracts", "current", "history")}
         atomic(Path("/etc/authentik-signer-generation.json"), public, 0o644)
     if args.command == "bootstrap":
-        require(args.enrollment_args in ([], ["--clear-pending"]))
-        bootstrap(io, save, state, clear_pending=args.enrollment_args == ["--clear-pending"])
+        # Check the raw argv: argparse would normalise forms such as "--".
+        raw = sys.argv[1:]
+        require(raw in (["bootstrap"], ["bootstrap", "--clear-pending"]))
+        bootstrap(io, save, state, clear_pending=raw == ["bootstrap", "--clear-pending"])
         return 0
     io.c["stage"] = state["stage"]
     controller = Controller(io, state, save)
