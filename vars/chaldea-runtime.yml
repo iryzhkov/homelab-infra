@@ -1,8 +1,8 @@
 ---
-# Published from Chaldea main 330926d; SHA-256 verified from the release asset.
+# Published from Chaldea main b5656fa; manifest digest verified against the downloaded archive.
 # Keep this version and digest identical in fleet-config and homelab-infra.
-chaldea_host_version: host-v0.2.2
-chaldea_host_sha256: "ebaf896b2b4552002f00ad9b83855ff2364abe02f57ec667d7c9fcafb308c357"
+chaldea_host_version: host-v0.2.21
+chaldea_host_sha256: "090bd269f0369f71b746d800ed68ced14f6ed9dff313cb439dfecb2d556bb524"
 # Clock repair is independent of Akasha, job and publisher runtime pins.
 chaldea_clock_host_version: host-v0.2.12
 chaldea_clock_host_sha256: "375af0c5f4e37955ae6a6b61e11cbbac6c581ea67b2875384eb7c4d3d44948ff"

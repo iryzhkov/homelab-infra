@@ -1,9 +1,9 @@
 ---
-# Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
-# Official host-v0.2.20 at abc9c90; verified GitHub release digest.
+# Homelab Akasha runtime; shared host is also021, independent clock stays0212.
+# Official host-v0.2.21 at b5656fa; manifest digest verified against the downloaded archive.
 # Independent root requires existing017/018 and matching cache pairs.
-# Keep collector018 (fleet akasha_collector_version) and rollback017 explicitly;
-# newest prior018 is retained too. After installation require017/018/020.
+# Fleet collector also advances to021. Preserve existing017/018 rollback entries;
+# the actual newest prior020 is retained too. Never install absent old versions.
 # Require fresh root ownership, no-symlink and mtime evidence before every call.
 # Never install missing old versions or alter mtimes to satisfy retention.
 # The trust call uses its own list; never pass the runtime list as extra vars.
@@ -12,5 +12,5 @@ chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4,
 # Independent service/collector root avoids collecting any of the ten old releases.
 akasha_runtime_release_root: /opt/chaldea-akasha-host/releases
 akasha_runtime_cache: /var/cache/chaldea-akasha-host
-akasha_host_version: host-v0.2.20
-akasha_host_sha256: ed967a7d018b4b46e9578fe0b272da9977e04b8f2c81a1fbdfe11cfbaa6a9063
+akasha_host_version: host-v0.2.21
+akasha_host_sha256: 090bd269f0369f71b746d800ed68ced14f6ed9dff313cb439dfecb2d556bb524
