@@ -355,11 +355,19 @@ class SnapshotTest(unittest.TestCase):
             proc = run("host-v0.2.18", [], independent=True)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
+            # Live service020 is the newest prior release before the selected pin.
+            candidate_manifest.write_text(json.dumps({"version": "host-v0.2.20",
+                "sha256": hashlib.sha256(candidate_archive.read_bytes()).hexdigest()}))
+            proc = run("host-v0.2.20", ["host-v0.2.17"], independent=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            rollback_versions = ("host-v0.2.17", "host-v0.2.18", "host-v0.2.20")
+
             def rollback_snapshot():
-                paths = sorted(path for version in ("host-v0.2.17", "host-v0.2.18")
+                paths = sorted(path for version in rollback_versions
                                for path in (root / "independent-releases" / version).rglob("*"))
                 paths += [root / "independent-cache" / (version + suffix)
-                          for version in ("host-v0.2.17", "host-v0.2.18")
+                          for version in rollback_versions
                           for suffix in (".tar.gz", ".json")]
                 return {str(path.relative_to(root)): (
                     path.lstat().st_mode, path.lstat().st_uid, path.lstat().st_gid,
@@ -378,10 +386,10 @@ class SnapshotTest(unittest.TestCase):
                     self.assertRegex(proc.stdout, r"changed=0\s+unreachable=0\s+failed=0")
                 self.assertEqual(snapshot(), before, "independent installation must preserve every shared byte and metadata")
                 self.assertEqual(rollback_snapshot(), rollback_before,
-                                 "017/018 bytes and metadata must survive service020")
+                                 "017/018/020 bytes and metadata must survive the selected pin")
                 self.assertEqual(sorted(p.name for p in (root / "independent-releases").iterdir()),
-                                 ["host-v0.2.17", "host-v0.2.18"] if check else
-                                 ["host-v0.2.17", "host-v0.2.18", "host-v0.2.22"])
+                                 ["host-v0.2.17", "host-v0.2.18", "host-v0.2.20"] if check else
+                                 ["host-v0.2.17", "host-v0.2.18", "host-v0.2.20", "host-v0.2.22"])
             # Legacy shared-root calls retain their ten-release compatibility contract.
             pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
             self.assertEqual(pin["akasha_host_version"], "host-v0.2.22")
