@@ -17,6 +17,7 @@
       ansible.builtin.copy:
         content: |
           [Service]
+          ProtectHome=tmpfs
           BindReadOnlyPaths={{ ansible_facts.env.HOME }}/.config/chaldea/authentik
         dest: /etc/systemd/system/chaldea-route-scores.service.d/akasha-authentik.conf
         owner: root
@@ -36,6 +37,30 @@
       become: true
       ansible.builtin.systemd:
         daemon_reload: true
+
+- name: Remove retired Normandy Mission Control reader grants
+  hosts: normandy
+  gather_facts: false
+  tasks:
+    - name: Require exactly one selected host
+      ansible.builtin.assert:
+        that: ansible_play_hosts_all | length == 1
+        quiet: true
+    - name: Read existing public helper enrollment
+      become: true
+      ansible.builtin.slurp:
+        src: /etc/chaldea/token-helper.json
+      register: akasha_retired_reader_config
+    - name: Drop retired reader grants before regenerating helper sudoers
+      become: true
+      vars:
+        akasha_retired_reader_public: "{{ akasha_retired_reader_config.content | b64decode | from_json }}"
+      ansible.builtin.copy:
+        content: "{{ akasha_retired_reader_public | combine({'grants': akasha_retired_reader_public.grants | rejectattr('source', 'equalto', 'mission-control-reader') | list}) | to_nice_json }}\n"
+        dest: /etc/chaldea/token-helper.json
+        owner: root
+        group: root
+        mode: "0644"
 
 - name: Reuse the reviewed fleet helper implementation
   ansible.builtin.import_playbook: "{{ chaldea_fleet_config_checkout }}/playbooks/akasha-producer-auth.yml"
