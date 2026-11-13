@@ -1,6 +1,7 @@
 ---
 # Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
-# Official host-v0.2.21 at b5656fa; manifest digest verified against the downloaded archive.
+# Official host-v0.2.22 at 57f3c38; manifest digest verified against the downloaded archive.
+# host-v0.2.22 adds the host/kind reader index; schema stays version 1, so 020 remains a valid rollback.
 # Independent root requires existing017/018 and matching cache pairs.
 # Fleet collector also advances to021. Preserve existing017/018 rollback entries;
 # the actual newest prior020 is retained too. Never install absent old versions.
@@ -12,5 +13,5 @@ chaldea_host_artifact_preserve_versions: [host-v0.2.2, host-v0.2.3, host-v0.2.4,
 # Independent service/collector root avoids collecting any of the ten old releases.
 akasha_runtime_release_root: /opt/chaldea-akasha-host/releases
 akasha_runtime_cache: /var/cache/chaldea-akasha-host
-akasha_host_version: host-v0.2.21
-akasha_host_sha256: 090bd269f0369f71b746d800ed68ced14f6ed9dff313cb439dfecb2d556bb524
+akasha_host_version: host-v0.2.22
+akasha_host_sha256: 2495a653d6047ae5e04a76b42cb6984de987dbea6cbbfeef55bc03dd3ad866a9

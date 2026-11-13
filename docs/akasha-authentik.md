@@ -66,8 +66,10 @@ ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -
 ```
 
 3. Verify current artifact roots and caches before each Akasha invocation.
-   The independent runtime root must contain 017/018 with matching cache pairs,
-   newest prior018 excluding selected020. After installation expect017/018/020.
+   The independent runtime root must contain 017/018/020 with matching cache pairs,
+   newest prior020 excluding selected host-v0.2.22 (the reader-index release from
+   chaldea #108). After installation expect017/018/020/022. The original dual-verifier
+   rollout selected020 from 017/018; 020 is now the implicit rollback release.
    Explicit018 keeps the fleet collectors (akasha_collector_version runs from this
    root) and is also the newest prior release; explicit017 keeps the older
    rollback. 016 was pruned before this packet and is not required. Never change
@@ -79,8 +81,8 @@ akasha_dual() {
   ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/akasha.yml --limit homelab \
     -e @"$PROTECTED_AKASHA" -e @vars/akasha-homelab.yml \
     -e akasha_route_host_qualified=true \
-    -e akasha_route_host_version=host-v0.2.20 \
-    -e akasha_route_host_sha256=ed967a7d018b4b46e9578fe0b272da9977e04b8f2c81a1fbdfe11cfbaa6a9063 \
+    -e akasha_route_host_version=host-v0.2.22 \
+    -e akasha_route_host_sha256=2495a653d6047ae5e04a76b42cb6984de987dbea6cbbfeef55bc03dd3ad866a9 \
     -e '{"akasha_activate":true,"akasha_authentik_enabled":false}' "$@"
 }
 akasha_dual --tags runtime --check --diff

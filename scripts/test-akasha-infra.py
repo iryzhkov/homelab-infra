@@ -355,11 +355,19 @@ class SnapshotTest(unittest.TestCase):
             proc = run("host-v0.2.18", [], independent=True)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
+            # Live service020 is the newest prior release before the selected pin.
+            candidate_manifest.write_text(json.dumps({"version": "host-v0.2.20",
+                "sha256": hashlib.sha256(candidate_archive.read_bytes()).hexdigest()}))
+            proc = run("host-v0.2.20", ["host-v0.2.17"], independent=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+            rollback_versions = ("host-v0.2.17", "host-v0.2.18", "host-v0.2.20")
+
             def rollback_snapshot():
-                paths = sorted(path for version in ("host-v0.2.17", "host-v0.2.18")
+                paths = sorted(path for version in rollback_versions
                                for path in (root / "independent-releases" / version).rglob("*"))
                 paths += [root / "independent-cache" / (version + suffix)
-                          for version in ("host-v0.2.17", "host-v0.2.18")
+                          for version in rollback_versions
                           for suffix in (".tar.gz", ".json")]
                 return {str(path.relative_to(root)): (
                     path.lstat().st_mode, path.lstat().st_uid, path.lstat().st_gid,
@@ -378,13 +386,13 @@ class SnapshotTest(unittest.TestCase):
                     self.assertRegex(proc.stdout, r"changed=0\s+unreachable=0\s+failed=0")
                 self.assertEqual(snapshot(), before, "independent installation must preserve every shared byte and metadata")
                 self.assertEqual(rollback_snapshot(), rollback_before,
-                                 "017/018 bytes and metadata must survive service020")
+                                 "017/018/020 bytes and metadata must survive the selected pin")
                 self.assertEqual(sorted(p.name for p in (root / "independent-releases").iterdir()),
-                                 ["host-v0.2.17", "host-v0.2.18"] if check else
-                                 ["host-v0.2.17", "host-v0.2.18", "host-v0.2.21"])
+                                 ["host-v0.2.17", "host-v0.2.18", "host-v0.2.20"] if check else
+                                 ["host-v0.2.17", "host-v0.2.18", "host-v0.2.20", "host-v0.2.22"])
             # Legacy shared-root calls retain their ten-release compatibility contract.
             pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
-            self.assertEqual(pin["akasha_host_version"], "host-v0.2.21")
+            self.assertEqual(pin["akasha_host_version"], "host-v0.2.22")
             self.assertEqual(pin["chaldea_host_artifact_preserve_versions"], versions[:8])
             self.assertEqual(pin["akasha_trust_preserve_versions"], versions[1:9])
             calls = [(versions[-1], pin["chaldea_host_artifact_preserve_versions"], versions[-2]),
@@ -551,9 +559,9 @@ class SnapshotTest(unittest.TestCase):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
         self.assertEqual(shared["chaldea_host_version"], "host-v0.2.2")
-        self.assertEqual(pin["akasha_host_version"], "host-v0.2.21")
+        self.assertEqual(pin["akasha_host_version"], "host-v0.2.22")
         self.assertEqual(pin["akasha_host_sha256"],
-                         "090bd269f0369f71b746d800ed68ced14f6ed9dff313cb439dfecb2d556bb524")
+                         "2495a653d6047ae5e04a76b42cb6984de987dbea6cbbfeef55bc03dd3ad866a9")
         old_versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10, 14)]
         versions = old_versions + ["host-v0.2.15"]
         self.assertEqual(shared["chaldea_clock_host_version"], "host-v0.2.12")
@@ -564,14 +572,14 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(clock_vars["chaldea_host_artifact_cache"], "/var/cache/chaldea-clock-host")
         self.assertEqual(clock_vars["chaldea_host_artifact_preserve_versions"], [])
         old_root = "/opt/chaldea-host/releases/host-v0.2.2/host"
-        new_root = "/opt/chaldea-akasha-host/releases/host-v0.2.21/host"
+        new_root = "/opt/chaldea-akasha-host/releases/host-v0.2.22/host"
         checks = {
             "chaldea_node": [
                 "chaldea_host_version == 'host-v0.2.2'",
                 "chaldea_node_version == '26.10.0'",
                 "chaldea_node_sha256 == 'ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022'"],
             "chaldea_host_artifact": [
-                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.21')",
+                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.22')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
                 "chaldea_host_artifact_preserve_versions == (fixture_old_versions[1:] if fixture_artifact_calls | default([]) | length else ['host-v0.2.17', 'host-v0.2.18'])",
                 "chaldea_host_artifact_preserve_versions | length == (8 if fixture_artifact_calls | default([]) | length else 2)",
@@ -584,7 +592,7 @@ class SnapshotTest(unittest.TestCase):
                 "chaldea_host_artifact_root == '" + old_root + "'",
                 "chaldea_access_trust_runtime == '/opt/chaldea-clock-host/releases/" + shared["chaldea_clock_host_version"] + "/host/access-maintenance.mjs'"],
             "akasha": [
-                "chaldea_host_version == 'host-v0.2.21'",
+                "chaldea_host_version == 'host-v0.2.22'",
                 "chaldea_host_artifact_root == '" + new_root + "'",
                 "'" + new_root + "/akasha-service.mjs' in akasha_exec_start"],
         }
@@ -683,7 +691,7 @@ class SnapshotTest(unittest.TestCase):
                                   for path in play["vars_files"]]
             play["post_tasks"] = [{"ansible.builtin.assert": {"that": [
                 "chaldea_host_version == 'host-v0.2.2'",
-                "fixture_artifact_calls == ['host-v0.2.21', 'host-v0.2.2']",
+                "fixture_artifact_calls == ['host-v0.2.22', 'host-v0.2.2']",
                 "chaldea_host_artifact_root == '" + old_root + "'"], "quiet": True}}]
             path = root / "play.yml"
             path.write_text(yaml.safe_dump([play]))
