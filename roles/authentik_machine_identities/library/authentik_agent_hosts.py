@@ -211,10 +211,27 @@ return {'aud': 'https://akasha.ryzhkov.dev',
                     require(actual.get("pk") == prior["pk"]
                             and all(key in actual for key in body))
                 if prior["body"] != body:
+                    differs = {k for k in set(body) | set(prior["body"])
+                               if body.get(k) != prior["body"].get(k)}
+                    # One reviewed provider migration: Authentik 2026.8.5 applies scope
+                    # mappings to client_credentials access JWTs only when
+                    # include_claims_in_id_token is true. Send just that field.
+                    if (kind == "provider" and differs == {"include_claims_in_id_token"}
+                            and prior["body"]["include_claims_in_id_token"] is False
+                            and body["include_claims_in_id_token"] is True):
+                        self.mutate("PATCH", PATHS[kind] + str(prior["pk"]) + "/",
+                                    {"include_claims_in_id_token": True})
+                        if self.check:
+                            # Predicted change only; the receipt and readback
+                            # follow the real PATCH.
+                            return prior["pk"]
+                        actual = self.api.request("GET", PATHS[kind] + str(prior["pk"]) + "/")
+                        require(actual.get("pk") == prior["pk"] and matches(actual, body))
+                        prior["body"] = body
+                        self.commit()
+                        return prior["pk"]
                     # Only the exact account cohort in our own expressions may evolve.
-                    require(kind in ("mapping", "policy")
-                            and {k: v for k, v in body.items() if k != "expression"}
-                            == {k: v for k, v in prior["body"].items() if k != "expression"})
+                    require(kind in ("mapping", "policy") and differs == {"expression"})
                     self.mutate("PATCH", PATHS[kind] + str(prior["pk"]) + "/", body)
                     prior["body"] = body
                     self.commit()
@@ -257,7 +274,7 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             "invalidation_flow": flow("default-provider-invalidation-flow"),
             "access_token_validity": "seconds=300", "issuer_mode": "per_provider",
             "sub_mode": "hashed_user_id", "encryption_key": None,
-            "include_claims_in_id_token": False, "refresh_token_validity": "seconds=0",
+            "include_claims_in_id_token": True, "refresh_token_validity": "seconds=0",
             "redirect_uris": [], "signing_key": signing_key, "property_mappings": [mapping],
             "jwt_federation_sources": [], "jwt_federation_providers": []})
         app = owned("application", {"name": "Chaldea Akasha", "slug": AKASHA_CLIENT,

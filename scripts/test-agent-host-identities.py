@@ -308,7 +308,9 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(body["access_token_validity"], "seconds=300")
         self.assertEqual(body["sub_mode"], "hashed_user_id")
         self.assertIsNone(body["encryption_key"])
-        self.assertIs(body["include_claims_in_id_token"], False)
+        # Authentik 2026.8.5 emits mapping claims in client_credentials access
+        # JWTs only through the ID-token path; false silently drops aud and host.
+        self.assertIs(body["include_claims_in_id_token"], True)
         self.assertEqual(body["refresh_token_validity"], "seconds=0")
         self.assertEqual(body["signing_key"], OWNER)
         self.assertEqual(body["property_mappings"], [objects["mapping"]["pk"]])
@@ -363,7 +365,7 @@ class Lifecycle(unittest.TestCase):
                                     ("provider", "client_type", "public"),
                                     ("provider", "sub_mode", "user_username"),
                                     ("provider", "encryption_key", OWNER),
-                                    ("provider", "include_claims_in_id_token", True),
+                                    ("provider", "include_claims_in_id_token", False),
                                     ("provider", "refresh_token_validity", "days=30"),
                                     ("provider", "access_token_validity", "seconds=301"),
                                     ("provider", "authorization_flow", "foreign"),
@@ -378,6 +380,34 @@ class Lifecycle(unittest.TestCase):
             with self.assertRaises(Exception):
                 self.enrollment().akasha(users, OWNER)
         self.api.data = good
+        # A provider recorded with the old false value migrates once, sending only
+        # that field; any other recorded provider difference still refuses.
+        row = next(r for r in self.api.data["provider"] if r["pk"] == objects["provider"]["pk"])
+        row["include_claims_in_id_token"] = False
+        objects["provider"]["body"]["include_claims_in_id_token"] = False
+        x.save()
+        old = copy.deepcopy(self.api.data)
+        calls = len(self.api.calls)
+        checked = self.enrollment(check=True)
+        checked.akasha(users, OWNER)
+        self.assertTrue(checked.changed)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.assertEqual(self.api.data, old)
+        self.assertIs(self.enrollment(check=True).receipt["akasha"]["provider"]["body"]["include_claims_in_id_token"], False)
+        calls = len(self.api.calls)
+        x.akasha(users, OWNER)
+        writes = [(m, b) for m, _, b in self.api.calls[calls:] if m != "GET"]
+        self.assertEqual(writes, [("PATCH", {"include_claims_in_id_token": True})])
+        self.assertIs(row["include_claims_in_id_token"], True)
+        self.assertIs(objects["provider"]["body"]["include_claims_in_id_token"], True)
+        self.assertIsNone(x.receipt["pending"])
+        calls = len(self.api.calls)
+        x.akasha(users, OWNER)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        row["access_token_validity"] = "seconds=60"
+        objects["provider"]["body"]["access_token_validity"] = "seconds=60"
+        with self.assertRaises(Exception):
+            x.akasha(users, OWNER)
 
 
     def akasha_pending_fixture(self):
