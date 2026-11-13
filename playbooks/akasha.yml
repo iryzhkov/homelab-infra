@@ -50,9 +50,11 @@
         chaldea_host_sha256: "{{ akasha_host_sha256 }}"
         chaldea_host_artifact_release_root: "{{ akasha_runtime_release_root }}"
         chaldea_host_artifact_cache: "{{ akasha_runtime_cache }}"
-        # Retain 017 and 018 as rollback releases in this shared Akasha root.
-        # The fleet collector moves to 021 with fleet-config #185.
-        chaldea_host_artifact_preserve_versions: [host-v0.2.17, host-v0.2.18]
+        # This root is shared with the homelab fleet collector. Retain 017/018,
+        # server rollback 020 and collector 021 explicitly: once the collector
+        # installs 021 it becomes the newest prior and 020 would otherwise be pruned.
+        # Fleet-config #190 mirrors this list on the collector side.
+        chaldea_host_artifact_preserve_versions: [host-v0.2.17, host-v0.2.18, host-v0.2.20, host-v0.2.21]
     - role: chaldea_access_trust
       vars:
         chaldea_host_artifact_preserve_versions: "{{ akasha_trust_preserve_versions }}"
