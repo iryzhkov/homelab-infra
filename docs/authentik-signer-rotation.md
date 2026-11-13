@@ -58,8 +58,18 @@ Never log complete API responses, SOPS plaintext, credentials, JWTs or private k
    on omarchy-pc. Never run those writers from another controller.
    Disable stored cohort blueprint instances, or retain this explicit warning:
    manually applying a frozen instance reverts its providers to the original key.
-   Bootstrap journals one reused grantless staging provider, its application,
-   deny policy and binding. Uncertain creates require exact-ID reconciliation.
+   Bootstrap journals one reused staging provider allowing only authorization_code
+   with no redirect URIs, plus its application and deny policy/binding.
+   For the stopped bootstrap in receipt jocasta:aad3d1c9f7944f6eff51256b37522842@7,
+   install the reviewed fix and rerun bootstrap. Name, client_id and slug can be
+   changed after a create, so empty lookups never clear a pending create by
+   themselves; bootstrap refuses and asks for --clear-pending. Pass it only when
+   the create is known to have failed (that receipt records HTTP 400 for the
+   POST): sudo /usr/local/sbin/authentik-signer bootstrap --clear-pending. It
+   still refuses if any provider with the staging name or client_id, or any
+   application referencing one, exists. Existing candidates are never adopted;
+   inspect them by exact PK and delete only after confirming they are the
+   controller's own create. Never edit the journal or unfreeze writers by hand.
 3. Run sudo /usr/local/sbin/authentik-signer publish to publish the original key
    only. An edge check can fail until routes are enabled; signing stays original.
 4. Set authentik_signer_routes_enabled=true on one edge at a time and apply
@@ -107,7 +117,8 @@ for retry; partial switches restore old signing while retaining overlap.
 Manual rollback uses sudo /usr/local/sbin/authentik-signer rollback.
 It refuses prune, delete and idle before changing signers: once public-key
 removal starts, even an unfinished retirement cannot roll back to that key.
-Never clear pending state or reconstruct ownership to bypass an uncertain create.
+Only bootstrap reconciles pending staging provider/application creates as above;
+other uncertain creates still require operator reconciliation.
 
 Use sudo /usr/local/sbin/authentik-signer enrollment ansible-playbook
 playbooks/authentik-agent-hosts.yml -e @"$PROTECTED_AGENT_HOSTS" from the checkout.

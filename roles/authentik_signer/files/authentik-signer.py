@@ -116,11 +116,17 @@ class IO:
         require(actor["user"]["is_superuser"] is True)
 
     def rows(self, path):
-        out, page = [], 1
+        out, page, count = [], 1, None
         while True:
-            data = self.request("GET", path + "?superuser_full_list=true&page_size=100&page=" + str(page))
+            data = self.request("GET", path + ("&" if "?" in path else "?") + "superuser_full_list=true&page_size=100&page=" + str(page))
+            seen_count = data["pagination"]["count"]
+            require(type(seen_count) is int and seen_count >= 0
+                    and (count is None or seen_count == count))
+            count = seen_count
             out.extend(data["results"])
+            require(len(out) <= count)
             if not data["pagination"]["next"]:
+                require(len(out) == count and len({r["pk"] for r in out}) == len(out))
                 return out
             page += 1
             require(page < 1000)
@@ -275,7 +281,7 @@ class Controller:
             require(app["provider"] == p["pk"] and app["slug"] == p["slug"])
         stage = c["stage"]
         provider = self.io.request("GET", "/providers/oauth2/" + str(stage["provider"]) + "/")
-        require(provider["pk"] == stage["provider"] and projection(provider) == stage["body"] and provider["grant_types"] == []
+        require(provider["pk"] == stage["provider"] and projection(provider) == stage["body"] and provider["grant_types"] == ["authorization_code"] and provider["redirect_uris"] == []
                 and provider["encryption_key"] is None)
         app = self.io.request("GET", "/core/applications/" + stage["slug"] + "/")
         require(app["pk"] == stage["application"] and app["slug"] == stage["slug"]
@@ -455,7 +461,7 @@ class Controller:
 
 
 
-def bootstrap(io, save, state):
+def bootstrap(io, save, state, clear_pending=False):
     """Write-ahead setup. Uncertain creates refuse rather than adopt by name."""
     io.authority()
     require(set(p["slug"] for p in io.c["providers"]) <= set(SLUGS))
@@ -468,11 +474,11 @@ def bootstrap(io, save, state):
                      next=None, retiring=None, alert=False, rotated=time.time())
         save(state)
     require(state["phase"] == "bootstrap" and state["contracts"] == io.c["providers"])
-    require(not state.get("pending"))
     stage = state["stage"]
+    require(not state.get("pending") or state["pending"]["kind"] not in stage)
     slug = "homelab-cohort-signer-staging"
     body = copy.deepcopy(io.c["providers"][0]["body"])
-    body.update(name=slug, client_id=slug, grant_types=[], encryption_key=None,
+    body.update(name=slug, client_id=slug, grant_types=["authorization_code"], encryption_key=None,
                 access_token_validity="seconds=300", refresh_token_validity="seconds=0",
                 redirect_uris=[], property_mappings=[],
                 jwt_federation_sources=[], jwt_federation_providers=[])
@@ -488,7 +494,6 @@ def bootstrap(io, save, state):
     ]
     # Recompute dependent bodies after each persisted returned ID.
     for name, path, request in objects:
-        require(not state.get("pending"))
         if name == "application":
             request["provider"] = stage["provider"]
         if name == "binding":
@@ -498,11 +503,38 @@ def bootstrap(io, save, state):
             actual = io.request("GET", path + lookup + "/")
             require(actual["pk"] == stage[name] and all(actual[k] == v for k, v in request.items()))
             continue
+        pending = state.get("pending")
+        if pending:
+            require(name in ("provider", "application") and pending["kind"] == name
+                    and pending["path"] == path and set(pending) <= {"kind", "path", "body"})
+            providers = [p for p in io.rows("/providers/oauth2/?name=" + slug) if p["name"] == slug]
+            clients = [p for p in io.rows("/providers/oauth2/?client_id=" + slug) if p["client_id"] == slug]
+            ids = {p["pk"] for p in providers + clients}
+            apps = io.rows("/core/applications/")
+            linked = [a for a in apps if a["slug"] == slug or a["provider"] in ids
+                      or ids.intersection(a["backchannel_providers"])]
+            try:
+                app = io.request("GET", "/core/applications/" + slug + "/")
+            except urllib.error.HTTPError as exc:
+                require(exc.code == 404)
+                app = None
+            # Public-body equality cannot prove creator ownership or permissions.
+            # Preserve every uncertain intent for exact-PK operator reconciliation.
+            require(not providers and not clients and not linked and app is None)
+            # Name, client_id and slug are mutable, so empty lookups cannot prove
+            # the create failed. Only an operator who has established that (for
+            # example from the recorded HTTP error) may clear the intent.
+            if not clear_pending:
+                print("Pending staging " + name + " create is uncertain; reconcile it in Authentik, "
+                      "then run: authentik-signer bootstrap --clear-pending", file=sys.stderr)
+                require(False)
+            state["pending"] = None
+            save(state)
         if name == "provider":
             require(not any(p["name"] == slug for p in io.rows(path)))
         if name == "application":
             require(not any(p["slug"] == slug for p in io.rows(path)))
-        state["pending"] = {"kind": name, "path": path}
+        state["pending"] = {"kind": name, "path": path, "body": copy.deepcopy(request)}
         save(state)
         result = io.request("POST", path, request)
         stage[name] = result["pk"]
@@ -583,7 +615,10 @@ def main():
         public = {k: s[k] for k in ("phase", "contracts", "current", "history")}
         atomic(Path("/etc/authentik-signer-generation.json"), public, 0o644)
     if args.command == "bootstrap":
-        bootstrap(io, save, state)
+        # Check the raw argv: argparse would normalise forms such as "--".
+        raw = sys.argv[1:]
+        require(raw in (["bootstrap"], ["bootstrap", "--clear-pending"]))
+        bootstrap(io, save, state, clear_pending=raw == ["bootstrap", "--clear-pending"])
         return 0
     io.c["stage"] = state["stage"]
     controller = Controller(io, state, save)
