@@ -1,0 +1,41 @@
+---
+# Shared helper implementation belongs to fleet-config. Use both inventories.
+- name: Expose host credential only inside the route publisher namespace
+  hosts: homelab
+  gather_facts: true
+  tasks:
+    - name: Create route publisher drop-in directory
+      become: true
+      ansible.builtin.file:
+        path: /etc/systemd/system/chaldea-route-scores.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+    - name: Bind only the guarded host credential directory read-only
+      become: true
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          BindReadOnlyPaths={{ ansible_facts.env.HOME }}/.config/chaldea/authentik
+        dest: /etc/systemd/system/chaldea-route-scores.service.d/akasha-authentik.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: chaldea_akasha_authentik_enabled | default(false) | bool
+      notify: Reload systemd
+    - name: Remove namespace exception on PKI rollback
+      become: true
+      ansible.builtin.file:
+        path: /etc/systemd/system/chaldea-route-scores.service.d/akasha-authentik.conf
+        state: absent
+      when: not (chaldea_akasha_authentik_enabled | default(false) | bool)
+      notify: Reload systemd
+  handlers:
+    - name: Reload systemd
+      become: true
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+- name: Reuse the reviewed fleet helper implementation
+  ansible.builtin.import_playbook: "{{ chaldea_fleet_config_checkout }}/playbooks/akasha-producer-auth.yml"
