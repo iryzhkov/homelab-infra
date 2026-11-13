@@ -351,6 +351,7 @@ jobs:
           ansible-playbook playbooks/retire-dashboard.yml --syntax-check
           ansible-playbook playbooks/akasha-ingress.yml --syntax-check
           python3 scripts/test-akasha-backup.py -v
+          python3 -B scripts/test-akasha-producer-auth.py -v
           python3 scripts/test-trust-fetcher.py -v
           python3 scripts/test-trust-rollout.py -v
           python3 scripts/test-chaldea-publisher.py -v
