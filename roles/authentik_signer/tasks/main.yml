@@ -9,10 +9,13 @@
           - inventory_hostname == 'omarchy-pc'
           - authentik_signer_config_source is match('^/')
         quiet: true
-    - name: Install public certificate parsing dependency
-      ansible.builtin.package:
-        name: python-cryptography
-        state: present
+    # Arch's package module needs community.general, which this repository does
+    # not install; the controller only needs the module importable by the
+    # interpreter its shebang pins (/usr/bin/python3).
+    - name: Require the public certificate parsing dependency
+      ansible.builtin.command: /usr/bin/python3 -c "import cryptography"
+      changed_when: false
+      check_mode: false
     - name: Create private journal directory
       ansible.builtin.file:
         path: /var/lib/authentik-signer

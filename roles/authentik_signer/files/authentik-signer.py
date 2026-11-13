@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-only cohort signer controller. No private keys leave Authentik."""
 import argparse
 import base64

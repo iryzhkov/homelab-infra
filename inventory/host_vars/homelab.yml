@@ -1,9 +1,9 @@
 ---
 # Producer mode, independent of Akasha server verifier acceptance.
 chaldea_token_helper_authentik_enabled: false
-# Shizune gateway built on homelab from iryzhkov/shizune 3ae4632 (merged in PR #1)
-# and pushed to the Forgejo registry; see docs/shizune.md.
-shizune_image: git.ryzhkov.dev/igor/shizune:3ae46323fea53b69390ed987f32f01f5442f7daf@sha256:a060953cbefb98864978b7fd27cd34ce556fb3c3c6395b2e29b0238999d8a8c8
+# Shizune gateway built on homelab from iryzhkov/shizune 80ac267 (PR #4, buffer
+# affordability) and pushed to the Forgejo registry; see docs/shizune.md.
+shizune_image: git.ryzhkov.dev/igor/shizune:80ac2670fd8564835e58d5418c053f3b5c1e0ec7@sha256:95fcfcab5b4c86c96e79525753792a7046bcce83011dc555f45d0301eb3936c2
 observability_host_capabilities:
   - {capability: igpu, mode: passthrough}
 observability_gpu_owners:
