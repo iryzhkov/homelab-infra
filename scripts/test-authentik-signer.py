@@ -453,7 +453,9 @@ class ControllerTests(unittest.TestCase):
 
     def test_bootstrap_pending_create_reconciliation(self):
         slug="homelab-cohort-signer-staging"
-        for outcome in ("absent", "adopt", "adopt_application", "mismatch", "duplicate", "foreign_app", "legacy_found", "recorded_provider"):
+        for outcome in ("absent", "absent_new", "same_name", "client_alias", "linked_app",
+                        "backchannel_app", "mismatch", "duplicate", "foreign_app",
+                        "legacy_found", "recorded_provider", "incomplete"):
             with self.subTest(outcome=outcome):
                 io=BootstrapFixture(); state={}
                 def crash(s):
@@ -463,26 +465,30 @@ class ControllerTests(unittest.TestCase):
                 if outcome=="absent":
                     # Exact installed receipt @7: no body, no returned ID.
                     state["pending"]={"kind":"provider","path":"/providers/oauth2/"}
-                else:
+                elif outcome=="incomplete":
+                    rows=io.rows
+                    def incomplete(path):
+                        if path=="/core/applications/": raise RuntimeError("incomplete GET")
+                        return rows(path)
+                    io.rows=incomplete
+                elif outcome!="absent_new":
                     provider=dict(pending["body"],pk=900)
-                    io.objects[("/providers/oauth2/","900")]=provider
+                    if outcome in ("client_alias","linked_app","backchannel_app"):
+                        provider["name"]="foreign-creator"
+                    if outcome!="foreign_app":
+                        io.objects[("/providers/oauth2/","900")]=provider
                     if outcome=="mismatch": provider["grant_types"]=["client_credentials"]
                     if outcome=="duplicate": io.objects[("/providers/oauth2/","901")]=dict(provider,pk=901)
-                    if outcome=="foreign_app":
-                        io.objects[("/core/applications/",slug)]=dict(pk="foreign",slug=slug,provider=999)
+                    if outcome in ("foreign_app","linked_app","backchannel_app"):
+                        app_slug=slug if outcome=="foreign_app" else "foreign-app"
+                        io.objects[("/core/applications/",app_slug)]=dict(
+                            pk="foreign",slug=app_slug,
+                            provider=900 if outcome=="linked_app" else 999,
+                            backchannel_providers=[900] if outcome=="backchannel_app" else [])
                     if outcome=="legacy_found": state["pending"].pop("body")
                     if outcome=="recorded_provider": state["stage"]["provider"]=900
-                    if outcome=="adopt_application":
-                        # Provider is already journaled; app POST loses its reply.
-                        def lose_app(method,path,body=None):
-                            result=request(method,path,body)
-                            if method=="POST" and path=="/core/applications/": raise Crash()
-                            return result
-                        request=io.request; io.request=lose_app
-                        with self.assertRaises(Crash): m.bootstrap(io,lambda s:None,state)
-                        io.request=request
                 before=copy.deepcopy(state)
-                if outcome in ("mismatch","duplicate","foreign_app","legacy_found","recorded_provider"):
+                if outcome not in ("absent","absent_new"):
                     with self.assertRaises(RuntimeError): m.bootstrap(io,lambda s:None,state)
                     self.assertEqual(state,before)
                     self.assertEqual(io.posts,[])
@@ -490,10 +496,35 @@ class ControllerTests(unittest.TestCase):
                     m.bootstrap(io,lambda s:None,state)
                     self.assertEqual(state["phase"],"idle")
                     self.assertIsNone(state["pending"])
-                    self.assertEqual(io.posts.count("/providers/oauth2/"),1 if outcome=="absent" else 0)
+                    self.assertEqual(io.posts.count("/providers/oauth2/"),1)
                     self.assertEqual(io.posts.count("/core/applications/"),1)
-                    self.assertIn("/providers/oauth2/?name="+slug,io.gets)
                     self.assertIn("/core/applications/"+slug+"/",io.gets)
+                if outcome not in ("recorded_provider",):
+                    self.assertIn("/providers/oauth2/?name="+slug,io.gets)
+                    self.assertIn("/providers/oauth2/?client_id="+slug,io.gets)
+                if outcome not in ("recorded_provider","incomplete"):
+                    self.assertIn("/core/applications/",io.gets)
+
+    def test_paginated_filtered_queries_and_incomplete_results(self):
+        io=m.IO({}, {})
+        for field in ("name","client_id"):
+            path="/providers/oauth2/?"+field+"=homelab-cohort-signer-staging"
+            pages=[dict(results=[dict(pk=1)],pagination=dict(count=2,next=2)),
+                   dict(results=[dict(pk=2)],pagination=dict(count=2,next=None))]
+            with patch.object(io,"request",side_effect=pages) as request:
+                self.assertEqual(io.rows(path),[dict(pk=1),dict(pk=2)])
+                self.assertEqual(request.call_args_list,[
+                    unittest.mock.call("GET",path+"&superuser_full_list=true&page_size=100&page=1"),
+                    unittest.mock.call("GET",path+"&superuser_full_list=true&page_size=100&page=2")])
+        for pages in (
+            [dict(results=[],pagination=dict(count=1,next=None))],
+            [dict(results=[dict(pk=1)],pagination=dict(count=2,next=2)),
+             dict(results=[dict(pk=1)],pagination=dict(count=2,next=None))],
+            [dict(results=[],pagination=dict(count=0,next=2)),
+             dict(results=[],pagination=dict(count=1,next=None))],
+        ):
+            with patch.object(io,"request",side_effect=pages):
+                with self.assertRaises(RuntimeError): io.rows("/core/applications/")
 
     def test_publication_command_quotes_python_as_one_argument(self):
         import shlex

@@ -62,9 +62,11 @@ Never log complete API responses, SOPS plaintext, credentials, JWTs or private k
    with no redirect URIs, plus its application and deny policy/binding.
    For the stopped bootstrap in receipt jocasta:aad3d1c9f7944f6eff51256b37522842@7,
    rerun this same bootstrap command after installing the reviewed fix. It checks
-   the exact provider name and application slug with GETs before retrying a create.
-   A legacy intent without a body retries only when both are absent. New intents
-   journal their body and can adopt an exact match; collisions or drift refuse.
+   the exact provider name, client_id and application slug, plus complete paginated
+   application references, before retrying an absent create. Existing candidates
+   are never adopted; the pending intent stays intact. Inspect candidates by exact
+   PK; delete only after confirming they are the controller's own create, then
+   rerun bootstrap. Otherwise stop for operator reconciliation.
    Never manually clear the pending entry or unfreeze writers.
 3. Run sudo /usr/local/sbin/authentik-signer publish to publish the original key
    only. An edge check can fail until routes are enabled; signing stays original.

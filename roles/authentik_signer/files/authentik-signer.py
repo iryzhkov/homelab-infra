@@ -116,11 +116,17 @@ class IO:
         require(actor["user"]["is_superuser"] is True)
 
     def rows(self, path):
-        out, page = [], 1
+        out, page, count = [], 1, None
         while True:
             data = self.request("GET", path + ("&" if "?" in path else "?") + "superuser_full_list=true&page_size=100&page=" + str(page))
+            seen_count = data["pagination"]["count"]
+            require(type(seen_count) is int and seen_count >= 0
+                    and (count is None or seen_count == count))
+            count = seen_count
             out.extend(data["results"])
+            require(len(out) <= count)
             if not data["pagination"]["next"]:
+                require(len(out) == count and len({r["pk"] for r in out}) == len(out))
                 return out
             page += 1
             require(page < 1000)
@@ -502,29 +508,21 @@ def bootstrap(io, save, state):
             require(name in ("provider", "application") and pending["kind"] == name
                     and pending["path"] == path and set(pending) <= {"kind", "path", "body"})
             providers = [p for p in io.rows("/providers/oauth2/?name=" + slug) if p["name"] == slug]
+            clients = [p for p in io.rows("/providers/oauth2/?client_id=" + slug) if p["client_id"] == slug]
+            ids = {p["pk"] for p in providers + clients}
+            apps = io.rows("/core/applications/")
+            linked = [a for a in apps if a["slug"] == slug or a["provider"] in ids
+                      or ids.intersection(a["backchannel_providers"])]
             try:
                 app = io.request("GET", "/core/applications/" + slug + "/")
             except urllib.error.HTTPError as exc:
                 require(exc.code == 404)
                 app = None
-            if name == "provider":
-                require(app is None)
-                found = providers
-            else:
-                require(len(providers) == 1 and providers[0]["pk"] == stage["provider"])
-                found = [app] if app is not None else []
-            require(len(found) <= 1)
-            if found:
-                # The installed legacy intent has no body: only proven absence
-                # permits retry. New intents can adopt exact-body GET evidence.
-                require(pending.get("body") == request)
-                actual = io.request("GET", path + (slug if name == "application" else str(found[0]["pk"])) + "/")
-                require(actual["pk"] == found[0]["pk"] and all(actual[k] == v for k, v in request.items()))
-                stage[name] = actual["pk"]
+            # Public-body equality cannot prove creator ownership or permissions.
+            # Preserve every uncertain intent for exact-PK operator reconciliation.
+            require(not providers and not clients and not linked and app is None)
             state["pending"] = None
             save(state)
-            if found:
-                continue
         if name == "provider":
             require(not any(p["name"] == slug for p in io.rows(path)))
         if name == "application":
