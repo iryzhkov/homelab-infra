@@ -558,7 +558,9 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn("staging/jwks",route)
         for slug in m.SLUGS: self.assertIn("/application/o/"+slug+"/jwks/",route)
         self.assertIn("priority: 10000",route)
-        self.assertIn("Method(`GET`, `HEAD`)",route)
+        # Traefik v3 Method() takes exactly one method.
+        self.assertIn("(Method(`GET`) || Method(`HEAD`))",route)
+        self.assertNotRegex(route,r"Method\([^)]*,")
         nginx=(ROOT/"stacks/observability/files/nginx.conf").read_text()
         self.assertIn("location = /signer-jwks.json",nginx)
         self.assertIn('Cache-Control "no-store"',nginx)
