@@ -44,6 +44,11 @@ class ProducerAuthTests(unittest.TestCase):
             env = dict(os.environ, ANSIBLE_LOCAL_TEMP=str(scratch / "local"),
                        ANSIBLE_REMOTE_TEMP=str(scratch / "remote"))
             args = ["ansible-playbook", "-i", "localhost,", "-c", "local", str(fixture)]
+            widened = [retained, other_uid, dict(uid=1000, source="new-reader", action="read", kind="report")]
+            supplied = subprocess.run(args + ["-e", json.dumps({"akasha_helper_grants_override": widened})],
+                                      env=env, capture_output=True, text=True)
+            self.assertNotEqual(supplied.returncode, 0, supplied.stdout)
+            self.assertEqual(json.loads(path.read_text()), original)
             check = subprocess.run(args + ["--check"], env=env, capture_output=True, text=True)
             self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
             self.assertEqual(json.loads(path.read_text()), original)

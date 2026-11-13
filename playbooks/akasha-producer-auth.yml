@@ -69,7 +69,17 @@
         akasha_retired_reader_grants: "{{ akasha_retired_reader_raw.grants | selectattr('source', 'equalto', 'mission-control-reader') | selectattr('uid', 'equalto', 940) | list }}"
       ansible.builtin.set_fact:
         akasha_retired_reader_public: "{{ akasha_retired_reader_raw }}"
+        akasha_retired_reader_kept: "{{ akasha_retired_reader_raw.grants | reject('in', akasha_retired_reader_grants) | list }}"
         akasha_helper_grants_override: "{{ akasha_retired_reader_raw.grants | reject('in', akasha_retired_reader_grants) | list }}"
+    # Extra vars outrank set_fact; refuse any override that is not exactly the
+    # filtered installed grants before writing anything.
+    - name: Refuse a supplied grant override that differs from the filtered grants
+      ansible.builtin.assert:
+        that:
+          - akasha_helper_grants_override == akasha_retired_reader_kept
+          - akasha_retired_reader_kept | reject('in', akasha_retired_reader_public.grants) | list | length == 0
+        fail_msg: akasha_helper_grants_override must not be supplied by the caller.
+        quiet: true
     - name: Drop retired reader grants before regenerating helper sudoers
       become: true
       ansible.builtin.copy:
