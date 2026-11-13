@@ -1,0 +1,93 @@
+---
+# Shared helper implementation belongs to fleet-config. Use both inventories.
+- name: Refuse more than one selected host before any change
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Require exactly one selected host
+      ansible.builtin.assert:
+        that: ansible_play_hosts_all | length == 1
+        quiet: true
+
+- name: Expose host credential only inside the route publisher namespace
+  hosts: homelab
+  gather_facts: true
+  tasks:
+    - name: Create route publisher drop-in directory
+      become: true
+      ansible.builtin.file:
+        path: /etc/systemd/system/chaldea-route-scores.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+    - name: Bind only the guarded host credential directory read-only
+      become: true
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          ProtectHome=tmpfs
+          BindReadOnlyPaths={{ ansible_facts.env.HOME }}/.config/chaldea/authentik
+        dest: /etc/systemd/system/chaldea-route-scores.service.d/akasha-authentik.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: chaldea_token_helper_authentik_enabled | default(false) | bool
+      notify: Reload systemd
+    - name: Remove namespace exception on PKI rollback
+      become: true
+      ansible.builtin.file:
+        path: /etc/systemd/system/chaldea-route-scores.service.d/akasha-authentik.conf
+        state: absent
+      when: not (chaldea_token_helper_authentik_enabled | default(false) | bool)
+      notify: Reload systemd
+  handlers:
+    - name: Reload systemd
+      become: true
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+- name: Remove retired Normandy Mission Control reader grants
+  hosts: normandy
+  gather_facts: false
+  tasks:
+    - name: Require exactly one selected host
+      ansible.builtin.assert:
+        that: ansible_play_hosts_all | length == 1
+        quiet: true
+    - name: Read existing public helper enrollment
+      become: true
+      ansible.builtin.slurp:
+        src: /etc/chaldea/token-helper.json
+      register: akasha_retired_reader_config
+    # Only grants that are both the retired reader source and its UID 940.
+    # The filtered list is also handed to the fleet play below, so --check
+    # validates the same grants that apply will write.
+    - name: Compute grants without the retired reader
+      vars:
+        akasha_retired_reader_raw: "{{ akasha_retired_reader_config.content | b64decode | from_json }}"
+        akasha_retired_reader_grants: "{{ akasha_retired_reader_raw.grants | selectattr('source', 'equalto', 'mission-control-reader') | selectattr('uid', 'equalto', 940) | list }}"
+      ansible.builtin.set_fact:
+        akasha_retired_reader_public: "{{ akasha_retired_reader_raw }}"
+        akasha_retired_reader_kept: "{{ akasha_retired_reader_raw.grants | reject('in', akasha_retired_reader_grants) | list }}"
+        akasha_helper_grants_override: "{{ akasha_retired_reader_raw.grants | reject('in', akasha_retired_reader_grants) | list }}"
+    # Extra vars outrank set_fact; refuse any override that is not exactly the
+    # filtered installed grants before writing anything.
+    - name: Refuse a supplied grant override that differs from the filtered grants
+      ansible.builtin.assert:
+        that:
+          - akasha_helper_grants_override == akasha_retired_reader_kept
+          - akasha_retired_reader_kept | reject('in', akasha_retired_reader_public.grants) | list | length == 0
+        fail_msg: akasha_helper_grants_override must not be supplied by the caller.
+        quiet: true
+    - name: Drop retired reader grants before regenerating helper sudoers
+      become: true
+      ansible.builtin.copy:
+        content: "{{ akasha_retired_reader_public | combine({'grants': akasha_helper_grants_override}) | to_nice_json }}\n"
+        dest: /etc/chaldea/token-helper.json
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Reuse the reviewed fleet helper implementation
+  ansible.builtin.import_playbook: "{{ chaldea_fleet_config_checkout }}/playbooks/akasha-producer-auth.yml"

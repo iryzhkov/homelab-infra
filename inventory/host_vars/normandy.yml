@@ -1,4 +1,6 @@
 ---
+# Producer mode, independent of Akasha server verifier acceptance.
+chaldea_token_helper_authentik_enabled: false
 observability_host_capabilities:
   - {capability: igpu, mode: passthrough}
 observability_gpu_owners:
