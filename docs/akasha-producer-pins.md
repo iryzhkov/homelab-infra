@@ -8,7 +8,11 @@ with gh release download and their SHA-256 compared to the published manifest.js
 | client-v0.4.27 | chaldea-client.tar.gz | a6a1f5c47ebb60d0372a1d1dc135d5a86d2a3eb0f4f2ba33f565e555a978ec0d |
 | host-v0.2.21 | chaldea-host.tar.gz | 090bd269f0369f71b746d800ed68ced14f6ed9dff313cb439dfecb2d556bb524 |
 
-vars/akasha-runtime.yml selects host021; the shared runtime stays on host022.
+vars/akasha-runtime.yml now selects host-v0.2.22 from Chaldea main 57f3c38
+(archive SHA-256 2495a653d6047ae5e04a76b42cb6984de987dbea6cbbfeef55bc03dd3ad866a9),
+which adds the Akasha host/kind reader index from chaldea #108. The live server
+moves from host-v0.2.20 directly to host-v0.2.22; host-v0.2.20 stays as the
+implicit newest prior release for rollback. The shared runtime stays on host022.
 Clock012 and explicit rollback retention remain unchanged. Check fresh installed
 release/cache custody before any deployment; these pins do not qualify live GC.
 
