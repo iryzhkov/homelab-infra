@@ -2525,6 +2525,14 @@ class CoexistencePackaging(unittest.TestCase):
             worker.validate_policy(policy)
         finally:
             sys.path.pop(0)
+        # The previous coexistence build stays admissible for rollback with acquisition.
+        for source, sha256 in contract.HOLONET_COEXISTENCE_ROLLBACK.items():
+            rollback = copy.deepcopy(endpoint)
+            rollback["artifact"].update(source_revision=source, contract_revision=source, sha256=sha256)
+            self.assertEqual(contract.endpoint_contract(rollback), rollback)
+            rollback["artifact"]["sha256"] = contract.HOLONET_COEXISTENCE_SHA256
+            with self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(rollback)
         # The superseded pre-coexistence acquisition candidate and wrong bytes refuse.
         for source, sha256 in (
                 ("4e6f87442b88f61b4017f86e507bf90567ad2c29",
