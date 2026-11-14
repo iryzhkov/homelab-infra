@@ -26,7 +26,10 @@ START = 'janitor.acquire.start'
 MEDIA = 'janitor.acquire.media'
 OPERATIONS = tuple('janitor-acquire-' + x for x in
                    ('inspect', 'search', 'start', 'status', 'verify'))
-SECONDS = dict(zip(OPERATIONS, (20, 60, 30, 10, 60)))
+# Sonarr searches an anime season one episode at a time (about 12 s each), and
+# start repeats that search before any add, so both need minutes. The Go
+# consumer uses the same budgets; the signed token expiry still bounds a call.
+SECONDS = dict(zip(OPERATIONS, (20, 180, 210, 10, 60)))
 HEX = {n: re.compile('[0-9a-f]{' + str(n) + '}') for n in (32, 40, 64)}
 FAILURE = 'Acquisition source unavailable'
 
@@ -164,7 +167,7 @@ class Sonarr(ImporterInventoryAdapter):
         if group is not None:
             need(type(group) is int and group == 988 and config['app_config_owner_uid'] == 1002)
             self._config['app_config_read_gid'] = group
-        self._deadline = time.monotonic() + min(60, guard())
+        self._deadline = time.monotonic() + min(max(SECONDS.values()), guard())
         self.routes = {'/api/v3/system/status', '/api/v3/rootfolder',
                        '/api/v3/downloadclient', '/api/v3/remotepathmapping',
                        '/api/v3/config/importlist'}

@@ -2144,7 +2144,7 @@ class PackagingTest(unittest.TestCase):
                          ["ExecStart=/usr/bin/python3 -E -s -B " + plan["release_directory"]
                           + "/emby_operator_socket.py"])
         for setting in ("User=root", "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
-                        "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "RuntimeMaxSec=150",
+                        "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "RuntimeMaxSec=240",
                         "TasksMax=8", "MemoryMax=128M", "LimitNOFILE=64",
                         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"):
             self.assertIn(setting, lines)
