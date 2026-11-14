@@ -325,7 +325,11 @@ def search(call, block, api, emby):
         need(all(text(x, 64) for x in languages))
         seeders = r.get('seeders')
         need(seeders is None or integer(seeders, 0, 2 ** 53 - 1))
+        # Sonarr reports an unknown torrent hash as an empty string. Project it
+        # as absent; start still requires the exact expected hex hash.
         infohash = r.get('infoHash')
+        if infohash == '':
+            infohash = None
         need(infohash is None or hexid(infohash, 40))
         claim = audio_claim(r['title'])
         projected.append(dict(handle=handle, title=r['title'], indexer=r['indexer'],
