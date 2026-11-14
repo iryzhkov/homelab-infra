@@ -53,7 +53,13 @@ existing guarded qBit credential. It never reads or copies the credential in
 Ansible and never creates a new login. start_enabled/media_enabled are explicit
 booleans and independent of purpose grants. The three acquisition scopes project
 separate flat managed-janitor grants on the existing Anime writer; old grants and
-request branches remain separate. Defaults are false. The consumer artifact is
+request branches remain separate. Defaults are false. The current consumer
+artifact is source/interface 74745a2c3cd72acbbaa519ef07210cf978dcabf6, tree
+ef717d91b7fcdbbea246b4cc10540a1116754b78, SHA256
+55ac2e95ffbd594107e810960c43dc2852842ba5b6a4312fc138e314bd295aa0 (homelab-cli
+PR58: acquisition calls receive their worker budgets, search 180 s and start
+210 s). Install the matching worker before it. The previous build below stays
+admissible only for rollback. The
 purpose-compatible coexistence build: source/interface
 9230187a4cf3058f316f0c06cfcac0a848fc910c, tree
 ffd527ad214ac8a279f6ee19981e160d9a42a800,

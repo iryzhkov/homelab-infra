@@ -58,10 +58,10 @@ HOLONET_TORRENT_SHA256 = "d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848
 TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
-# One purpose-compatible consumer artifact satisfies acquisition and coexistence.
-# CLI 9230187 extends main 8350d751 (PR54 + PR55) with the exact original-writer
-# acquisition tuples. Installed 189717cc lacks those mappings and needs replacement
-# for this input. The acquisition wire fixture and helper 9a9455ee are unchanged.
+# One purpose-compatible consumer artifact satisfies acquisition and coexistence:
+# the current coexistence build above (CLI 74745a2, worker budgets). CLI 9230187,
+# which first added the exact original-writer acquisition tuples, remains only
+# as the rollback build. The acquisition wire fixture is unchanged.
 # Review, CI and conditional packet gates still precede activation.
 HOLONET_ACQUIRE_SOURCE = HOLONET_COEXISTENCE_SOURCE
 HOLONET_ACQUIRE_SHA256 = HOLONET_COEXISTENCE_SHA256
@@ -788,6 +788,7 @@ def endpoint_contract(value):
                      and HOLONET_ACQUIRE_SHA256 is not None and HOLONET_ACQUIRE_CONTRACT is not None
                      and (artifact["source_revision"] == HOLONET_ACQUIRE_SOURCE
                           or artifact["source_revision"] in HOLONET_COEXISTENCE_ROLLBACK))
+    require(HOLONET_COEXISTENCE_SOURCE not in HOLONET_COEXISTENCE_ROLLBACK, "ambiguous coexistence pin")
     coexistence_pins = {HOLONET_COEXISTENCE_SOURCE: HOLONET_COEXISTENCE_SHA256, **HOLONET_COEXISTENCE_ROLLBACK}
     coexistence_build = service == "holonet" and artifact["source_revision"] in coexistence_pins
     # The shared coexistence build is checked once below against the same pin.

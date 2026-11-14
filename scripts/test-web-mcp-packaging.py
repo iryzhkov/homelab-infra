@@ -2533,6 +2533,15 @@ class CoexistencePackaging(unittest.TestCase):
             rollback["artifact"]["sha256"] = contract.HOLONET_COEXISTENCE_SHA256
             with self.assertRaises(AnsibleFilterError):
                 contract.endpoint_contract(rollback)
+            # Neither build pairs with the other's hash or interface revision.
+            for changed in (dict(source_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+                                 contract_revision=contract.HOLONET_COEXISTENCE_SOURCE, sha256=sha256),
+                            dict(source_revision=source, sha256=sha256,
+                                 contract_revision=contract.HOLONET_COEXISTENCE_SOURCE)):
+                mixed = copy.deepcopy(endpoint)
+                mixed["artifact"].update(changed)
+                with self.subTest(mixed=changed), self.assertRaises(AnsibleFilterError):
+                    contract.endpoint_contract(mixed)
         # The superseded pre-coexistence acquisition candidate and wrong bytes refuse.
         for source, sha256 in (
                 ("4e6f87442b88f61b4017f86e507bf90567ad2c29",
