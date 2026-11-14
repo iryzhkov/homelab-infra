@@ -17,8 +17,16 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-HOLONET_COEXISTENCE_SOURCE = "9230187a4cf3058f316f0c06cfcac0a848fc910c"
-HOLONET_COEXISTENCE_SHA256 = "d94092107039ffe8cb2c79926952a38922c383b9d006503f49231f0254bb66e1"
+# CLI 74745a2 (PR58) adds the acquisition worker budgets to 9230187 with the
+# same wire contract; Chaldea package 4d82b020-1c1b-479f-b09c-e97718ea4e5e,
+# tree ef717d91b7fcdbbea246b4cc10540a1116754b78, reproduced byte for byte.
+HOLONET_COEXISTENCE_SOURCE = "74745a2c3cd72acbbaa519ef07210cf978dcabf6"
+HOLONET_COEXISTENCE_SHA256 = "55ac2e95ffbd594107e810960c43dc2852842ba5b6a4312fc138e314bd295aa0"
+# The previously installed coexistence build stays admissible for rollback.
+HOLONET_COEXISTENCE_ROLLBACK = {
+    "9230187a4cf3058f316f0c06cfcac0a848fc910c":
+        "d94092107039ffe8cb2c79926952a38922c383b9d006503f49231f0254bb66e1",
+}
 HOLONET_CATALOG_SOURCE_REVISIONS = frozenset({
     SERVICES["holonet"][1],
     "31817f70f7fed5900622bc7274c6a8a31275189b",
@@ -50,10 +58,10 @@ HOLONET_TORRENT_SHA256 = "d282c09f241cf95df9c37baa2ab818d757e1ddc8bc0d0bd4fdd848
 TORRENT_DESCRIPTOR = "/etc/holonet-playlists/qbit.json"
 TORRENT_AUTH = "/etc/holonet-playlists/qbit-auth.json"
 TORRENT_RESOURCE = "homelab-qbit-movies"
-# One purpose-compatible consumer artifact satisfies acquisition and coexistence.
-# CLI 9230187 extends main 8350d751 (PR54 + PR55) with the exact original-writer
-# acquisition tuples. Installed 189717cc lacks those mappings and needs replacement
-# for this input. The acquisition wire fixture and helper 9a9455ee are unchanged.
+# One purpose-compatible consumer artifact satisfies acquisition and coexistence:
+# the current coexistence build above (CLI 74745a2, worker budgets). CLI 9230187,
+# which first added the exact original-writer acquisition tuples, remains only
+# as the rollback build. The acquisition wire fixture is unchanged.
 # Review, CI and conditional packet gates still precede activation.
 HOLONET_ACQUIRE_SOURCE = HOLONET_COEXISTENCE_SOURCE
 HOLONET_ACQUIRE_SHA256 = HOLONET_COEXISTENCE_SHA256
@@ -83,7 +91,7 @@ HOLONET_PLAYBACK_LOOPBACK = "http://127.0.0.1:3012"
 # installed together, byte for byte, as one release named by the digest of this
 # manifest. Changing any module requires a reviewed pin update here.
 OPERATOR_MODULES = {
-    "emby_operator_acquire.py": "584cb04f9f0524149391081e248885905d6f0c91ffdf82b4277981ae40b37ad3",
+    "emby_operator_acquire.py": "7088e890d4ba2f1d4d7ac02f0b56ac9cace3814b4c74ca4853f2a790c5f81e98",
     "emby_operator_acquire_media.py": "8c5969434b52a94a9441daef1e8d6ec47642e222bb23bea5bb2567b4b0384798",
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
@@ -778,8 +786,11 @@ def endpoint_contract(value):
         contract = HOLONET_WRITER_CONTRACT
     acquire_build = (service == "holonet" and HOLONET_ACQUIRE_SOURCE is not None
                      and HOLONET_ACQUIRE_SHA256 is not None and HOLONET_ACQUIRE_CONTRACT is not None
-                     and artifact["source_revision"] == HOLONET_ACQUIRE_SOURCE)
-    coexistence_build = service == "holonet" and artifact["source_revision"] == HOLONET_COEXISTENCE_SOURCE
+                     and (artifact["source_revision"] == HOLONET_ACQUIRE_SOURCE
+                          or artifact["source_revision"] in HOLONET_COEXISTENCE_ROLLBACK))
+    require(HOLONET_COEXISTENCE_SOURCE not in HOLONET_COEXISTENCE_ROLLBACK, "ambiguous coexistence pin")
+    coexistence_pins = {HOLONET_COEXISTENCE_SOURCE: HOLONET_COEXISTENCE_SHA256, **HOLONET_COEXISTENCE_ROLLBACK}
+    coexistence_build = service == "holonet" and artifact["source_revision"] in coexistence_pins
     # The shared coexistence build is checked once below against the same pin.
     if acquire_build and not coexistence_build:
         require(artifact["sha256"] == HOLONET_ACQUIRE_SHA256, "unaccepted acquisition binary")
@@ -809,8 +820,8 @@ def endpoint_contract(value):
         service == "holonet" and HOLONET_OPERATOR_SOURCE is not None
         and artifact["source_revision"] == HOLONET_OPERATOR_SOURCE)
     if coexistence_build:
-        require(artifact["sha256"] == HOLONET_COEXISTENCE_SHA256, "unaccepted coexistence binary")
-        contract = HOLONET_COEXISTENCE_SOURCE
+        require(artifact["sha256"] == coexistence_pins[artifact["source_revision"]], "unaccepted coexistence binary")
+        contract = artifact["source_revision"]
     elif acquire_build:
         contract = HOLONET_ACQUIRE_CONTRACT
     elif seed_join_build:

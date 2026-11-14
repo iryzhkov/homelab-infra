@@ -587,8 +587,8 @@ Service template requirements (`holonet-playlists-worker@.service`):
 - `User=root`, `ExecStart=/usr/bin/python3 -E -s -B <source>/emby_operator_socket.py`
   with no arguments. Do not use `-I`, which drops the script directory from the
   import path. The worker takes fd 3 from `LISTEN_FDS`/`LISTEN_PID`.
-- `RuntimeMaxSec=150` (above the 120-second ceiling plus read and write
-  bounds), `TasksMax=8`, `MemoryMax=128M`, `LimitNOFILE=64`, `UMask=0077`.
+- `RuntimeMaxSec=240` (above the 210-second acquisition start ceiling plus
+  read and write bounds; other management calls keep the 120-second ceiling), `TasksMax=8`, `MemoryMax=128M`, `LimitNOFILE=64`, `UMask=0077`.
 - `NoNewPrivileges=yes`, `CapabilityBoundingSet=` empty, `AmbientCapabilities=`
   empty, `ProtectSystem=strict`, `ReadWritePaths=` exactly the seven journal
   directories, `ProtectHome=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`,

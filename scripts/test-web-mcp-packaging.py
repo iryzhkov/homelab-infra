@@ -2144,7 +2144,7 @@ class PackagingTest(unittest.TestCase):
                          ["ExecStart=/usr/bin/python3 -E -s -B " + plan["release_directory"]
                           + "/emby_operator_socket.py"])
         for setting in ("User=root", "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
-                        "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "RuntimeMaxSec=150",
+                        "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "RuntimeMaxSec=240",
                         "TasksMax=8", "MemoryMax=128M", "LimitNOFILE=64",
                         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"):
             self.assertIn(setting, lines)
@@ -2525,6 +2525,23 @@ class CoexistencePackaging(unittest.TestCase):
             worker.validate_policy(policy)
         finally:
             sys.path.pop(0)
+        # The previous coexistence build stays admissible for rollback with acquisition.
+        for source, sha256 in contract.HOLONET_COEXISTENCE_ROLLBACK.items():
+            rollback = copy.deepcopy(endpoint)
+            rollback["artifact"].update(source_revision=source, contract_revision=source, sha256=sha256)
+            self.assertEqual(contract.endpoint_contract(rollback), rollback)
+            rollback["artifact"]["sha256"] = contract.HOLONET_COEXISTENCE_SHA256
+            with self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(rollback)
+            # Neither build pairs with the other's hash or interface revision.
+            for changed in (dict(source_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+                                 contract_revision=contract.HOLONET_COEXISTENCE_SOURCE, sha256=sha256),
+                            dict(source_revision=source, sha256=sha256,
+                                 contract_revision=contract.HOLONET_COEXISTENCE_SOURCE)):
+                mixed = copy.deepcopy(endpoint)
+                mixed["artifact"].update(changed)
+                with self.subTest(mixed=changed), self.assertRaises(AnsibleFilterError):
+                    contract.endpoint_contract(mixed)
         # The superseded pre-coexistence acquisition candidate and wrong bytes refuse.
         for source, sha256 in (
                 ("4e6f87442b88f61b4017f86e507bf90567ad2c29",
