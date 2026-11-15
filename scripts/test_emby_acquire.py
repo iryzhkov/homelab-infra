@@ -119,6 +119,26 @@ class AcquisitionTests(unittest.TestCase):
         other, _ = a.search(self.call, self.block, SyntheticSonarr(self.fixture), SyntheticEmby())
         self.assertEqual(result, other)
 
+    def test_empty_sonarr_info_hash_projects_as_absent(self):
+        self.call['operation'] = a.OPERATIONS[1]
+        self.call['request']['limit'] = 25
+        api = SyntheticSonarr(self.fixture)
+        selected = api.selected
+        def unknown(kind, **query):
+            rows = selected(kind, **query)
+            if kind == 'release':
+                rows.append(dict(rows[0], guid='synthetic-unknown-hash', infoHash=''))
+            return rows
+        api.selected = unknown
+        result, _ = a.search(self.call, self.block, api, SyntheticEmby())
+        hashes = sorted(str(r['info_hash']) for r in result['releases'])
+        self.assertEqual(hashes, ['1' * 40, 'None'])
+        for bad in ('ABC', 'G' * 40, '1' * 39):
+            api.selected = lambda kind, bad=bad, **query: [dict(r, infoHash=bad) if kind == 'release' else r
+                                                           for r in selected(kind, **query)]
+            with self.assertRaises(Exception):
+                a.search(self.call, self.block, api, SyntheticEmby())
+
     def test_rejected_existing_quality_release_remains_staging_candidate(self):
         api = SyntheticSonarr(self.fixture)
         selected = api.selected
