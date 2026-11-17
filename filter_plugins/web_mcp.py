@@ -17,13 +17,15 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-# CLI 74745a2 (PR58) adds the acquisition worker budgets to 9230187 with the
-# same wire contract; Chaldea package 4d82b020-1c1b-479f-b09c-e97718ea4e5e,
-# tree ef717d91b7fcdbbea246b4cc10540a1116754b78, reproduced byte for byte.
-HOLONET_COEXISTENCE_SOURCE = "74745a2c3cd72acbbaa519ef07210cf978dcabf6"
-HOLONET_COEXISTENCE_SHA256 = "55ac2e95ffbd594107e810960c43dc2852842ba5b6a4312fc138e314bd295aa0"
+# CLI 5786c1a preserves acquisition/coexistence and admits exact Emby 4.10.2.0
+# for catalog reads. Chaldea Go 1.25 package 8f6b62f9-0c43-4174-9c33-24b31bf9e544,
+# tree 603272bbadb7e6994993f0e4ad4e98f37af76801.
+HOLONET_COEXISTENCE_SOURCE = "5786c1a735ca2be3c7c1a4c6282673b3e23b939e"
+HOLONET_COEXISTENCE_SHA256 = "e20f38beeb200b023bdbf2a9b582884027ab672b47e89088b9adb491c997e626"
 # The previously installed coexistence build stays admissible for rollback.
 HOLONET_COEXISTENCE_ROLLBACK = {
+    "74745a2c3cd72acbbaa519ef07210cf978dcabf6":
+        "55ac2e95ffbd594107e810960c43dc2852842ba5b6a4312fc138e314bd295aa0",
     "9230187a4cf3058f316f0c06cfcac0a848fc910c":
         "d94092107039ffe8cb2c79926952a38922c383b9d006503f49231f0254bb66e1",
 }
