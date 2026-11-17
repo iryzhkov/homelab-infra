@@ -792,6 +792,12 @@ class Operator:
             if rows[0].get("Subtitle") == LEGACY_SUBTITLE and args.get("Subtitle") == "":
                 rows[0]["Subtitle"] = ""
             rows[0].update(CustomName=args["CustomName"], Name=args["CustomName"])
+            # Emby 4.10.2 can materialize the recipient on the one renamed row.
+            # Accept only that exact addition; all other fields/rows stay exact.
+            observed = [r for r in after["home"] if row_id(r["Id"]) == row_id(args["Id"])]
+            if (len(observed) == 1 and "UserId" not in rows[0] and
+                    observed[0].get("UserId") == self.scope["recipient"]):
+                rows[0]["UserId"] = self.scope["recipient"]
         elif operation == "share":
             target["access"] = [self.scope["recipient"]]
         elif operation == "clear":

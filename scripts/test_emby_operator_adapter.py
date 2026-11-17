@@ -433,6 +433,8 @@ class SyntheticBackend:
                 expected['Subtitle'] = ''
             assert body == expected, 'Only the title and exact old subtitle may change'
             rows[0].update(CustomName=body['CustomName'], Name=body['CustomName'])
+            if getattr(self, 'title_user_id', None) is not None:
+                rows[0]['UserId'] = self.title_user_id
             if 'Subtitle' in expected:
                 rows[0]['Subtitle'] = expected['Subtitle']
         elif op == 'add':
@@ -814,6 +816,29 @@ class LifecycleHTTPTests(unittest.TestCase):
     def title(self, key='title', title='Movies for Igor'):
         preview = self.operator.display_title_preview(title)
         return self.operator.set_display_title(key, title, preview['baseline_digest'])
+
+    def test_title_adds_only_recipient_userid_and_lost_reply_reconciles(self):
+        self.apply()
+        self.backend.title_user_id = R
+        self.backend.lose = 'display-title'
+        with self.assertRaises(Refused):
+            self.title()
+        writes = len(self.backend.writes)
+        self.fresh_session()
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'observed-applied'})
+        self.backend.home[-1]['UserId'] = A
+        with self.assertRaises(Refused):
+            self.operator.show()
+        self.backend.home[-1]['UserId'] = R
+        self.backend.home[0]['UserId'] = R
+        with self.assertRaises(Refused):
+            self.operator.show()
+        del self.backend.home[0]['UserId']
+        self.backend.lose = None
+        self.fresh_session()
+        self.assertEqual(self.operator.set_display_title('title', 'Movies for Igor')['writes'], 0)
+        self.assertEqual(len(self.backend.writes), writes)
+        self.assertEqual(self.operator.show()['reconcile'], {'state': 'clean'})
 
     def test_display_title_requires_retained_owned_row(self):
         with self.assertRaises(Refused):
