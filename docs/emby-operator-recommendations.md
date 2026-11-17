@@ -305,7 +305,10 @@ Name to the intended title, plus the exact old-label-to-blank transition only wh
 requested in the pending body. Historical pending bodies that retain the old label
 must retain it in readback. Completing them does not dispatch a cleanup write;
 use a fresh preview and key to remove the label afterward. Reads never rewrite
-legacy journal bytes. All other row fields, typed IDs, ParentId, row order,
+legacy journal bytes. Readback may additionally materialize UserId equal to the
+configured recipient only on the renamed target row and only when that row had
+no UserId before. A foreign UserId or a UserId added to any other row refuses.
+All other row fields, typed IDs, ParentId, row order,
 playlist identity, marker, grant and ordered membership must match. Playlist Name
 remains the marker; playlist metadata is never sent. The row update is at most one
 mutation dispatch, with no retry after uncertainty. Identical completed-key replay
