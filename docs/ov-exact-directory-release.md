@@ -7,7 +7,7 @@ is retained as historical evidence.
 
 | Binding | Docker config ID | Source |
 | --- | --- | --- |
-| HTTP | sha256:42d9a69d630b772ffd73c7f67380dfff7fa37d368ef8bee2d5ee217e8f41770b | 6ded162b66b8b3af7bf9e151dbbb068bd7947ec9 |
+| HTTP | sha256:901fc2999a7bc04f37c6e81a54607ea64ea034ed661279848ed56f0b7afb1c36 | f6a07b81ae4b259268cd5e7a9f05f7b159bfb5b3 |
 | Backend | sha256:48b046b5c2b43814fb091a1fa2cf60920af07f443679960a60e4e826b0a68576 | e60c92e22ac924a864a5a3c7699538ff8955fb36 |
 
 HTTP exact-directory-v2 preserves original target URI bytes and supports optional typed
