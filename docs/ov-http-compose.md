@@ -119,16 +119,18 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:42d9a69d630b772ffd73c7f67380dfff7fa37d368ef8bee2d5ee217e8f41770b
-source_revision: 6ded162b66b8b3af7bf9e151dbbb068bd7947ec9
+reference: sha256:901fc2999a7bc04f37c6e81a54607ea64ea034ed661279848ed56f0b7afb1c36
+source_revision: f6a07b81ae4b259268cd5e7a9f05f7b159bfb5b3
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/43253872788
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/44892406304
 ```
 
 All five fields must match together. The contract revision remains the existing
-full-resource envelope pin. Publication source 6ded162b66b8b3af7bf9e151dbbb068bd7947ec9
-identifies reviewed tree 67defb96caffe02a8f455dea48ff52f10dcbe583,
-with current-note filtering and protected sidecar mutations qualified on disposable fixtures.
+full-resource envelope pin. Publication source f6a07b81ae4b259268cd5e7a9f05f7b159bfb5b3
+(ov-mcp PR 20) identifies reviewed tree 3579cbe919963b0722cb89dd7faba241221789e2.
+It adds one change to the current-note release: URI tool arguments may end in
+one trailing slash, which the tool boundary strips before authorization. Every
+other non-canonical URI form is still refused.
 The closed object and image label use the publication revision. The distribution
 source allowlist, roles, templates, namespace ceiling and grants stay unchanged.
 
@@ -171,17 +173,18 @@ cause nor runtime, native or pilot acceptance, schedule changes or hold clearanc
 
 The reference is the Docker config ID, committing to the complete immutable
 config and ordered RootFS diff IDs, not a registry distribution manifest.
-The retained linux/amd64 Docker save is 176909824 bytes, SHA256
-9a8d1c5b6c0a57dde8be18921f92ad2440730e16fe18d92e3476cbbda0450d94.
-The publication ZIP is 176948266 bytes, SHA256
-098769f4bc8c957c25279d6a42b9004179f1d36c91ee8fc1f8a4eb66eca7e0b9.
-Independent artifact custody checked 12 source inputs, 10 embedded runtime
-modules, the full saved config and all 10 uncompressed layers. Dockerfile and
-lock custody use runner records matched to independently read source bytes.
-No registry publication digest or signature attestation is claimed. Compressed
-base registry blobs are absent; their pull verification is not an independent
-compressed-blob check. Artifact authority is
-/home/igor/.cache/exact-directory-repair/lifetime-http-artifact-01/receipt.json.
+The retained linux/amd64 Docker save is 176912896 bytes, SHA256
+96cb7f606d63260be539a392ef5cd51da4ef53313060c317f20bcf37614c2032.
+For this release the operator checked that the save checksum matched the
+runner record after download and again on the target before `docker load`,
+that the runner's source tree equals the reviewed commit's Git tree, that the
+runner's `ov_http/app.py` and `ov_http/auth.py` digests equal the reviewed
+source, and that the loaded image reports this config ID, the source revision
+label and User 8098:8098. The fuller independent layer-by-layer custody
+recorded for the lifetime-admission release
+(/home/igor/.cache/exact-directory-repair/lifetime-http-artifact-01/receipt.json)
+was not repeated. No registry publication digest or signature attestation is
+claimed.
 Custody does not establish target loading or runtime acceptance.
 Other kinds, extra fields and arbitrary release triples still refuse.
 
