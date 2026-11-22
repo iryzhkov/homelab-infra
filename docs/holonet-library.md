@@ -33,7 +33,13 @@ Read operations (require `library.read`):
   lists (`https://api.mdblist.com`) and Radarr TMDb discovery recommendations
   (`/api/v3/importlist/movie?includeRecommendations=true&includeTrending=false&includePopular=false`),
   marked with live Radarr/Sonarr library membership and exclusions, ready to
-  pass into `library-add` (`mode: "preview"`). Budget 60 s. Reports a warning
+  pass into `library-add` (`mode: "preview"`) with `monitor` and `search_now`.
+  Defaults: limit 20, include_in_library false, include_excluded false.
+  Excluded rows appear only with include_excluded true and remain marked.
+  Ranking and min_score use a 0–100 score: mdblist score, else IMDb rating
+  times 10, else TMDb rating times 10. mdblist rank breaks score ties.
+  Language is an ISO 639-1 code or null. Budget 60 s, including lock wait.
+  Non-429 failures also serve stale cache with a warning, or refuse without cache. Reports a warning
   for any Radarr (`enabled && enableAuto`) or Sonarr (`enableAutomaticAdd`)
   import list that still has automatic add enabled. Refuses
   `recommendations_disabled` when policy omits `library.recommendations`, and
@@ -63,7 +69,7 @@ All effects occur through existing Arr, qBittorrent, and Emby HTTP APIs; when
 `ReadWritePaths=/var/lib/holonet-operator/recommendations` (0700 `root:root`)
 for the root-only normalized cache (`cache.json`, 0600, 6-hour TTL, atomic
 write) and per-UTC-day mdblist call counter (`quota.json`, 0600, hard ceiling
-100 calls/day by default). The mdblist API key is read from a root-only file
+100 calls/day maximum, counted durably before each attempted request). The mdblist API key is read from a root-only file
 (`/etc/holonet/mdblist.key` by default, 0400 `root:root`, raw key text) using
 directory-FD `O_NOFOLLOW` custody, is never logged, and is sent only as the
 `apikey` query parameter over HTTPS to `api.mdblist.com` (no redirects, 4 MiB
@@ -116,11 +122,11 @@ ceiling into `/etc/holonet-playlists/policy.json`:
     - `lists`: 1–16 `{slug, kind}` mappings (`kind` in `movie|series|anime`),
       matched by slug against `/lists/user` (e.g., `top-movies -> movie`,
       `top-anime-movies -> anime`, `top-tv -> series`, `top-anime -> anime`).
-    - `daily_ceiling`: 1–200, default `100` mdblist requests per UTC day. At
+    - `daily_ceiling`: 1–100, default `100` mdblist requests per UTC day. At
       the ceiling or on HTTP 429, stale cache is served with `cache.stale=true`
       and a warning, or `quota_exhausted` is refused when no cache exists.
-    - `cache_ttl_seconds`: 300–86400, default `21600` (6 hours).
-    - `min_refresh_age_seconds`: 60–21600, default `3600` (1 hour; `refresh: true`
+    - `cache_ttl_seconds`: 21600–86400, default `21600` (6 hours).
+    - `min_refresh_age_seconds`: 3600–21600, default `3600` (1 hour; `refresh: true`
       bypasses the cache only once `age_seconds >= min_refresh_age_seconds`).
     - `state_dir`: fixed `/var/lib/holonet-operator/recommendations` (0700
       `root:root`).

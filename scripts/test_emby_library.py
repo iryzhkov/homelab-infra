@@ -19,7 +19,7 @@ import emby_operator_socket as sock
 import emby_operator_torrents as tor
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
-FIXTURE_SHA256 = 'b9d25c6a0d7a29eec40e272dfb16ad4aa9aba995cdd26c6582720097f7218b09'
+FIXTURE_SHA256 = '36ee37185e989c26093aa56f1383680943009287886326404f1cd5fc08f9d22d'
 
 RADARR_KEY = '1' * 32
 SONARR_KEY = '2' * 32
@@ -1534,6 +1534,15 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertEqual(self.state.subtitle_srt_calls, [4])
 
     def _make_recs_state_dir(self, name):
+        if os.geteuid() != 0:
+            self.skipTest('root-only recommendations state runs in Chaldea/CI')
+        home = Path(os.environ['HOME'])
+        self.assertEqual(Path(os.environ['TMPDIR']), home / 'tmp')
+        # Strict custody tests need a protected scratch HOME, including every ancestor.
+        for parent in [home, *home.parents]:
+            info = parent.lstat()
+            self.assertEqual(info.st_uid, 0)
+            self.assertEqual(info.st_mode & 0o022, 0)
         base = Path(os.environ['TMPDIR']) / f'recs-{name}-{os.getpid()}'
         if base.exists():
             import shutil
@@ -1698,6 +1707,13 @@ class LibraryWorkerTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(lib.Refused):
                 lib.request('library-recommendations', bad)
 
+        for key, value in (('daily_ceiling', 200), ('cache_ttl_seconds', 300),
+                           ('min_refresh_age_seconds', 60)):
+            pol = self._recs_policy('/var/lib/synthetic/recs')
+            pol['library']['recommendations'][key] = value
+            with self.subTest(key=key), self.assertRaises(lib.Refused):
+                lib.validate_block(pol['library'])
+
         # Disabled when policy omits library.recommendations.
         frame = copy.deepcopy(self.fixture['library_recommendations_frame'])
         with self.assertRaises(lib.LibraryRefusal) as ctx:
@@ -1755,9 +1771,9 @@ class LibraryWorkerTests(unittest.TestCase):
                     self.policy = orig
 
         # 1. Cold fetch: 1 (/lists/user) + 4 lists = 5 calls.
-        res = run_with({}, now_ts=1795262400.0)
+        res = run_with({'include_excluded': True}, now_ts=1795262400.0)
         self.assertEqual(len(mdb_calls), 5)
-        self.assertEqual(res['quota'], {'tool_calls_today': 5, 'daily_ceiling': 100, 'mdblist_remaining': 994})
+        self.assertEqual(res['quota'], {'mdblist_calls_today': 5, 'daily_ceiling': 100, 'mdblist_remaining': 994})
         self.assertFalse(res['cache']['stale'])
         self.assertEqual(res['cache']['age_seconds'], 0)
         self.assertEqual(len(res['lists']), 4)
@@ -1795,6 +1811,11 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertTrue(any('Radarr Auto' in w for w in res['warnings']))
         self.assertTrue(any('Sonarr Auto' in w for w in res['warnings']))
 
+        default_res = run_with({})
+        self.assertFalse(any(i['excluded'] for i in default_res['items']))
+        scored = run_with({'source': 'radarr', 'min_score': 75})
+        self.assertEqual(scored['items'][0]['score'], 78)
+        self.assertEqual(scored['items'][0]['language'], 'ja')
         # 2. include_in_library=True shows 603 and 384541 from cache with 0 extra mdblist calls.
         res_all = run_with({'include_in_library': True}, now_ts=1795262500.0)
         self.assertEqual(len(mdb_calls), 5)
@@ -1803,19 +1824,20 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertEqual(in_lib_titles, {'Synthetic Movie', 'Synthetic Anime'})
 
         # 3. refresh=True under 1 hour does NOT bypass cache.
-        run_with({'refresh': True}, now_ts=1795262400.0 + 1800)
+        ignored = run_with({'refresh': True}, now_ts=1795262400.0 + 1800)
+        self.assertTrue(any('refresh ignored' in w for w in ignored['warnings']))
         self.assertEqual(len(mdb_calls), 5)
 
         # 4. refresh=True after 1 hour DOES refresh cache (+5 calls = 10).
         res_ref = run_with({'refresh': True}, now_ts=1795262400.0 + 3601)
         self.assertEqual(len(mdb_calls), 10)
-        self.assertEqual(res_ref['quota']['tool_calls_today'], 10)
+        self.assertEqual(res_ref['quota']['mdblist_calls_today'], 10)
         self.assertEqual(res_ref['cache']['age_seconds'], 0)
 
         # 5. Cache expires after 6 hours -> automatic refresh (+5 calls = 15).
         res_exp = run_with({}, now_ts=1795262400.0 + 3601 + 21600)
         self.assertEqual(len(mdb_calls), 15)
-        self.assertEqual(res_exp['quota']['tool_calls_today'], 15)
+        self.assertEqual(res_exp['quota']['mdblist_calls_today'], 15)
 
     def test_recommendations_quota_ceiling_and_429(self):
         # 1. Quota exhausted with no cache -> refuses quota_exhausted.
@@ -1895,6 +1917,127 @@ class LibraryWorkerTests(unittest.TestCase):
                 self.assertEqual(ctx.exception.reason, 'quota_exhausted')
             finally:
                 self.policy = orig
+
+
+    def test_recommendations_failed_attempts_are_durable_and_stale(self):
+        state_dir = self._make_recs_state_dir('failed')
+        cfg = self._recs_policy(state_dir)['library']
+        frame = copy.deepcopy(self.fixture['library_recommendations_frame'])
+        frame['request'] = {'source': 'mdblist'}
+        arr = lambda backend, desc, budget: type('Arr', (), {'get': lambda self, path: []})()
+        ok, _ = self._fake_mdblist()
+        def run(client, now=1795262400.0):
+            with patch.object(lib.time, 'time', return_value=now):
+                return lib.op_recommendations(frame, cfg, arr, mdblist_factory=lambda _: client)
+        # Assert the durable reservation is present while the request is in flight.
+        class Broken:
+            def close(self):
+                pass
+            def get_json(inner, route, params=None):
+                count = json.loads((Path(state_dir) / 'quota.json').read_text())['calls']
+                self.assertEqual(count, expected[0])
+                if route == '/lists/user' and fail_route[0] != route:
+                    return 200, [{'id': 101, 'slug': 'top-movies'}], 42
+                raise OSError('synthetic TLS/timeout failure')
+        expected, fail_route = [1], ['/lists/user']
+        with self.assertRaises(lib.Refused):
+            run(Broken())
+        self.assertEqual(json.loads((Path(state_dir) / 'quota.json').read_text())['calls'], 1)
+        # Seed complete cache, then fail both list discovery and item fetch.
+        run(ok)
+        for route, count in (('/lists/user', 7), ('/lists/101/items', 9)):
+            fail_route[0], expected[0] = route, count if route == '/lists/user' else count - 1
+            # Discovery reserves one call, then the item request reserves another.
+            broken = Broken()
+            if route != '/lists/user':
+                original = broken.get_json
+                def get_json(route, params=None):
+                    if route != '/lists/user':
+                        expected[0] = 9
+                    return original(route, params)
+                broken.get_json = get_json
+            result = run(broken, 1795262400.0 + 25000)
+            self.assertTrue(result['cache']['stale'])
+            self.assertTrue(any('request failed' in w for w in result['warnings']))
+            self.assertEqual(json.loads((Path(state_dir) / 'quota.json').read_text())['calls'], count)
+
+    def test_recommendations_cached_warnings_and_item_mediatype(self):
+        state_dir = self._make_recs_state_dir('missing-slug')
+        block = self._recs_policy(state_dir)['library']
+        frame = {'request': {'source': 'mdblist'}}
+        arr = lambda backend, desc, budget: type('Arr', (), {'get': lambda self, path: []})()
+        class Empty:
+            def get_json(self, *args, **kwargs):
+                return 200, [], 99
+            def close(self):
+                pass
+        first = lib.op_recommendations(frame, block, arr, mdblist_factory=lambda _: Empty())
+        cached = lib.op_recommendations(frame, block, arr)
+        self.assertEqual(first['warnings'], cached['warnings'])
+        self.assertTrue(any('slug not found' in w for w in cached['warnings']))
+        for configured, media, kind, library in (
+            ('movie', 'show', 'series', 'tv'),
+            ('series', 'movie', 'movie', 'movies'),
+            ('anime', 'movie', 'anime', 'movies'),
+        ):
+            item = lib._normalize_mdblist_item(
+                {'title': 'Mismatch', 'mediatype': media, 'ids': {'tmdb': 1, 'tvdb': 2}},
+                configured, 'movie', 'List')
+            self.assertEqual(item['kind'], kind)
+            self.assertEqual(lib._recommendation_add_target(item)['library'], library)
+        self.assertEqual(lib._language_code('English'), 'en')
+        self.assertEqual(lib._language_code('fr'), 'fr')
+        self.assertIsNone(lib._language_code('unknown'))
+
+    def test_mdblist_real_client_transport_contract(self):
+        import io
+        import urllib.error
+        from email.message import Message
+        key = 'synthetic-key-for-transport'
+        seen = []
+        class Response(io.BytesIO):
+            status = 200
+            headers = Message()
+            headers['X-RateLimit-Remaining'] = ' 17 '
+        class Opener:
+            payload = b'[]'
+            code = 200
+            def open(self, req, timeout):
+                seen.append(req.full_url)
+                parsed = urllib.parse.urlsplit(req.full_url)
+                self_case.assertEqual((parsed.scheme, parsed.netloc), ('https', 'api.mdblist.com'))
+                if self.code != 200:
+                    raise urllib.error.HTTPError(req.full_url, self.code, req.full_url, {}, None)
+                return Response(self.payload)
+        self_case, opener = self, Opener()
+        def build(*handlers):
+            self.assertTrue(any(isinstance(h, lib.NoRedirect) for h in handlers))
+            self.assertIsNone(next(h for h in handlers if isinstance(h, lib.NoRedirect))
+                              .redirect_request(None, None, 302, '', {}, 'https://evil.invalid'))
+            return opener
+        with patch.object(lib.urllib.request, 'build_opener', side_effect=build):
+            client = lib.MdblistClient(key, request_guard=lambda: 60)
+        self.assertEqual(client.get_json('/lists/user'), (200, [], 17))
+        for origin in ('http://api.mdblist.com', 'https://evil.invalid'):
+            with patch.object(lib, 'MDBLIST_ORIGIN', origin), self.assertRaises(lib.Refused):
+                client.get_json('/lists/user')
+        self.assertEqual(len(seen), 1)
+        opener.payload = b'x' * (4 * 1024 * 1024 + 1)
+        with self.assertRaises(lib.Refused):
+            client.get_json('/lists/user')
+        for code in (302, 500):
+            opener.code = code
+            with self.assertRaises(lib.Refused) as caught:
+                client.get_json('/lists/user')
+            self.assertNotIn(key, str(caught.exception))
+            self.assertNotIn('https://', str(caught.exception))
+        client.close()
+
+    def test_recommendations_lock_respects_remaining_budget(self):
+        block = self._recs_policy(self._make_recs_state_dir('locked'))['library']
+        with patch.object(lib.fcntl, 'flock', side_effect=BlockingIOError), \
+             self.assertRaisesRegex(lib.Refused, 'deadline'):
+            lib.op_recommendations({'request': {}}, block, None, request_guard=lambda: 0)
 
     def test_read_mdblist_key_custody(self):
         if os.geteuid() != 0:

@@ -102,7 +102,7 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "293bf1b81922c672da3b4acacef9865dfcfe0f15d769d282741471ffa7bb8d41",
+    "emby_operator_library.py": "793ed4b7a77b51e5340a36b5ecfa495f6ace779464b1a3dddbe67af835f27765",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
     "emby_operator_socket.py": "870079605e6fce1b2d9c4abd5b283b9be37a7dc3c7d2a621bf9b533bbe15005b",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
@@ -865,11 +865,11 @@ def library_install_plan(value):
                     "recommendations list kind must be movie, series, or anime")
             rendered_lists.append({"slug": slug, "kind": entry["kind"]})
         daily_ceiling = recs.get("daily_ceiling", 100)
-        integer(daily_ceiling, 1, 200)
+        integer(daily_ceiling, 1, 100)
         cache_ttl = recs.get("cache_ttl_seconds", 21600)
-        integer(cache_ttl, 300, 86400)
+        integer(cache_ttl, 21600, 86400)
         min_refresh_age = recs.get("min_refresh_age_seconds", 3600)
-        integer(min_refresh_age, 60, 21600)
+        integer(min_refresh_age, 3600, 21600)
         rendered_recs = {
             "mdblist_key_file": key_file,
             "state_dir": state_dir,

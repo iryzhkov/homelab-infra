@@ -305,6 +305,7 @@
       "source": "all",
       "limit": 20,
       "include_in_library": false,
+      "include_excluded": false,
       "min_score": 70,
       "refresh": false
     }
@@ -332,6 +333,8 @@
           "description": "A synthetic top-rated film recommended for library addition.",
           "status": "released",
           "runtime": 118,
+          "rank": null,
+          "score": 88,
           "scores": {
             "mdblist": 88,
             "imdb": 8.2,
@@ -367,6 +370,8 @@
           "description": "A synthetic top-rated anime series.",
           "status": "continuing",
           "runtime": 24,
+          "rank": null,
+          "score": 85,
           "scores": {
             "mdblist": 85,
             "imdb": 8.4,
@@ -404,7 +409,7 @@
         "stale": false
       },
       "quota": {
-        "tool_calls_today": 5,
+        "mdblist_calls_today": 5,
         "daily_ceiling": 100,
         "mdblist_remaining": 995
       },

@@ -232,9 +232,9 @@ def validate_block(value):
                  and slug not in seen_slugs, 'Invalid library policy')
             need(entry['kind'] in RECOMMENDATION_KINDS, 'Invalid library policy')
             seen_slugs.add(slug)
-        need(integer(recs['daily_ceiling'], 1, 200)
-             and integer(recs['cache_ttl_seconds'], 300, 86400)
-             and integer(recs['min_refresh_age_seconds'], 60, 21600), 'Invalid library policy')
+        need(integer(recs['daily_ceiling'], 1, 100)
+             and integer(recs['cache_ttl_seconds'], 21600, 86400)
+             and integer(recs['min_refresh_age_seconds'], 3600, 21600), 'Invalid library policy')
     return copy.deepcopy(value)
 
 
@@ -296,7 +296,7 @@ def request(operation, value):
         if 'max_chars' in value:
             need(integer(value['max_chars'], 1, 60000), 'Invalid library request')
     elif operation == 'library-recommendations':
-        need(fields <= {'kind', 'source', 'limit', 'include_in_library', 'min_score', 'refresh'},
+        need(fields <= {'kind', 'source', 'limit', 'include_in_library', 'include_excluded', 'min_score', 'refresh'},
              'Invalid library request')
         if 'kind' in value:
             need(isinstance(value['kind'], str) and value['kind'] in RECOMMENDATION_FILTER_KINDS,
@@ -308,6 +308,8 @@ def request(operation, value):
             need(integer(value['limit'], 1, 50), 'Invalid library request')
         if 'include_in_library' in value:
             need(type(value['include_in_library']) is bool, 'Invalid library request')
+        if 'include_excluded' in value:
+            need(type(value['include_excluded']) is bool, 'Invalid library request')
         if 'min_score' in value:
             need(integer(value['min_score'], 0, 100), 'Invalid library request')
         if 'refresh' in value:
@@ -2564,6 +2566,10 @@ def _extract_mdblist_scores(item):
 def _normalize_mdblist_item(raw, kind, mediatype, list_name):
     if type(raw) is not dict:
         return None
+    mediatype = raw.get('mediatype', mediatype)
+    if mediatype not in ('movie', 'show'):
+        return None
+    kind = 'anime' if kind == 'anime' else ('movie' if mediatype == 'movie' else 'series')
     title = _opt_str(raw.get('title'), 256)
     if not title:
         return None
@@ -2585,22 +2591,51 @@ def _normalize_mdblist_item(raw, kind, mediatype, list_name):
         'kind': kind,
         'mediatype': mediatype,
         'ids': {'tmdb': tmdb_id, 'tvdb': tvdb_id, 'imdb': imdb_id},
-        'language': language,
+        'language': _language_code(language),
         'country': country,
         'genres': genres,
         'description': description,
         'status': status,
         'runtime': runtime,
         'scores': scores,
+        'rank': _opt_pos_int(raw.get('rank')),
         'sources': [list_name],
     }
+
+
+def _language_code(value):
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    common = {
+        'english': 'en', 'japanese': 'ja', 'french': 'fr', 'german': 'de',
+        'spanish': 'es', 'italian': 'it', 'portuguese': 'pt', 'russian': 'ru',
+        'chinese': 'zh', 'mandarin': 'zh', 'cantonese': 'zh', 'korean': 'ko',
+        'hindi': 'hi', 'arabic': 'ar', 'dutch': 'nl', 'swedish': 'sv',
+        'norwegian': 'no', 'danish': 'da', 'finnish': 'fi', 'polish': 'pl',
+        'turkish': 'tr', 'thai': 'th', 'indonesian': 'id', 'vietnamese': 'vi',
+        'czech': 'cs', 'greek': 'el', 'hebrew': 'he', 'ukrainian': 'uk',
+    }
+    codes = set(common.values())
+    return value if value in codes else common.get(value)
+
+
+def _recommendation_score(item):
+    scores = item['scores']
+    value = scores.get('mdblist')
+    if value is None:
+        rating = scores.get('imdb')
+        if rating is None:
+            rating = scores.get('tmdb')
+        value = rating * 10 if rating is not None else None
+    return max(0, min(100, value)) if value is not None else None
 
 
 def _radarr_language(raw):
     lang = raw.get('originalLanguage')
     if type(lang) is dict:
-        return _opt_str(lang.get('name'), 32)
-    return _opt_str(lang, 32)
+        return _language_code(lang.get('name'))
+    return _language_code(lang)
 
 
 def _normalize_radarr_rec(raw):
@@ -2729,7 +2764,7 @@ def _load_cache(dir_fd):
     return None
 
 
-def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
+def op_recommendations(call, block, arr_factory, *, mdblist_factory=None, request_guard=lambda: 60):
     recs_cfg = block.get('recommendations')
     if recs_cfg is None:
         refuse('recommendations_disabled', 'Library recommendations not configured by policy')
@@ -2739,6 +2774,7 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
     source_filter = req.get('source', 'all')
     limit = req.get('limit', 20)
     include_in_library = req.get('include_in_library', False)
+    include_excluded = req.get('include_excluded', False)
     min_score = req.get('min_score')
     want_refresh = req.get('refresh', False)
 
@@ -2751,6 +2787,7 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
     now = time.time()
     today = time.strftime('%Y-%m-%d', time.gmtime(now))
 
+    lock_deadline = time.monotonic() + budget
     dir_fd = _open_state_dir(recs_cfg['state_dir'])
     lock_fd = None
     try:
@@ -2758,7 +2795,14 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
         ls = os.fstat(lock_fd)
         need(stat.S_ISREG(ls.st_mode) and ls.st_uid == 0 and stat.S_IMODE(ls.st_mode) == 0o600,
              'Unsafe recommendations lock file')
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = min(lock_deadline - time.monotonic(), request_guard())
+                need(remaining > 0, 'Caller deadline exceeded waiting for recommendations lock')
+                time.sleep(min(0.05, remaining))
 
         quota = _load_quota(dir_fd, today)
         cache = _load_cache(dir_fd)
@@ -2769,6 +2813,8 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
             expired = cache is None or age_seconds >= cache_ttl
             forced_refresh = want_refresh and cache is not None and age_seconds >= min_refresh_age
             need_fetch = expired or forced_refresh
+            if want_refresh and not need_fetch:
+                warnings.append('refresh ignored: cache is younger than the minimum refresh age')
 
             if need_fetch:
                 if quota['calls'] >= daily_ceiling:
@@ -2786,6 +2832,7 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
                         quota_hit = False
 
                         quota['calls'] += 1
+                        _write_state_json(dir_fd, 'quota.json', quota)
                         status, user_lists, rl = client.get_json('/lists/user')
                         if rl is not None:
                             quota['mdblist_remaining'] = rl
@@ -2817,6 +2864,7 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
                                     quota_hit = True
                                     break
                                 quota['calls'] += 1
+                                _write_state_json(dir_fd, 'quota.json', quota)
                                 st_items, payload, rl = client.get_json(
                                     f'/lists/{list_id}/items',
                                     params={
@@ -2863,6 +2911,7 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
                                     'fetched_at_ts': now,
                                     'lists': fetched_lists,
                                     'items': fetched_items,
+                                    'warnings': list(warnings),
                                 }
                                 _write_state_json(dir_fd, 'cache.json', cache)
                                 stale = False
@@ -2879,17 +2928,26 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
                                 warnings.append('mdblist daily quota ceiling reached; serving cached recommendations')
                             else:
                                 refuse('quota_exhausted', 'Daily mdblist quota ceiling reached and no cache is available')
+                    except LibraryRefusal:
+                        raise
+                    except Exception:
+                        if cache is None:
+                            raise Refused('mdblist request failed and no cache is available') from None
+                        stale = True
+                        warnings.append('mdblist request failed; serving cached recommendations')
                     finally:
                         if client is not None:
                             client.close()
 
+        if cache is not None:
+            warnings = list(dict.fromkeys(warnings + cache.get('warnings', [])))
         cache_meta = {
             'fetched_at': cache['fetched_at'] if cache is not None else None,
             'age_seconds': max(0, int(now - cache['fetched_at_ts'])) if cache is not None else None,
             'stale': stale,
         }
         quota_meta = {
-            'tool_calls_today': quota['calls'],
+            'mdblist_calls_today': quota['calls'],
             'daily_ceiling': daily_ceiling,
             'mdblist_remaining': quota['mdblist_remaining'],
         }
@@ -2982,8 +3040,10 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
             continue
         if not include_in_library and in_lib:
             continue
+        if excluded and not include_excluded:
+            continue
         if min_score is not None:
-            sc = item['scores'].get('mdblist')
+            sc = _recommendation_score(item)
             if sc is None or sc < min_score:
                 continue
 
@@ -2998,6 +3058,8 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
             'description': item['description'],
             'status': item['status'],
             'runtime': item['runtime'],
+            'rank': item.get('rank'),
+            'score': _recommendation_score(item),
             'scores': dict(item['scores']),
             'sources': list(item['sources']),
             'in_library': in_lib,
@@ -3006,17 +3068,12 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None):
         })
 
     def _sort_key(row):
-        sc = row['scores']
-        mdb = sc.get('mdblist')
-        votes = sc.get('imdb_votes')
-        imdb = sc.get('imdb')
-        tmdb = sc.get('tmdb')
+        score = row['score']
+        votes = row['scores'].get('imdb_votes')
         return (
-            0 if mdb is not None else 1,
-            -(mdb if mdb is not None else -1),
+            -(score if score is not None else -1),
+            row.get('rank') if row.get('rank') is not None else 2 ** 31,
             -(votes if votes is not None else -1),
-            -(imdb if imdb is not None else -1.0),
-            -(tmdb if tmdb is not None else -1.0),
             row['title'].lower(),
         )
 
@@ -3080,7 +3137,7 @@ def execute(policy, call, guard, config):
         if op == 'library-subtitles':
             return op_subtitles(call, block, arr_factory, emby_factory)
         if op == 'library-recommendations':
-            return op_recommendations(call, block, arr_factory, mdblist_factory=mdblist_factory)
+            return op_recommendations(call, block, arr_factory, mdblist_factory=mdblist_factory, request_guard=guard)
         if op == 'library-add':
             return op_add(call, block, arr_factory)
         if op == 'library-grab':

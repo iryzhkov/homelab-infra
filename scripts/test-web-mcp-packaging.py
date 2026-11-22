@@ -2754,7 +2754,9 @@ class CoexistencePackaging(unittest.TestCase):
             ("bad_kind", {"lists": [{"slug": "top-movies", "kind": "music"}]}),
             ("bad_state_dir", {"lists": [{"slug": "top-movies", "kind": "movie"}], "state_dir": "/tmp/recs"}),
             ("bad_key_path", {"lists": [{"slug": "top-movies", "kind": "movie"}], "mdblist_key_file": "../key"}),
-            ("bad_ceiling", {"lists": [{"slug": "top-movies", "kind": "movie"}], "daily_ceiling": 201}),
+            ("bad_ceiling", {"lists": [{"slug": "top-movies", "kind": "movie"}], "daily_ceiling": 200}),
+            ("short_cache", {"lists": [{"slug": "top-movies", "kind": "movie"}], "cache_ttl_seconds": 300}),
+            ("short_refresh", {"lists": [{"slug": "top-movies", "kind": "movie"}], "min_refresh_age_seconds": 60}),
         ):
             bad_recs = copy.deepcopy(enabled_ep)
             bad_recs["library"]["recommendations"] = mut
