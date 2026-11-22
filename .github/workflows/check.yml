@@ -248,7 +248,6 @@ jobs:
           - test_holonet_catalog_identities.py
           - test_holonet_writer_grants.py
           - test_holonet_acquire_grants.py
-          - test_holonet_library_grants.py
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

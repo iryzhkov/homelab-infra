@@ -15,8 +15,8 @@ attribute slot are described in [host credential rotation](host-credential-rotat
 
 | Host | Grants |
 | --- | --- |
-| laptop | Jocasta operator read/write; OV resources read/write/remove/maintain and default/default memory.read, memory.write, session.read, session.create, session.append; HoloNet catalog, writer/history/series, importer/custody read, torrent read, seed-join read; Shizune owner igor/use |
-| omarchy-pc | Jocasta operator read/write; identical OV resources/personal grants; Shizune owner igor/use |
+| laptop | Jocasta operator read/write; OV resources read/write/remove/maintain and default/default memory.read, memory.write, session.read, session.create, session.append; HoloNet catalog, writer/history/series, importer/custody read, torrent read, seed-join read, library read/manage; Shizune owner igor/use |
+| omarchy-pc | Jocasta operator read/write; identical OV resources/personal grants; HoloNet library read/manage only; Shizune owner igor/use |
 | agent-a | Jocasta operator read/write |
 | agent-b | Jocasta operator read/write |
 | homelab | HoloNet Movies catalog/read; HA state.read on sensor.zigbee2mqtt_bridge_version; observer host homelab, no services |
@@ -26,7 +26,11 @@ catalog user 54b7d36cef804d3c8478474553ed3a82, namespace movies-catalog, empty
 history/targets. Writer is libraries 3/615/1132, namespace
 managed-recommendations, and the exact eight actions and seven recipients in
 the contract. Janitor purposes are separate scope tuples, library 3,
-namespace managed-janitor, empty catalog/history/target users. Combined or
+namespace managed-janitor, empty catalog/history/target users. Library
+management is a separate exact scope `holonet.library` for `laptop` and
+`omarchy-pc` only, emitting server `3c86e6d7ff6c4a3296522cdf03d22bb0`,
+actions `library.read` and `library.manage`, libraries `3`, `615`, `1132`,
+namespace `managed-library`, and empty catalog/history/target users. Combined or
 foreign-purpose requests emit no host claims. One mapping emits arrays once;
 other selected mappings return empty dictionaries. No resource token receives
 another resource's claims.
@@ -249,6 +253,35 @@ Acquisition unions, start/media, sibling purposes and other subjects receive no
 acquisition claims. No new M3 grants are added. Start/media and SR05 remain
 withheld; native read acceptance and denied sibling probes belong to the parent
 after the separately qualified write window.
+
+## HoloNet library scope mapping producer
+
+The `holonet.library` scope mapping does not exist live and is not owned by the
+frozen legacy catalog playbook. The maintained host writer provides a narrow
+opt-in producer controlled by `authentik_agent_create_library_mapping: true`
+(default `false` in `playbooks/vars/authentik-agent-hosts.yml`), modelled on the
+`holonet.acquire` producer above.
+
+Supply the normal mapping and policy baselines with their existing protected
+ownership anchors; do not supply a `holonet.library` baseline when using this
+producer. Complete-inventory preflight refuses if any `holonet.library`-prefixed
+scope or the fixed mapping name `M3 host HoloNet library` already exists, or if
+provider attachments or baselines have drifted. Before the single `POST`
+creating `holonet.library` with a deny-only body (`return {}`), the module
+persists `pending` in `hosts.json`. After recording the returned UUID PK, a
+fresh public provider inventory recheck must still match the original attachment
+list before `PATCH` appends only the new PK (the OAuth2 detail response stays in
+memory only and is never stored or logged). Existing `chaldea-laptop` and
+`chaldea-omarchy-pc` accounts are then upgraded in place (attributes and, for
+`omarchy-pc`, HoloNet resource group membership only; no token or delivery
+changes), and the qualified projection renders host expressions. Unknown create
+or attach outcomes leave `pending` intact and block later runs; repeated runs
+report zero changes.
+
+Runtime rollback is immediate at the worker policy layer (`library.enabled:
+false` in `/etc/holonet-playlists/policy.json`). Authentik-side withdrawal of
+the `holonet.library` grant (retaining the mapping with a deny-only expression)
+is deferred as a follow-up.
 
 ## Credential custody and revocation
 

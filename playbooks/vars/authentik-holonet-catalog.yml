@@ -139,9 +139,6 @@ holonet_catalog_seed_join_enabled: false
 holonet_catalog_acquire_enabled: false
 holonet_catalog_acquire_start_enabled: false
 holonet_catalog_acquire_media_enabled: false
-holonet_catalog_library_enabled: false
-holonet_catalog_gaming_pc_writer_token_enabled: false
-holonet_catalog_gaming_pc_writer_token_generation: 1
 holonet_catalog_series_enabled: false
 holonet_catalog_playback_enabled: false
 holonet_catalog_recommendations_enabled: false

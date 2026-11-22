@@ -322,11 +322,15 @@ return {'aud': 'https://akasha.ryzhkov.dev',
         require(not any(b["service"] == "holonet" and b["scope"] == "holonet.acquire"
                         for b in baselines))
         if record:
+            other = self.receipt.get("library_mapping")
+            extra = ([other["pk"]] if other and other.get("attached")
+                     and other["pk"] not in record["before"] else [])
             require(record["provider"] == provider["pk"] and record["body"] == body)
             require(len(selected) == 1 and selected[0]["pk"] == record["pk"]
                     and selected[0]["name"] == name and selected[0]["scope_name"] == "holonet.acquire")
-            expected = sorted(record["before"] + [record["pk"]])
-            require(sorted(provider["property_mappings"]) in (record["before"], expected))
+            before = sorted(record["before"] + extra)
+            expected = sorted(before + [record["pk"]])
+            require(sorted(provider["property_mappings"]) in (before, expected))
             require(not record["attached"] or sorted(provider["property_mappings"]) == expected)
             if not record["attached"]:
                 require(selected[0]["expression"] == body["expression"])
@@ -368,10 +372,85 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             self.commit()
         # CHECK uses only an in-memory hypothetical PK, never a guessed grant.
         for row in self.rows["provider"]:
-            if row["pk"] == record["provider"]:
-                row["property_mappings"] = record["before"] + [record["pk"]]
+            if row["pk"] == record["provider"] and record["pk"] not in row["property_mappings"]:
+                row["property_mappings"] = list(row["property_mappings"]) + [record["pk"]]
         return baselines + [{"kind": "mapping", "pk": record["pk"], "service": "holonet",
                              "scope": "holonet.acquire",
+                             "sha256": hashlib.sha256(body["expression"].encode()).hexdigest(),
+                             "ownership": {"host_owner": self.owner}}]
+
+    def library_mapping(self, hosts, baselines, create=False):
+        """One bounded resource effect for holonet.library, using the existing write-ahead journal."""
+        record = self.receipt.get("library_mapping")
+        if not record and not create:
+            return baselines
+        require(any("holonet" in MATRIX[h["host"]] for h in hosts))
+        name = "M3 host HoloNet library"
+        body = {"name": name, "scope_name": "holonet.library", "expression": "return {}"}
+        selected = [m for m in self.rows["mapping"]
+                    if m["scope_name"].startswith("holonet.library") or m["name"] == name]
+        apps = [a for a in self.rows["application"] if a["slug"] == "chaldea-holonet"]
+        require(len(apps) == 1)
+        providers = [p for p in self.rows["provider"] if p["pk"] == apps[0]["provider"]]
+        require(len(providers) == 1)
+        provider = providers[0]
+        require(not any(b["service"] == "holonet" and b["scope"] == "holonet.library"
+                        for b in baselines))
+        if record:
+            other = self.receipt.get("acquire_mapping")
+            extra = ([other["pk"]] if other and other.get("attached")
+                     and other["pk"] not in record["before"] else [])
+            require(record["provider"] == provider["pk"] and record["body"] == body)
+            require(len(selected) == 1 and selected[0]["pk"] == record["pk"]
+                    and selected[0]["name"] == name and selected[0]["scope_name"] == "holonet.library")
+            before = sorted(record["before"] + extra)
+            expected = sorted(before + [record["pk"]])
+            require(sorted(provider["property_mappings"]) in (before, expected))
+            require(not record["attached"] or sorted(provider["property_mappings"]) == expected)
+            if not record["attached"]:
+                require(selected[0]["expression"] == body["expression"])
+            # Validate all existing resource ownership before a resumable attach.
+            original_rows = copy.deepcopy(self.rows)
+            provider["property_mappings"] = record["before"]
+            try:
+                self.resources(hosts, baselines)
+            finally:
+                self.rows = original_rows
+        else:
+            require(create and not selected)
+            self.resources(hosts, baselines)
+            record = {"provider": provider["pk"], "before": sorted(provider["property_mappings"]),
+                      "body": body, "attached": False}
+            require(len(record["before"]) == len(set(record["before"])))
+            if self.check:
+                self.changed = True
+                record["pk"] = "pending-holonet-library"
+            else:
+                # mutate persists pending BEFORE POST. An unknown outcome cannot
+                # be adopted by name or automatically retried on a later run.
+                result = self.mutate("POST", PATHS["mapping"], body)
+                require(isinstance(result["pk"], str) and str(uuid.UUID(result["pk"])) == result["pk"])
+                record["pk"] = result["pk"]
+            self.receipt["library_mapping"] = record
+            self.commit()
+            self.rows["mapping"].append(dict(body, pk=record["pk"]))
+        if not record["attached"]:
+            if self.check:
+                self.changed = True
+            else:
+                fresh = self.api.rows("provider")
+                found = [p for p in fresh if p["pk"] == record["provider"]]
+                require(len(found) == 1 and sorted(found[0]["property_mappings"]) == record["before"])
+                self.mutate("PATCH", PATHS["provider"] + str(record["provider"]) + "/",
+                            {"property_mappings": record["before"] + [record["pk"]]})
+            record["attached"] = True
+            self.commit()
+        # CHECK uses only an in-memory hypothetical PK, never a guessed grant.
+        for row in self.rows["provider"]:
+            if row["pk"] == record["provider"] and record["pk"] not in row["property_mappings"]:
+                row["property_mappings"] = list(row["property_mappings"]) + [record["pk"]]
+        return baselines + [{"kind": "mapping", "pk": record["pk"], "service": "holonet",
+                             "scope": "holonet.library",
                              "sha256": hashlib.sha256(body["expression"].encode()).hexdigest(),
                              "ownership": {"host_owner": self.owner}}]
 
@@ -495,8 +574,20 @@ return {'aud': 'https://akasha.ryzhkov.dev',
         rotation_group = self.receipt.get("rotation", {}).get("group", {}).get("pk")
         legacy_groups = [g for g in groups if g != rotation_group]
         rotation = {"group": rotation_group, "client_id": "chaldea-host-rotation"} if rotation_group and host in ROTATION_HOSTS else None
-        require(actual in (expected, attributes(host, self.owner, rotation))
-                and sorted(user["groups"]) in (groups, legacy_groups))
+        expected_attrs = [expected, attributes(host, self.owner, rotation)]
+        expected_groups = [groups, legacy_groups]
+        if host in ("laptop", "omarchy-pc"):
+            for base in list(expected_attrs):
+                prior = copy.deepcopy(base)
+                if host == "laptop":
+                    prior["services"]["holonet"]["purposes"].pop("library", None)
+                else:
+                    prior["services"].pop("holonet", None)
+                expected_attrs.append(prior)
+        if host == "omarchy-pc":
+            for group_set in list(expected_groups):
+                expected_groups.append([g for g in group_set if g != GROUP_IDS["holonet"]])
+        require(actual in expected_attrs and sorted(user["groups"]) in expected_groups)
         roles, permissions = {}, {}
         for rid in user["roles"]:
             roles[rid] = self.api.request("GET", "/rbac/roles/" + rid + "/")
@@ -604,9 +695,13 @@ return {'aud': 'https://akasha.ryzhkov.dev',
     def baseline_owner(self, baseline, current, original):
         anchor = baseline["ownership"]
         if anchor == {"host_owner": self.owner}:
-            record = self.receipt["acquire_mapping"]
+            key = {"holonet.acquire": "acquire_mapping",
+                   "holonet.library": "library_mapping"}.get(baseline["scope"])
+            require(key is not None and key in self.receipt)
+            record = self.receipt[key]
             require(record["attached"] and baseline["kind"] == "mapping"
-                    and baseline["service"] == "holonet" and baseline["scope"] == "holonet.acquire"
+                    and baseline["service"] == "holonet"
+                    and baseline["scope"] == record["body"]["scope_name"]
                     and current["pk"] == record["pk"] and current["name"] == record["body"]["name"]
                     and original == record["body"]["expression"])
             return
@@ -751,6 +846,7 @@ def main():
         "baselines": {"type": "list", "elements": "dict", "required": True},
         "original_writer_read": {"type": "dict", "default": {}},
         "create_original_writer_read_mapping": {"type": "bool", "default": False},
+        "create_library_mapping": {"type": "bool", "default": False},
         "original_writer_previous_sha256": {"type": "str", "default": ""},
         "reenable_host": {"type": "str", "default": ""},
         "akasha_signing_key": {"type": "str", "default": ""},
@@ -783,20 +879,49 @@ def main():
         projection_changed = original_writer_declaration(p["original_writer_read"]) != e.receipt.get("original_writer", {})
         e.check = True
         saved_rows = copy.deepcopy(e.rows)
+        def apply_mappings():
+            lib_first = ("library_mapping" in e.receipt and (
+                "acquire_mapping" not in e.receipt
+                or e.receipt["library_mapping"]["pk"] in e.receipt["acquire_mapping"]["before"]))
+            if lib_first:
+                result = e.library_mapping(hosts, p["baselines"], p.get("create_library_mapping", False))
+                lib_changed = e.changed
+                e.changed = False
+                result = e.acquire_mapping(hosts, result, p["original_writer_read"],
+                                           p.get("create_original_writer_read_mapping", False))
+                acq_changed = e.changed
+            else:
+                result = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
+                                           p.get("create_original_writer_read_mapping", False))
+                acq_changed = e.changed
+                e.changed = False
+                result = e.library_mapping(hosts, result, p.get("create_library_mapping", False))
+                lib_changed = e.changed
+            e.changed = acq_changed or lib_changed
+            return result, acq_changed, lib_changed
+
         e.recover_provider(rotation_key, akasha_key)
         # Adopting a pending provider is not a resource change; keep it out of
         # resource_changed so the isolation guard below only sees resources.
         e.changed = False
-        baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
-                                      p.get("create_original_writer_read_mapping", False))
+        baselines, acquire_changed, library_changed = apply_mappings()
         e.resources(hosts, baselines)
-        resource_changed = e.changed
         e.changed = False
         if rotation_key:
             e.rotation(rotation_key)
+        rotation_changed = e.changed
+        e.changed = False
+        users_before = copy.deepcopy(e.receipt["users"])
+        tokens_before = copy.deepcopy(e.receipt["tokens"])
+        revoked_before = list(e.receipt["revoked"])
         users, _ = e.users(hosts)
-        if projection_changed or resource_changed:
-            require(not e.changed and not p["reenable_host"])
+        if projection_changed or acquire_changed:
+            require(not rotation_changed and not e.changed and not p["reenable_host"])
+        if library_changed:
+            require(not rotation_changed and not p["reenable_host"]
+                    and e.receipt["users"] == users_before
+                    and e.receipt["tokens"] == tokens_before
+                    and e.receipt["revoked"] == revoked_before)
         e.expressions(users, baselines, p["original_writer_read"], p.get("original_writer_previous_sha256", ""))
         if akasha_key:
             e.akasha(users, akasha_key)
@@ -804,9 +929,13 @@ def main():
         e.changed = False
         e.check = module.check_mode
         e.rows = saved_rows
+        real_changed = False
         e.recover_provider(rotation_key, akasha_key)
-        baselines = e.acquire_mapping(hosts, p["baselines"], p["original_writer_read"],
-                                      p.get("create_original_writer_read_mapping", False))
+        real_changed = real_changed or e.changed
+        e.changed = False
+        baselines, _, _ = apply_mappings()
+        real_changed = real_changed or e.changed
+        e.changed = real_changed
         e.resources(hosts, baselines)
         if rotation_key:
             e.rotation(rotation_key)
@@ -825,7 +954,7 @@ def main():
         if not module.check_mode:
             e.save()
         # Projection-only enrollment never reads/delivers any host credential.
-        if projection_changed or resource_changed:
+        if projection_changed or acquire_changed or library_changed:
             delivery = []
         module.exit_json(changed=e.changed or e.signer_rebased, delivery=delivery,
                          public_host_users=users, predicted_pks=False)

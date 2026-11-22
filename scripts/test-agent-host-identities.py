@@ -85,7 +85,7 @@ class Contract(unittest.TestCase):
     def test_exact_matrix(self):
         self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
         expected = {"laptop": {"jocasta", "ov", "holonet", "shizune"},
-                    "omarchy-pc": {"jocasta", "ov", "shizune"}, "agent-a": {"jocasta"},
+                    "omarchy-pc": {"jocasta", "ov", "holonet", "shizune"}, "agent-a": {"jocasta"},
                     "agent-b": {"jocasta"}, "homelab": {"holonet", "ha", "homelab"}, "normandy": set()}
         for host, services in expected.items():
             self.assertEqual(set(c.MATRIX[host]), services)
@@ -99,7 +99,7 @@ class Contract(unittest.TestCase):
                                                    "ha_actions": ["state.read"]})
         self.assertEqual(c.MATRIX["homelab"]["homelab"], {"homelab_hosts": ["homelab"], "homelab_services": []})
         p = c.MATRIX["laptop"]["holonet"]["purposes"]
-        self.assertEqual(set(p), {"catalog", "writer", "janitor", "torrents", "seed_join"})
+        self.assertEqual(set(p), {"catalog", "writer", "janitor", "torrents", "seed_join", "library"})
         self.assertEqual(p["catalog"]["claims"]["holonet_libraries"], ["3"])
         self.assertEqual(p["catalog"]["claims"]["holonet_actions"], ["catalog.read"])
         self.assertEqual(p["catalog"]["claims"]["holonet_target_users"], [])
@@ -121,6 +121,19 @@ class Contract(unittest.TestCase):
             self.assertEqual(claims["holonet_libraries"], ["3"])
             self.assertEqual(claims["holonet_namespace"], "managed-janitor")
             self.assertEqual(claims["holonet_catalog_users"], [])
+        self.assertEqual(p["library"], {
+            "scopes": ["holonet.library"],
+            "claims": {
+                "holonet_server": "3c86e6d7ff6c4a3296522cdf03d22bb0",
+                "holonet_actions": ["library.read", "library.manage"],
+                "holonet_libraries": ["3", "615", "1132"],
+                "holonet_namespace": "managed-library",
+                "holonet_target_users": [],
+                "holonet_catalog_users": [],
+                "holonet_history_users": [],
+            },
+        })
+        self.assertEqual(c.MATRIX["omarchy-pc"]["holonet"]["purposes"], {"library": p["library"]})
         self.assertEqual(c.MATRIX["homelab"]["holonet"]["purposes"], {"catalog": p["catalog"]})
 
     def test_declaration_closed(self):
@@ -144,12 +157,52 @@ class Contract(unittest.TestCase):
                     for p in grant["purposes"].values():
                         self.assertEqual(c.claims(service, grant, p["scopes"]), p["claims"])
                     for bad in [["holonet.read", "holonet.home"], ["holonet.read", "holonet.janitor", "holonet.curate"],
-                                ["holonet.read", "holonet.acquire"], ["holonet.read", "ov.read"]]:
+                                ["holonet.read", "holonet.acquire"], ["holonet.read", "ov.read"],
+                                ["holonet.read", "holonet.library"], ["holonet.library", "holonet.janitor"],
+                                ["holonet.library", "holonet.curate"], ["holonet.library", "ov.read"]]:
                         self.assertEqual(c.claims(service, grant, bad), {})
                 else:
                     self.assertEqual(c.claims(service, grant, ["foreign.read"]), {})
+        omarchy_holonet = c.MATRIX["omarchy-pc"]["holonet"]
+        self.assertEqual(c.claims("holonet", omarchy_holonet, ["holonet.library"]),
+                         c.MATRIX["laptop"]["holonet"]["purposes"]["library"]["claims"])
+        for denied in (["holonet.read"], ["holonet.read", "holonet.curate", "holonet.home"],
+                       ["holonet.read", "holonet.janitor"], ["holonet.read", "holonet.library"]):
+            self.assertEqual(c.claims("holonet", omarchy_holonet, denied), {})
+        self.assertEqual(c.claims("holonet", c.MATRIX["homelab"]["holonet"], ["holonet.library"]), {})
         self.assertEqual(c.claims("ov", c.MATRIX["laptop"]["ov"], ["ov.read"]), {
             "ov_namespaces": ["viking://resources"], "ov_actions": ["read"]})
+
+    def test_library_scope_expression_hosts_and_mixed_refusals(self):
+        users = [
+            {"pk": 42, "username": "chaldea-laptop",
+             "groups": [c.GROUP_IDS[s] for s in ("ov", "holonet", "shizune")],
+             "attributes": c.attributes("laptop", OWNER)},
+            {"pk": 43, "username": "chaldea-omarchy-pc",
+             "groups": [c.GROUP_IDS[s] for s in ("ov", "holonet", "shizune")],
+             "attributes": c.attributes("omarchy-pc", OWNER)},
+            {"pk": 44, "username": "chaldea-homelab",
+             "groups": [c.GROUP_IDS[s] for s in ("holonet", "ha", "homelab")],
+             "attributes": c.attributes("homelab", OWNER)},
+            {"pk": 45, "username": "chaldea-agent-a", "groups": [],
+             "attributes": c.attributes("agent-a", OWNER)},
+        ]
+        expr = c.scope_expression("holonet", "holonet.library", users, "return {'old': True}")
+        expr = expr.replace(c.RUNTIME_GUARD, "def host_allowed(u, e):\n    return True\n")
+        expected = dict(c.MATRIX["laptop"]["holonet"]["purposes"]["library"]["claims"],
+                        aud=c.RESOURCES["holonet"])
+        for u in users[:2]:
+            self.assertEqual(function(expr, user=NS(**u, path=c.PATH), token=NS(scope=["holonet.library"])), expected)
+            for bad in (["holonet.read", "holonet.library"], ["holonet.library", "holonet.janitor"],
+                        ["holonet.library", "ov.read"]):
+                self.assertEqual(function(expr, user=NS(**u, path=c.PATH), token=NS(scope=bad)), {})
+        for u in users[2:]:
+            self.assertEqual(function(expr, user=NS(**u, path=c.PATH), token=NS(scope=["holonet.library"])), {})
+        read_expr = c.scope_expression("holonet", "holonet.read", users, "return {'old': True}")
+        read_expr = read_expr.replace(c.RUNTIME_GUARD, "def host_allowed(u, e):\n    return True\n")
+        self.assertEqual(function(read_expr, user=NS(**users[1], path=c.PATH), token=NS(scope=["holonet.read"])), {})
+        self.assertEqual(function(read_expr, user=NS(**users[0], path=c.PATH),
+                                  token=NS(scope=["holonet.read", "holonet.library"])), {})
 
     def test_emitted_mapping_elects_once_and_falls_back_only_for_old_accounts(self):
         user = {"pk": 42, "username": "chaldea-laptop", "groups": [c.GROUP_IDS[s] for s in ("ov", "holonet", "shizune")],
@@ -836,13 +889,14 @@ class Lifecycle(unittest.TestCase):
             d.credential(self.fd, "laptop", 1000, 1, False)
 
 
-    def mapping_fixture(self, acquire=False):
-        self.enrollment().users([item()])
+    def mapping_fixture(self, acquire=False, library=True, hosts=None):
+        self.enrollment().users(hosts or [item()])
         scopes = {"jocasta": ["jocasta.read"], "ha": ["ha.read"],
             "homelab": ["homelab.read"], "shizune": ["shizune.use"],
             "ov": ["ov." + a for a in c.MATRIX["laptop"]["ov"]["ov_actions"]] +
                   ["ov.personal." + a for a in c.MATRIX["laptop"]["ov"]["ov_personal"]["actions"]],
-            "holonet": sorted({s for p in c.MATRIX["laptop"]["holonet"]["purposes"].values() for s in p["scopes"]})}
+            "holonet": sorted({s for p in c.MATRIX["laptop"]["holonet"]["purposes"].values() for s in p["scopes"]
+                               if library or s != "holonet.library"})}
         if acquire:
             scopes["holonet"].append("holonet.acquire")
         baselines = []
@@ -1098,6 +1152,148 @@ class Lifecycle(unittest.TestCase):
         receipt = e.read_private(self.fd, "hosts.json")
         self.assertIsNotNone(receipt["pending"])
         mapping = next(m for m in self.api.data["mapping"] if m["pk"] == receipt["acquire_mapping"]["pk"])
+        self.assertEqual(mapping["expression"], "return {}")
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertEqual(len(self.api.calls), calls)
+
+    def library_params(self, hosts=None):
+        baselines = self.mapping_fixture(library=False, hosts=hosts)
+        self.resource_fixture(baselines)
+        return dict(hosts=hosts or [item()], owner=OWNER, receipt_dir=self.temp.name,
+                    baselines=baselines, api_token="SYNTHETIC-invalid-token",
+                    reenable_host="", rotation_signing_key="", original_writer_read={},
+                    create_original_writer_read_mapping=False, create_library_mapping=True,
+                    original_writer_previous_sha256="")
+
+    def test_library_mapping_create_attach_upgrade_and_repeat(self):
+        hosts = [item("laptop"), item("omarchy-pc")]
+        params = self.library_params(hosts=hosts)
+        # Simulate pre-library live accounts: laptop lacks library purpose; omarchy-pc lacks holonet entirely.
+        for u in self.api.data["user"]:
+            if u["username"] == "chaldea-laptop":
+                u["attributes"]["services"]["holonet"]["purposes"].pop("library")
+            elif u["username"] == "chaldea-omarchy-pc":
+                u["attributes"]["services"].pop("holonet")
+                u["groups"] = [g for g in u["groups"] if g != c.GROUP_IDS["holonet"]]
+        before = copy.deepcopy(next(p for p in self.api.data["provider"] if p["pk"] == 99)["property_mappings"])
+        calls = len(self.api.calls)
+        checked = self.main_run(params, True)
+        self.assertNotIn("failed", checked)
+        self.assertTrue(checked["changed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        applied = self.main_run(params)
+        self.assertNotIn("failed", applied)
+        self.assertEqual(applied["delivery"], [])
+        effects = [(m, p, b) for m, p, b in self.api.calls[calls:] if m != "GET"]
+        mapping_posts = [(m, p, b) for m, p, b in effects if m == "POST" and p == e.PATHS["mapping"]]
+        self.assertEqual(len(mapping_posts), 1)
+        self.assertEqual(mapping_posts[0][2], {
+            "name": "M3 host HoloNet library", "scope_name": "holonet.library", "expression": "return {}"})
+        record = e.read_private(self.fd, "hosts.json")["library_mapping"]
+        self.assertTrue(record["attached"])
+        self.assertEqual(set(next(p for p in self.api.data["provider"] if p["pk"] == 99)["property_mappings"]),
+                         set(before + [record["pk"]]))
+        omarchy = next(u for u in self.api.data["user"] if u["username"] == "chaldea-omarchy-pc")
+        self.assertIn(c.GROUP_IDS["holonet"], omarchy["groups"])
+        self.assertEqual(omarchy["attributes"]["services"]["holonet"], c.MATRIX["omarchy-pc"]["holonet"])
+        # Repeat run (with reversed provider order and flag back to false) is zero-change.
+        for p in self.api.data["provider"]:
+            p["property_mappings"].reverse()
+        params["create_library_mapping"] = False
+        self.assertFalse(self.main_run(params)["changed"])
+        # Coexistence with acquire_mapping attached afterwards also converges with zero-change repeat.
+        pinned = self.writer_fixture()
+        params["original_writer_read"] = pinned
+        params["create_original_writer_read_mapping"] = True
+        self.assertNotIn("failed", self.main_run(params))
+        self.assertFalse(self.main_run(params)["changed"])
+
+    def test_library_mapping_after_existing_acquire_mapping(self):
+        params = self.library_params()
+        params["original_writer_read"] = self.writer_fixture()
+        params["create_original_writer_read_mapping"] = True
+        params["create_library_mapping"] = False
+        # Without holonet.library mapping or flag, expressions refuse before any write.
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        # Creating both in one run (or library after acquire) converges and repeats zero-change.
+        params["create_library_mapping"] = True
+        applied = self.main_run(params)
+        self.assertNotIn("failed", applied)
+        self.assertEqual(applied["delivery"], [])
+        self.assertFalse(self.main_run(params)["changed"])
+
+    def test_library_mapping_confirmed_create_checkpoint_resumes_only_unchanged_deny(self):
+        params = self.library_params()
+        from unittest.mock import patch
+        commit = e.HostEnrollment.commit
+        def crash(x):
+            commit(x)
+            record = x.receipt.get("library_mapping")
+            if not x.check and record and not record["attached"]:
+                raise OSError("crash after confirmed library create checkpoint")
+        with patch.object(e.HostEnrollment, "commit", crash):
+            self.assertTrue(self.main_run(params)["failed"])
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertIsNone(receipt["pending"])
+        self.assertFalse(receipt["library_mapping"]["attached"])
+        created = next(m for m in self.api.data["mapping"] if m["pk"] == receipt["library_mapping"]["pk"])
+        created["expression"] = "return {'drift': True}"
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        created["expression"] = "return {}"
+        self.assertNotIn("failed", self.main_run(params))
+        self.assertEqual(sum(m == "POST" and p == e.PATHS["mapping"] for m, p, _ in self.api.calls), 1)
+
+    def test_library_mapping_preflight_and_unknown_outcomes(self):
+        params = self.library_params()
+        good = copy.deepcopy(self.api.data)
+        calls = len(self.api.calls)
+        for kind in ("name", "scope", "scope_prefix", "attachment", "baseline"):
+            self.api.data = copy.deepcopy(good)
+            changed = copy.deepcopy(params)
+            if kind in ("name", "scope", "scope_prefix"):
+                self.api.data["mapping"].append({"pk": "foreign",
+                    "name": "M3 host HoloNet library" if kind == "name" else "foreign",
+                    "scope_name": ("other" if kind == "name" else
+                                   "holonet.library" if kind == "scope" else "holonet.library.read"),
+                    "expression": "return {}"})
+            elif kind == "attachment":
+                next(p for p in self.api.data["provider"] if p["pk"] == 99)["property_mappings"].append("foreign")
+            else:
+                changed["baselines"][-1]["sha256"] = "0" * 64
+            self.assertTrue(self.main_run(changed)["failed"], kind)
+            self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.api.data = copy.deepcopy(good)
+        original = self.api.request
+        def unknown_post(method, path, body=None):
+            result = original(method, path, body)
+            if method == "POST" and path == e.PATHS["mapping"]:
+                raise OSError("unknown library create outcome")
+            return result
+        self.api.request = unknown_post
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertIsNotNone(e.read_private(self.fd, "hosts.json")["pending"])
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertEqual(len(self.api.calls), calls)
+
+    def test_unknown_library_mapping_attachment_is_never_replayed(self):
+        params = self.library_params()
+        original = self.api.request
+        def unknown_patch(method, path, body=None):
+            result = original(method, path, body)
+            if method == "PATCH" and path == e.PATHS["provider"] + "99/":
+                raise OSError("unknown library attachment outcome")
+            return result
+        self.api.request = unknown_patch
+        self.assertTrue(self.main_run(params)["failed"])
+        receipt = e.read_private(self.fd, "hosts.json")
+        self.assertIsNotNone(receipt["pending"])
+        mapping = next(m for m in self.api.data["mapping"] if m["pk"] == receipt["library_mapping"]["pk"])
         self.assertEqual(mapping["expression"], "return {}")
         calls = len(self.api.calls)
         self.assertTrue(self.main_run(params)["failed"])

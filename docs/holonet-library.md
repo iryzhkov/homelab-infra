@@ -64,23 +64,41 @@ worker unit's `ReadWritePaths` does not change and no new credentials are added.
   `subtitles_default_chars` (20000), `subtitles_max_chars` (60000),
   `remove_max_files` (500).
 
-## Authentik scope and gaming-pc token
+## Authentik host grant and scope mapping
 
-- Scope `holonet.library` projects a flat grant (`namespace: managed-library`,
-  `libraries: ["3", "615", "1132"]`, `actions: ["library.read", "library.manage"]`)
-  onto the existing original writer subject (`chaldea-laptop-holonet-recommendations`).
-  Controlled by `holonet_catalog_library_enabled` (default `false`) in
-  `playbooks/vars/authentik-holonet-catalog.yml`.
-- Separate gaming-pc (`omarchy-pc`) app-password token for the same writer
-  account (`chaldea-laptop-holonet-recommendations-omarchy-pc-g1`, same expiry
-  policy, delivered via the existing `host.yml` path) is controlled by
-  `holonet_catalog_gaming_pc_writer_token_enabled` (default `false`).
+- In the closed M3 host contract (`module_utils/agent_host_contract.py`), the
+  exact scope tuple `["holonet.library"]` is granted to `chaldea-laptop` and
+  `chaldea-omarchy-pc` only, emitting `holonet_server`
+  `3c86e6d7ff6c4a3296522cdf03d22bb0`, `holonet_actions`
+  `["library.read", "library.manage"]`, `holonet_libraries`
+  `["3", "615", "1132"]`, `holonet_namespace` `"managed-library"`, and empty
+  `holonet_catalog_users`, `holonet_history_users`, and `holonet_target_users`.
+  `omarchy-pc` gains HoloNet resource membership for this purpose only (no
+  catalog, writer, or janitor grants). Mixed or foreign-purpose scope requests
+  emit no claims.
+- Do not run `playbooks/authentik-holonet-catalog.yml`. The sole issuer writer
+  is `playbooks/authentik-agent-hosts.yml` (via the `authentik-signer`
+  enrollment wrapper) with the opt-in producer flag
+  `authentik_agent_create_library_mapping: true` (default `false` in
+  `playbooks/vars/authentik-agent-hosts.yml`), which creates the deny-only
+  `M3 host HoloNet library` (`holonet.library`) scope mapping, attaches it to
+  the `chaldea-holonet` provider, upgrades `chaldea-laptop` and
+  `chaldea-omarchy-pc`, and renders the qualified host expressions. See
+  [authentik-agent-hosts.md](authentik-agent-hosts.md) for preflight and
+  `hosts.json` pending-recovery rules.
 
 ## Enable and rollback
 
-- Enable: set `library.enabled: true` in the endpoint's `web_mcp_endpoint`
-  inventory input alongside the explicit root folder paths and quality profile
-  IDs, and enable `holonet_catalog_library_enabled: true` in Authentik.
+- Enable:
+  1. Run the standard CHECK -> REAL -> REAL -> CHECK sequence of
+     `playbooks/authentik-agent-hosts.yml` with the existing protected cohort,
+     baselines, and journal plus `-e authentik_agent_create_library_mapping=true`.
+     Verify the second REAL and final CHECK report zero changes.
+  2. Set `library.enabled: true` in the endpoint's `web_mcp_endpoint` inventory
+     input alongside the explicit root folder paths and quality profile IDs, and
+     re-render `/etc/holonet-playlists/policy.json`.
 - Rollback: set `library.enabled: false` in the endpoint policy input and
   re-render `/etc/holonet-playlists/policy.json`. The worker immediately refuses
   all `library-*` operations with `Library management not enabled by policy`.
+  Authentik-side withdrawal of the `holonet.library` mapping expression is a
+  separate follow-up.
