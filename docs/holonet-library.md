@@ -89,6 +89,16 @@ and `mode: "apply"` with canonical `plan_sha256` verification):
   `recycleBin` is empty, `no_import_candidates` when no candidates match,
   `target_mismatch` unless every candidate in the download maps to the requested
   `arr_id`, `file_limit_exceeded` over 200 files, and `plan_changed`.
+  Movies require exactly one candidate, and series candidates must not overlap
+  episode IDs. Only upgrade-class rejections may be overridden; sample, unparsed
+  and unknown rejections refuse the import. Candidate paths must be outside the
+  title's library folder and within configured download payload roots.
+  Preview and apply require finished Arr queue records or qBittorrent progress
+  of 1; the completion evidence is bound into the plan digest.
+  Hardlink removal pins library inodes across torrent checks and rechecks library
+  paths and link counts. Immediately before torrent deletion, every proven
+  payload path must still resolve to the same inode with exactly one link after
+  Arr deletion; changes keep the torrent with `hardlink_changed_before_delete`.
 
 All effects occur through existing Arr, qBittorrent, and Emby HTTP APIs; when
 `library.recommendations` is configured, the worker unit adds

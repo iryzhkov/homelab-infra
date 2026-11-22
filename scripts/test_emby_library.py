@@ -19,7 +19,7 @@ import emby_operator_socket as sock
 import emby_operator_torrents as tor
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
-FIXTURE_SHA256 = 'c69074f78e698db884d77949a8e72cf3e4896fe5a8c538193d645e86eb54244b'
+FIXTURE_SHA256 = '3b7427d186e6b3fada64f9da91436d51d2bf865aa8e48d6d379d548dba769569'
 
 RADARR_KEY = '1' * 32
 SONARR_KEY = '2' * 32
@@ -263,6 +263,13 @@ def make_radarr_handler(state):
                     'languages': [{'name': 'English'}], 'customFormatScore': 50,
                     'approved': True, 'rejections': [],
                 }])
+            if u.path == '/api/v3/queue' and 'downloadId' in urllib.parse.parse_qs(u.query):
+                dl = urllib.parse.parse_qs(u.query)['downloadId'][0]
+                override = state.radarr_queue_override
+                recs = override if override is not None else [{
+                    'downloadId': dl, 'status': 'completed', 'trackedDownloadState': 'importBlocked',
+                }]
+                return self._send(200, {'records': recs, 'totalRecords': len(recs)})
             if u.path == '/api/v3/queue':
                 recs = state.radarr_queue_override if state.radarr_queue_override is not None else []
                 total = state.queue_total_records if state.queue_total_records is not None else len(recs)
@@ -427,17 +434,27 @@ def make_sonarr_handler(state):
                         'approved': False, 'rejections': ['Quality cutoff met'],
                     },
                 ])
+            if u.path == '/api/v3/queue' and 'downloadId' in urllib.parse.parse_qs(u.query):
+                dl = urllib.parse.parse_qs(u.query)['downloadId'][0]
+                override = state.sonarr_queue_override
+                recs = override if override is not None else [{
+                    'downloadId': dl, 'status': 'completed', 'trackedDownloadState': 'importBlocked',
+                }]
+                return self._send(200, {'records': recs, 'totalRecords': len(recs)})
             if u.path == '/api/v3/queue':
                 if state.sonarr_queue_override is not None:
                     recs = state.sonarr_queue_override
                 else:
                     recs = [{
                         'title': 'Synthetic Anime S01 1080p', 'seriesId': 26, 'episodeId': 101,
+                        'downloadId': 'a' * 40, 'seasonNumber': 1,
                         'series': state.series[0],
                         'status': 'downloading', 'trackedDownloadState': 'downloading',
                         'size': 2048, 'sizeleft': 1024, 'timeleft': '00:05:00',
                         'downloadClient': 'qBittorrent', 'statusMessages': [],
                     }]
+                if state.sonarr_queue_override is None:
+                    recs.append(dict(recs[0], episodeId=102))
                 total = state.queue_total_records if state.queue_total_records is not None else len(recs)
                 return self._send(200, {'records': recs, 'totalRecords': total})
             if u.path == '/api/v3/manualimport':
@@ -801,7 +818,7 @@ class LibraryWorkerTests(unittest.TestCase):
                 'origin': self.qbit_url, 'expected_version': 'v5.3.0',
                 'credential_file': '/etc/holonet-playlists/qbit-auth.json',
                 'categories': ['radarr-movies', 'tv-sonarr'],
-                'payload_prefixes': ['/mnt/shared/downloads/complete/movies'],
+                'payload_prefixes': ['/mnt/shared/downloads/complete/movies', '/mnt/shared/downloads/complete/tv'],
             },
             '/etc/holonet-playlists/qbit-auth.json': {'username': 'synthetic', 'password': 'synthetic'},
         }
@@ -2369,6 +2386,65 @@ class LibraryWorkerTests(unittest.TestCase):
         finally:
             self.state.fail_command_post = False
 
+    def test_import_candidate_gates_and_completion(self):
+        frame = copy.deepcopy(self.fixture['library_import_preview_frame'])
+        candidate = self.state.sonarr_manualimport['a' * 40][0]
+        for reason in ('Sample', 'Unable to parse file', 'Unknown', 'Not an upgrade; Sample'):
+            with self.subTest(reason=reason):
+                candidate['rejections'] = [{'reason': reason}]
+                with self.assertRaises(lib.LibraryRefusal) as ctx:
+                    self._run(frame)
+                self.assertEqual(ctx.exception.reason, 'import_candidate_rejected')
+        candidate['rejections'] = []
+        duplicate = copy.deepcopy(candidate)
+        duplicate['path'] += '.duplicate.mkv'
+        self.state.sonarr_manualimport['a' * 40].append(duplicate)
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(frame)
+        self.assertEqual(ctx.exception.reason, 'ambiguous_import_candidates')
+        self.state.sonarr_manualimport['a' * 40].pop()
+        original_path = candidate['path']
+        candidate['path'] = self.state.series[0]['path'] + '/existing.mkv'
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(frame)
+        self.assertEqual(ctx.exception.reason, 'import_path_in_library')
+        candidate['path'] = original_path
+
+        preview = self._run(frame)
+        self.state.sonarr_queue_override = [{
+            'downloadId': 'a' * 40, 'status': 'downloading', 'trackedDownloadState': 'downloading',
+        }]
+        for mode in ('preview', 'apply'):
+            request = copy.deepcopy(frame)
+            if mode == 'apply':
+                request['request'].update(mode='apply', operation_id='f' * 32,
+                                          plan_sha256=preview['plan_sha256'])
+            with self.assertRaises(lib.LibraryRefusal) as ctx:
+                self._run(request)
+            self.assertEqual(ctx.exception.reason, 'download_incomplete')
+        self.assertEqual(self.state.commands_submitted, [])
+
+        # qBittorrent can independently prove completion when Arr has no finished row.
+        class CompleteTorrent:
+            def login(self): pass
+            def logout(self): pass
+            def info_by_hashes(self, hashes):
+                return [{'hash': hashes[0], 'progress': 1}]
+        class Queue:
+            def get(self, path): return {'records': []}
+        self.assertEqual(lib._import_completion(Queue(), 'a' * 40, {'torrents': {}},
+                                               lambda _: CompleteTorrent())['source'], 'qbittorrent')
+
+        movie = copy.deepcopy(candidate)
+        movie.update(movie={'id': 18}, rejections=[])
+        self.state.radarr_manualimport['b' * 40] = [movie, dict(movie, path=original_path + '.extra')]
+        movie_frame = copy.deepcopy(frame)
+        movie_frame['request'].pop('season', None)
+        movie_frame['request'].update(library='movies', arr_id=18, download_id='b' * 40)
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(movie_frame)
+        self.assertEqual(ctx.exception.reason, 'ambiguous_import_candidates')
+
     def test_remove_hardlink_ownership_proof(self):
         base = Path(os.environ['TMPDIR']) / f'holonet-hardlink-{os.getpid()}'
         if base.exists():
@@ -2411,6 +2487,43 @@ class LibraryWorkerTests(unittest.TestCase):
             self.assertEqual(t0['action'], 'remove')
             self.assertEqual(t0['reason'], 'meets_threshold')
             self.assertEqual(t0['ownership_proof'], 'hardlink')
+
+            # Race: preview approved; another title gains a link and selected path
+            # vanishes between the library and torrent stats in apply.
+            apply_frame = copy.deepcopy(self.fixture['library_remove_apply_frame'])
+            apply_frame['request']['plan_sha256'] = res['plan_sha256']
+            walk = lib._walk_stat_regular
+            raced = [False]
+            third_race = other_root / 'race.mkv'
+            def race_walk(path, depth, budget, held=None):
+                if path == str(tor_main) and not raced[0]:
+                    raced[0] = True
+                    os.link(tor_main, third_race)
+                    lib_file.unlink()
+                return walk(path, depth, budget, held)
+            with patch.object(lib, '_walk_stat_regular', side_effect=race_walk):
+                with self.assertRaises(lib.LibraryRefusal) as ctx:
+                    self._run(apply_frame)
+            self.assertEqual(ctx.exception.reason, 'plan_changed')
+            self.assertEqual(self.state.deleted_torrents, [])
+            third_race.unlink()
+            os.link(tor_main, lib_file)
+
+            # A change after evaluation must also keep the torrent at dispatch.
+            delete = lib.LibraryArrClient.delete
+            def race_delete(client, path, *args, **kwargs):
+                if path.startswith('/api/v3/movie/'):
+                    os.link(tor_main, third_race)
+                    lib_file.unlink()
+                return delete(client, path, *args, **kwargs)
+            with patch.object(lib.LibraryArrClient, 'delete', autospec=True, side_effect=race_delete):
+                applied = self._run(apply_frame)
+            self.assertTrue(third_race.exists())
+            third_race.unlink()
+            os.link(tor_main, lib_file)
+            self.assertIn(TORRENT_HASH_OK, applied['kept_torrent_hashes'])
+            self.assertEqual(applied['removed_torrent_hashes'], [])
+            self.assertEqual(applied['plan']['torrents'][0]['reason'], 'hardlink_changed_before_delete')
 
             # 2. Seeding threshold still enforced after hardlink proof.
             orig_ratio = self.state.torrents[TORRENT_HASH_OK]['ratio']

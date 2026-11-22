@@ -1775,7 +1775,7 @@ class _HardlinkCheckFailed(Exception):
         self.reason = reason
 
 
-def _walk_stat_regular(path, root_depth, stat_budget):
+def _walk_stat_regular(path, root_depth, stat_budget, held=None):
     """Walk path from / with O_PATH|O_NOFOLLOW and return (st_dev, st_ino, st_nlink)."""
     if stat_budget[0] <= 0:
         raise _HardlinkCheckFailed('hardlink_file_limit_exceeded')
@@ -1810,6 +1810,9 @@ def _walk_stat_regular(path, root_depth, stat_budget):
             raise _HardlinkCheckFailed('hardlink_symlink')
         if not stat.S_ISREG(info.st_mode):
             raise _HardlinkCheckFailed('hardlink_unsafe_path')
+        if held is not None:
+            held.append(fd)
+            fd = None
         return (info.st_dev, info.st_ino, info.st_nlink)
     except _HardlinkCheckFailed:
         raise
@@ -1910,48 +1913,66 @@ def _verify_torrent_hardlinks(
     if not files:
         return False, 'hardlink_no_match'
 
-    # Stat deleted library files once per op_remove call.
-    if 'result' not in deleted_inodes_cache:
-        inodes = set()
-        try:
-            for f in files:
-                mapped_lib, mapped_root = _map_library_host_path(f.get('path'), lib_name, root_folder_path)
-                if mapped_lib is None:
-                    raise _HardlinkCheckFailed('hardlink_path_unmapped')
-                dev, ino, _ = _walk_stat_regular(mapped_lib, mapped_root.count('/'), stat_budget)
-                inodes.add((dev, ino))
-            deleted_inodes_cache['result'] = (inodes, None)
-        except _HardlinkCheckFailed as err:
-            deleted_inodes_cache['result'] = (None, err.reason)
+    # Pin library inodes until all torrent stats and library path rechecks finish.
+    held = []
+    library_evidence = []
+    torrent_evidence = []
+    try:
+        deleted_inodes = set()
+        for f in files:
+            path, root = _map_library_host_path(f.get('path'), lib_name, root_folder_path)
+            if path is None:
+                raise _HardlinkCheckFailed('hardlink_path_unmapped')
+            identity = _walk_stat_regular(path, root.count('/'), stat_budget, held)
+            library_evidence.append((path, root.count('/'), identity, held[-1]))
+            deleted_inodes.add(identity[:2])
 
-    deleted_inodes, lib_err = deleted_inodes_cache['result']
-    if lib_err is not None:
-        return False, lib_err
-    if not deleted_inodes:
-        return False, 'hardlink_no_match'
+        matched_any = False
+        for full, depth in mapped_torrent_files:
+            identity = _walk_stat_regular(full, depth, stat_budget)
+            dev, ino, nlink = identity
+            if (dev, ino) in deleted_inodes:
+                if nlink != 2:
+                    raise _HardlinkCheckFailed('hardlink_extra_links')
+                matched_any = True
+            elif nlink != 1:
+                raise _HardlinkCheckFailed('hardlink_linked_elsewhere')
+            torrent_evidence.append((full, depth, identity[:2]))
+        for path, depth, identity, fd in library_evidence:
+            info = os.fstat(fd)
+            try:
+                current = _walk_stat_regular(path, depth, stat_budget)
+            except _HardlinkCheckFailed:
+                raise _HardlinkCheckFailed('hardlink_library_changed') from None
+            if current != identity or (info.st_dev, info.st_ino, info.st_nlink) != identity:
+                raise _HardlinkCheckFailed('hardlink_library_changed')
+        if not matched_any:
+            return False, 'hardlink_no_match'
+        deleted_inodes_cache[torrent_hash] = torrent_evidence
+        return True, None
+    except _HardlinkCheckFailed as err:
+        return False, err.reason
+    finally:
+        for fd in held:
+            os.close(fd)
 
-    matched_any = False
-    for full, prefix_depth in mapped_torrent_files:
-        try:
-            dev, ino, nlink = _walk_stat_regular(full, prefix_depth, stat_budget)
-        except _HardlinkCheckFailed as err:
-            return False, err.reason
-        if (dev, ino) in deleted_inodes:
-            if nlink != 2:
-                return False, 'hardlink_extra_links'
-            matched_any = True
-        else:
-            if nlink != 1:
-                return False, 'hardlink_linked_elsewhere'
 
-    if not matched_any:
-        return False, 'hardlink_no_match'
-    return True, None
+def _hardlink_after_media_removal(evidence):
+    """After Arr deletion, payload paths must still name the proven, now unlinked inodes."""
+    try:
+        budget = [HARDLINK_MAX_TOTAL_STATS]
+        for path, depth, identity in evidence:
+            current = _walk_stat_regular(path, depth, budget)
+            if current[:2] != identity or current[2] != 1:
+                return False
+        return bool(evidence)
+    except _HardlinkCheckFailed:
+        return False
 
 
 def _evaluate_torrents(
     qbit, hashes_ownership, *, remove_torrents, allowed_categories, min_ratio, min_seeding_days,
-    files=None, lib_name=None, root_folder_path=None,
+    files=None, lib_name=None, root_folder_path=None, hardlink_evidence=None,
 ):
     if not hashes_ownership:
         return []
@@ -1963,7 +1984,7 @@ def _evaluate_torrents(
     }
     min_seeding_seconds = min_seeding_days * 86400
     stat_budget = [HARDLINK_MAX_TOTAL_STATS]
-    deleted_inodes_cache = {}
+    deleted_inodes_cache = hardlink_evidence if hardlink_evidence is not None else {}
     hardlink_checked = 0
     out = []
     for h in hashes:
@@ -2497,6 +2518,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
 
     qbit = None
     torrents = []
+    hardlink_evidence = {}
     try:
         if hashes_ownership:
             qbit = qbit_factory(block['torrents'])
@@ -2511,6 +2533,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
                 files=files,
                 lib_name=lib_name,
                 root_folder_path=lib['root_folder_path'],
+                hardlink_evidence=hardlink_evidence,
             )
 
         plan = {
@@ -2571,6 +2594,10 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
                     ) from None
                 completed.append(f'episode_file_deleted:{fid}')
 
+        for torrent in torrents:
+            if torrent['action'] == 'remove' and torrent.get('ownership_proof') == 'hardlink':
+                if not _hardlink_after_media_removal(hardlink_evidence.get(torrent['hash'], [])):
+                    torrent.update(action='keep', reason='hardlink_changed_before_delete')
         to_remove = [t['hash'] for t in torrents if t['action'] == 'remove']
         to_keep = [t['hash'] for t in torrents if t['action'] != 'remove']
         if to_remove and qbit is not None:
@@ -2635,7 +2662,52 @@ def _existing_file_summary(f, fallback_id=None):
     }
 
 
-def op_import(call, block, arr_factory):
+def _import_completion(api, download_id, block, qbit_factory):
+    qs = urllib.parse.urlencode({'page': 1, 'pageSize': 1000, 'downloadId': download_id})
+    queue = api.get('/api/v3/queue?' + qs)
+    records = queue.get('records') if type(queue) is dict else None
+    need(type(records) is list, FAILURE)
+    matching = [r for r in records if type(r) is dict
+                and str(r.get('downloadId') or '').lower() == download_id.lower()]
+    finished = lambda r: (str(r.get('trackedDownloadState') or '').lower()
+                         in {'importpending', 'importblocked', 'importfailed'}
+                         or str(r.get('status') or '').lower() == 'completed')
+    if matching and all(finished(r) for r in matching):
+        return {'source': 'arr_queue', 'records': sorted(
+            [{'status': r.get('status'), 'tracked_download_state': r.get('trackedDownloadState')}
+             for r in matching], key=lambda r: json.dumps(r, sort_keys=True))}
+    if qbit_factory is not None:
+        qbit = qbit_factory(block['torrents'])
+        try:
+            qbit.login()
+            rows = qbit.info_by_hashes([download_id])
+            if any(type(r) is dict and str(r.get('hash') or '').lower() == download_id.lower()
+                   and type(r.get('progress')) in (int, float) and r['progress'] == 1 for r in rows):
+                return {'source': 'qbittorrent', 'progress': 1}
+        finally:
+            qbit.logout()
+    refuse('download_incomplete', 'Download completion could not be verified')
+
+
+def _import_rejections_allowed(raw):
+    if raw is None:
+        return True
+    if type(raw) is not list:
+        return False
+    patterns = (
+        r'not an upgrade(?: for existing .*file)?[.!]?',
+        r'existing file (?:meets cutoff|is higher quality)[.!]?',
+        r'(?:quality|custom[ -]format|custom format score).* (?:is not|isn.t|not) (?:an? )?upgrade.*',
+        r'(?:quality|custom[ -]format|custom format score) (?:cutoff (?:already )?met|upgrade (?:is )?not (?:allowed|required|needed)).*',
+    )
+    for rejection in raw:
+        reason = rejection.get('reason') if type(rejection) is dict else rejection
+        if not isinstance(reason, str) or not any(re.fullmatch(p, reason.strip().lower()) for p in patterns):
+            return False
+    return True
+
+
+def op_import(call, block, arr_factory, qbit_factory=None):
     q = call['request']
     lib_name = q['library']
     lib = block['libraries'][lib_name]
@@ -2693,6 +2765,17 @@ def op_import(call, block, arr_factory):
         c_path = c.get('path')
         if not isinstance(c_path, str) or not c_path:
             refuse('target_mismatch', 'Manual import candidate is missing path')
+        try:
+            safe_path(c_path, absolute=True)
+        except Exception:
+            refuse('import_path_unsafe', 'Manual import candidate path is unsafe')
+        if _in_root(c_path, item['path']):
+            refuse('import_path_in_library', 'Manual import candidate is inside the title library folder')
+        prefixes = (qbit_factory(block['torrents']).config.get('payload_prefixes') or []) if qbit_factory else []
+        if prefixes and not any(within(c_path, p.rstrip('/')) and c_path != p.rstrip('/') for p in prefixes):
+            refuse('import_path_outside_download_root', 'Manual import candidate is outside download payload roots')
+        if not _import_rejections_allowed(c.get('rejections')):
+            refuse('import_candidate_rejected', 'Manual import candidate has a non-upgrade rejection')
         if type(c.get('quality')) is not dict:
             refuse('target_mismatch', 'Manual import candidate is missing quality')
 
@@ -2747,6 +2830,15 @@ def op_import(call, block, arr_factory):
         if not selected:
             refuse('no_import_candidates', 'No manual import candidates match the requested restriction')
 
+    if kind == 'movie' and len(selected) != 1:
+        refuse('ambiguous_import_candidates', 'Movie import requires exactly one candidate')
+    seen_episodes = set()
+    for _, ep_ids in selected:
+        if ep_ids is not None:
+            if seen_episodes.intersection(ep_ids):
+                refuse('ambiguous_import_candidates', 'Episode appears in more than one import candidate')
+            seen_episodes.update(ep_ids)
+    completion = _import_completion(api, download_id, block, qbit_factory)
     selected.sort(key=lambda pair: pair[0]['path'])
 
     plan_files = []
@@ -2855,6 +2947,7 @@ def op_import(call, block, arr_factory):
         'files': plan_files,
         # Bind exact Arr command metadata, including quality and language IDs.
         'command_files': command_files,
+        'download_completion': completion,
         'total_bytes': sum(f['size'] for f in plan_files),
     }
     digest = plan_digest(plan)
@@ -3804,7 +3897,7 @@ def execute(policy, call, guard, config):
         if op == 'library-remove':
             return op_remove(call, block, arr_factory, qbit_factory, emby_factory)
         if op == 'library-import':
-            return op_import(call, block, arr_factory)
+            return op_import(call, block, arr_factory, qbit_factory)
         need(False, 'Unsupported operation')
     finally:
         for client in arr_clients.values():

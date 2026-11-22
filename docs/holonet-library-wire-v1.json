@@ -207,11 +207,14 @@
           "title": "Synthetic Anime S01 1080p",
           "series_title": "Synthetic Anime",
           "arr_id": 26,
-          "download_id": null,
-          "seasons": [],
-          "episode_count": 1,
+          "download_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "seasons": [
+            1
+          ],
+          "episode_count": 2,
           "episode_ids": [
-            101
+            101,
+            102
           ],
           "status": "downloading",
           "tracked_state": "downloading",
@@ -897,9 +900,18 @@
             "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "releaseGroup": "DualGroup"
           }
-        ]
+        ],
+        "download_completion": {
+          "source": "arr_queue",
+          "records": [
+            {
+              "status": "completed",
+              "tracked_download_state": "importBlocked"
+            }
+          ]
+        }
       },
-      "plan_sha256": "ce79c3f81930214eed18fd0fcb6a771a60fc8f1e9a77d09e84866775c8ec77f4"
+      "plan_sha256": "c0653fc3cd42e9411b10b43fec8be020cbfacb9ef0953333190ebb53789e6a6a"
     }
   },
   "library_import_apply_frame": {
@@ -927,7 +939,7 @@
       "download_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "season": 1,
       "operation_id": "dddddddddddddddddddddddddddddddd",
-      "plan_sha256": "ce79c3f81930214eed18fd0fcb6a771a60fc8f1e9a77d09e84866775c8ec77f4"
+      "plan_sha256": "c0653fc3cd42e9411b10b43fec8be020cbfacb9ef0953333190ebb53789e6a6a"
     }
   },
   "library_import_apply": {
@@ -1014,9 +1026,18 @@
             "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "releaseGroup": "DualGroup"
           }
-        ]
+        ],
+        "download_completion": {
+          "source": "arr_queue",
+          "records": [
+            {
+              "status": "completed",
+              "tracked_download_state": "importBlocked"
+            }
+          ]
+        }
       },
-      "plan_sha256": "ce79c3f81930214eed18fd0fcb6a771a60fc8f1e9a77d09e84866775c8ec77f4",
+      "plan_sha256": "c0653fc3cd42e9411b10b43fec8be020cbfacb9ef0953333190ebb53789e6a6a",
       "applied": true,
       "command_id": 701,
       "command_status": "queued",
