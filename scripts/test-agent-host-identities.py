@@ -1188,7 +1188,8 @@ class Lifecycle(unittest.TestCase):
             if case == "missing_token":
                 self.api.data["token"] = []
             elif case == "foreign_token":
-                self.api.data["token"][0]["identifier"] = "foreign"
+                # The only app password belongs to another account.
+                self.api.data["token"][0]["user"] = 99999
             elif case == "inactive":
                 self.api.data["user"][0]["is_active"] = False
             elif case == "rotation":
@@ -1202,6 +1203,23 @@ class Lifecycle(unittest.TestCase):
                 with self.subTest(case=case, check=check):
                     self.assertTrue(self.main_run(changed, check)["failed"])
                     self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+
+    def test_library_producer_accepts_self_rotated_host_token(self):
+        params = self.library_params()
+        # Self-rotation replaced the bootstrap token under a new identifier;
+        # the receipt keeps the bootstrap record by design.
+        for t in self.api.data["token"]:
+            t["identifier"] = "chaldea-laptop-g2"
+        calls = len(self.api.calls)
+        checked = self.main_run(params, True)
+        self.assertNotIn("failed", checked)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        applied = self.main_run(params)
+        self.assertNotIn("failed", applied)
+        self.assertEqual(applied["delivery"], [])
+        token_writes = [(m, p) for m, p, _ in self.api.calls[calls:]
+                        if m != "GET" and p.startswith(e.PATHS["token"])]
+        self.assertEqual(token_writes, [])
 
     def test_library_mapping_create_attach_upgrade_and_repeat(self):
         hosts = [item("laptop"), item("omarchy-pc")]

@@ -927,10 +927,14 @@ def main():
                               if u["username"] == "chaldea-" + host and u["pk"] == pk]
                 require(len(live_users) == 1 and live_users[0]["is_active"] is True
                         and not live_users[0]["attributes"].get("revoked"))
+                # Self-rotation replaces the bootstrap token under a new
+                # identifier and the receipt keeps the bootstrap record, so the
+                # live credential is any app password owned by this account.
+                # Token creation is already excluded by the receipt record above
+                # and by the receipt equality checks after users().
                 live_tokens = [t for t in e.rows["token"]
-                               if t.get("user") == pk and t.get("intent") == "app_password"
-                               and t.get("identifier") == tok["identifier"]]
-                require(len(live_tokens) == 1
+                               if t.get("user") == pk and t.get("intent") == "app_password"]
+                require(len(live_tokens) >= 1
                         and item["generation"] == tok["generation"])
         users, _ = e.users(hosts)
         if projection_changed or acquire_changed:
