@@ -2628,8 +2628,19 @@ class CoexistencePackaging(unittest.TestCase):
             sys.path.pop(0)
         # Extended qBit descriptor with tv-sonarr is accepted when library is configured.
         extended = copy.deepcopy(endpoint)
-        extended["torrents"]["descriptor"]["categories"] = ["radarr-movies", "tv-sonarr"]
+        extended["torrents"]["descriptor"] = contract.canonical_torrent_descriptor(library=True)
         self.assertEqual(contract.endpoint_contract(extended), extended)
+        deployed = contract.playlist_operator_plan(extended)["torrent_descriptor"]["descriptor"]
+        self.assertEqual(deployed, contract.canonical_torrent_descriptor(library=True))
+        self.assertEqual(deployed["payload_prefixes"], [
+            "/mnt/shared/downloads/complete/movies", "/mnt/shared/downloads/complete/tv"])
+        for prefixes in (["/mnt/shared/downloads/complete/movies"],
+                         ["/mnt/shared/downloads/complete"],
+                         ["/mnt/shared/downloads/complete/anime"]):
+            broken = copy.deepcopy(extended)
+            broken["torrents"]["descriptor"]["payload_prefixes"] = prefixes
+            with self.subTest(prefixes=prefixes), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(broken)
         # Missing root_folder_path or quality_profile_id refuses (no guessed defaults).
         for field in ("root_folder_path", "quality_profile_id"):
             bad = copy.deepcopy(endpoint)
