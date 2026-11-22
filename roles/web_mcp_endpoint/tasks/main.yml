@@ -394,6 +394,15 @@
             group: root
             mode: "0700"
 
+        - name: Create the private root recommendations state directory
+          ansible.builtin.file:
+            path: "{{ web_mcp_operator.policy.library.recommendations.state_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          when: web_mcp_operator.policy.library is defined and web_mcp_operator.policy.library.recommendations is defined
+
         - name: Install only the private root Radarr descriptor, never its key
           ansible.builtin.copy:
             content: "{{ web_mcp_operator.custody_descriptor.descriptor | to_nice_json }}\n"

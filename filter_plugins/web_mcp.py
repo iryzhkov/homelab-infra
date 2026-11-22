@@ -102,7 +102,7 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "923e8633017e936d5142486defc70a5260853a8eb9e639088304fa5dab2bf2c6",
+    "emby_operator_library.py": "293bf1b81922c672da3b4acacef9865dfcfe0f15d769d282741471ffa7bb8d41",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
     "emby_operator_socket.py": "870079605e6fce1b2d9c4abd5b283b9be37a7dc3c7d2a621bf9b533bbe15005b",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
@@ -738,6 +738,9 @@ LIBRARY_SPECS = {
     "tv": {"library_id": "1132", "kind": "series", "arr": "sonarr", "descriptor": "/etc/holonet-playlists/sonarr.json"},
     "anime": {"library_id": "615", "kind": "series", "arr": "sonarr", "descriptor": "/etc/holonet-playlists/sonarr.json"},
 }
+RECOMMENDATIONS_DEFAULT_KEY_FILE = "/etc/holonet/mdblist.key"
+RECOMMENDATIONS_STATE_DIR = "/var/lib/holonet-operator/recommendations"
+RECOMMENDATIONS_KINDS = ("movie", "series", "anime")
 
 
 def library_install_plan(value):
@@ -752,7 +755,8 @@ def library_install_plan(value):
     operator = config.get("playlist_operator")
     require(operator is not None, "library management requires playlist_operator")
     data = value["library"]
-    keys(data, ("libraries", "allowed_categories"), ("enabled", "removal_thresholds", "limits", "torrents", "subjects"))
+    keys(data, ("libraries", "allowed_categories"),
+         ("enabled", "removal_thresholds", "limits", "torrents", "subjects", "recommendations"))
     enabled = data.get("enabled", False)
     require(type(enabled) is bool, "library enabled must be a boolean")
     require(go_enabled == enabled, "Go config library.enabled must match worker library.enabled")
@@ -832,6 +836,48 @@ def library_install_plan(value):
     require(limits["subtitles_default_chars"] <= limits["subtitles_max_chars"],
             "subtitles_default_chars must not exceed subtitles_max_chars")
     integer(limits["remove_max_files"], 1, 500)
+    rendered_recs = None
+    if "recommendations" in data:
+        recs = data["recommendations"]
+        keys(recs, ("lists",),
+             ("mdblist_key_file", "state_dir", "daily_ceiling",
+              "cache_ttl_seconds", "min_refresh_age_seconds"))
+        key_file = recs.get("mdblist_key_file", RECOMMENDATIONS_DEFAULT_KEY_FILE)
+        require(isinstance(key_file, str) and 1 < len(key_file.encode("utf-8")) <= 4096
+                and key_file.startswith("/") and not key_file.startswith("//")
+                and str(PurePosixPath(key_file)) == key_file
+                and len(PurePosixPath(key_file).parts) > 2
+                and all(part not in (".", "..") for part in key_file.split("/")[1:]),
+                "recommendations mdblist_key_file must be a normalized absolute path")
+        state_dir = recs.get("state_dir", RECOMMENDATIONS_STATE_DIR)
+        require(state_dir == RECOMMENDATIONS_STATE_DIR,
+                "recommendations state_dir must match fixed root operator path")
+        raw_lists = records(recs["lists"], 1, 16)
+        rendered_lists = []
+        seen_slugs = set()
+        for entry in raw_lists:
+            keys(entry, ("slug", "kind"))
+            slug = entry["slug"]
+            match(slug, r"[a-z0-9][a-z0-9_-]{0,127}")
+            require(slug not in seen_slugs, "duplicate recommendations list slug")
+            seen_slugs.add(slug)
+            require(entry["kind"] in RECOMMENDATIONS_KINDS,
+                    "recommendations list kind must be movie, series, or anime")
+            rendered_lists.append({"slug": slug, "kind": entry["kind"]})
+        daily_ceiling = recs.get("daily_ceiling", 100)
+        integer(daily_ceiling, 1, 200)
+        cache_ttl = recs.get("cache_ttl_seconds", 21600)
+        integer(cache_ttl, 300, 86400)
+        min_refresh_age = recs.get("min_refresh_age_seconds", 3600)
+        integer(min_refresh_age, 60, 21600)
+        rendered_recs = {
+            "mdblist_key_file": key_file,
+            "state_dir": state_dir,
+            "lists": rendered_lists,
+            "daily_ceiling": daily_ceiling,
+            "cache_ttl_seconds": cache_ttl,
+            "min_refresh_age_seconds": min_refresh_age,
+        }
     return {
         "policy": {
             "enabled": enabled,
@@ -846,6 +892,7 @@ def library_install_plan(value):
                 "min_seeding_days": thresh["min_seeding_days"],
             },
             "limits": dict(limits),
+            **({"recommendations": rendered_recs} if rendered_recs is not None else {}),
         },
     }
 

@@ -19,7 +19,7 @@ import emby_operator_socket as sock
 import emby_operator_torrents as tor
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
-FIXTURE_SHA256 = 'a656675b4a4c799a8bb5a9b5c08a5eaa59215a5f17c758124288020da543c80d'
+FIXTURE_SHA256 = 'b9d25c6a0d7a29eec40e272dfb16ad4aa9aba995cdd26c6582720097f7218b09'
 
 RADARR_KEY = '1' * 32
 SONARR_KEY = '2' * 32
@@ -169,6 +169,11 @@ class FakeState:
             {'downloadId': TORRENT_HASH_PACK, 'seriesId': 26, 'episodeId': 101, 'eventType': 'downloadFolderImported'},
             {'downloadId': TORRENT_HASH_PACK, 'seriesId': 26, 'episodeId': 102, 'eventType': 'downloadFolderImported'},
         ]
+        self.radarr_exclusions = []
+        self.radarr_importlists = []
+        self.radarr_recommendations = []
+        self.sonarr_exclusions = []
+        self.sonarr_importlists = []
 
 
 def make_radarr_handler(state):
@@ -249,6 +254,12 @@ def make_radarr_handler(state):
                 return self._send(404, {'error': 'not found'})
             if u.path == '/api/v3/history/movie':
                 return self._send(200, state.movie_history)
+            if u.path == '/api/v3/exclusions':
+                return self._send(200, state.radarr_exclusions)
+            if u.path == '/api/v3/importlist':
+                return self._send(200, state.radarr_importlists)
+            if u.path == '/api/v3/importlist/movie':
+                return self._send(200, state.radarr_recommendations)
             if u.path == '/api/v3/history':
                 qs = urllib.parse.parse_qs(u.query)
                 dl = qs.get('downloadId', [''])[0].lower()
@@ -401,6 +412,10 @@ def make_sonarr_handler(state):
                 return self._send(404, {'error': 'not found'})
             if u.path == '/api/v3/history/series':
                 return self._send(200, state.series_history)
+            if u.path == '/api/v3/importlistexclusion':
+                return self._send(200, state.sonarr_exclusions)
+            if u.path == '/api/v3/importlist':
+                return self._send(200, state.sonarr_importlists)
             if u.path == '/api/v3/history':
                 if state.sonarr_history_fail:
                     return self._send(500, {'error': 'sonarr history down'})
@@ -1517,6 +1532,394 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertEqual(res_explicit['selected_stream']['index'], 4)
         self.assertEqual(res_explicit['lines'], ['[00:00:02] Explicit stream 4 line.'])
         self.assertEqual(self.state.subtitle_srt_calls, [4])
+
+    def _make_recs_state_dir(self, name):
+        base = Path(os.environ['TMPDIR']) / f'recs-{name}-{os.getpid()}'
+        if base.exists():
+            import shutil
+            shutil.rmtree(base)
+        base.mkdir(parents=True, mode=0o700)
+        os.chmod(base, 0o700)
+        return str(base)
+
+    def _recs_policy(self, state_dir, *, daily_ceiling=100, cache_ttl=21600, min_refresh=3600):
+        pol = copy.deepcopy(self.policy)
+        pol['library']['recommendations'] = {
+            'mdblist_key_file': '/etc/holonet/mdblist.key',
+            'state_dir': state_dir,
+            'lists': [
+                {'slug': 'top-movies', 'kind': 'movie'},
+                {'slug': 'top-anime-movies', 'kind': 'anime'},
+                {'slug': 'top-tv', 'kind': 'series'},
+                {'slug': 'top-anime', 'kind': 'anime'},
+            ],
+            'daily_ceiling': daily_ceiling,
+            'cache_ttl_seconds': cache_ttl,
+            'min_refresh_age_seconds': min_refresh,
+        }
+        return pol
+
+    def _fake_mdblist(self, *, status_429_at=None, remaining_start=999):
+        calls = []
+        user_lists = [
+            {'id': 101, 'name': 'Top Movies', 'slug': 'top-movies', 'mediatype': 'movie',
+             'items': 2, 'last_updated_at': '2026-11-22T00:00:00Z'},
+            {'id': 102, 'name': 'Top Anime Movies', 'slug': 'top-anime-movies', 'mediatype': 'movie',
+             'items': 1, 'last_updated_at': '2026-11-22T00:00:00Z'},
+            {'id': 103, 'name': 'Top TV', 'slug': 'top-tv', 'mediatype': 'show',
+             'items': 1, 'last_updated_at': '2026-11-22T00:00:00Z'},
+            {'id': 104, 'name': 'Top Anime', 'slug': 'top-anime', 'mediatype': 'show',
+             'items': 2, 'last_updated_at': '2026-11-22T00:00:00Z'},
+        ]
+        long_desc = 'A' * 350
+        list_payloads = {
+            101: {
+                'movies': [
+                    {
+                        'id': 555001, 'mediatype': 'movie', 'imdb_id': 'tt5550001',
+                        'ids': {'mdblist': 'm1', 'imdb': 'tt5550001', 'tmdb': 555001, 'tvdb': None},
+                        'title': 'Synthetic Recommended Movie', 'language': 'en', 'country': 'us',
+                        'release_year': 2025, 'status': 'released', 'runtime': 118,
+                        'description': long_desc, 'genre': ['Sci-Fi', 'Thriller'],
+                        'ratings': [
+                            {'source': 'mdblist', 'score': 88},
+                            {'source': 'imdb', 'value': 8.2, 'votes': 125000},
+                            {'source': 'tmdb', 'value': 8.0},
+                        ],
+                    },
+                    {
+                        # Already in Radarr (tmdbId 603 from FakeState.movies)
+                        'id': 603, 'mediatype': 'movie', 'imdb_id': 'tt0133093',
+                        'ids': {'mdblist': 'm2', 'imdb': 'tt0133093', 'tmdb': 603, 'tvdb': None},
+                        'title': 'Synthetic Movie', 'language': 'en', 'country': 'us',
+                        'release_year': 2024, 'status': 'released', 'runtime': 136,
+                        'description': 'Already in Radarr.', 'genre': ['Action'],
+                        'ratings': [{'source': 'mdblist', 'score': 92}, {'source': 'imdb', 'value': 8.7, 'votes': 900000}],
+                    },
+                ],
+                'shows': [],
+                'pagination': {'page': 1},
+            },
+            102: {
+                'movies': [
+                    {
+                        'id': 555003, 'mediatype': 'movie', 'imdb_id': 'tt5550003',
+                        'ids': {'mdblist': 'm3', 'imdb': 'tt5550003', 'tmdb': 555003, 'tvdb': None},
+                        'title': 'Synthetic Anime Film', 'language': 'ja', 'country': 'jp',
+                        'release_year': 2025, 'status': 'released', 'runtime': 105,
+                        'description': 'Anime film in Radarr movies library.',
+                        'genre': [{'title': 'Animation'}, {'title': 'Fantasy'}],
+                        'ratings': [{'source': 'mdblist', 'score': 86}, {'source': 'imdb', 'value': 8.1, 'votes': 30000}],
+                    },
+                ],
+                'shows': [],
+            },
+            103: {
+                'movies': [],
+                'shows': [
+                    {
+                        'id': 555004, 'mediatype': 'show', 'imdb_id': 'tt5550004', 'tvdb_id': 888004,
+                        'ids': {'mdblist': 's1', 'imdb': 'tt5550004', 'tmdb': 555004, 'tvdb': 888004},
+                        'title': 'Synthetic Drama', 'language': 'en', 'country': 'gb',
+                        'release_year': 2025, 'status': 'continuing', 'runtime': 50,
+                        'description': 'Excluded TV drama.', 'genre': ['Drama'],
+                        'ratings': [{'source': 'mdblist', 'score': 80}, {'source': 'imdb', 'value': 7.9, 'votes': 50000}],
+                    },
+                ],
+            },
+            104: {
+                'movies': [],
+                'shows': [
+                    {
+                        'id': 555002, 'mediatype': 'show', 'imdb_id': 'tt5550002', 'tvdb_id': 888002,
+                        'ids': {'mdblist': 's2', 'imdb': 'tt5550002', 'tmdb': 555002, 'tvdb': 888002},
+                        'title': 'Synthetic Recommended Anime', 'language': 'ja', 'country': 'jp',
+                        'release_year': 2025, 'status': 'continuing', 'runtime': 24,
+                        'description': 'Top anime series.', 'genre': ['Animation', 'Action'],
+                        'ratings': [{'source': 'mdblist', 'score': 85}, {'source': 'imdb', 'value': 8.4, 'votes': 42000}],
+                    },
+                    {
+                        # Already in Sonarr (tvdbId 384541)
+                        'id': 555099, 'mediatype': 'show', 'imdb_id': 'tt12590266', 'tvdb_id': 384541,
+                        'ids': {'mdblist': 's3', 'imdb': 'tt12590266', 'tmdb': 555099, 'tvdb': 384541},
+                        'title': 'Synthetic Anime', 'language': 'ja', 'country': 'jp',
+                        'release_year': 2022, 'status': 'continuing', 'runtime': 24,
+                        'description': 'Already in Sonarr.', 'genre': ['Animation'],
+                        'ratings': [{'source': 'mdblist', 'score': 90}, {'source': 'imdb', 'value': 8.5, 'votes': 60000}],
+                    },
+                ],
+            },
+        }
+
+        class FakeClient:
+            def close(self):
+                pass
+
+            def get_json(self, route, params=None):
+                calls.append((route, dict(params or {})))
+                rem = remaining_start - len(calls)
+                if status_429_at is not None and len(calls) >= status_429_at:
+                    return 429, None, 0
+                if route == '/lists/user':
+                    return 200, copy.deepcopy(user_lists), rem
+                if route.startswith('/lists/') and route.endswith('/items'):
+                    lid = int(route.split('/')[2])
+                    return 200, copy.deepcopy(list_payloads[lid]), rem
+                raise AssertionError(f'unexpected mdblist route: {route}')
+
+        return FakeClient(), calls
+
+    def test_recommendations_validation_and_disabled(self):
+        # Request validation.
+        self.assertEqual(lib.request('library-recommendations', {}), {})
+        self.assertEqual(
+            lib.request('library-recommendations', {
+                'kind': 'anime', 'source': 'mdblist', 'limit': 10,
+                'include_in_library': True, 'min_score': 75, 'refresh': True,
+            }),
+            {
+                'kind': 'anime', 'source': 'mdblist', 'limit': 10,
+                'include_in_library': True, 'min_score': 75, 'refresh': True,
+            },
+        )
+        for bad in (
+            {'kind': 'music'},
+            {'source': 'trakt'},
+            {'limit': 0},
+            {'limit': 51},
+            {'limit': True},
+            {'include_in_library': 'yes'},
+            {'min_score': -1},
+            {'min_score': 101},
+            {'min_score': 75.5},
+            {'refresh': 1},
+            {'unknown': 1},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(lib.Refused):
+                lib.request('library-recommendations', bad)
+
+        # Disabled when policy omits library.recommendations.
+        frame = copy.deepcopy(self.fixture['library_recommendations_frame'])
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(frame)
+        self.assertEqual(ctx.exception.reason, 'recommendations_disabled')
+
+    def test_recommendations_normalization_radarr_membership_and_warnings(self):
+        state_dir = self._make_recs_state_dir('norm')
+        pol = self._recs_policy(state_dir)
+        self.state.radarr_exclusions = [{'tmdbId': 555003}]
+        self.state.sonarr_exclusions = [{'tvdbId': 888004}]
+        self.state.radarr_importlists = [
+            {'id': 1, 'name': 'Radarr Auto', 'enabled': True, 'enableAuto': True},
+            {'id': 2, 'name': 'Radarr Off', 'enabled': False, 'enableAuto': True},
+        ]
+        self.state.sonarr_importlists = [
+            {'id': 1, 'name': 'Sonarr Auto', 'enableAutomaticAdd': True},
+            {'id': 2, 'name': 'Sonarr Off', 'enableAutomaticAdd': False},
+        ]
+        self.state.radarr_recommendations = [
+            # Merges with mdblist Top Movies item 555001
+            {
+                'title': 'Synthetic Recommended Movie', 'year': 2025, 'tmdbId': 555001, 'imdbId': 'tt5550001',
+                'originalLanguage': {'id': 1, 'name': 'English'}, 'genres': ['Sci-Fi'],
+                'overview': 'From Radarr.', 'status': 'released', 'runtime': 118,
+                'isRecommendation': True, 'isExisting': False, 'isExcluded': False,
+            },
+            # Radarr-only Japanese Animation -> kind='anime', add={'library': 'movies', 'tmdb_id': 777001}
+            {
+                'title': 'Radarr Anime Film', 'year': 2025, 'tmdbId': 777001, 'imdbId': 'tt7770001',
+                'originalLanguage': {'id': 8, 'name': 'Japanese'}, 'genres': ['Animation', 'Drama'],
+                'overview': 'Japanese animated film.', 'status': 'released', 'runtime': 99,
+                'ratings': {'imdb': {'value': 7.8, 'votes': 12000}, 'tmdb': {'value': 7.9}},
+                'isRecommendation': True, 'isExisting': False, 'isExcluded': False,
+            },
+            # Non-recommendation trending item must be ignored
+            {
+                'title': 'Not A Rec', 'year': 2025, 'tmdbId': 777999,
+                'isRecommendation': False, 'isExisting': False, 'isExcluded': False,
+            },
+        ]
+        fake_client, mdb_calls = self._fake_mdblist()
+
+        def run_with(req, *, now_ts=1795262400.0):
+            frame = copy.deepcopy(self.fixture['library_recommendations_frame'])
+            frame['request'] = req
+            with patch.object(lib.time, 'time', return_value=now_ts), \
+                 patch.object(lib, 'MdblistClient', return_value=fake_client), \
+                 patch.object(lib, 'read_mdblist_key', return_value='synthetic-key-12345678'):
+                orig = self.policy
+                self.policy = pol
+                try:
+                    return self._run(frame)
+                finally:
+                    self.policy = orig
+
+        # 1. Cold fetch: 1 (/lists/user) + 4 lists = 5 calls.
+        res = run_with({}, now_ts=1795262400.0)
+        self.assertEqual(len(mdb_calls), 5)
+        self.assertEqual(res['quota'], {'tool_calls_today': 5, 'daily_ceiling': 100, 'mdblist_remaining': 994})
+        self.assertFalse(res['cache']['stale'])
+        self.assertEqual(res['cache']['age_seconds'], 0)
+        self.assertEqual(len(res['lists']), 4)
+
+        # In-library items (603 and 384541) filtered out by default; trending item ignored.
+        titles = [i['title'] for i in res['items']]
+        self.assertEqual(titles, [
+            'Synthetic Recommended Movie',  # mdblist 88
+            'Synthetic Anime Film',         # mdblist 86
+            'Synthetic Recommended Anime',  # mdblist 85
+            'Synthetic Drama',              # mdblist 80
+            'Radarr Anime Film',            # mdblist None
+        ])
+        by_title = {i['title']: i for i in res['items']}
+        # Description truncated to <= 300 chars.
+        self.assertLessEqual(len(by_title['Synthetic Recommended Movie']['description']), 300)
+        self.assertTrue(by_title['Synthetic Recommended Movie']['description'].endswith('...'))
+        # Merged sources & add payload.
+        self.assertEqual(by_title['Synthetic Recommended Movie']['sources'], ['Top Movies', 'radarr-recommendation'])
+        self.assertEqual(by_title['Synthetic Recommended Movie']['add'], {'library': 'movies', 'tmdb_id': 555001})
+        # Anime movie -> kind='anime' but add.library='movies' with tmdb_id, and Radarr exclusion marked.
+        self.assertEqual(by_title['Synthetic Anime Film']['kind'], 'anime')
+        self.assertEqual(by_title['Synthetic Anime Film']['add'], {'library': 'movies', 'tmdb_id': 555003})
+        self.assertTrue(by_title['Synthetic Anime Film']['excluded'])
+        # Anime series -> kind='anime', add.library='anime' with tvdb_id.
+        self.assertEqual(by_title['Synthetic Recommended Anime']['add'], {'library': 'anime', 'tvdb_id': 888002})
+        # TV series -> kind='series', add.library='tv' with tvdb_id, Sonarr exclusion marked.
+        self.assertEqual(by_title['Synthetic Drama']['add'], {'library': 'tv', 'tvdb_id': 888004})
+        self.assertTrue(by_title['Synthetic Drama']['excluded'])
+        # Radarr anime detection.
+        self.assertEqual(by_title['Radarr Anime Film']['kind'], 'anime')
+        self.assertEqual(by_title['Radarr Anime Film']['add'], {'library': 'movies', 'tmdb_id': 777001})
+        # Auto-add warnings for both Radarr and Sonarr (only enabled auto lists).
+        self.assertEqual(len(res['warnings']), 2)
+        self.assertTrue(any('Radarr Auto' in w for w in res['warnings']))
+        self.assertTrue(any('Sonarr Auto' in w for w in res['warnings']))
+
+        # 2. include_in_library=True shows 603 and 384541 from cache with 0 extra mdblist calls.
+        res_all = run_with({'include_in_library': True}, now_ts=1795262500.0)
+        self.assertEqual(len(mdb_calls), 5)
+        self.assertEqual(res_all['cache']['age_seconds'], 100)
+        in_lib_titles = {i['title'] for i in res_all['items'] if i['in_library']}
+        self.assertEqual(in_lib_titles, {'Synthetic Movie', 'Synthetic Anime'})
+
+        # 3. refresh=True under 1 hour does NOT bypass cache.
+        run_with({'refresh': True}, now_ts=1795262400.0 + 1800)
+        self.assertEqual(len(mdb_calls), 5)
+
+        # 4. refresh=True after 1 hour DOES refresh cache (+5 calls = 10).
+        res_ref = run_with({'refresh': True}, now_ts=1795262400.0 + 3601)
+        self.assertEqual(len(mdb_calls), 10)
+        self.assertEqual(res_ref['quota']['tool_calls_today'], 10)
+        self.assertEqual(res_ref['cache']['age_seconds'], 0)
+
+        # 5. Cache expires after 6 hours -> automatic refresh (+5 calls = 15).
+        res_exp = run_with({}, now_ts=1795262400.0 + 3601 + 21600)
+        self.assertEqual(len(mdb_calls), 15)
+        self.assertEqual(res_exp['quota']['tool_calls_today'], 15)
+
+    def test_recommendations_quota_ceiling_and_429(self):
+        # 1. Quota exhausted with no cache -> refuses quota_exhausted.
+        state_dir_empty = self._make_recs_state_dir('quota-empty')
+        pol_low = self._recs_policy(state_dir_empty, daily_ceiling=2)
+        fake_client, _ = self._fake_mdblist()
+        frame = copy.deepcopy(self.fixture['library_recommendations_frame'])
+        frame['request'] = {}
+        with patch.object(lib.time, 'time', return_value=1795262400.0), \
+             patch.object(lib, 'MdblistClient', return_value=fake_client), \
+             patch.object(lib, 'read_mdblist_key', return_value='synthetic-key-12345678'):
+            orig = self.policy
+            self.policy = pol_low
+            try:
+                with self.assertRaises(lib.LibraryRefusal) as ctx:
+                    self._run(frame)
+                self.assertEqual(ctx.exception.reason, 'quota_exhausted')
+            finally:
+                self.policy = orig
+
+        # 2. Seed cache with ceiling=5, then after TTL expires -> serves stale cache with warning.
+        state_dir_stale = self._make_recs_state_dir('quota-stale')
+        pol_five = self._recs_policy(state_dir_stale, daily_ceiling=5)
+        fake_ok, calls_ok = self._fake_mdblist()
+        with patch.object(lib.time, 'time', return_value=1795262400.0), \
+             patch.object(lib, 'MdblistClient', return_value=fake_ok), \
+             patch.object(lib, 'read_mdblist_key', return_value='synthetic-key-12345678'):
+            orig = self.policy
+            self.policy = pol_five
+            try:
+                first = self._run(frame)
+                self.assertFalse(first['cache']['stale'])
+                self.assertEqual(len(calls_ok), 5)
+            finally:
+                self.policy = orig
+
+        with patch.object(lib.time, 'time', return_value=1795262400.0 + 25000), \
+             patch.object(lib, 'MdblistClient', return_value=fake_ok), \
+             patch.object(lib, 'read_mdblist_key', return_value='synthetic-key-12345678'):
+            orig = self.policy
+            self.policy = pol_five
+            try:
+                stale_res = self._run(frame)
+                self.assertTrue(stale_res['cache']['stale'])
+                self.assertEqual(len(calls_ok), 5)
+                self.assertTrue(any('quota ceiling' in w for w in stale_res['warnings']))
+            finally:
+                self.policy = orig
+
+        # 3. HTTP 429 with existing cache -> serves stale cache with warning.
+        pol_high = self._recs_policy(state_dir_stale, daily_ceiling=100)
+        fake_429, _ = self._fake_mdblist(status_429_at=1)
+        with patch.object(lib.time, 'time', return_value=1795262400.0 + 25000), \
+             patch.object(lib, 'MdblistClient', return_value=fake_429), \
+             patch.object(lib, 'read_mdblist_key', return_value='synthetic-key-12345678'):
+            orig = self.policy
+            self.policy = pol_high
+            try:
+                res_429 = self._run(frame)
+                self.assertTrue(res_429['cache']['stale'])
+                self.assertTrue(any('HTTP 429' in w for w in res_429['warnings']))
+            finally:
+                self.policy = orig
+
+        # 4. HTTP 429 with no cache -> refuses quota_exhausted.
+        state_dir_429 = self._make_recs_state_dir('429-empty')
+        pol_429 = self._recs_policy(state_dir_429, daily_ceiling=100)
+        fake_429_empty, _ = self._fake_mdblist(status_429_at=1)
+        with patch.object(lib.time, 'time', return_value=1795262400.0), \
+             patch.object(lib, 'MdblistClient', return_value=fake_429_empty), \
+             patch.object(lib, 'read_mdblist_key', return_value='synthetic-key-12345678'):
+            orig = self.policy
+            self.policy = pol_429
+            try:
+                with self.assertRaises(lib.LibraryRefusal) as ctx:
+                    self._run(frame)
+                self.assertEqual(ctx.exception.reason, 'quota_exhausted')
+            finally:
+                self.policy = orig
+
+    def test_read_mdblist_key_custody(self):
+        if os.geteuid() != 0:
+            self.skipTest('root-only custody check runs as uid 0 in Chaldea/CI')
+        key_dir = Path(os.environ['TMPDIR']) / f'mdblist-key-{os.getpid()}'
+        key_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(key_dir, 0o750)
+        key_file = key_dir / 'mdblist.key'
+        key_file.write_text('synthetic_key_value_1234', encoding='utf-8')
+        os.chmod(key_file, 0o400)
+        self.assertEqual(lib.read_mdblist_key(str(key_file)), 'synthetic_key_value_1234')
+
+        # World-readable key must be refused.
+        os.chmod(key_file, 0o644)
+        with self.assertRaises(lib.Refused):
+            lib.read_mdblist_key(str(key_file))
+        os.chmod(key_file, 0o400)
+
+        # Symlink must be refused.
+        link = key_dir / 'mdblist.link'
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(key_file)
+        with self.assertRaises(lib.Refused):
+            lib.read_mdblist_key(str(link))
 
 
 if __name__ == '__main__':

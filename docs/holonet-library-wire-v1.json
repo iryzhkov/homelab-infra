@@ -283,6 +283,134 @@
       "truncated": false
     }
   },
+  "library_recommendations_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "library-recommendations",
+    "request": {
+      "kind": "all",
+      "source": "all",
+      "limit": 20,
+      "include_in_library": false,
+      "min_score": 70,
+      "refresh": false
+    }
+  },
+  "library_recommendations": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "items": [
+        {
+          "title": "Synthetic Recommended Movie",
+          "year": 2025,
+          "kind": "movie",
+          "ids": {
+            "tmdb": 555001,
+            "tvdb": null,
+            "imdb": "tt5550001"
+          },
+          "language": "en",
+          "country": "us",
+          "genres": [
+            "Sci-Fi",
+            "Thriller"
+          ],
+          "description": "A synthetic top-rated film recommended for library addition.",
+          "status": "released",
+          "runtime": 118,
+          "scores": {
+            "mdblist": 88,
+            "imdb": 8.2,
+            "imdb_votes": 125000,
+            "tmdb": 8.0
+          },
+          "sources": [
+            "Top Movies",
+            "radarr-recommendation"
+          ],
+          "in_library": false,
+          "excluded": false,
+          "add": {
+            "library": "movies",
+            "tmdb_id": 555001
+          }
+        },
+        {
+          "title": "Synthetic Recommended Anime",
+          "year": 2025,
+          "kind": "anime",
+          "ids": {
+            "tmdb": 555002,
+            "tvdb": 888002,
+            "imdb": "tt5550002"
+          },
+          "language": "ja",
+          "country": "jp",
+          "genres": [
+            "Animation",
+            "Action"
+          ],
+          "description": "A synthetic top-rated anime series.",
+          "status": "continuing",
+          "runtime": 24,
+          "scores": {
+            "mdblist": 85,
+            "imdb": 8.4,
+            "imdb_votes": 42000,
+            "tmdb": 8.3
+          },
+          "sources": [
+            "Top Anime"
+          ],
+          "in_library": false,
+          "excluded": false,
+          "add": {
+            "library": "anime",
+            "tvdb_id": 888002
+          }
+        }
+      ],
+      "lists": [
+        {
+          "name": "Top Movies",
+          "mediatype": "movie",
+          "item_count": 100,
+          "updated_at": "2026-11-22T00:00:00Z"
+        },
+        {
+          "name": "Top Anime",
+          "mediatype": "show",
+          "item_count": 50,
+          "updated_at": "2026-11-22T00:00:00Z"
+        }
+      ],
+      "cache": {
+        "fetched_at": "2026-11-22T12:00:00Z",
+        "age_seconds": 120,
+        "stale": false
+      },
+      "quota": {
+        "tool_calls_today": 5,
+        "daily_ceiling": 100,
+        "mdblist_remaining": 995
+      },
+      "warnings": []
+    }
+  },
   "library_add_preview_frame": {
     "version": 1,
     "caller": {
@@ -702,6 +830,24 @@
         "code": "refused",
         "reason": "emby_unresolved",
         "message": "Cannot unambiguously resolve movie in Emby to verify keep list"
+      }
+    },
+    "recommendations_disabled": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "recommendations_disabled",
+        "message": "Library recommendations not configured by policy"
+      }
+    },
+    "quota_exhausted": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "quota_exhausted",
+        "message": "Daily mdblist quota ceiling reached and no cache is available"
       }
     },
     "partial": {

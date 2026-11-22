@@ -9,7 +9,7 @@ Normative contract: `tooling/contracts/holonet-library-v1-2026-11-22.md`
 
 ## What it does
 
-`scripts/emby_operator_library.py` adds eight worker operations dispatched over
+`scripts/emby_operator_library.py` adds nine worker operations dispatched over
 the existing root operator socket (`scripts/emby_operator_socket.py`):
 
 Read operations (require `library.read`):
@@ -29,6 +29,16 @@ Read operations (require `library.read`):
   (otherwise) with `lines: []` and the full `streams` list without extracting,
   so callers can pass an explicit `stream_index`. Image subtitles (PGS, VobSub,
   DVB) are reported as `image_subtitle` without decoding.
+- `library-recommendations`: read-only recommendations from configured mdblist
+  lists (`https://api.mdblist.com`) and Radarr TMDb discovery recommendations
+  (`/api/v3/importlist/movie?includeRecommendations=true&includeTrending=false&includePopular=false`),
+  marked with live Radarr/Sonarr library membership and exclusions, ready to
+  pass into `library-add` (`mode: "preview"`). Budget 60 s. Reports a warning
+  for any Radarr (`enabled && enableAuto`) or Sonarr (`enableAutomaticAdd`)
+  import list that still has automatic add enabled. Refuses
+  `recommendations_disabled` when policy omits `library.recommendations`, and
+  `quota_exhausted` when the daily mdblist ceiling or HTTP 429 is reached with
+  no cache available.
 
 Manage operations (require `library.manage`, each supporting `mode: "preview"`
 and `mode: "apply"` with canonical `plan_sha256` verification):
@@ -48,8 +58,17 @@ and `mode: "apply"` with canonical `plan_sha256` verification):
   only when `remove_torrents: true`, category is allowed, every supplied library
   file is deleted, and seeding meets the threshold (ratio >= 1.0 or >= 14 days).
 
-All effects occur through existing Arr, qBittorrent, and Emby HTTP APIs; the
-worker unit's `ReadWritePaths` does not change and no new credentials are added.
+All effects occur through existing Arr, qBittorrent, and Emby HTTP APIs; when
+`library.recommendations` is configured, the worker unit adds
+`ReadWritePaths=/var/lib/holonet-operator/recommendations` (0700 `root:root`)
+for the root-only normalized cache (`cache.json`, 0600, 6-hour TTL, atomic
+write) and per-UTC-day mdblist call counter (`quota.json`, 0600, hard ceiling
+100 calls/day by default). The mdblist API key is read from a root-only file
+(`/etc/holonet/mdblist.key` by default, 0400 `root:root`, raw key text) using
+directory-FD `O_NOFOLLOW` custody, is never logged, and is sent only as the
+`apikey` query parameter over HTTPS to `api.mdblist.com` (no redirects, 4 MiB
+response cap). Outbound HTTPS is already permitted by the worker unit
+(`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, no `IPAddressDeny`).
 
 ## Policy inputs
 
@@ -89,6 +108,20 @@ ceiling into `/etc/holonet-playlists/policy.json`:
   - `limits`: `lookup_max_rows` (25), `releases_max_rows` (50),
     `subtitles_default_chars` (20000), `subtitles_max_chars` (60000),
     `remove_max_files` (500).
+  - `recommendations` (optional; omitted disables `library-recommendations`):
+    - `mdblist_key_file`: normalized absolute path, default
+      `/etc/holonet/mdblist.key` (0400 `root:root`).
+    - `lists`: 1–16 `{slug, kind}` mappings (`kind` in `movie|series|anime`),
+      matched by slug against `/lists/user` (e.g., `top-movies -> movie`,
+      `top-anime-movies -> anime`, `top-tv -> series`, `top-anime -> anime`).
+    - `daily_ceiling`: 1–200, default `100` mdblist requests per UTC day. At
+      the ceiling or on HTTP 429, stale cache is served with `cache.stale=true`
+      and a warning, or `quota_exhausted` is refused when no cache exists.
+    - `cache_ttl_seconds`: 300–86400, default `21600` (6 hours).
+    - `min_refresh_age_seconds`: 60–21600, default `3600` (1 hour; `refresh: true`
+      bypasses the cache only once `age_seconds >= min_refresh_age_seconds`).
+    - `state_dir`: fixed `/var/lib/holonet-operator/recommendations` (0700
+      `root:root`).
   - `subjects`: rendered into `/etc/holonet-playlists/policy.json` from Go
     `config.purpose_grants.library.subjects` (single source of truth; if also
     supplied on the worker `library` input, any mismatch is refused). The worker
