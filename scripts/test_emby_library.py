@@ -58,6 +58,8 @@ class FakeState:
         self.radarr_history_by_dl = None
         self.sonarr_history_by_dl = None
         self.history_truncated = False
+        self.history_missing_total = False
+        self.history_page_size = 200
         self.sonarr_history_fail = False
         self.fail_episode_file_delete = False
         self.fail_qbit_delete = False
@@ -65,6 +67,10 @@ class FakeState:
         self.emby_movies_override = None
         self.emby_series_override = None
         self.emby_episodes_override = None
+        self.emby_episodes_total_override = None
+        self.emby_episodes_page_size = None
+        self.episode_files_by_id = {}
+        self.movie_files_by_id = {}
         self.movies = [{
             'id': 18,
             'title': 'Synthetic Movie',
@@ -155,10 +161,10 @@ class FakeState:
                 'category': 'other-cat', 'ratio': 5.0, 'seeding_time': 30 * 86400,
             },
         }
-        self.movie_history = [{'downloadId': TORRENT_HASH_OK, 'movieId': 18}]
+        self.movie_history = [{'downloadId': TORRENT_HASH_OK, 'movieId': 18, 'eventType': 'downloadFolderImported'}]
         self.series_history = [
-            {'downloadId': TORRENT_HASH_PACK, 'seriesId': 26, 'episodeId': 101},
-            {'downloadId': TORRENT_HASH_PACK, 'seriesId': 26, 'episodeId': 102},
+            {'downloadId': TORRENT_HASH_PACK, 'seriesId': 26, 'episodeId': 101, 'eventType': 'downloadFolderImported'},
+            {'downloadId': TORRENT_HASH_PACK, 'seriesId': 26, 'episodeId': 102, 'eventType': 'downloadFolderImported'},
         ]
 
 
@@ -220,16 +226,32 @@ def make_radarr_handler(state):
             if u.path == '/api/v3/queue':
                 total = state.queue_total_records if state.queue_total_records is not None else 0
                 return self._send(200, {'records': [], 'totalRecords': total})
+            if u.path.startswith('/api/v3/moviefile/'):
+                try:
+                    fid = int(u.path.rsplit('/', 1)[-1])
+                except ValueError:
+                    return self._send(404, {})
+                mf = state.movie_files_by_id.get(fid)
+                if mf is not None:
+                    return self._send(200, mf)
+                return self._send(404, {'error': 'not found'})
             if u.path == '/api/v3/history/movie':
                 return self._send(200, state.movie_history)
             if u.path == '/api/v3/history':
-                dl = urllib.parse.parse_qs(u.query).get('downloadId', [''])[0].lower()
+                qs = urllib.parse.parse_qs(u.query)
+                dl = qs.get('downloadId', [''])[0].lower()
+                page = int(qs.get('page', ['1'])[0])
+                req_ps = int(qs.get('pageSize', ['200'])[0])
+                ps = min(req_ps, state.history_page_size)
                 if state.radarr_history_by_dl is not None:
                     recs = state.radarr_history_by_dl.get(dl, [])
                 else:
                     recs = [r for r in state.movie_history if str(r.get('downloadId', '')).lower() == dl]
-                total = len(recs) + 5 if state.history_truncated else len(recs)
-                return self._send(200, {'page': 1, 'pageSize': 200, 'totalRecords': total, 'records': recs})
+                page_recs = recs[(page - 1) * ps : page * ps]
+                payload = {'page': page, 'pageSize': ps, 'records': page_recs}
+                if not state.history_missing_total:
+                    payload['totalRecords'] = len(recs) + 5 if state.history_truncated else len(recs)
+                return self._send(200, payload)
             return self._send(404, {'error': 'not found'})
 
         def do_POST(self):
@@ -349,18 +371,34 @@ def make_sonarr_handler(state):
                 }]
                 total = state.queue_total_records if state.queue_total_records is not None else len(recs)
                 return self._send(200, {'records': recs, 'totalRecords': total})
+            if u.path.startswith('/api/v3/episodefile/'):
+                try:
+                    fid = int(u.path.rsplit('/', 1)[-1])
+                except ValueError:
+                    return self._send(404, {})
+                ef = state.episode_files_by_id.get(fid)
+                if ef is not None:
+                    return self._send(200, ef)
+                return self._send(404, {'error': 'not found'})
             if u.path == '/api/v3/history/series':
                 return self._send(200, state.series_history)
             if u.path == '/api/v3/history':
                 if state.sonarr_history_fail:
                     return self._send(500, {'error': 'sonarr history down'})
-                dl = urllib.parse.parse_qs(u.query).get('downloadId', [''])[0].lower()
+                qs = urllib.parse.parse_qs(u.query)
+                dl = qs.get('downloadId', [''])[0].lower()
+                page = int(qs.get('page', ['1'])[0])
+                req_ps = int(qs.get('pageSize', ['200'])[0])
+                ps = min(req_ps, state.history_page_size)
                 if state.sonarr_history_by_dl is not None:
                     recs = state.sonarr_history_by_dl.get(dl, [])
                 else:
                     recs = [r for r in state.series_history if str(r.get('downloadId', '')).lower() == dl]
-                total = len(recs) + 5 if state.history_truncated else len(recs)
-                return self._send(200, {'page': 1, 'pageSize': 200, 'totalRecords': total, 'records': recs})
+                page_recs = recs[(page - 1) * ps : page * ps]
+                payload = {'page': page, 'pageSize': ps, 'records': page_recs}
+                if not state.history_missing_total:
+                    payload['totalRecords'] = len(recs) + 5 if state.history_truncated else len(recs)
+                return self._send(200, payload)
             return self._send(404, {})
 
         def do_POST(self):
@@ -518,9 +556,19 @@ def make_emby_handler(state):
                             'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E02.mkv',
                         },
                     ]
+                    start = int(qs.get('StartIndex', ['0'])[0])
+                    limit = int(qs.get('Limit', ['500'])[0])
+                    if state.emby_episodes_page_size is not None:
+                        limit = min(limit, state.emby_episodes_page_size)
+                    page_rows = rows[start : start + limit]
+                    total = (
+                        state.emby_episodes_total_override
+                        if state.emby_episodes_total_override is not None
+                        else len(rows)
+                    )
                     return self._send(200, json.dumps({
-                        'TotalRecordCount': len(rows),
-                        'Items': rows,
+                        'TotalRecordCount': total,
+                        'Items': page_rows,
                     }).encode('utf-8'))
                 if state.emby_movies_override is not None:
                     prov_filter = qs.get('AnyProviderIdEquals', [None])[0]
@@ -781,8 +829,8 @@ class LibraryWorkerTests(unittest.TestCase):
     def test_remove_seeding_threshold_and_season_pack_partially_kept(self):
         # Low ratio / low seeding time -> torrent kept.
         self.state.movie_history = [
-            {'downloadId': TORRENT_HASH_LOW, 'movieId': 18},
-            {'downloadId': TORRENT_HASH_CAT, 'movieId': 18},
+            {'downloadId': TORRENT_HASH_LOW, 'movieId': 18, 'eventType': 'downloadFolderImported'},
+            {'downloadId': TORRENT_HASH_CAT, 'movieId': 18, 'eventType': 'downloadFolderImported'},
         ]
         res = self._run(self.fixture['library_remove_preview_frame'])
         by_hash = {t['hash']: t for t in res['plan']['torrents']}
@@ -1105,6 +1153,175 @@ class LibraryWorkerTests(unittest.TestCase):
         q_res = self._run(self.fixture['library_queue_frame'])
         self.assertTrue(q_res['truncated'])
         self.assertEqual(self.state.full_list_calls, [])
+
+    def test_r2_r1_3_whole_series_title_removal_checks_all_episodes(self):
+        title_frame = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+        title_frame['request'] = {
+            'mode': 'preview', 'library': 'anime', 'arr_id': 26,
+            'target': 'title', 'remove_torrents': False,
+            'keep_emby_ids': ['55012'],
+        }
+        # 1. Protected episode present in Emby listing -> refuses keep_listed.
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(title_frame)
+        self.assertEqual(ctx.exception.reason, 'keep_listed')
+
+        # 2. Protected episode omitted from Emby episode listing -> refuses emby_unresolved.
+        self.state.emby_episodes_override = [
+            {
+                'Id': '55011', 'Type': 'Episode', 'Name': 'Ep One',
+                'ParentIndexNumber': 1, 'IndexNumber': 1,
+                'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E01.mkv',
+            },
+        ]
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(title_frame)
+        self.assertEqual(ctx.exception.reason, 'emby_unresolved')
+
+        # 3. Incomplete Emby paging (TotalRecordCount > returned items) -> refuses emby_unresolved.
+        self.state.emby_episodes_override = None
+        self.state.emby_episodes_total_override = 5
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(title_frame)
+        self.assertEqual(ctx.exception.reason, 'emby_unresolved')
+        self.state.emby_episodes_total_override = None
+
+        # 4. Duplicate Emby episode match -> refuses emby_unresolved.
+        self.state.emby_episodes_override = [
+            {
+                'Id': '55011', 'Type': 'Episode', 'Name': 'Ep One',
+                'ParentIndexNumber': 1, 'IndexNumber': 1,
+                'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E01.mkv',
+            },
+            {
+                'Id': '55099', 'Type': 'Episode', 'Name': 'Ep One Dup',
+                'ParentIndexNumber': 1, 'IndexNumber': 1,
+                'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E01.mkv',
+            },
+            {
+                'Id': '55012', 'Type': 'Episode', 'Name': 'Ep Two',
+                'ParentIndexNumber': 1, 'IndexNumber': 2,
+                'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E02.mkv',
+            },
+        ]
+        title_frame['request']['keep_emby_ids'] = ['99999']
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(title_frame)
+        self.assertEqual(ctx.exception.reason, 'emby_unresolved')
+        self.state.emby_episodes_override = None
+
+    def test_r2_r1_2_torrent_exclusivity_completeness_and_positive_ownership(self):
+        # 1. Missing totalRecords -> kept with ownership_incomplete.
+        self.state.history_missing_total = True
+        res = self._run(self.fixture['library_remove_preview_frame'])
+        self.assertEqual(res['plan']['torrents'][0]['action'], 'keep')
+        self.assertEqual(res['plan']['torrents'][0]['reason'], 'ownership_incomplete')
+        self.state.history_missing_total = False
+
+        # 2. Empty histories in both Arrs -> kept with ownership_unverified.
+        self.state.radarr_history_by_dl = {}
+        self.state.sonarr_history_by_dl = {}
+        res = self._run(self.fixture['library_remove_preview_frame'])
+        self.assertEqual(res['plan']['torrents'][0]['action'], 'keep')
+        self.assertEqual(res['plan']['torrents'][0]['reason'], 'ownership_unverified')
+
+        # 3. Grabbed-only history (no import record) -> kept with ownership_unverified.
+        self.state.radarr_history_by_dl = {
+            TORRENT_HASH_OK: [
+                {'id': 1, 'downloadId': TORRENT_HASH_OK, 'movieId': 18, 'eventType': 'grabbed'},
+            ],
+        }
+        res = self._run(self.fixture['library_remove_preview_frame'])
+        self.assertEqual(res['plan']['torrents'][0]['action'], 'keep')
+        self.assertEqual(res['plan']['torrents'][0]['reason'], 'ownership_unverified')
+
+        # 4. Multi-page history: 3 pages of 1 record each; exclusive import -> removed.
+        self.state.history_page_size = 1
+        self.state.radarr_history_by_dl = {
+            TORRENT_HASH_OK: [
+                {'id': 1, 'downloadId': TORRENT_HASH_OK, 'movieId': 18, 'eventType': 'grabbed'},
+                {'id': 2, 'downloadId': TORRENT_HASH_OK, 'movieId': 18, 'eventType': 'downloadFolderImported'},
+                {'id': 3, 'downloadId': TORRENT_HASH_OK, 'movieId': 18, 'eventType': 'movieFileDeleted'},
+            ],
+        }
+        res = self._run(self.fixture['library_remove_preview_frame'])
+        self.assertEqual(res['plan']['torrents'][0]['action'], 'remove')
+        self.assertEqual(res['plan']['torrents'][0]['reason'], 'meets_threshold')
+
+        # 5. Multi-page history where a later page references another movie -> shared_torrent.
+        self.state.radarr_history_by_dl[TORRENT_HASH_OK].append(
+            {'id': 4, 'downloadId': TORRENT_HASH_OK, 'movieId': 19, 'eventType': 'downloadFolderImported'},
+        )
+        res = self._run(self.fixture['library_remove_preview_frame'])
+        self.assertEqual(res['plan']['torrents'][0]['action'], 'keep')
+        self.assertEqual(res['plan']['torrents'][0]['reason'], 'shared_torrent')
+        self.state.history_page_size = 200
+        self.state.radarr_history_by_dl = None
+        self.state.sonarr_history_by_dl = None
+
+    def test_r2_1_episodefile_fallback_metadata_and_file_limit(self):
+        # Episode 104 has episodeFileId=605 without embedded episodeFile metadata.
+        self.state.extra_episodes = [{
+            'id': 104, 'seriesId': 26, 'seasonNumber': 1, 'episodeNumber': 4,
+            'title': 'Ep Four', 'monitored': True, 'hasFile': True,
+            'episodeFileId': 605,
+        }]
+        ep_frame = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+        ep_frame['request'] = {
+            'mode': 'preview', 'library': 'anime', 'arr_id': 26,
+            'target': {'episode_arr_ids': [104]}, 'remove_torrents': False,
+            'keep_emby_ids': [],
+        }
+
+        # 1. Missing episodeFile metadata (404 from /api/v3/episodefile/605) -> refuses file_metadata_missing.
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(ep_frame)
+        self.assertEqual(ctx.exception.reason, 'file_metadata_missing')
+
+        # 2. Resolved via GET /api/v3/episodefile/605 -> included in plan.files and total_bytes.
+        self.state.episode_files_by_id[605] = {
+            'id': 605,
+            'relativePath': 'Season 01/S01E04.mkv',
+            'path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E04.mkv',
+            'size': 3072,
+        }
+        prev = self._run(ep_frame)
+        self.assertEqual(prev['plan']['files'], [{
+            'id': 605,
+            'path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E04.mkv',
+            'size': 3072,
+        }])
+        self.assertEqual(prev['plan']['total_bytes'], 3072)
+
+        # 3. Resolved fallback file counts toward remove_max_files limit (ep 101 + fallback ep 104 = 2 > 1).
+        limit_frame = copy.deepcopy(ep_frame)
+        limit_frame['request']['target'] = {'episode_arr_ids': [101, 104]}
+        orig_limit = self.policy['library']['limits']['remove_max_files']
+        self.policy['library']['limits']['remove_max_files'] = 1
+        try:
+            with self.assertRaises(lib.LibraryRefusal) as ctx:
+                self._run(limit_frame)
+            self.assertEqual(ctx.exception.reason, 'file_limit_exceeded')
+        finally:
+            self.policy['library']['limits']['remove_max_files'] = orig_limit
+
+        # 4. Movie with hasFile=True and missing movieFile metadata -> refuses file_metadata_missing.
+        self.state.movies[0]['movieFile'] = None
+        self.state.movies[0]['movieFileId'] = 505
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(self.fixture['library_remove_preview_frame'])
+        self.assertEqual(ctx.exception.reason, 'file_metadata_missing')
+
+        # 5. Movie with resolved /api/v3/moviefile/505 -> included in plan.files.
+        self.state.movie_files_by_id[505] = {
+            'id': 505,
+            'relativePath': 'Synthetic.mkv',
+            'path': '/mnt/shared/media/movies/Synthetic Movie (2024)/Synthetic.mkv',
+            'size': 4096,
+        }
+        m_prev = self._run(self.fixture['library_remove_preview_frame'])
+        self.assertEqual(len(m_prev['plan']['files']), 1)
+        self.assertEqual(m_prev['plan']['files'][0]['id'], 505)
 
 
 if __name__ == '__main__':

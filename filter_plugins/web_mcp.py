@@ -98,7 +98,7 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "ca7407889221f212351a3a65a32c99a10765c595d466a0702700514e466e7c99",
+    "emby_operator_library.py": "f5b45f7809e00ae042b156865f92f52fd6da48d47efeb4afa0e5e8e0d53746ea",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
     "emby_operator_socket.py": "bb513c3f7c3809bce5d2202e4e03ccc80db7181a87b9e5f46383f17a36f11209",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
