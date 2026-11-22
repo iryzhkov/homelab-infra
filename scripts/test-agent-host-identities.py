@@ -82,6 +82,15 @@ def function(source, **context):
     return namespace["run"]()
 
 class Contract(unittest.TestCase):
+    def test_shizune_optional_write_scope(self):
+        for host in ("laptop", "omarchy-pc"):
+            grant = c.MATRIX[host]["shizune"]
+            for scopes in (["shizune.use"], ["shizune.use", "shizune.budget.write"]):
+                self.assertEqual(c.claims("shizune", grant, scopes), grant)
+            for scopes in (["shizune.budget.write"], ["shizune.use", "foreign"],
+                           ["shizune.use", "shizune.use"], []):
+                self.assertEqual(c.claims("shizune", grant, scopes), {})
+
     def test_exact_matrix(self):
         self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
         expected = {"laptop": {"jocasta", "ov", "holonet", "shizune"},

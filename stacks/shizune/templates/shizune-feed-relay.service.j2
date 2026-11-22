@@ -1,0 +1,12 @@
+[Unit]
+Description=Relay private Shizune budget event counts
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/shizune-feed-relay
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{ stack_dir }}/data/feed-outbox
+ProtectHome=read-only
+PrivateTmp=true
+TimeoutStartSec=55min

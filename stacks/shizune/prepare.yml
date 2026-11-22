@@ -14,7 +14,7 @@
     group: "10001"
     mode: "0700"
   become: true
-  loop: [data, data/actual, data/google, secrets]
+  loop: [data, data/actual, data/google, data/feed-outbox, secrets]
 
 - name: Inspect optional protected controller credential sources
   ansible.builtin.stat:
@@ -70,13 +70,22 @@
   become: true
   register: shizune_firewall_script
 
+- name: Install Shizune feed relay
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../stacks/shizune/files/shizune-feed-relay"
+    dest: /usr/local/sbin/shizune-feed-relay
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
 - name: Install mesh-ordered Shizune units
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../stacks/shizune/templates/{{ item }}.j2"
     dest: "/etc/systemd/system/{{ item }}"
     mode: "0644"
   become: true
-  loop: [shizune-firewall.service, shizune-container.service]
+  loop: [shizune-firewall.service, shizune-container.service, shizune-feed-relay.service, shizune-feed-relay.path, shizune-feed-relay.timer]
   register: shizune_units
 
 - name: Restrict backend before publishing
@@ -85,6 +94,16 @@
     state: "{{ 'restarted' if shizune_units is changed or shizune_firewall_script is changed else 'started' }}"
     enabled: true
     daemon_reload: true
+  become: true
+  when: not ansible_check_mode
+
+- name: Enable Shizune outbox relay triggers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if shizune_units is changed else 'started' }}"
+    daemon_reload: true
+  loop: [shizune-feed-relay.path, shizune-feed-relay.timer]
   become: true
   when: not ansible_check_mode
 

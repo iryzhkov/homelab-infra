@@ -1,0 +1,8 @@
+[Unit]
+Description=Retry Shizune budget event relay
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=15min
+Unit=shizune-feed-relay.service
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,98 @@
+#!/usr/bin/python3
+"""Relay only validated Shizune budget event counts to the host's feed identity."""
+import datetime as dt
+import json
+import os
+import re
+import stat
+import subprocess
+
+OUTBOX = "/home/iryzhkov/app/shizune/data/feed-outbox"
+NAME = re.compile(r"[0-9a-f]{32}\.json\Z")
+STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\Z")
+TITLES = {
+    "budget_delete": "Shizune deleted {} stale pending budget transactions",
+    "budget_categorize": "Shizune categorized {} budget transactions",
+}
+
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate key")
+        result[key] = value
+    return result
+
+
+def title(raw):
+    value = json.loads(raw, object_pairs_hook=unique)
+    if type(value) is not dict or set(value) != {"v", "event", "count", "at"}:
+        raise ValueError("keys")
+    if type(value["v"]) is not int or value["v"] != 1:
+        raise ValueError("version")
+    if type(value["event"]) is not str or value["event"] not in TITLES:
+        raise ValueError("event")
+    if type(value["count"]) is not int or not 1 <= value["count"] <= 500:
+        raise ValueError("count")
+    if type(value["at"]) is not str or not STAMP.fullmatch(value["at"]):
+        raise ValueError("timestamp")
+    dt.datetime.fromisoformat(value["at"].replace("Z", "+00:00"))
+    return TITLES[value["event"]].format(value["count"])
+
+
+def post(message):
+    # Never inherit feed output or errors into the root journal.
+    try:
+        return subprocess.run(
+            ["/usr/sbin/runuser", "-u", "iryzhkov", "--", "feed", "post",
+             message, "--tag", "shizune budget"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=60, check=False).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def relay(outbox=OUTBOX, send=post):
+    directory = os.open(outbox, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        names = (name for name in os.listdir(directory) if NAME.fullmatch(name))
+        for name in sorted(names)[:50]:
+            original = None
+            reason = None
+            try:
+                original = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if (not stat.S_ISREG(original.st_mode) or original.st_nlink != 1
+                        or original.st_size > 1024 or stat.S_IMODE(original.st_mode) != 0o600):
+                    raise ValueError("file metadata")
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                with os.fdopen(fd, "rb") as stream:
+                    actual = os.fstat(stream.fileno())
+                    if (actual.st_ino != original.st_ino or actual.st_dev != original.st_dev
+                            or actual.st_nlink != 1 or not stat.S_ISREG(actual.st_mode)):
+                        raise ValueError("file changed")
+                    raw = stream.read(1025)
+                if len(raw) > 1024:
+                    raise ValueError("size")
+                message = title(raw)
+            except (ValueError, UnicodeError, RecursionError):
+                reason = "invalid event"
+            except OSError:
+                # A concurrent rename/removal is harmless; no content is logged.
+                continue
+            if reason:
+                print(f"{name}: {reason}", flush=True)
+            elif not send(message):
+                continue
+            try:
+                current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if original and (current.st_ino, current.st_dev) == (original.st_ino, original.st_dev):
+                    os.unlink(name, dir_fd=directory)
+            except OSError:
+                pass
+    finally:
+        os.close(directory)
+
+
+if __name__ == "__main__":
+    relay()

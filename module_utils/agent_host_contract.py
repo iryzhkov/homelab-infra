@@ -441,6 +441,10 @@ def claims(service, grant, requested):
         if personal:
             result["ov_personal"] = dict(grant["ov_personal"], actions=personal)
         return copy.deepcopy(result)
+    if service == "shizune":
+        if "shizune.use" not in scopes or not scopes <= {"shizune.use", "shizune.budget.write"}:
+            return {}
+        return copy.deepcopy(grant)
     exact = {"jocasta": {"jocasta.read", "jocasta.write"}, "ha": {"ha.read"},
              "homelab": {"homelab.read"}, "shizune": {"shizune.use"}}
     if scopes != exact[service]:

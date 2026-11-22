@@ -1,0 +1,7 @@
+[Unit]
+Description=Watch Shizune budget event outbox
+[Path]
+PathChanged={{ stack_dir }}/data/feed-outbox
+Unit=shizune-feed-relay.service
+[Install]
+WantedBy=multi-user.target

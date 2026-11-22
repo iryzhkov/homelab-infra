@@ -501,6 +501,18 @@ def _bounded_expression(access, service, scope=None):
                 "    return {}",
                 f"return dict(grant, aud={access['resource']!r})",
             ]
+    elif service == "shizune":
+        lines += [
+            "requested = token.scope",
+            f"allowed = {list(access['scope_mappings'])!r}",
+            "if (not isinstance(requested, list) or 'shizune.use' not in requested",
+            "        or any(s not in allowed for s in requested)",
+            "        or len(set(requested)) != len(requested)):",
+            "    return {}",
+            f"if {scope!r} != sorted(requested)[0]:",
+            "    return {}",
+            f"return dict(grant, aud={access['resource']!r})",
+        ]
     elif service == "ha":
         # Authentik 2026.8.4 get_claims evaluates requested mappings with token
         # and deepmerge appends arrays. Elect one selected mapping to emit both
@@ -594,6 +606,8 @@ def _application(raw, service):
         elif service == "holonet":
             scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES),
                       " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES))
+        elif service == "shizune":
+            scopes = ("shizune.use", "shizune.use shizune.budget.write")
         elif service == "ov":
             # ov.read first, then any optional families in canonical order.
             optional = OV_SCOPES[1:] + OV_PERSONAL_SCOPES

@@ -10,7 +10,7 @@ There is no ordinary public stack route.
 
 The fixed resource is https://shizune.mcp.ryzhkov.dev/mcp.
 Authentik's shizune-mcp application uses client shizune-mcp-machine,
-scope shizune.use, a 300-second lifetime, and the existing RS256 keypair
+scope shizune.use with optional shizune.budget.write, a 300-second lifetime, and the existing RS256 keypair
 8bbd6516-af33-4e64-a73b-caa39e692c29. Existing patterns permit key reuse.
 Issuer is https://auth.ryzhkov.dev/application/o/shizune-mcp/ and JWKS is
 that URL plus jwks/. Only the two declared service accounts in
@@ -125,6 +125,40 @@ once into data/google as a single-link regular file, mode 0600, owner 10001
 delete the desktop copy. This is Shizune's own Google grant, not a provider login
 cache, and workspace-mcp refreshes it in place. Actual state belongs in data/actual. Back up these private data
 directories through the owning backup procedure before storing useful data.
+
+## Budget writes and private audit relay
+
+Both declared igor identities may request `shizune.use shizune.budget.write`.
+Requesting only `shizune.use` retains use-only access. Budget write tools
+require the optional scope. Issuer, audience, client and 300-second lifetime
+stay fixed. Converge through the existing-owned baseline procedure above;
+confirm the new successful stored blueprint hash before updating the baseline,
+then require an identical zero-change repeat. Never retry through bootstrap
+if the baseline guard refuses.
+
+The stack prepare tasks create `data/feed-outbox`, mode 0700 owned by UID
+10001, before container startup. The gateway atomically renames mode-0600
+files named `<32 lowercase hex>.json` into that directory. Each contains
+exactly `{"v":1,"event":"budget_delete","count":1,"at":"2026-11-22T01:02:03Z"}`.
+Allowed events are budget_delete and budget_categorize; count is 1..500;
+at is a valid UTC ISO timestamp ending in Z.
+
+Root's shizune-feed-relay.service handles at most 50 files per run. Its path
+unit watches changes, and its timer retries 15 minutes after the last run.
+It rejects nonregular, symlink, multiple-link, oversized and nonprivate files,
+duplicate JSON keys, extra fields and invalid values. Invalid files are removed
+with a filename-only reason. A successful post removes the file; failure retains
+it for retry. Feed output is suppressed. Only event kind and count reach the
+feed through `runuser -u iryzhkov -- feed post TITLE --tag "shizune budget"`,
+using that user's existing default producer. No producer enrollment is needed.
+A crash after posting but before unlink may duplicate an audit entry.
+
+Deploy with the targeted stack commands above without changing the image pin.
+Verify the relay path/timer and storage custody. Drop one valid synthetic
+count-1 event as UID 10001, confirm removal and its ID with
+`feed recent --since 10m`, then confirm an invalid event is removed without
+a post or private journal content. Disable both relay triggers when retiring
+the stack; preserve any pending valid events until their disposition is decided.
 
 ## Rollback
 
