@@ -43,6 +43,9 @@ class FakeState:
         self.sonarr_recycle = '/mnt/shared/.recycle/sonarr'
         self.grab_expired = False
         self.image_only_subs = False
+        self.subtitles_override = None
+        self.subtitle_srt_calls = []
+        self.item_get_calls = []
         self.deleted_movies = []
         self.deleted_series = []
         self.deleted_episode_files = []
@@ -202,13 +205,22 @@ def make_radarr_handler(state):
                     return self._send(404, {'error': 'not found'})
                 for m in state.movies:
                     if m['id'] == mid:
+                        state.item_get_calls.append(('radarr', mid))
                         return self._send(200, m)
                 return self._send(404, {'error': 'not found'})
             if u.path == '/api/v3/movie/lookup':
                 term = urllib.parse.parse_qs(u.query).get('term', [''])[0]
+                def strip_movie_stats(m):
+                    c = copy.deepcopy(m)
+                    c.pop('sizeOnDisk', None)
+                    c.pop('statistics', None)
+                    return c
                 if term == 'tmdb:603':
-                    return self._send(200, [state.movies[0]])
-                rows = [m for m in state.movies if term.lower() in m['title'].lower() or term == f"tmdb:{m['tmdbId']}"]
+                    return self._send(200, [strip_movie_stats(state.movies[0])])
+                rows = [
+                    strip_movie_stats(m) for m in state.movies
+                    if term.lower() in m['title'].lower() or term == f"tmdb:{m['tmdbId']}"
+                ]
                 rows.append({
                     'title': 'Synthetic New Movie', 'year': 2025, 'tmdbId': 888001, 'imdbId': 'tt8880001',
                 })
@@ -315,12 +327,19 @@ def make_sonarr_handler(state):
                     return self._send(404, {})
                 for s in state.series:
                     if s['id'] == sid:
+                        state.item_get_calls.append(('sonarr', sid))
                         return self._send(200, s)
                 return self._send(404, {})
             if u.path == '/api/v3/series/lookup':
                 term = urllib.parse.parse_qs(u.query).get('term', [''])[0]
+                def strip_series_stats(s):
+                    c = copy.deepcopy(s)
+                    c.pop('statistics', None)
+                    for season in c.get('seasons') or []:
+                        season.pop('statistics', None)
+                    return c
                 rows = [
-                    s for s in state.series
+                    strip_series_stats(s) for s in state.series
                     if term.lower() in s['title'].lower() or term == f"tvdb:{s['tvdbId']}"
                 ]
                 rows.append({
@@ -577,15 +596,18 @@ def make_emby_handler(state):
                         'TotalRecordCount': len(rows),
                         'Items': rows,
                     }).encode('utf-8'))
-                streams = (
-                    [{'Type': 'Subtitle', 'Index': 3, 'Language': 'eng', 'Codec': 'pgssub',
-                      'DisplayTitle': 'English (PGSSUB)', 'IsForced': False, 'IsExternal': False,
-                      'IsTextSubtitleStream': False}]
-                    if state.image_only_subs else
-                    [{'Type': 'Subtitle', 'Index': 2, 'Language': 'eng', 'Codec': 'subrip',
-                      'DisplayTitle': 'English (SUBRIP)', 'IsForced': False, 'IsExternal': False,
-                      'IsTextSubtitleStream': True}]
-                )
+                if state.subtitles_override is not None:
+                    streams = state.subtitles_override
+                else:
+                    streams = (
+                        [{'Type': 'Subtitle', 'Index': 3, 'Language': 'eng', 'Codec': 'pgssub',
+                          'DisplayTitle': 'English (PGSSUB)', 'IsForced': False, 'IsExternal': False,
+                          'IsTextSubtitleStream': False}]
+                        if state.image_only_subs else
+                        [{'Type': 'Subtitle', 'Index': 2, 'Language': 'eng', 'Codec': 'subrip',
+                          'DisplayTitle': 'English (SUBRIP)', 'IsForced': False, 'IsExternal': False,
+                          'IsTextSubtitleStream': True}]
+                    )
                 return self._send(200, json.dumps({
                     'TotalRecordCount': 1,
                     'Items': [{
@@ -595,12 +617,19 @@ def make_emby_handler(state):
                         'MediaSources': [{'Id': 'mediasource_44801', 'MediaStreams': streams}],
                     }],
                 }).encode('utf-8'))
-            if u.path == '/emby/Videos/44801/mediasource_44801/Subtitles/2/Stream.srt':
-                srt = (
-                    '1\n00:00:01,000 --> 00:00:03,000\n<i>Synthetic</i> line one.\n\n'
-                    '2\n00:00:05,500 --> 00:00:07,000\n{\\an8}Synthetic line two.\n\n'
-                    '3\n00:05:00,000 --> 00:05:02,000\nOutside window.\n'
-                ).encode('utf-8')
+            if u.path.startswith('/emby/Videos/44801/mediasource_44801/Subtitles/') and u.path.endswith('/Stream.srt'):
+                idx = int(u.path.split('/')[-2])
+                state.subtitle_srt_calls.append(idx)
+                if idx == 2:
+                    srt = (
+                        '1\n00:00:01,000 --> 00:00:03,000\n<i>Synthetic</i> line one.\n\n'
+                        '2\n00:00:05,500 --> 00:00:07,000\n{\\an8}Synthetic line two.\n\n'
+                        '3\n00:05:00,000 --> 00:05:02,000\nOutside window.\n'
+                    ).encode('utf-8')
+                else:
+                    srt = (
+                        f'1\n00:00:02,000 --> 00:00:04,000\nExplicit stream {idx} line.\n\n'
+                    ).encode('utf-8')
                 return self._send(200, srt, ct='text/plain; charset=utf-8')
             return self._send(404, b'{}')
     return Handler
@@ -1343,6 +1372,151 @@ class LibraryWorkerTests(unittest.TestCase):
         m_prev = self._run(self.fixture['library_remove_preview_frame'])
         self.assertEqual(len(m_prev['plan']['files']), 1)
         self.assertEqual(m_prev['plan']['files'][0]['id'], 505)
+
+    def test_lookup_stats_unknown_when_detail_vanishes(self):
+        # A 404 (None) or mismatched detail must not leave zeros that look valid.
+        for detail in (None, {'id': 999}):
+            series = {'arr_id': 26, 'size_on_disk': 0,
+                      'seasons': [{'season': 1, 'monitored': True, 'episode_count': 0, 'episode_file_count': 0}]}
+            lib._fill_lookup_stats(series, detail, 'series')
+            self.assertIsNone(series['size_on_disk'])
+            self.assertIsNone(series['seasons'][0]['episode_count'])
+            self.assertIsNone(series['seasons'][0]['episode_file_count'])
+            movie = {'arr_id': 216, 'size_on_disk': 0}
+            lib._fill_lookup_stats(movie, detail, 'movie')
+            self.assertIsNone(movie['size_on_disk'])
+
+    def test_lookup_enriches_in_library_stats_for_movies_and_series(self):
+        # Movie lookup: statistics.sizeOnDisk (Radarr) for in-library row; 0 for not-in-library row.
+        self.state.movies[0]['sizeOnDisk'] = 0
+        self.state.movies[0]['statistics'] = {'sizeOnDisk': 76_000_000_000}
+        self.state.item_get_calls.clear()
+        self.state.full_list_calls.clear()
+        movie_frame = copy.deepcopy(self.fixture['library_lookup_frame'])
+        movie_frame['request'] = {'library': 'movies', 'term': 'Synthetic'}
+        movie_res = self._run(movie_frame)
+        self.assertEqual(len(movie_res['items']), 2)
+        in_lib_m, new_m = movie_res['items']
+        self.assertTrue(in_lib_m['in_library'])
+        self.assertEqual(in_lib_m['arr_id'], 18)
+        self.assertEqual(in_lib_m['size_on_disk'], 76_000_000_000)
+        self.assertFalse(new_m['in_library'])
+        self.assertIsNone(new_m['arr_id'])
+        self.assertEqual(new_m['size_on_disk'], 0)
+        self.assertEqual(self.state.item_get_calls, [('radarr', 18)])
+        self.assertEqual(self.state.full_list_calls, [])
+
+        # Series lookup: statistics.sizeOnDisk and per-season totalEpisodeCount/episodeFileCount.
+        self.state.series[0]['statistics'] = {'sizeOnDisk': 12_345_678}
+        self.state.series[0]['seasons'] = [
+            {'seasonNumber': 1, 'monitored': True, 'statistics': {'totalEpisodeCount': 10, 'episodeFileCount': 10}},
+            {'seasonNumber': 2, 'monitored': True, 'statistics': {'totalEpisodeCount': 10, 'episodeFileCount': 10}},
+        ]
+        self.state.item_get_calls.clear()
+        series_res = self._run(self.fixture['library_lookup_frame'])
+        self.assertEqual(len(series_res['items']), 2)
+        in_lib_s, new_s = series_res['items']
+        self.assertTrue(in_lib_s['in_library'])
+        self.assertEqual(in_lib_s['arr_id'], 26)
+        self.assertEqual(in_lib_s['size_on_disk'], 12_345_678)
+        self.assertEqual(in_lib_s['seasons'], [
+            {'season': 1, 'monitored': True, 'episode_count': 10, 'episode_file_count': 10},
+            {'season': 2, 'monitored': True, 'episode_count': 10, 'episode_file_count': 10},
+        ])
+        self.assertFalse(new_s['in_library'])
+        self.assertIsNone(new_s['arr_id'])
+        self.assertEqual(new_s['size_on_disk'], 0)
+        self.assertEqual(new_s['seasons'], [
+            {'season': 1, 'monitored': False, 'episode_count': 0, 'episode_file_count': 0},
+        ])
+        self.assertEqual(self.state.item_get_calls, [('sonarr', 26)])
+        self.assertEqual(self.state.full_list_calls, [])
+
+        # Bounded by lookup_max_rows: second in-library row beyond cap does not trigger a GET.
+        self.state.series.append({
+            'id': 27,
+            'title': 'Synthetic Anime Two',
+            'year': 2024,
+            'tvdbId': 384542,
+            'imdbId': 'tt12590267',
+            'monitored': True,
+            'path': '/mnt/shared/media/anime/Synthetic Anime Two (2024)',
+            'seasons': [{'seasonNumber': 1, 'monitored': True, 'statistics': {'totalEpisodeCount': 5, 'episodeFileCount': 5}}],
+            'statistics': {'sizeOnDisk': 9999},
+        })
+        orig_cap = self.policy['library']['limits']['lookup_max_rows']
+        self.policy['library']['limits']['lookup_max_rows'] = 1
+        self.state.item_get_calls.clear()
+        try:
+            capped = self._run(self.fixture['library_lookup_frame'])
+        finally:
+            self.policy['library']['limits']['lookup_max_rows'] = orig_cap
+        self.assertTrue(capped['truncated'])
+        self.assertEqual(len(capped['items']), 1)
+        self.assertEqual(self.state.item_get_calls, [('sonarr', 26)])
+        self.assertEqual(self.state.full_list_calls, [])
+
+    def test_subtitles_english_selection_and_explicit_stream_index(self):
+        # 1. English text present alongside Arabic text -> picks English text and extracts.
+        self.state.subtitles_override = [
+            {'Type': 'Subtitle', 'Index': 4, 'Language': 'ara', 'Codec': 'subrip',
+             'DisplayTitle': 'Arabic (SUBRIP)', 'IsForced': False, 'IsExternal': False,
+             'IsTextSubtitleStream': True},
+            {'Type': 'Subtitle', 'Index': 2, 'Language': 'eng', 'Codec': 'subrip',
+             'DisplayTitle': 'English (SUBRIP)', 'IsForced': False, 'IsExternal': False,
+             'IsTextSubtitleStream': True},
+        ]
+        self.state.subtitle_srt_calls.clear()
+        res_ok = self._run(self.fixture['library_subtitles_frame'])
+        self.assertEqual(res_ok['status'], 'ok')
+        self.assertEqual(res_ok['selected_stream']['index'], 2)
+        self.assertEqual(len(res_ok['streams']), 2)
+        self.assertEqual(res_ok['lines'], ['[00:00:01] Synthetic line one.', '[00:00:05] Synthetic line two.'])
+        self.assertEqual(self.state.subtitle_srt_calls, [2])
+
+        # 2. Only English image (PGS) + Arabic text, no stream_index -> image_subtitle, no extraction.
+        self.state.subtitles_override = [
+            {'Type': 'Subtitle', 'Index': 4, 'Language': 'ara', 'Codec': 'subrip',
+             'DisplayTitle': 'Arabic (SUBRIP)', 'IsForced': False, 'IsExternal': False,
+             'IsTextSubtitleStream': True},
+            {'Type': 'Subtitle', 'Index': 3, 'Language': 'eng', 'Codec': 'pgssub',
+             'DisplayTitle': 'English (PGSSUB)', 'IsForced': False, 'IsExternal': False,
+             'IsTextSubtitleStream': False},
+        ]
+        self.state.subtitle_srt_calls.clear()
+        res_img = self._run(self.fixture['library_subtitles_frame'])
+        self.assertEqual(res_img['status'], 'image_subtitle')
+        self.assertEqual(res_img['selected_stream']['index'], 3)
+        self.assertEqual(res_img['lines'], [])
+        self.assertEqual([s['index'] for s in res_img['streams']], [4, 3])
+        self.assertEqual(self.state.subtitle_srt_calls, [])
+
+        # 3. No English at all (Arabic text + French PGS), no stream_index -> no_english_text, no extraction.
+        self.state.subtitles_override = [
+            {'Type': 'Subtitle', 'Index': 4, 'Language': 'ara', 'Codec': 'subrip',
+             'DisplayTitle': 'Arabic (SUBRIP)', 'IsForced': False, 'IsExternal': False,
+             'IsTextSubtitleStream': True},
+            {'Type': 'Subtitle', 'Index': 5, 'Language': 'fre', 'Codec': 'pgssub',
+             'DisplayTitle': 'French (PGSSUB)', 'IsForced': False, 'IsExternal': False,
+             'IsTextSubtitleStream': False},
+        ]
+        self.state.subtitle_srt_calls.clear()
+        res_no_eng = self._run(self.fixture['library_subtitles_frame'])
+        self.assertEqual(res_no_eng['status'], 'no_english_text')
+        self.assertIsNone(res_no_eng['selected_stream'])
+        self.assertEqual(res_no_eng['lines'], [])
+        self.assertEqual([s['index'] for s in res_no_eng['streams']], [4, 5])
+        self.assertEqual(self.state.subtitle_srt_calls, [])
+
+        # 4. Explicit stream_index still extracts non-English text stream.
+        explicit_frame = copy.deepcopy(self.fixture['library_subtitles_frame'])
+        explicit_frame['request']['stream_index'] = 4
+        self.state.subtitle_srt_calls.clear()
+        res_explicit = self._run(explicit_frame)
+        self.assertEqual(res_explicit['status'], 'ok')
+        self.assertEqual(res_explicit['selected_stream']['index'], 4)
+        self.assertEqual(res_explicit['lines'], ['[00:00:02] Explicit stream 4 line.'])
+        self.assertEqual(self.state.subtitle_srt_calls, [4])
 
 
 if __name__ == '__main__':

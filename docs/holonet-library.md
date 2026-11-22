@@ -22,8 +22,13 @@ Read operations (require `library.read`):
 - `library-queue`: Radarr/Sonarr download queue status and messages.
 - `library-subtitles`: list subtitle streams for an Emby item in libraries `3`,
   `615`, or `1132`, and extract one text stream as `[hh:mm:ss] text` lines
-  (default 20,000 chars, cap 60,000, budget 120 s). Image subtitles (PGS,
-  VobSub, DVB) are reported as `image_subtitle` without decoding.
+  (default 20,000 chars, cap 60,000, budget 120 s). When `stream_index` is
+  omitted, the worker selects the first English (`eng`/`en`) text stream
+  (preferring non-forced); if no English text stream exists, it returns
+  `image_subtitle` (when an English image stream exists) or `no_english_text`
+  (otherwise) with `lines: []` and the full `streams` list without extracting,
+  so callers can pass an explicit `stream_index`. Image subtitles (PGS, VobSub,
+  DVB) are reported as `image_subtitle` without decoding.
 
 Manage operations (require `library.manage`, each supporting `mode: "preview"`
 and `mode: "apply"` with canonical `plan_sha256` verification):
