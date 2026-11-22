@@ -8,6 +8,7 @@
     baselines: "{{ authentik_agent_host_baselines }}"
     original_writer_read: "{{ authentik_agent_original_writer_read | default({}) }}"
     create_original_writer_read_mapping: "{{ authentik_agent_create_original_writer_read_mapping | default(false) }}"
+    create_library_mapping: "{{ authentik_agent_create_library_mapping | default(false) }}"
     original_writer_previous_sha256: "{{ authentik_agent_original_writer_previous_sha256 | default('') }}"
     akasha_signing_key: "{{ authentik_agent_akasha_signing_key | default('') }}"
     rotation_signing_key: "{{ authentik_agent_rotation_signing_key | default('') }}"

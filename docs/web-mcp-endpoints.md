@@ -362,6 +362,18 @@ credential; the Emby backend stays the existing nonadmin key. The root worker
 plan and policy, the endpoint unit (read-only paths, no new writable path,
 empty capabilities, no new privileges) and the worker socket are unchanged.
 
+## HoloNet library management
+
+The optional `library` block in `web_mcp_endpoint` renders a default-off
+`library` ceiling into `/etc/holonet-playlists/policy.json` for the eight
+Arr-native library management operations (`library-lookup`, `library-detail`,
+`library-releases`, `library-queue`, `library-subtitles`, `library-add`,
+`library-grab`, `library-remove`). Root folder paths, quality profile IDs, and
+allowed qBittorrent categories are explicit inputs with no guessed defaults.
+All effects go through existing Radarr, Sonarr, qBittorrent, and Emby HTTP APIs
+without changing the worker unit's `ReadWritePaths` or adding credentials. See
+`docs/holonet-library.md` and `docs/holonet-library-wire-v1.json`.
+
 ## Service config and custody
 
 HA config has exactly `listen, resource_url, issuer_url, jwks_url, ha_url,

@@ -21,6 +21,7 @@ FILES = (
     "scripts/emby_operator_custody.py scripts/emby_operator_torrents.py "
     "scripts/emby_operator_seed_join.py scripts/emby_operator_acquire.py "
     "scripts/emby_operator_acquire_torrents.py scripts/emby_operator_acquire_media.py "
+    "scripts/emby_operator_library.py "
     "roles/web_mcp_endpoint/library/web_mcp_local_artifact.py "
     "roles/web_mcp_route/defaults/main.yml roles/web_mcp_route/tasks/main.yml "
     "roles/web_mcp_route/templates/route.yml.j2 roles/web_mcp_route/vars/main.yml "

@@ -176,6 +176,27 @@ MATRIX = {
                         "holonet_catalog_users": [],
                         "holonet_history_users": []
                     }
+                },
+                "library": {
+                    "scopes": [
+                        "holonet.library"
+                    ],
+                    "claims": {
+                        "holonet_server": "3c86e6d7ff6c4a3296522cdf03d22bb0",
+                        "holonet_actions": [
+                            "library.read",
+                            "library.manage"
+                        ],
+                        "holonet_libraries": [
+                            "3",
+                            "615",
+                            "1132"
+                        ],
+                        "holonet_namespace": "managed-library",
+                        "holonet_target_users": [],
+                        "holonet_catalog_users": [],
+                        "holonet_history_users": []
+                    }
                 }
             }
         },
@@ -208,6 +229,31 @@ MATRIX = {
             "ov_namespaces": [
                 "viking://resources"
             ]
+        },
+        "holonet": {
+            "purposes": {
+                "library": {
+                    "scopes": [
+                        "holonet.library"
+                    ],
+                    "claims": {
+                        "holonet_server": "3c86e6d7ff6c4a3296522cdf03d22bb0",
+                        "holonet_actions": [
+                            "library.read",
+                            "library.manage"
+                        ],
+                        "holonet_libraries": [
+                            "3",
+                            "615",
+                            "1132"
+                        ],
+                        "holonet_namespace": "managed-library",
+                        "holonet_target_users": [],
+                        "holonet_catalog_users": [],
+                        "holonet_history_users": []
+                    }
+                }
+            }
         },
         "shizune": {
             "shizune_owner": "igor"

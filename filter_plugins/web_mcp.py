@@ -17,13 +17,17 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-# CLI 5786c1a preserves acquisition/coexistence and admits exact Emby 4.10.2.0
-# for catalog reads. Chaldea Go 1.25 package 8f6b62f9-0c43-4174-9c33-24b31bf9e544,
-# tree 603272bbadb7e6994993f0e4ad4e98f37af76801.
-HOLONET_COEXISTENCE_SOURCE = "5786c1a735ca2be3c7c1a4c6282673b3e23b939e"
-HOLONET_COEXISTENCE_SHA256 = "e20f38beeb200b023bdbf2a9b582884027ab672b47e89088b9adb491c997e626"
-# The previously installed coexistence build stays admissible for rollback.
+# CLI ee4c336 adds the library management tools (homelab-cli PR 60, library
+# grant bound to explicit M3 host subjects) on top of 5786c1a, which preserves
+# acquisition/coexistence and admits exact Emby 4.10.2.0 for catalog reads.
+# Chaldea Go 1.25.0 package jobs 7bce2520 and 7de96f14 (byte-identical),
+# tree d012cc14304f12ccd859f6d897a9c723f0b08b48.
+HOLONET_COEXISTENCE_SOURCE = "ee4c3360edbd52cead7ac62d95629d3bb04a6ef8"
+HOLONET_COEXISTENCE_SHA256 = "ab7a42ebee9d6893794502c3e63401537155cc0e5b3414470df80e1eaede9d16"
+# The previously installed coexistence builds stay admissible for rollback.
 HOLONET_COEXISTENCE_ROLLBACK = {
+    "5786c1a735ca2be3c7c1a4c6282673b3e23b939e":
+        "e20f38beeb200b023bdbf2a9b582884027ab672b47e89088b9adb491c997e626",
     "74745a2c3cd72acbbaa519ef07210cf978dcabf6":
         "55ac2e95ffbd594107e810960c43dc2852842ba5b6a4312fc138e314bd295aa0",
     "9230187a4cf3058f316f0c06cfcac0a848fc910c":
@@ -98,8 +102,9 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
+    "emby_operator_library.py": "0c5f887b4ca9caf06baff777a96eb43c0be46761ebe8540e69b472b288f49ce2",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
-    "emby_operator_socket.py": "f5085434e9272a126723b2c6e7497345bec768caa5d97aad9cfbb8a63f047060",
+    "emby_operator_socket.py": "870079605e6fce1b2d9c4abd5b283b9be37a7dc3c7d2a621bf9b533bbe15005b",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
     "emby_operator_custody.py": "09bbaf1a9a59ca2a2df533d5fdae669cfda4170cd0d3ecb7250cdcde34c3b79c",
     "emby_operator_seed_join.py": "deb669172df79565cd17a8774c827604432936eb2404e86a49e59b8e68eb21d2",
@@ -312,7 +317,7 @@ def observer_config(config):
 def holonet_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
                   "credential_file", "policy_revision", "policy", "library_guids"),
-         ("recommendations", "playlist_operator", "playback", "janitor", "purpose_grants"))
+         ("recommendations", "playlist_operator", "playback", "janitor", "library", "purpose_grants"))
     require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
             "HoloNet resource is fixed")
     trust(config, "resource", "issuer", ha_canonical_url)
@@ -324,12 +329,23 @@ def holonet_config(config):
             "HoloNet backend must be trusted HTTPS /emby or exact host-local Emby")
     require(config["credential_file"] == "/etc/holonet/backend.json",
             "HoloNet runtime credential path is fixed")
+    if "library" in config:
+        lib_cfg = config["library"]
+        keys(lib_cfg, ("enabled",))
+        require(type(lib_cfg["enabled"]) is bool, "library enabled must be a boolean")
+        if lib_cfg["enabled"]:
+            require(config.get("playlist_operator") is not None,
+                    "library requires playlist_operator")
+            grants = config.get("purpose_grants")
+            require(isinstance(grants, dict) and "library" in grants,
+                    "enabled library requires purpose_grants.library")
     policy = config["policy"]
     keys(policy, ("Server", "Actions", "Libraries", "CatalogUsers", "HistoryUsers"))
     playback = config.get("playback") is not None
     require(policy["Server"] == config["server_id"], "policy server must be the configured server")
     if not playback:
-        require(policy["Actions"] == ["catalog.read"] + janitor_read_actions(config) and policy["HistoryUsers"] == [],
+        require(policy["Actions"] == ["catalog.read"] + janitor_read_actions(config) + library_read_actions(config)
+                and policy["HistoryUsers"] == [],
                 "initial HoloNet release is catalog-only")
     libraries = records(policy["Libraries"], 1, 1)
     users = records(policy["CatalogUsers"], 1, 1)
@@ -383,7 +399,7 @@ def holonet_playback(config):
     except ValueError:
         require(False, "credential expiry must be a valid UTC time")
     policy = config["policy"]
-    require(policy["Actions"] == ["catalog.read", "history.read"] + janitor_read_actions(config),
+    require(policy["Actions"] == ["catalog.read", "history.read"] + janitor_read_actions(config) + library_read_actions(config),
             "playback adds only history.read to the catalog ceiling")
     history = records(policy["HistoryUsers"], 1, 16)
     require(all(isinstance(u, str) for u in history), "invalid history user")
@@ -403,6 +419,7 @@ def holonet_purposes(config):
         "acquire_read": ["holonet.read", "holonet.janitor", "holonet.acquire"],
         "acquire_start": ["holonet.read", "holonet.janitor", "holonet.acquire", "holonet.acquire.start"],
         "acquire_media": ["holonet.read", "holonet.janitor", "holonet.acquire", "holonet.acquire.media"],
+        "library": ["holonet.library"],
         "catalog": ["holonet.read"],
         "writer": ["holonet.read", "holonet.curate", "holonet.home"],
         "importer": ["holonet.read", "holonet.janitor"],
@@ -430,6 +447,14 @@ def holonet_purposes(config):
                     and not grant["history_users"] and not grant["target_users"]
                     and set(grant["libraries"]) <= set(config["policy"]["Libraries"]),
                     "catalog purpose must remain read only")
+        elif name == "library":
+            require(1 <= len(grant["subjects"]) <= 4
+                    and all(re.fullmatch(r"[0-9a-f]{64}", s) for s in grant["subjects"])
+                    and grant["namespace"] == "managed-library"
+                    and grant["libraries"] == ["3", "615", "1132"]
+                    and not grant["catalog_users"] and not grant["history_users"] and not grant["target_users"]
+                    and set(grant["actions"]) in ({"library.read"}, {"library.read", "library.manage"}),
+                    "library purpose exceeds host-subject contract")
         elif name in ("acquire_read", "acquire_start", "acquire_media"):
             janitor = config.get("janitor")
             actions = {"acquire_read": {"janitor.acquire.read"},
@@ -556,6 +581,14 @@ def holonet_recommendations(value, libraries, users):
 
 CUSTODY_ACTIONS = ["janitor.importers.read", "janitor.custody.read"]
 CUSTODY_DESCRIPTOR = "/etc/holonet-playlists/radarr.json"
+
+
+LIBRARY_ACTIONS = ["library.read", "library.manage"]
+
+
+def library_read_actions(config):
+    lib = config.get("library")
+    return list(LIBRARY_ACTIONS) if isinstance(lib, dict) and lib.get("enabled") is True else []
 
 
 def janitor_read_actions(config):
@@ -688,12 +721,131 @@ def torrent_install_plan(value):
         origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
         credential_file=TORRENT_AUTH, categories=["radarr-movies"],
         payload_prefixes=["/mnt/shared/downloads/complete/movies"])
-    require(data["descriptor"] == expected,
+    allowed_descriptors = [expected]
+    if "library" in value:
+        extended = dict(expected, categories=["radarr-movies", "tv-sonarr"])
+        allowed_descriptors.append(extended)
+    require(data["descriptor"] in allowed_descriptors,
             "torrent descriptor must match the canonical Movies source")
     integer(data["descriptor"].get("version"), 1, 1)
-    return {"path": TORRENT_DESCRIPTOR, "descriptor": expected,
+    return {"path": TORRENT_DESCRIPTOR, "descriptor": dict(data["descriptor"]),
             "policy": {"target_library": OPERATOR_LIBRARY,
                        "revision": config["policy_revision"], "config": TORRENT_DESCRIPTOR}}
+
+
+LIBRARY_SPECS = {
+    "movies": {"library_id": "3", "kind": "movie", "arr": "radarr", "descriptor": CUSTODY_DESCRIPTOR},
+    "tv": {"library_id": "1132", "kind": "series", "arr": "sonarr", "descriptor": "/etc/holonet-playlists/sonarr.json"},
+    "anime": {"library_id": "615", "kind": "series", "arr": "sonarr", "descriptor": "/etc/holonet-playlists/sonarr.json"},
+}
+
+
+def library_install_plan(value):
+    """Explicit default-off library management root ceiling. No guessed root folders or profiles."""
+    config = value["config"]
+    go_lib = config.get("library")
+    go_enabled = bool(go_lib.get("enabled")) if isinstance(go_lib, dict) else False
+    if "library" not in value:
+        require(not go_enabled, "Go config library.enabled requires worker library block")
+        return None
+    require(value["service"] == "holonet", "library management is HoloNet only")
+    operator = config.get("playlist_operator")
+    require(operator is not None, "library management requires playlist_operator")
+    data = value["library"]
+    keys(data, ("libraries", "allowed_categories"), ("enabled", "removal_thresholds", "limits", "torrents", "subjects"))
+    enabled = data.get("enabled", False)
+    require(type(enabled) is bool, "library enabled must be a boolean")
+    require(go_enabled == enabled, "Go config library.enabled must match worker library.enabled")
+    go_grant = (config.get("purpose_grants") or {}).get("library")
+    go_subjects = list(go_grant["subjects"]) if isinstance(go_grant, dict) and isinstance(go_grant.get("subjects"), list) else None
+    if enabled:
+        require(go_subjects is not None,
+                "enabled library management requires Go purpose_grants.library.subjects")
+    if "subjects" in data:
+        require(isinstance(data["subjects"], list) and go_subjects is not None
+                and data["subjects"] == go_subjects,
+                "worker library subjects must match Go purpose_grants.library.subjects")
+    libs = data["libraries"]
+    require(isinstance(libs, dict) and set(libs) == set(LIBRARY_SPECS),
+            "library mapping must declare exactly movies, tv and anime")
+    rendered_libs = {}
+    for name, spec in LIBRARY_SPECS.items():
+        entry = libs[name]
+        opt_keys = ("library_id", "kind", "arr", "descriptor", "minimum_availability") if name == "movies" else ("library_id", "kind", "arr", "descriptor")
+        keys(entry, ("root_folder_path", "quality_profile_id"), opt_keys)
+        if "library_id" in entry:
+            require(entry["library_id"] == spec["library_id"], f"{name} library_id mismatch")
+        if "kind" in entry:
+            require(entry["kind"] == spec["kind"], f"{name} kind mismatch")
+        if "arr" in entry:
+            require(entry["arr"] == spec["arr"], f"{name} arr mismatch")
+        rf = entry["root_folder_path"]
+        require(isinstance(rf, str) and 1 < len(rf.encode("utf-8")) <= 4096
+                and rf.startswith("/") and not rf.startswith("//")
+                and str(PurePosixPath(rf)) == rf
+                and all(part not in (".", "..") for part in rf.split("/")[1:]),
+                f"{name} root_folder_path must be a normalized absolute path")
+        qp = entry["quality_profile_id"]
+        integer(qp, 1, 2147483647)
+        desc = entry.get("descriptor", spec["descriptor"])
+        require(isinstance(desc, str) and desc == spec["descriptor"],
+                f"{name} descriptor must match fixed Arr descriptor path")
+        rendered_entry = {
+            "library_id": spec["library_id"],
+            "kind": spec["kind"],
+            "arr": spec["arr"],
+            "descriptor": desc,
+            "root_folder_path": rf,
+            "quality_profile_id": qp,
+        }
+        if name == "movies" and "minimum_availability" in entry:
+            require(entry["minimum_availability"] in ("announced", "inCinemas", "released"),
+                    "movies minimum_availability must be announced, inCinemas, or released")
+            rendered_entry["minimum_availability"] = entry["minimum_availability"]
+        rendered_libs[name] = rendered_entry
+    cats = records(data["allowed_categories"], 1, 16)
+    require(all(isinstance(c, str) and 1 <= len(c.encode("utf-8")) <= 64 and c.isprintable() for c in cats),
+            "invalid allowed_categories")
+    unique(cats)
+    torrents_path = data.get("torrents", TORRENT_DESCRIPTOR)
+    require(torrents_path == TORRENT_DESCRIPTOR, "library torrents must reuse existing qBit descriptor")
+    thresh = data.get("removal_thresholds", {"min_ratio": 1.0, "min_seeding_days": 14})
+    keys(thresh, ("min_ratio", "min_seeding_days"))
+    require(type(thresh["min_ratio"]) in (int, float) and 0.0 <= float(thresh["min_ratio"]) <= 1000.0,
+            "invalid min_ratio")
+    integer(thresh["min_seeding_days"], 0, 3650)
+    limits = data.get("limits", {
+        "lookup_max_rows": 25,
+        "releases_max_rows": 50,
+        "subtitles_default_chars": 20000,
+        "subtitles_max_chars": 60000,
+        "remove_max_files": 500,
+    })
+    keys(limits, ("lookup_max_rows", "releases_max_rows", "subtitles_default_chars",
+                  "subtitles_max_chars", "remove_max_files"))
+    integer(limits["lookup_max_rows"], 1, 25)
+    integer(limits["releases_max_rows"], 1, 50)
+    integer(limits["subtitles_default_chars"], 1, 60000)
+    integer(limits["subtitles_max_chars"], 1, 60000)
+    require(limits["subtitles_default_chars"] <= limits["subtitles_max_chars"],
+            "subtitles_default_chars must not exceed subtitles_max_chars")
+    integer(limits["remove_max_files"], 1, 500)
+    return {
+        "policy": {
+            "enabled": enabled,
+            "target_library": OPERATOR_LIBRARY,
+            "revision": config["policy_revision"],
+            "subjects": list(go_subjects) if go_subjects is not None else [],
+            "libraries": rendered_libs,
+            "torrents": torrents_path,
+            "allowed_categories": list(cats),
+            "removal_thresholds": {
+                "min_ratio": float(thresh["min_ratio"]),
+                "min_seeding_days": thresh["min_seeding_days"],
+            },
+            "limits": dict(limits),
+        },
+    }
 
 
 
@@ -771,7 +923,7 @@ def seed_join_install_plan(value):
 
 def endpoint_contract(value):
     keys(value, ("service", "uid", "gid", "listen", "artifact", "config", "credentials"),
-         ("custody", "torrents", "seed_join", "acquire"))
+         ("custody", "torrents", "seed_join", "acquire", "library"))
     service = value["service"]
     require(service in SERVICES, "unregistered fixed service package")
     integer(value["uid"], 100, 999)
@@ -877,6 +1029,7 @@ def endpoint_contract(value):
                     set(value["config"].get("janitor") or {})) or acquire_build,
                 "acquisition keys require the exact reviewed artifact")
         acquire_install_plan(value)
+        library_install_plan(value)
         # Older binaries refuse the unknown key, so even null needs the new build.
         require("playlist_operator" not in value["config"] or operator_build,
                 "playlist_operator requires its exact reviewed artifact")
@@ -891,7 +1044,7 @@ def endpoint_contract(value):
             require(value["uid"] == OPERATOR_UID and value["gid"] == OPERATOR_GID,
                     "management requires the homelab holonet identity")
     else:
-        require("custody" not in value and "torrents" not in value and "seed_join" not in value,
+        require("custody" not in value and "torrents" not in value and "seed_join" not in value and "library" not in value,
                 "root readers are HoloNet only")
         expected = (ha_config(value["config"], value["listen"]) if service == "ha-mcp"
                     else observer_config(value["config"]))
@@ -938,6 +1091,7 @@ def playlist_operator_plan(value):
     torrents = torrent_install_plan(value)
     seed_join = seed_join_install_plan(value)
     acquire = acquire_install_plan(value)
+    library = library_install_plan(value)
     return {
         **({"acquire_descriptor": acquire} if acquire else {}),
         **({"torrent_descriptor": torrents} if torrents else {}),
@@ -950,6 +1104,7 @@ def playlist_operator_plan(value):
         "configs": [OPERATOR_RECIPIENTS[r] for r in selected],
         "journals": [str(PurePosixPath(OPERATOR_RECIPIENTS[r]).parent / "journal") for r in selected],
         "policy": {
+            **({"library": library["policy"]} if library else {}),
             **({"janitor_acquire": acquire["policy"]} if acquire else {}),
             **({"janitor_torrents": torrents["policy"]} if torrents else {}),
             **({"janitor_importers": custody["importers"]} if custody else {}),

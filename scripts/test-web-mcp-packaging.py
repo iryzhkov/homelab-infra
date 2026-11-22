@@ -2585,6 +2585,126 @@ class CoexistencePackaging(unittest.TestCase):
         self.assertFalse(policy["janitor_acquire"]["start_enabled"])
         self.assertFalse(policy["janitor_acquire"]["media_enabled"])
 
+    def test_library_management_policy_ceiling_requires_explicit_inputs(self):
+        endpoint = copy.deepcopy(self.acquire_fixture())
+        endpoint["artifact"].update(
+            source_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+            contract_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+            sha256=contract.HOLONET_COEXISTENCE_SHA256,
+        )
+        endpoint["library"] = {
+            "libraries": {
+                "movies": {"root_folder_path": "/mnt/shared/media/movies", "quality_profile_id": 11},
+                "tv": {"root_folder_path": "/mnt/shared/media/tv shows", "quality_profile_id": 6},
+                "anime": {"root_folder_path": "/mnt/shared/media/anime", "quality_profile_id": 6},
+            },
+            "allowed_categories": ["radarr-movies", "tv-sonarr"],
+        }
+        self.assertEqual(contract.endpoint_contract(endpoint), endpoint)
+        policy = contract.playlist_operator_plan(endpoint)["policy"]
+        self.assertFalse(policy["library"]["enabled"])
+        self.assertEqual(policy["library"]["libraries"]["movies"]["library_id"], "3")
+        self.assertEqual(policy["library"]["libraries"]["tv"]["library_id"], "1132")
+        self.assertEqual(policy["library"]["libraries"]["anime"]["library_id"], "615")
+        self.assertEqual(policy["library"]["removal_thresholds"], {"min_ratio": 1.0, "min_seeding_days": 14})
+        self.assertEqual(policy["library"]["limits"]["remove_max_files"], 500)
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(policy)
+        finally:
+            sys.path.pop(0)
+        # Extended qBit descriptor with tv-sonarr is accepted when library is configured.
+        extended = copy.deepcopy(endpoint)
+        extended["torrents"]["descriptor"]["categories"] = ["radarr-movies", "tv-sonarr"]
+        self.assertEqual(contract.endpoint_contract(extended), extended)
+        # Missing root_folder_path or quality_profile_id refuses (no guessed defaults).
+        for field in ("root_folder_path", "quality_profile_id"):
+            bad = copy.deepcopy(endpoint)
+            del bad["library"]["libraries"]["movies"][field]
+            with self.subTest(missing=field), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad)
+        # Non-boolean enabled refuses.
+        bad_enabled = copy.deepcopy(endpoint)
+        bad_enabled["library"]["enabled"] = "true"
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(bad_enabled)
+
+        # R1-6 / P1-1: Go config library.enabled must match worker library.enabled and add library actions.
+        enabled_ep = copy.deepcopy(endpoint)
+        enabled_ep["library"]["enabled"] = True
+        enabled_ep["library"]["libraries"]["movies"]["minimum_availability"] = "released"
+        enabled_ep["config"]["library"] = {"enabled": True}
+        enabled_ep["config"]["policy"]["Actions"] = list(enabled_ep["config"]["policy"]["Actions"]) + [
+            "library.read", "library.manage",
+        ]
+        operator = enabled_ep["config"]["playlist_operator"]
+        enabled_ep["config"]["purpose_grants"] = {
+            "library": {
+                "subjects": ["1" * 64, "2" * 64],
+                "scopes": ["holonet.library"],
+                "namespace": "managed-library",
+                "libraries": ["3", "615", "1132"],
+                "catalog_users": [],
+                "history_users": [],
+                "target_users": [],
+                "actions": ["library.read", "library.manage"],
+            },
+        }
+        self.assertEqual(contract.endpoint_contract(enabled_ep), enabled_ep)
+        enabled_policy = contract.playlist_operator_plan(enabled_ep)["policy"]
+        self.assertTrue(enabled_policy["library"]["enabled"])
+        self.assertEqual(enabled_policy["library"]["subjects"], ["1" * 64, "2" * 64])
+        self.assertNotIn(operator["subject"], enabled_policy["library"]["subjects"])
+        for subjects in ([], ["A" * 64], ["1" * 63], ["g" * 64], ["1" * 64] * 2,
+                         [str(i) * 64 for i in range(5)]):
+            bad = copy.deepcopy(enabled_ep)
+            bad["config"]["purpose_grants"]["library"]["subjects"] = subjects
+            with self.subTest(subjects=subjects), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad)
+        matching = copy.deepcopy(enabled_ep)
+        matching["library"]["subjects"] = ["1" * 64, "2" * 64]
+        self.assertEqual(contract.endpoint_contract(matching), matching)
+        matching["library"]["subjects"] = ["3" * 64]
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(matching)
+        independent = copy.deepcopy(enabled_ep)
+        independent["config"]["janitor"]["subject"] = "another-janitor"
+        contract.holonet_purposes(independent["config"])
+        self.assertEqual(enabled_policy["library"]["libraries"]["movies"]["minimum_availability"], "released")
+        # Verify Go config invariants: policy.Actions contains library actions & purpose_grants["library"] actions are in policy.Actions.
+        self.assertTrue({"library.read", "library.manage"} <= set(enabled_ep["config"]["policy"]["Actions"]))
+        self.assertTrue(set(enabled_ep["config"]["purpose_grants"]["library"]["actions"]) <= set(enabled_ep["config"]["policy"]["Actions"]))
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(enabled_policy)
+        finally:
+            sys.path.pop(0)
+
+        # Mismatched Go vs worker library.enabled must be refused.
+        for label_case, bad_ep in (
+            ("go_on_worker_off", dict(copy.deepcopy(enabled_ep), library=dict(enabled_ep["library"], enabled=False))),
+            ("go_off_worker_on", dict(copy.deepcopy(endpoint), library=dict(endpoint["library"], enabled=True))),
+        ):
+            with self.subTest(case=label_case), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad_ep)
+
+        # Go library enabled without worker library block must be refused.
+        no_worker_lib = copy.deepcopy(enabled_ep)
+        del no_worker_lib["library"]
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(no_worker_lib)
+
+        # Go library enabled without library actions in policy.Actions must be refused.
+        missing_actions = copy.deepcopy(enabled_ep)
+        missing_actions["config"]["policy"]["Actions"] = [
+            a for a in missing_actions["config"]["policy"]["Actions"]
+            if a not in ("library.read", "library.manage")
+        ]
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(missing_actions)
+
 
 if __name__ == "__main__":
     expected = ROOT / ".cache/web-mcp-tests/home"
