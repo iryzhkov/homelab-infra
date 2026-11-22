@@ -2696,6 +2696,19 @@ def _import_rejections_allowed(raw):
     if type(raw) is not list:
         return False
     patterns = (
+        # Sonarr v4.0.20.3014 / Radarr v6.4.4.10685:
+        # DecisionEngine/Specifications/{UpgradeDisk,UpgradeAllowed}Specification.cs
+        # MediaFiles/{Episode,Movie}Import/Specifications/UpgradeSpecification.cs
+        r'existing file meets cutoff: [^;\r\n]+',
+        r'existing file on disk is of equal or higher (?:preference|revision): [^;\r\n]+',
+        r'existing file on disk meets (?:quality|custom format) cutoff: [^;\r\n]+',
+        r'existing file on disk has a equal or higher custom format score: -?\d+',
+        r'existing file on disk has custom format score within custom format score increment: -?\d+',
+        r"existing file on disk and quality profile '[^'\r\n]+' does not allow upgrades",
+        r'existing file and the quality profile does not allow upgrades',
+        r'not an upgrade for existing (?:episode file\(s\)|movie file)\. existing quality: [^;\r\n]+\. new quality [^;\r\n]+\.',
+        r'not a quality revision upgrade for existing (?:episode|movie) file\(s\)',
+        r'not a custom format upgrade for existing (?:episode|movie) file\(s\)\. new: \[[^;\r\n]*\] \(-?\d+\) do not improve on existing: \[[^;\r\n]*\] \(-?\d+\)',
         r'not an upgrade(?: for existing (?:movie |episode )?file)?[.!]?',
         r'existing file (?:meets cutoff|is higher quality)[.!]?',
         r'(?:quality|custom[ -]format|custom format score) (?:is not|isn.t|not) (?:an? )?upgrade[.!]?',
@@ -2760,6 +2773,7 @@ def op_import(call, block, arr_factory, qbit_factory=None):
 
     # Fail closed unless EVERY candidate in the download maps to this exact arr_id.
     validated = []
+    prefixes = (qbit_factory(block['torrents']).config.get('payload_prefixes') or []) if qbit_factory else []
     for c in raw_candidates:
         if type(c) is not dict:
             refuse('target_mismatch', 'Manual import candidate is malformed')
@@ -2772,7 +2786,6 @@ def op_import(call, block, arr_factory, qbit_factory=None):
             refuse('import_path_unsafe', 'Manual import candidate path is unsafe')
         if _in_root(c_path, item['path']):
             refuse('import_path_in_library', 'Manual import candidate is inside the title library folder')
-        prefixes = (qbit_factory(block['torrents']).config.get('payload_prefixes') or []) if qbit_factory else []
         if prefixes and not any(within(c_path, p.rstrip('/')) and c_path != p.rstrip('/') for p in prefixes):
             refuse('import_path_outside_download_root', 'Manual import candidate is outside download payload roots')
         if not _import_rejections_allowed(c.get('rejections')):

@@ -5,6 +5,7 @@ No production credentials, live network calls, or writes outside scratch HOME.
 import copy
 import hashlib
 import http.server
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,12 @@ import emby_operator_adapter as adapter
 import emby_operator_library as lib
 import emby_operator_socket as sock
 import emby_operator_torrents as tor
+
+_contract_spec = importlib.util.spec_from_file_location(
+    'library_packaging_contract', Path(__file__).resolve().parents[1] / 'filter_plugins/web_mcp.py')
+assert _contract_spec is not None and _contract_spec.loader is not None
+contract = importlib.util.module_from_spec(_contract_spec)
+_contract_spec.loader.exec_module(contract)
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
 FIXTURE_SHA256 = '3b7427d186e6b3fada64f9da91436d51d2bf865aa8e48d6d379d548dba769569'
@@ -814,11 +821,8 @@ class LibraryWorkerTests(unittest.TestCase):
                 'app_config_owner_uid': 1002, 'app_config_read_gid': 988,
             },
             '/etc/holonet-playlists/qbit.json': {
-                'version': 1, 'resource_id': 'homelab-qbit-movies',
-                'origin': self.qbit_url, 'expected_version': 'v5.3.0',
-                'credential_file': '/etc/holonet-playlists/qbit-auth.json',
-                'categories': ['radarr-movies', 'tv-sonarr'],
-                'payload_prefixes': ['/mnt/shared/downloads/complete/movies', '/mnt/shared/downloads/complete/tv'],
+                **contract.canonical_torrent_descriptor(library=True),
+                'origin': self.qbit_url,
             },
             '/etc/holonet-playlists/qbit-auth.json': {'username': 'synthetic', 'password': 'synthetic'},
         }
@@ -2388,6 +2392,36 @@ class LibraryWorkerTests(unittest.TestCase):
         finally:
             self.state.fail_command_post = False
 
+    def test_real_arr_upgrade_rejections(self):
+        # Rendered messages from Sonarr v4.0.20.3014 and Radarr v6.4.4.10685.
+        reasons = [
+            "Existing file meets cutoff: Bluray-1080p",
+            "Existing file on disk is of equal or higher preference: Bluray-1080p v1",
+            "Existing file on disk is of equal or higher revision: v2",
+            "Existing file on disk meets quality cutoff: Bluray-1080p",
+            "Existing file on disk meets Custom Format cutoff: 100",
+            "Existing file on disk has a equal or higher Custom Format score: 100",
+            "Existing file on disk has Custom Format score within Custom Format score increment: 10",
+            "Existing file on disk and Quality Profile 'HD' does not allow upgrades",
+            "Existing file and the Quality profile does not allow upgrades",
+            "Not an upgrade for existing episode file(s). Existing quality: Bluray-1080p. New Quality HDTV-720p.",
+            "Not an upgrade for existing movie file. Existing quality: Bluray-1080p. New Quality HDTV-720p.",
+            "Not a quality revision upgrade for existing episode file(s)",
+            "Not a Custom Format upgrade for existing episode file(s). New: [Dual Audio] (50) do not improve on Existing: [Dual Audio, HEVC] (100)",
+            "Not a quality revision upgrade for existing movie file(s)",
+            "Not a Custom Format upgrade for existing movie file(s). New: [Dual Audio] (50) do not improve on Existing: [Dual Audio, HEVC] (100)",
+        ]
+        candidate = self.state.sonarr_manualimport['a' * 40][0]
+        for reason in reasons:
+            with self.subTest(reason=reason):
+                candidate['rejections'] = [{'reason': reason}]
+                self._run(self.fixture['library_import_preview_frame'])
+                self.assertFalse(lib._import_rejections_allowed([reason, 'Sample']))
+                self.assertFalse(lib._import_rejections_allowed([reason + '; Sample']))
+        for reason in ('Custom Formats [] have score -10 below Series profile minimum 0',
+                       "Custom Formats [] have score -10 below Movie's profile minimum 0"):
+            self.assertFalse(lib._import_rejections_allowed([reason]))
+
     def test_import_candidate_gates_and_completion(self):
         frame = copy.deepcopy(self.fixture['library_import_preview_frame'])
         candidate = self.state.sonarr_manualimport['a' * 40][0]
@@ -2402,9 +2436,11 @@ class LibraryWorkerTests(unittest.TestCase):
         duplicate = copy.deepcopy(candidate)
         duplicate['path'] += '.duplicate.mkv'
         self.state.sonarr_manualimport['a' * 40].append(duplicate)
-        with self.assertRaises(lib.LibraryRefusal) as ctx:
-            self._run(frame)
-        self.assertEqual(ctx.exception.reason, 'ambiguous_import_candidates')
+        with patch.object(lib, 'LibraryTorrentClient', wraps=lib.LibraryTorrentClient) as factory:
+            with self.assertRaises(lib.LibraryRefusal) as ctx:
+                self._run(frame)
+            self.assertEqual(ctx.exception.reason, 'ambiguous_import_candidates')
+            factory.assert_called_once()
         self.state.sonarr_manualimport['a' * 40].pop()
         original_path = candidate['path']
         candidate['path'] = self.state.series[0]['path'] + '/existing.mkv'
@@ -2447,6 +2483,35 @@ class LibraryWorkerTests(unittest.TestCase):
         with self.assertRaises(lib.LibraryRefusal) as ctx:
             self._run(movie_frame)
         self.assertEqual(ctx.exception.reason, 'ambiguous_import_candidates')
+
+    def test_tv_and_anime_hardlink_payload_roots(self):
+        class QBit:
+            config = contract.canonical_torrent_descriptor(library=True)
+            def files_by_hash(self, torrent_hash):
+                return [{'name': 'Show/episode.mkv'}]
+        def stat_file(path, depth, budget, held=None):
+            if held is not None:
+                held.append(999)
+            return (1, 2, 2)
+        from types import SimpleNamespace
+        with patch.object(lib, '_walk_stat_regular', side_effect=stat_file) as walk, \
+             patch.object(lib.os, 'fstat', return_value=SimpleNamespace(st_dev=1, st_ino=2, st_nlink=2)), \
+             patch.object(lib.os, 'close'):
+            for name, root in (('tv', '/mnt/shared/media/tv shows'),
+                               ('anime', '/mnt/shared/media/anime')):
+                with self.subTest(library=name):
+                    evidence = {}
+                    self.assertEqual(lib._verify_torrent_hardlinks(
+                        QBit(), {'save_path': '/mnt/shared/downloads/complete/tv'}, 'a' * 40,
+                        deleted_inodes_cache=evidence, files=[{'path': root + '/Show/episode.mkv'}],
+                        lib_name=name, root_folder_path=root, stat_budget=[100]), (True, None))
+                    self.assertEqual(evidence['a' * 40][0][:2],
+                                     ('/mnt/shared/downloads/complete/tv/Show/episode.mkv', 5))
+                    self.assertEqual(lib._verify_torrent_hardlinks(
+                        QBit(), {'save_path': '/mnt/shared/downloads/complete/xxx'}, 'a' * 40,
+                        deleted_inodes_cache={}, files=[{'path': root + '/Show/episode.mkv'}],
+                        lib_name=name, root_folder_path=root, stat_budget=[100]),
+                                     (False, 'hardlink_outside_download_root'))
 
     def test_remove_hardlink_ownership_proof(self):
         base = Path(os.environ['TMPDIR']) / f'holonet-hardlink-{os.getpid()}'

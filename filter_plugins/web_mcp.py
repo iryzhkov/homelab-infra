@@ -105,7 +105,7 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "962a8a6e3abc4b8d867e8a8fa53a368f849e2c1c27feb942220134e10a8812c6",
+    "emby_operator_library.py": "befe89f079a7c0c30857069ea96731ef190d132a90782e29f2543f61e7b44de2",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
     "emby_operator_socket.py": "870079605e6fce1b2d9c4abd5b283b9be37a7dc3c7d2a621bf9b533bbe15005b",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
@@ -709,6 +709,19 @@ def qbit_auth(value):
     return value
 
 
+def canonical_torrent_descriptor(*, library=False):
+    """Existing qBit categories and payload roots, including Sonarr anime in tv."""
+    descriptor = dict(version=1, resource_id=TORRENT_RESOURCE,
+        origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
+        credential_file=TORRENT_AUTH, categories=["radarr-movies"],
+        payload_prefixes=["/mnt/shared/downloads/complete/movies"])
+    if library:
+        descriptor.update(categories=["radarr-movies", "tv-sonarr"],
+                          payload_prefixes=["/mnt/shared/downloads/complete/movies",
+                                            "/mnt/shared/downloads/complete/tv"])
+    return descriptor
+
+
 def torrent_install_plan(value):
     config = value["config"]
     janitor = config.get("janitor")
@@ -720,13 +733,10 @@ def torrent_install_plan(value):
     holonet_janitor(config)
     data = value["torrents"]
     keys(data, ("descriptor",))
-    expected = dict(version=1, resource_id=TORRENT_RESOURCE,
-        origin="https://torrent.ryzhkov.dev", expected_version="v5.3.0",
-        credential_file=TORRENT_AUTH, categories=["radarr-movies"],
-        payload_prefixes=["/mnt/shared/downloads/complete/movies"])
+    expected = canonical_torrent_descriptor()
     allowed_descriptors = [expected]
     if "library" in value:
-        extended = dict(expected, categories=["radarr-movies", "tv-sonarr"])
+        extended = canonical_torrent_descriptor(library=True)
         allowed_descriptors.append(extended)
     require(data["descriptor"] in allowed_descriptors,
             "torrent descriptor must match the canonical Movies source")
