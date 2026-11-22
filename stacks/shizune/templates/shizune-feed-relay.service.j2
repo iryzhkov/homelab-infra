@@ -4,9 +4,5 @@ Description=Relay private Shizune budget event counts
 Type=oneshot
 ExecStart=/usr/local/sbin/shizune-feed-relay
 UMask=0077
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths={{ stack_dir }}/data/feed-outbox
-ProtectHome=read-only
-PrivateTmp=true
+Environment=PATH=/home/iryzhkov/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 TimeoutStartSec=55min

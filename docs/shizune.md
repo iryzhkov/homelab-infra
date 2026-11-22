@@ -131,10 +131,35 @@ directories through the owning backup procedure before storing useful data.
 Both declared igor identities may request `shizune.use shizune.budget.write`.
 Requesting only `shizune.use` retains use-only access. Budget write tools
 require the optional scope. Issuer, audience, client and 300-second lifetime
-stay fixed. Converge through the existing-owned baseline procedure above;
-confirm the new successful stored blueprint hash before updating the baseline,
-then require an identical zero-change repeat. Never retry through bootstrap
-if the baseline guard refuses.
+stay fixed. The legacy blueprint procedure above is frozen after cohort
+signer enrollment and must not be used or bypassed on the enrolled controller.
+Deploying the relay is independent of scope enrollment.
+
+Use the existing protected M3 packet and complete cohort, owner, receipt and
+baseline inputs with `authentik_agent_create_shizune_budget_mapping=true`
+through the signer's locked enrollment wrapper:
+
+```sh
+sudo /usr/local/sbin/authentik-signer enrollment ansible-playbook -i "$PROTECTED_INVENTORY" playbooks/authentik-agent-hosts.yml -e @"$PROTECTED_AGENT_HOSTS" -e authentik_agent_create_shizune_budget_mapping=true --check
+# Inspect CHECK, then run REAL and an identical zero-change repeat.
+```
+
+This narrow producer creates only shizune.budget.write with an initial deny
+expression, attaches its API-returned UUID to the owned Shizune provider, and
+records each mutation in hosts.json. Unknown outcomes remain pending and refuse
+replay. Its final expression grants only the two named legacy Shizune accounts,
+with exact owner attribute and group membership and both scopes requested.
+It grants no budget writes to M3 host accounts. It refuses simultaneous host
+lifecycle or rotation changes. Do not supply a new mapping baseline; provenance
+comes from the producer's own journal. The legacy blueprint baseline stays
+unchanged because no stored blueprint is reapplied.
+
+After an accepted change, retain the new mapping ID/expression and attachment
+receipt, update the protected signer's Shizune property_mappings contract to the
+exact live attachment set, and run approve-contracts and publish through the
+maintained signer procedure. Require zero-change enrollment repeat and verify
+both use-only and combined-scope token claims. Never use bootstrap to evade
+a signer or ownership refusal.
 
 The stack prepare tasks create `data/feed-outbox`, mode 0700 owned by UID
 10001, before container startup. The gateway atomically renames mode-0600

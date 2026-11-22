@@ -9,3 +9,5 @@ authentik_agent_host_baselines: []
 authentik_agent_original_writer_read: {}
 # Narrow opt-in producer for the M3 host holonet.library scope mapping.
 authentik_agent_create_library_mapping: false
+# Fixed legacy Shizune budget write scope; journal-owned, default off.
+authentik_agent_create_shizune_budget_mapping: false

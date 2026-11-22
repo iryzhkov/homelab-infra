@@ -83,13 +83,24 @@ def function(source, **context):
 
 class Contract(unittest.TestCase):
     def test_shizune_optional_write_scope(self):
+        both = ["shizune.use", "shizune.budget.write"]
         for host in ("laptop", "omarchy-pc"):
             grant = c.MATRIX[host]["shizune"]
-            for scopes in (["shizune.use"], ["shizune.use", "shizune.budget.write"]):
-                self.assertEqual(c.claims("shizune", grant, scopes), grant)
-            for scopes in (["shizune.budget.write"], ["shizune.use", "foreign"],
-                           ["shizune.use", "shizune.use"], []):
-                self.assertEqual(c.claims("shizune", grant, scopes), {})
+            self.assertEqual(c.claims("shizune", grant, ["shizune.use"]), grant)
+            self.assertEqual(c.claims("shizune", grant, both), {})
+            user = NS(username="chaldea-" + host + "-shizune-interactive",
+                      type="service_account", attributes={"chaldea_shizune": grant})
+            expression = c.scope_expression("shizune", "shizune.budget.write", [], "return {}")
+            def run(scopes, member=True):
+                return function(expression, user=user, token=NS(scope=scopes),
+                                ak_is_group_member=lambda u, name: member)
+            self.assertEqual(run(both), dict(grant, aud=c.RESOURCES["shizune"]))
+            for scopes in ([], ["shizune.use"], ["shizune.budget.write"],
+                           both + ["shizune.use"], both + ["foreign"]):
+                self.assertEqual(run(scopes), {})
+            self.assertEqual(run(both, False), {})
+            user.username = "chaldea-" + host
+            self.assertEqual(run(both), {})
 
     def test_exact_matrix(self):
         self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
@@ -968,7 +979,7 @@ class Lifecycle(unittest.TestCase):
             selected = [b for b in baselines if b["service"] == service and b["kind"] == "mapping"]
             ids = [b["pk"] for b in selected]
             pk = 99 if service == "holonet" else 200 + index
-            name = slug = "chaldea-" + service
+            name = slug = "shizune-mcp" if service == "shizune" else "chaldea-" + service
             app = {"pk": service, "slug": slug, "provider": pk,
                    "backchannel_providers": [], "policy_engine_mode": "any"}
             binding = {"pk": service, "target": service, "group": c.GROUP_IDS.get(service),
@@ -1229,6 +1240,27 @@ class Lifecycle(unittest.TestCase):
         token_writes = [(m, p) for m, p, _ in self.api.calls[calls:]
                         if m != "GET" and p.startswith(e.PATHS["token"])]
         self.assertEqual(token_writes, [])
+
+    def test_shizune_budget_mapping_create_repeat_and_collision(self):
+        params = self.library_params()
+        params["create_shizune_budget_mapping"] = True
+        calls = len(self.api.calls)
+        self.assertNotIn("failed", self.main_run(params, True))
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        result = self.main_run(params)
+        self.assertNotIn("failed", result)
+        self.assertEqual(result["delivery"], [])
+        record = e.read_private(self.fd, "hosts.json")["shizune_budget_mapping"]
+        mapping = next(m for m in self.api.data["mapping"] if m["pk"] == record["pk"])
+        self.assertEqual(mapping["scope_name"], "shizune.budget.write")
+        self.assertEqual(mapping["expression"], c.SHIZUNE_BUDGET_EXPRESSION)
+        calls = len(self.api.calls)
+        self.assertFalse(self.main_run(params)["changed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.api.data["mapping"].append(dict(mapping, pk="foreign"))
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
 
     def test_library_mapping_create_attach_upgrade_and_repeat(self):
         hosts = [item("laptop"), item("omarchy-pc")]

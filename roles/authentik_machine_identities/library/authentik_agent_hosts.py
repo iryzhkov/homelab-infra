@@ -22,6 +22,13 @@ PATHS = {"user": "/core/users/", "token": "/core/tokens/",
          "application": "/core/applications/", "binding": "/policies/bindings/"}
 
 HOST_MAPPING_SPECS = {
+    "shizune_budget_mapping": {
+        "receipt_key": "shizune_budget_mapping", "other_key": "",
+        "service": "shizune", "app_slug": "shizune-mcp",
+        "name": "M3 Shizune budget write",
+        "scope": "shizune.budget.write", "expression": "return {}",
+        "pending_pk": "pending-shizune-budget",
+    },
     "acquire_mapping": {
         "receipt_key": "acquire_mapping",
         "other_key": "library_mapping",
@@ -365,12 +372,12 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             original_rows = copy.deepcopy(self.rows)
             provider["property_mappings"] = record["before"]
             try:
-                self.resources(hosts, baselines)
+                self.resources(hosts, baselines, only=service)
             finally:
                 self.rows = original_rows
         else:
             require(create and not selected)
-            self.resources(hosts, baselines)
+            self.resources(hosts, baselines, only=service)
             record = {"provider": provider["pk"], "before": sorted(provider["property_mappings"]),
                       "body": body, "attached": False}
             require(len(record["before"]) == len(set(record["before"])))
@@ -421,9 +428,15 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             precondition=lambda: any("holonet" in MATRIX[h["host"]] for h in hosts),
         )
 
-    def resources(self, hosts, baselines):
+    def shizune_budget_mapping(self, hosts, baselines, create=False):
+        return self._ensure_mapping(HOST_MAPPING_SPECS["shizune_budget_mapping"],
+                                    hosts, baselines, create=create)
+
+    def resources(self, hosts, baselines, only=None):
         # Inspect public provider bodies only. Never open an OAuth2 secret.
         for service in set().union(*(set(MATRIX[h["host"]]) for h in hosts)):
+            if only is not None and service != only:
+                continue
             selected = [b for b in baselines if b["service"] == service]
             mappings = [b for b in selected if b["kind"] == "mapping"]
             require(mappings)
@@ -666,7 +679,7 @@ return {'aud': 'https://akasha.ryzhkov.dev',
             require(key is not None and key in self.receipt)
             record = self.receipt[key]
             require(record["attached"] and baseline["kind"] == "mapping"
-                    and baseline["service"] == "holonet"
+                    and baseline["service"] == HOST_MAPPING_SPECS[key]["service"]
                     and baseline["scope"] == record["body"]["scope_name"]
                     and current["pk"] == record["pk"] and current["name"] == record["body"]["name"]
                     and original == record["body"]["expression"])
@@ -790,6 +803,8 @@ return {'aud': 'https://akasha.ryzhkov.dev',
         expected |= {("ov", "ov." + a) for a in matrix["laptop"]["ov"]["ov_actions"]}
         expected |= {("ov", "ov.personal." + a) for a in matrix["laptop"]["ov"]["ov_personal"]["actions"]}
         expected |= {("holonet", s) for p in matrix["laptop"]["holonet"]["purposes"].values() for s in p["scopes"]}
+        if "shizune_budget_mapping" in self.receipt:
+            expected.add(("shizune", "shizune.budget.write"))
         if original_writer:
             expected.add(("holonet", "holonet.acquire"))
         require({(b["service"], b["scope"]) for b in baselines if b["kind"] == "mapping"} == expected)
@@ -813,6 +828,7 @@ def main():
         "original_writer_read": {"type": "dict", "default": {}},
         "create_original_writer_read_mapping": {"type": "bool", "default": False},
         "create_library_mapping": {"type": "bool", "default": False},
+        "create_shizune_budget_mapping": {"type": "bool", "default": False},
         "original_writer_previous_sha256": {"type": "str", "default": ""},
         "reenable_host": {"type": "str", "default": ""},
         "akasha_signing_key": {"type": "str", "default": ""},
@@ -863,8 +879,11 @@ def main():
                 e.changed = False
                 result = e.library_mapping(hosts, result, p.get("create_library_mapping", False))
                 lib_changed = e.changed
-            e.changed = acq_changed or lib_changed
-            return result, acq_changed, lib_changed
+            e.changed = False
+            result = e.shizune_budget_mapping(hosts, result, p.get("create_shizune_budget_mapping", False))
+            budget_changed = e.changed
+            e.changed = acq_changed or lib_changed or budget_changed
+            return result, acq_changed or budget_changed, lib_changed
 
         e.recover_provider(rotation_key, akasha_key)
         # Adopting a pending provider is not a resource change; keep it out of
@@ -903,7 +922,8 @@ def main():
                 require(len(live_tokens) >= 1
                         and item["generation"] == tok["generation"])
         users, _ = e.users(hosts)
-        if projection_changed or acquire_changed:
+        budget_mode = p.get("create_shizune_budget_mapping", False)
+        if projection_changed or acquire_changed or budget_mode:
             require(not rotation_changed and not e.changed and not p["reenable_host"])
         if library_mode:
             require(not rotation_changed and not p["reenable_host"]
@@ -943,7 +963,7 @@ def main():
         if not module.check_mode:
             e.save()
         # Projection-only enrollment never reads/delivers any host credential.
-        if projection_changed or acquire_changed or library_mode:
+        if projection_changed or acquire_changed or library_mode or budget_mode:
             delivery = []
         module.exit_json(changed=e.changed or e.signer_rebased, delivery=delivery,
                          public_host_users=users, predicted_pks=False)
