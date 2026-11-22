@@ -259,6 +259,8 @@ def make_radarr_handler(state):
             if u.path == '/api/v3/importlist':
                 return self._send(200, state.radarr_importlists)
             if u.path == '/api/v3/importlist/movie':
+                if state.radarr_recommendations is None:
+                    return self._send(500, {'message': 'upstream metadata failure'})
                 return self._send(200, state.radarr_recommendations)
             if u.path == '/api/v3/history':
                 qs = urllib.parse.parse_qs(u.query)
@@ -1838,6 +1840,16 @@ class LibraryWorkerTests(unittest.TestCase):
         res_exp = run_with({}, now_ts=1795262400.0 + 3601 + 21600)
         self.assertEqual(len(mdb_calls), 15)
         self.assertEqual(res_exp['quota']['mdblist_calls_today'], 15)
+
+        # 6. A failing Radarr recommendations endpoint keeps the mdblist results.
+        self.state.radarr_recommendations = None
+        degraded = run_with({}, now_ts=1795262400.0 + 3601 + 21600 + 10)
+        self.assertTrue(any('Radarr recommendations are unavailable' in w for w in degraded['warnings']))
+        degraded_titles = [i['title'] for i in degraded['items']]
+        self.assertIn('Synthetic Recommended Movie', degraded_titles)
+        self.assertNotIn('Radarr Anime Film', degraded_titles)
+        self.assertNotIn('radarr-recommendation',
+                         [s for i in degraded['items'] for s in i['sources']])
 
     def test_recommendations_quota_ceiling_and_429(self):
         # 1. Quota exhausted with no cache -> refuses quota_exhausted.
