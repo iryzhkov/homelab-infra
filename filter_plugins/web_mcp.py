@@ -102,9 +102,9 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "f5b45f7809e00ae042b156865f92f52fd6da48d47efeb4afa0e5e8e0d53746ea",
+    "emby_operator_library.py": "0c5f887b4ca9caf06baff777a96eb43c0be46761ebe8540e69b472b288f49ce2",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
-    "emby_operator_socket.py": "bb513c3f7c3809bce5d2202e4e03ccc80db7181a87b9e5f46383f17a36f11209",
+    "emby_operator_socket.py": "870079605e6fce1b2d9c4abd5b283b9be37a7dc3c7d2a621bf9b533bbe15005b",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
     "emby_operator_custody.py": "09bbaf1a9a59ca2a2df533d5fdae669cfda4170cd0d3ecb7250cdcde34c3b79c",
     "emby_operator_seed_join.py": "deb669172df79565cd17a8774c827604432936eb2404e86a49e59b8e68eb21d2",
@@ -334,12 +334,11 @@ def holonet_config(config):
         keys(lib_cfg, ("enabled",))
         require(type(lib_cfg["enabled"]) is bool, "library enabled must be a boolean")
         if lib_cfg["enabled"]:
-            operator = config.get("playlist_operator")
-            janitor = config.get("janitor")
-            require(operator is not None and janitor is not None
-                    and operator["subject"] == janitor["subject"]
-                    and operator["library"] == janitor["library"],
-                    "library requires playlist_operator and janitor on the same writer binding")
+            require(config.get("playlist_operator") is not None,
+                    "library requires playlist_operator")
+            grants = config.get("purpose_grants")
+            require(isinstance(grants, dict) and "library" in grants,
+                    "enabled library requires purpose_grants.library")
     policy = config["policy"]
     keys(policy, ("Server", "Actions", "Libraries", "CatalogUsers", "HistoryUsers"))
     playback = config.get("playback") is not None
@@ -449,13 +448,13 @@ def holonet_purposes(config):
                     and set(grant["libraries"]) <= set(config["policy"]["Libraries"]),
                     "catalog purpose must remain read only")
         elif name == "library":
-            require(operator is not None
-                    and grant["subjects"] == [operator["subject"]]
+            require(1 <= len(grant["subjects"]) <= 4
+                    and all(re.fullmatch(r"[0-9a-f]{64}", s) for s in grant["subjects"])
                     and grant["namespace"] == "managed-library"
                     and grant["libraries"] == ["3", "615", "1132"]
                     and not grant["catalog_users"] and not grant["history_users"] and not grant["target_users"]
                     and set(grant["actions"]) in ({"library.read"}, {"library.read", "library.manage"}),
-                    "library purpose exceeds original writer tuple")
+                    "library purpose exceeds host-subject contract")
         elif name in ("acquire_read", "acquire_start", "acquire_media"):
             janitor = config.get("janitor")
             actions = {"acquire_read": {"janitor.acquire.read"},
@@ -753,10 +752,19 @@ def library_install_plan(value):
     operator = config.get("playlist_operator")
     require(operator is not None, "library management requires playlist_operator")
     data = value["library"]
-    keys(data, ("libraries", "allowed_categories"), ("enabled", "removal_thresholds", "limits", "torrents"))
+    keys(data, ("libraries", "allowed_categories"), ("enabled", "removal_thresholds", "limits", "torrents", "subjects"))
     enabled = data.get("enabled", False)
     require(type(enabled) is bool, "library enabled must be a boolean")
     require(go_enabled == enabled, "Go config library.enabled must match worker library.enabled")
+    go_grant = (config.get("purpose_grants") or {}).get("library")
+    go_subjects = list(go_grant["subjects"]) if isinstance(go_grant, dict) and isinstance(go_grant.get("subjects"), list) else None
+    if enabled:
+        require(go_subjects is not None,
+                "enabled library management requires Go purpose_grants.library.subjects")
+    if "subjects" in data:
+        require(isinstance(data["subjects"], list) and go_subjects is not None
+                and data["subjects"] == go_subjects,
+                "worker library subjects must match Go purpose_grants.library.subjects")
     libs = data["libraries"]
     require(isinstance(libs, dict) and set(libs) == set(LIBRARY_SPECS),
             "library mapping must declare exactly movies, tv and anime")
@@ -827,6 +835,7 @@ def library_install_plan(value):
             "enabled": enabled,
             "target_library": OPERATOR_LIBRARY,
             "revision": config["policy_revision"],
+            "subjects": list(go_subjects) if go_subjects is not None else [],
             "libraries": rendered_libs,
             "torrents": torrents_path,
             "allowed_categories": list(cats),

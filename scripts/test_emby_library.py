@@ -610,6 +610,10 @@ class LibraryWorkerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.fixture = json.loads(FIXTURE.read_text())
+        # Keep the shared wire fixture intact; authorization uses M3 host uids.
+        for key, frame in cls.fixture.items():
+            if key.endswith('_frame'):
+                frame['caller']['subject'] = '1' * 64
 
     def setUp(self):
         self.state = FakeState()
@@ -634,6 +638,7 @@ class LibraryWorkerTests(unittest.TestCase):
                 'enabled': True,
                 'target_library': '3',
                 'revision': 'e' * 40,
+                'subjects': ['1' * 64, '2' * 64],
                 'libraries': {
                     'movies': {
                         'library_id': '3', 'kind': 'movie', 'arr': 'radarr',
@@ -735,6 +740,22 @@ class LibraryWorkerTests(unittest.TestCase):
             if key.endswith('_frame'):
                 parsed = sock.parse_request(json.dumps(value).encode('utf-8'))
                 sock.authorize(parsed, self.policy)
+
+    def test_library_subjects_are_independent_of_writer(self):
+        frame = copy.deepcopy(self.fixture['library_lookup_frame'])
+        for subject in self.policy['library']['subjects']:
+            frame['caller']['subject'] = subject
+            sock.authorize(sock.parse_request(json.dumps(frame).encode()), self.policy)
+        for subject in (self.policy['caller']['subject'], '3' * 64):
+            frame['caller']['subject'] = subject
+            with self.assertRaises(sock.WireError):
+                sock.authorize(sock.parse_request(json.dumps(frame).encode()), self.policy)
+        for subjects in ([], ['A' * 64], ['1' * 63], ['1' * 64] * 2,
+                         [str(i) * 64 for i in range(5)]):
+            policy = copy.deepcopy(self.policy)
+            policy['library']['subjects'] = subjects
+            with self.assertRaises(sock.Refused):
+                sock.validate_policy(policy)
 
     def test_lookup_detail_releases_queue_and_subtitles(self):
         self.assertEqual(

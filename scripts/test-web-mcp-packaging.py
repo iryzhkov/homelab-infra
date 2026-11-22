@@ -2641,7 +2641,7 @@ class CoexistencePackaging(unittest.TestCase):
         operator = enabled_ep["config"]["playlist_operator"]
         enabled_ep["config"]["purpose_grants"] = {
             "library": {
-                "subjects": [operator["subject"]],
+                "subjects": ["1" * 64, "2" * 64],
                 "scopes": ["holonet.library"],
                 "namespace": "managed-library",
                 "libraries": ["3", "615", "1132"],
@@ -2654,6 +2654,23 @@ class CoexistencePackaging(unittest.TestCase):
         self.assertEqual(contract.endpoint_contract(enabled_ep), enabled_ep)
         enabled_policy = contract.playlist_operator_plan(enabled_ep)["policy"]
         self.assertTrue(enabled_policy["library"]["enabled"])
+        self.assertEqual(enabled_policy["library"]["subjects"], ["1" * 64, "2" * 64])
+        self.assertNotIn(operator["subject"], enabled_policy["library"]["subjects"])
+        for subjects in ([], ["A" * 64], ["1" * 63], ["g" * 64], ["1" * 64] * 2,
+                         [str(i) * 64 for i in range(5)]):
+            bad = copy.deepcopy(enabled_ep)
+            bad["config"]["purpose_grants"]["library"]["subjects"] = subjects
+            with self.subTest(subjects=subjects), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad)
+        matching = copy.deepcopy(enabled_ep)
+        matching["library"]["subjects"] = ["1" * 64, "2" * 64]
+        self.assertEqual(contract.endpoint_contract(matching), matching)
+        matching["library"]["subjects"] = ["3" * 64]
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(matching)
+        independent = copy.deepcopy(enabled_ep)
+        independent["config"]["janitor"]["subject"] = "another-janitor"
+        contract.holonet_purposes(independent["config"])
         self.assertEqual(enabled_policy["library"]["libraries"]["movies"]["minimum_availability"], "released")
         # Verify Go config invariants: policy.Actions contains library actions & purpose_grants["library"] actions are in policy.Actions.
         self.assertTrue({"library.read", "library.manage"} <= set(enabled_ep["config"]["policy"]["Actions"]))

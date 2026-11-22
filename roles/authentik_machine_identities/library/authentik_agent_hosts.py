@@ -914,11 +914,30 @@ def main():
         users_before = copy.deepcopy(e.receipt["users"])
         tokens_before = copy.deepcopy(e.receipt["tokens"])
         revoked_before = list(e.receipt["revoked"])
+        library_mode = p.get("create_library_mapping", False) or library_changed
+        if library_mode:
+            require(not rotation_changed and not p["reenable_host"])
+            for item in hosts:
+                host = item["host"]
+                pk = e.receipt["users"].get(host)
+                tok = e.receipt["tokens"].get(host)
+                require(pk is not None and tok is not None
+                        and not item["revoked"] and host not in e.receipt["revoked"])
+                live_users = [u for u in e.rows["user"]
+                              if u["username"] == "chaldea-" + host and u["pk"] == pk]
+                require(len(live_users) == 1 and live_users[0]["is_active"] is True
+                        and not live_users[0]["attributes"].get("revoked"))
+                live_tokens = [t for t in e.rows["token"]
+                               if t.get("user") == pk and t.get("intent") == "app_password"
+                               and t.get("identifier") == tok["identifier"]]
+                require(len(live_tokens) == 1
+                        and item["generation"] == tok["generation"])
         users, _ = e.users(hosts)
         if projection_changed or acquire_changed:
             require(not rotation_changed and not e.changed and not p["reenable_host"])
-        if library_changed:
+        if library_mode:
             require(not rotation_changed and not p["reenable_host"]
+                    and len(users) == len(hosts)
                     and e.receipt["users"] == users_before
                     and e.receipt["tokens"] == tokens_before
                     and e.receipt["revoked"] == revoked_before)
@@ -954,7 +973,7 @@ def main():
         if not module.check_mode:
             e.save()
         # Projection-only enrollment never reads/delivers any host credential.
-        if projection_changed or acquire_changed or library_changed:
+        if projection_changed or acquire_changed or library_mode:
             delivery = []
         module.exit_json(changed=e.changed or e.signer_rebased, delivery=delivery,
                          public_host_users=users, predicted_pks=False)

@@ -531,7 +531,7 @@ def authorize(call, policy):
         block = policy.get('library')
         check(block is not None and block.get('enabled') is True,
               'refused', 'Library management not enabled by policy')
-        check(caller['subject'] == policy['caller']['subject'] and
+        check(caller['subject'] in block['subjects'] and
               all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
               caller['namespace'] == LIBRARY_NAMESPACE and
               caller['target_library'] == block['target_library'] and

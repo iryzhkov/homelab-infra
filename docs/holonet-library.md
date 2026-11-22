@@ -48,21 +48,47 @@ worker unit's `ReadWritePaths` does not change and no new credentials are added.
 
 ## Policy inputs
 
-`filter_plugins/web_mcp.py` renders an optional `library` block into
-`/etc/holonet-playlists/policy.json`:
+`filter_plugins/web_mcp.py` validates both the Go service `config` and the
+optional worker `library` block in `web_mcp_endpoint`, rendering the worker
+ceiling into `/etc/holonet-playlists/policy.json`:
 
-- `enabled`: explicit boolean, default `false`.
-- `libraries`: explicit mapping for `movies` (`3`, `movie`, `radarr`), `tv`
-  (`1132`, `series`, `sonarr`), and `anime` (`615`, `series`, `sonarr`). Every
-  entry requires explicit `root_folder_path` and `quality_profile_id` (no
-  guessed defaults).
-- `allowed_categories`: explicit list of qBittorrent categories eligible for
-  torrent removal (for example `["radarr-movies", "tv-sonarr"]`).
-- `removal_thresholds`: `min_ratio` (default `1.0`) and `min_seeding_days`
-  (default `14`).
-- `limits`: `lookup_max_rows` (25), `releases_max_rows` (50),
-  `subtitles_default_chars` (20000), `subtitles_max_chars` (60000),
-  `remove_max_files` (500).
+- Go `config.library.enabled`: explicit boolean (`false` by default; must match
+  worker `library.enabled`).
+- Go `config.policy.Actions`: must include `"library.read"` and
+  `"library.manage"` when `config.library.enabled` is `true` (and omit them when
+  `false`).
+- Go `config.purpose_grants.library` (required when enabled):
+  - `scopes`: `["holonet.library"]`
+  - `namespace`: `"managed-library"`
+  - `actions`: `["library.read", "library.manage"]` (or `["library.read"]`)
+  - `libraries`: `["3", "615", "1132"]`
+  - `catalog_users`, `history_users`, `target_users`: `[]`
+  - `subjects`: 1–4 unique lowercase 64-hex Authentik `uid` values for the
+    authorized M3 host accounts (`chaldea-laptop` and `chaldea-omarchy-pc`),
+    independent of the playlist writer subject. Read the exact `uid` values from
+    a public Authentik user GET (`/api/v3/core/users/?username=chaldea-laptop`
+    and `/api/v3/core/users/?username=chaldea-omarchy-pc`). Use each returned
+    user's `uid`, not its numeric `pk`: `hosts.json` and `public_host_users`
+    expose the `pk` and cannot supply these subject values.
+- Worker `library` block in `web_mcp_endpoint`:
+  - `enabled`: explicit boolean, default `false` (must match Go
+    `config.library.enabled`).
+  - `libraries`: explicit mapping for `movies` (`3`, `movie`, `radarr`), `tv`
+    (`1132`, `series`, `sonarr`), and `anime` (`615`, `series`, `sonarr`). Every
+    entry requires explicit `root_folder_path` and `quality_profile_id` (no
+    guessed defaults).
+  - `allowed_categories`: explicit list of qBittorrent categories eligible for
+    torrent removal (for example `["radarr-movies", "tv-sonarr"]`).
+  - `removal_thresholds`: `min_ratio` (default `1.0`) and `min_seeding_days`
+    (default `14`).
+  - `limits`: `lookup_max_rows` (25), `releases_max_rows` (50),
+    `subtitles_default_chars` (20000), `subtitles_max_chars` (60000),
+    `remove_max_files` (500).
+  - `subjects`: rendered into `/etc/holonet-playlists/policy.json` from Go
+    `config.purpose_grants.library.subjects` (single source of truth; if also
+    supplied on the worker `library` input, any mismatch is refused). The worker
+    authorizes `library-*` calls only for subjects in `policy.library.subjects`
+    (independent of the writer subject).
 
 ## Authentik host grant and scope mapping
 
@@ -89,16 +115,35 @@ worker unit's `ReadWritePaths` does not change and no new credentials are added.
 
 ## Enable and rollback
 
-- Enable:
-  1. Run the standard CHECK -> REAL -> REAL -> CHECK sequence of
-     `playbooks/authentik-agent-hosts.yml` with the existing protected cohort,
-     baselines, and journal plus `-e authentik_agent_create_library_mapping=true`.
-     Verify the second REAL and final CHECK report zero changes.
-  2. Set `library.enabled: true` in the endpoint's `web_mcp_endpoint` inventory
-     input alongside the explicit root folder paths and quality profile IDs, and
-     re-render `/etc/holonet-playlists/policy.json`.
-- Rollback: set `library.enabled: false` in the endpoint policy input and
-  re-render `/etc/holonet-playlists/policy.json`. The worker immediately refuses
-  all `library-*` operations with `Library management not enabled by policy`.
+- Enable (strict order):
+  1. **Merge** this revision. Once merged, the closed expected baseline set
+     includes `holonet.library` for `laptop`, so every
+     `playbooks/authentik-agent-hosts.yml` run without
+     `authentik_agent_create_library_mapping=true` refuses until the producer
+     has run. The producer run is the mandatory next `authentik-agent-hosts` run
+     after merge; no other run (rotation, reenable, revocation, or Akasha) can
+     succeed before it completes.
+  2. **Producer run**: run the standard `CHECK -> REAL -> REAL -> CHECK`
+     sequence of `playbooks/authentik-agent-hosts.yml` with the existing
+     protected cohort, baselines, and journal plus
+     `-e authentik_agent_create_library_mapping=true`. Every selected host must
+     already be enrolled; no lifecycle effects are permitted during the producer
+     run. Verify the second REAL and final CHECK report zero changes.
+  3. **Endpoint deploy**: read the Authentik `uid` values for `chaldea-laptop`
+     and `chaldea-omarchy-pc` via a public user GET (not `pk`), set all policy
+     inputs above (`config.library.enabled: true`, `config.policy.Actions` with
+     `library.read`/`library.manage`, `config.purpose_grants.library` with those
+     host `uid` subjects, and the worker `library` block with `enabled: true`,
+     explicit `libraries` mapping, `allowed_categories` including
+     `radarr-movies` and `tv-sonarr`, `removal_thresholds`, and `limits`), and
+     deploy the HoloNet endpoint to render both the Go config and
+     `/etc/holonet-playlists/policy.json`.
+  4. **Fleet flag**: enable `webmcp_interactive_holonet_library_enabled` on
+     `laptop` and `omarchy-pc` in `chaldea-fleet-config`.
+- Rollback: flip Go `config.library.enabled` and worker `library.enabled` to
+  `false` together (removing `library.read` and `library.manage` from
+  `config.policy.Actions`) and redeploy the endpoint to re-render
+  `/etc/holonet-playlists/policy.json`. The worker immediately refuses all
+  `library-*` operations with `Library management not enabled by policy`.
   Authentik-side withdrawal of the `holonet.library` mapping expression is a
   separate follow-up.

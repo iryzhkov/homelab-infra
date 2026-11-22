@@ -141,12 +141,17 @@ def required_action(operation):
 
 def validate_block(value):
     need(type(value) is dict and set(value) == {
-        'enabled', 'target_library', 'revision', 'libraries',
+        'enabled', 'target_library', 'revision', 'subjects', 'libraries',
         'torrents', 'allowed_categories', 'removal_thresholds', 'limits',
     }, 'Invalid library policy')
     need(type(value['enabled']) is bool, 'Invalid library policy')
     need(catalog_id(value['target_library']) and isinstance(value['revision'], str)
          and re.fullmatch(r'[0-9a-f]{40,64}', value['revision']), 'Invalid library policy')
+    subjects = value['subjects']
+    min_subjects = 1 if value['enabled'] else 0
+    need(type(subjects) is list and min_subjects <= len(subjects) <= 4
+         and all(isinstance(s, str) and HEX64.fullmatch(s) for s in subjects)
+         and len(set(subjects)) == len(subjects), 'Invalid library policy')
     libs = value['libraries']
     need(type(libs) is dict and set(libs) == set(LIBRARY_SPECS), 'Invalid library policy')
     for name, spec in LIBRARY_SPECS.items():

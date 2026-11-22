@@ -1166,6 +1166,43 @@ class Lifecycle(unittest.TestCase):
                     create_original_writer_read_mapping=False, create_library_mapping=True,
                     original_writer_previous_sha256="")
 
+    def test_library_producer_refuses_unenrolled_hosts_before_any_write(self):
+        params = self.library_params()
+        receipt = e.read_private(self.fd, "hosts.json")
+        receipt["users"].pop("laptop")
+        receipt["tokens"].pop("laptop")
+        e.write_private(self.fd, "hosts.json", receipt)
+        self.api.data["user"] = []
+        self.api.data["token"] = []
+        for check in (True, False):
+            calls = len(self.api.calls)
+            self.assertTrue(self.main_run(params, check)["failed"])
+            self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+
+    def test_library_producer_refuses_token_and_lifecycle_changes_before_writes(self):
+        params = self.library_params()
+        good = copy.deepcopy(self.api.data)
+        for case in ("missing_token", "foreign_token", "inactive", "rotation", "reenable", "revoke"):
+            self.api.data = copy.deepcopy(good)
+            changed = copy.deepcopy(params)
+            if case == "missing_token":
+                self.api.data["token"] = []
+            elif case == "foreign_token":
+                self.api.data["token"][0]["identifier"] = "foreign"
+            elif case == "inactive":
+                self.api.data["user"][0]["is_active"] = False
+            elif case == "rotation":
+                changed["hosts"][0]["generation"] += 1
+            elif case == "reenable":
+                changed["reenable_host"] = "laptop"
+            else:
+                changed["hosts"][0]["revoked"] = True
+            for check in (True, False):
+                calls = len(self.api.calls)
+                with self.subTest(case=case, check=check):
+                    self.assertTrue(self.main_run(changed, check)["failed"])
+                    self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+
     def test_library_mapping_create_attach_upgrade_and_repeat(self):
         hosts = [item("laptop"), item("omarchy-pc")]
         params = self.library_params(hosts=hosts)

@@ -262,6 +262,19 @@ opt-in producer controlled by `authentik_agent_create_library_mapping: true`
 (default `false` in `playbooks/vars/authentik-agent-hosts.yml`), modelled on the
 `holonet.acquire` producer above.
 
+**Mandatory sequencing after merge:** once this revision merges, the closed
+expected baseline set includes `holonet.library` for `laptop`, so every
+`playbooks/authentik-agent-hosts.yml` run without
+`authentik_agent_create_library_mapping=true` refuses before any write until the
+producer has run. The producer run is therefore the mandatory next
+`authentik-agent-hosts` run after merge: no other host lifecycle or projection
+operation (rotation, reenable, revocation, new host enrollment, or Akasha) can
+run before the producer completes. Every selected host must already be enrolled
+(existing active account and app-password token records in both `hosts.json` and
+live Authentik); the producer refuses any planned lifecycle effect (account
+creation, token creation/rotation/revocation, reenable, or delivery) before any
+API write.
+
 Supply the normal mapping and policy baselines with their existing protected
 ownership anchors; do not supply a `holonet.library` baseline when using this
 producer. Complete-inventory preflight refuses if any `holonet.library`-prefixed
