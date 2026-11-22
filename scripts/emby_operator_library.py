@@ -649,13 +649,26 @@ def _project_lookup_row(raw, kind, *, in_library):
     }
     if kind == 'movie':
         row['tmdb_id'] = raw.get('tmdbId') if type(raw.get('tmdbId')) is int else None
-        row['size_on_disk'] = int(raw.get('sizeOnDisk') or 0) if in_library else 0
+        stats = raw.get('statistics') if type(raw.get('statistics')) is dict else {}
+        row['size_on_disk'] = int(stats.get('sizeOnDisk') or raw.get('sizeOnDisk') or 0) if in_library else 0
     else:
         row['tvdb_id'] = raw.get('tvdbId') if type(raw.get('tvdbId')) is int else None
-        stats = raw.get('statistics') or {}
+        stats = raw.get('statistics') if type(raw.get('statistics')) is dict else {}
         row['size_on_disk'] = int(stats.get('sizeOnDisk') or 0) if in_library else 0
         row['seasons'] = _series_seasons_summary(raw.get('seasons'))
     return row
+
+
+def _fill_lookup_stats(row, detail, kind):
+    if type(detail) is not dict or detail.get('id') != row.get('arr_id'):
+        return
+    stats = detail.get('statistics') if type(detail.get('statistics')) is dict else {}
+    if kind == 'movie':
+        row['size_on_disk'] = int(stats.get('sizeOnDisk') or detail.get('sizeOnDisk') or 0)
+    else:
+        row['size_on_disk'] = int(stats.get('sizeOnDisk') or 0)
+        if type(detail.get('seasons')) is list:
+            row['seasons'] = _series_seasons_summary(detail.get('seasons'))
 
 
 def _extract_file_info(f, emby_item_id=None):
@@ -878,10 +891,15 @@ def op_lookup(call, block, arr_factory):
                 matched.append(_project_lookup_row(r, kind, in_library=True))
 
     truncated = len(matched) > cap
+    items = matched[:cap]
+    if arr_id is None and term is not None:
+        for row in items:
+            if row['in_library'] and row['arr_id'] is not None:
+                _fill_lookup_stats(row, api.get_optional(f"{endpoint}/{row['arr_id']}"), kind)
     return {
         'library': lib_name,
         'kind': kind,
-        'items': matched[:cap],
+        'items': items,
         'truncated': truncated,
     }
 
@@ -1188,6 +1206,10 @@ def _is_image_subtitle(stream):
     return False
 
 
+def _is_english_language(lang):
+    return str(lang or '').lower() in ('eng', 'en', 'english')
+
+
 def op_subtitles(call, block, arr_factory, emby_factory):
     q = call['request']
     lib_name = q['library']
@@ -1281,30 +1303,47 @@ def op_subtitles(call, block, arr_factory, emby_factory):
         selected = next((st for st in streams if st['index'] == q['stream_index']), None)
         need(selected is not None, 'Subtitle stream not found')
     else:
-        eng_text = [
+        if not streams:
+            return {
+                'library': lib_name,
+                'arr_id': q['arr_id'],
+                'emby_item_id': item['Id'],
+                'streams': streams,
+                'selected_stream': None,
+                'status': 'no_subtitles',
+                'lines': [],
+                'truncated': False,
+            }
+        eng_text_non_forced = [
             st for st in streams
-            if st['is_text'] and not st['forced']
-            and str(st['language'] or '').lower() in ('eng', 'en', 'english')
+            if st['is_text'] and not st['forced'] and _is_english_language(st['language'])
         ]
-        any_text = [st for st in streams if st['is_text']]
-        if eng_text:
-            selected = eng_text[0]
-        elif any_text:
-            selected = any_text[0]
-        elif streams:
-            selected = streams[0]
-
-    if selected is None:
-        return {
-            'library': lib_name,
-            'arr_id': q['arr_id'],
-            'emby_item_id': item['Id'],
-            'streams': streams,
-            'selected_stream': None,
-            'status': 'no_subtitles',
-            'lines': [],
-            'truncated': False,
-        }
+        eng_text_any = [
+            st for st in streams
+            if st['is_text'] and _is_english_language(st['language'])
+        ]
+        eng_image = [
+            st for st in streams
+            if not st['is_text'] and _is_english_language(st['language'])
+        ]
+        if eng_text_non_forced:
+            selected = eng_text_non_forced[0]
+        elif eng_text_any:
+            selected = eng_text_any[0]
+        elif eng_image:
+            eng_image_non_forced = [st for st in eng_image if not st['forced']]
+            selected = eng_image_non_forced[0] if eng_image_non_forced else eng_image[0]
+        else:
+            return {
+                'library': lib_name,
+                'arr_id': q['arr_id'],
+                'emby_item_id': item['Id'],
+                'streams': streams,
+                'selected_stream': None,
+                'status': 'no_english_text',
+                'lines': [],
+                'truncated': False,
+            }
 
     if not selected['is_text']:
         return {
