@@ -72,6 +72,7 @@ SECONDS = {
 
 MDBLIST_ORIGIN = 'https://api.mdblist.com'
 MDBLIST_MAX_BYTES = 4 * 1024 * 1024
+MDBLIST_USER_AGENT = 'holonet-library/1'
 MDBLIST_CACHE_MAX_BYTES = 8 * 1024 * 1024
 MDBLIST_QUOTA_MAX_BYTES = 16 * 1024
 RECOMMENDATION_KINDS = frozenset({'movie', 'series', 'anime'})
@@ -2430,7 +2431,11 @@ class MdblistClient:
         url = f'{MDBLIST_ORIGIN}{route}?{urllib.parse.urlencode(query)}'
         parsed = urllib.parse.urlsplit(url)
         need(parsed.scheme == 'https' and parsed.netloc == 'api.mdblist.com', FAILURE)
-        req = urllib.request.Request(url, headers={'Accept': 'application/json'}, method='GET')
+        # api.mdblist.com sits behind Cloudflare, which answers 403 to the
+        # default Python-urllib User-Agent; send a fixed product token instead.
+        req = urllib.request.Request(
+            url, headers={'Accept': 'application/json', 'User-Agent': MDBLIST_USER_AGENT},
+            method='GET')
         completed = queue.Queue(maxsize=1)
         opener = self._opener
 

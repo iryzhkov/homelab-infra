@@ -2004,6 +2004,8 @@ class LibraryWorkerTests(unittest.TestCase):
             code = 200
             def open(self, req, timeout):
                 seen.append(req.full_url)
+                self_case.assertEqual(req.get_header('User-agent'), lib.MDBLIST_USER_AGENT)
+                self_case.assertFalse(lib.MDBLIST_USER_AGENT.lower().startswith('python'))
                 parsed = urllib.parse.urlsplit(req.full_url)
                 self_case.assertEqual((parsed.scheme, parsed.netloc), ('https', 'api.mdblist.com'))
                 if self.code != 200:
