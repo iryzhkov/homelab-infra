@@ -19,7 +19,7 @@ import emby_operator_socket as sock
 import emby_operator_torrents as tor
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
-FIXTURE_SHA256 = 'ace39312f6fa7a6b27cd74beeb5c04093794a6936a6987f527ed260714e9f375'
+FIXTURE_SHA256 = '5778e83b79a528c420b8d3e0c4a45017bab3b29b989281802e059d536a6cf639'
 
 RADARR_KEY = '1' * 32
 SONARR_KEY = '2' * 32
@@ -408,6 +408,41 @@ def make_emby_handler(state):
                     'TotalRecordCount': 1, 'Items': [{'Id': '3', 'Name': 'Movies'}],
                 }).encode('utf-8'))
             if u.path.endswith('/Items'):
+                qs = urllib.parse.parse_qs(u.query)
+                item_types = qs.get('IncludeItemTypes', [''])[0]
+                if item_types == 'Series':
+                    return self._send(200, json.dumps({
+                        'TotalRecordCount': 1,
+                        'Items': [{
+                            'Id': '55000', 'Type': 'Series', 'Name': 'Synthetic Anime',
+                            'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]',
+                            'ProviderIds': {'Tvdb': '384541'},
+                        }],
+                    }).encode('utf-8'))
+                if item_types == 'Season':
+                    return self._send(200, json.dumps({
+                        'TotalRecordCount': 1,
+                        'Items': [{
+                            'Id': '55010', 'Type': 'Season', 'Name': 'Season 1',
+                            'IndexNumber': 1,
+                        }],
+                    }).encode('utf-8'))
+                if item_types == 'Episode':
+                    return self._send(200, json.dumps({
+                        'TotalRecordCount': 2,
+                        'Items': [
+                            {
+                                'Id': '55011', 'Type': 'Episode', 'Name': 'Ep One',
+                                'ParentIndexNumber': 1, 'IndexNumber': 1,
+                                'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E01.mkv',
+                            },
+                            {
+                                'Id': '55012', 'Type': 'Episode', 'Name': 'Ep Two',
+                                'ParentIndexNumber': 1, 'IndexNumber': 2,
+                                'Path': '/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]/Season 01/S01E02.mkv',
+                            },
+                        ],
+                    }).encode('utf-8'))
                 streams = (
                     [{'Type': 'Subtitle', 'Index': 3, 'Language': 'eng', 'Codec': 'pgssub',
                       'DisplayTitle': 'English (PGSSUB)', 'IsForced': False, 'IsExternal': False,
@@ -675,6 +710,7 @@ class LibraryWorkerTests(unittest.TestCase):
         ep_frame['request'] = {
             'mode': 'preview', 'library': 'anime', 'arr_id': 26,
             'target': {'episode_arr_ids': [101]}, 'remove_torrents': True,
+            'keep_emby_ids': [],
         }
         ep_preview = self._run(ep_frame)
         self.assertFalse(ep_preview['plan']['delete_title'])
@@ -692,6 +728,58 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertEqual(self.state.deleted_episode_files, ['/api/v3/episodefile/601'])
         self.assertEqual(self.state.deleted_torrents, [])
         self.assertEqual(ep_res['kept_torrent_hashes'], [TORRENT_HASH_PACK])
+
+    def test_remove_keep_listed_movie_and_series(self):
+        # Unrelated keep_emby_ids does not change plan_sha256.
+        base_preview = self._run(self.fixture['library_remove_preview_frame'])
+        other_keep = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+        other_keep['request']['keep_emby_ids'] = ['99999']
+        other_preview = self._run(other_keep)
+        self.assertEqual(other_preview['plan_sha256'], base_preview['plan_sha256'])
+
+        # Movie Emby ID 44801 in keep_emby_ids refuses preview and apply.
+        kept_movie_prev = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+        kept_movie_prev['request']['keep_emby_ids'] = ['44801']
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(kept_movie_prev)
+        self.assertEqual(ctx.exception.reason, 'keep_listed')
+
+        kept_movie_apply = copy.deepcopy(self.fixture['library_remove_apply_frame'])
+        kept_movie_apply['request']['keep_emby_ids'] = ['44801']
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(kept_movie_apply)
+        self.assertEqual(ctx.exception.reason, 'keep_listed')
+        self.assertEqual(self.state.deleted_movies, [])
+        self.assertEqual(self.state.deleted_torrents, [])
+
+        # Series keep_listed checks series ID (55000), affected season ID (55010), and affected episode ID (55011).
+        for target, keep_ids in (
+            ('title', ['55000']),
+            ({'season': 1}, ['55000']),
+            ({'season': 1}, ['55010']),
+            ({'episode_arr_ids': [101]}, ['55000']),
+            ({'episode_arr_ids': [101]}, ['55010']),
+            ({'episode_arr_ids': [101]}, ['55011']),
+        ):
+            frame = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+            frame['request'] = {
+                'mode': 'preview', 'library': 'anime', 'arr_id': 26,
+                'target': target, 'remove_torrents': False,
+                'keep_emby_ids': keep_ids,
+            }
+            with self.assertRaises(lib.LibraryRefusal) as ctx:
+                self._run(frame)
+            self.assertEqual(ctx.exception.reason, 'keep_listed')
+
+        # Keeping only episode 102 (55012) allows removing episode 101.
+        ok_ep = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+        ok_ep['request'] = {
+            'mode': 'preview', 'library': 'anime', 'arr_id': 26,
+            'target': {'episode_arr_ids': [101]}, 'remove_torrents': False,
+            'keep_emby_ids': ['55012'],
+        }
+        res = self._run(ok_ep)
+        self.assertEqual(len(res['plan']['files']), 1)
 
     def test_authorization_disabled_policy_and_missing_action(self):
         read_call = sock.parse_request(json.dumps(self.fixture['library_lookup_frame']).encode('utf-8'))

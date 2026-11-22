@@ -35,8 +35,11 @@ and `mode: "apply"` with canonical `plan_sha256` verification):
 - `library-remove`: preview/apply Arr deletion (`deleteFiles=true`,
   `addImportExclusion=false` / `addImportListExclusion=false`) for a title,
   season, or episode list (unmonitoring episodes before deleting episode files).
-  Refuses `recycle_bin_unset` when Arr `recycleBin` is empty, `file_limit_exceeded`
-  over 500 files, and `plan_changed`. Matching qBittorrent torrents are deleted
+  Refuses `recycle_bin_unset` when Arr's dynamically read `recycleBin` is empty
+  (live Radarr uses `/mnt/shared/holonet-recycle/radarr`; Sonarr uses
+  `/mnt/shared/.recycle/sonarr`), `keep_listed` when any resolved Emby ID for
+  the title/season/episodes is in `keep_emby_ids`, `file_limit_exceeded` over
+  500 files, and `plan_changed`. Matching qBittorrent torrents are deleted
   only when `remove_torrents: true`, category is allowed, every supplied library
   file is deleted, and seeding meets the threshold (ratio >= 1.0 or >= 14 days).
 

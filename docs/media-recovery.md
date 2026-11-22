@@ -7,7 +7,7 @@ Run `ansible-playbook playbooks/media-recovery.yml --check --limit homelab`, the
 The playbook requires the real NFS mount and creates separate application-owned paths outside scanned library roots:
 
 - Sonarr: `/mnt/shared/.recycle/sonarr`
-- Radarr: `/mnt/shared/.recycle/radarr`
+- Radarr: `/mnt/shared/holonet-recycle/radarr` (the HoloNet library worker reads Arr's configured recycle bin path dynamically)
 
 Both Swarm stacks explicitly run with PUID 1002 and PGID 988, matching NAS media ownership. The LinuxServer default 911:911 cannot traverse the share. Recovery directories are created by the existing SSH user through the NAS mapping, which maps ownership to 977:988. Mode 0770 gives the actual application group 988 access, and the playbook verifies that group plus read/write/traversal from a shell as abc. It does not attempt NFS chown or change the export. Apply the two stack identity settings before the recovery playbook. Both apps use zero cleanup days, disabling automatic recycle expiry. This retains replaced files and consumes storage until a separate retention decision. Existing NAS free-space monitoring remains necessary. Configuration rollback snapshots are root-only under `/var/backups/media-recovery/`. Restore their settings through supported APIs if needed; do not delete retained files as a rollback side effect.
 

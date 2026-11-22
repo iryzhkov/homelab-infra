@@ -284,13 +284,19 @@ def request(operation, value):
     elif operation == 'library-remove':
         mode = value.get('mode')
         need(mode in ('preview', 'apply'), 'Invalid library request')
-        base_req = {'mode', 'library', 'arr_id', 'target', 'remove_torrents'}
+        base_req = {'mode', 'library', 'arr_id', 'target', 'remove_torrents', 'keep_emby_ids'}
         if mode == 'apply':
             base_req |= {'operation_id', 'plan_sha256'}
         need(fields == base_req, 'Invalid library request')
         _check_library_name(value['library'])
         need(integer(value['arr_id']), 'Invalid library request')
         need(type(value['remove_torrents']) is bool, 'Invalid library request')
+        keep_ids = value['keep_emby_ids']
+        need(type(keep_ids) is list and len(keep_ids) <= 4096
+             and all(catalog_id(i) for i in keep_ids)
+             and len(set(keep_ids)) == len(keep_ids)
+             and keep_ids == sorted(keep_ids),
+             'Invalid library request')
         t = value['target']
         if t == 'title':
             pass
@@ -1397,7 +1403,112 @@ def _evaluate_torrents(qbit, hashes_info, *, remove_torrents, allowed_categories
     return out
 
 
-def op_remove(call, block, arr_factory, qbit_factory):
+def _resolve_remove_emby_ids(
+    emby, recipient, library_id, kind, *,
+    provider_key=None, provider_val=None, item_path=None,
+    file_paths=None, target='title', selected_eps=None,
+):
+    """Resolve Emby item IDs affected by a library-remove request (fail-closed on Emby errors)."""
+    ids = set()
+    file_paths = set(file_paths or ())
+    if kind == 'movie':
+        query = {
+            'Recursive': 'true',
+            'IncludeItemTypes': 'Movie',
+            'ParentId': library_id,
+            'Fields': 'Path,ProviderIds',
+            'StartIndex': 0,
+            'Limit': 50,
+        }
+        if provider_key and provider_val is not None:
+            query['AnyProviderIdEquals'] = f'{provider_key}.{provider_val}'
+        rows = emby._items(recipient, query, 50)
+        for r in rows:
+            eid = r.get('Id')
+            if not eid:
+                continue
+            prov_match = (
+                provider_key and provider_val is not None
+                and (r.get('ProviderIds') or {}).get(provider_key) == str(provider_val)
+            )
+            rpath = r.get('Path') or ''
+            path_match = bool(rpath) and (
+                rpath in file_paths
+                or (item_path and _in_root(rpath, item_path))
+            )
+            if prov_match or path_match:
+                ids.add(eid)
+        return ids
+
+    s_query = {
+        'Recursive': 'true',
+        'IncludeItemTypes': 'Series',
+        'ParentId': library_id,
+        'Fields': 'Path,ProviderIds',
+        'StartIndex': 0,
+        'Limit': 20,
+    }
+    if provider_key and provider_val is not None:
+        s_query['AnyProviderIdEquals'] = f'{provider_key}.{provider_val}'
+    s_rows = emby._items(recipient, s_query, 20)
+    series_id = None
+    for r in s_rows:
+        if provider_key and provider_val is not None and (r.get('ProviderIds') or {}).get(provider_key) == str(provider_val):
+            series_id = r.get('Id')
+            break
+        if item_path and r.get('Path') and r['Path'].rstrip('/') == item_path.rstrip('/'):
+            series_id = r.get('Id')
+            break
+    if not series_id:
+        return ids
+    ids.add(series_id)
+
+    selected_eps = list(selected_eps or ())
+    affected_seasons = {
+        int(e.get('seasonNumber'))
+        for e in selected_eps
+        if type(e.get('seasonNumber')) is int
+    }
+    season_rows = emby._items(recipient, {
+        'Recursive': 'true',
+        'IncludeItemTypes': 'Season',
+        'ParentId': series_id,
+        'Fields': 'IndexNumber',
+        'StartIndex': 0,
+        'Limit': 200,
+    }, 200)
+    for r in season_rows:
+        eid = r.get('Id')
+        if eid and (target == 'title' or r.get('IndexNumber') in affected_seasons):
+            ids.add(eid)
+
+    affected_se = {
+        (int(e.get('seasonNumber')), int(e.get('episodeNumber')))
+        for e in selected_eps
+        if type(e.get('seasonNumber')) is int and type(e.get('episodeNumber')) is int
+    }
+    ep_rows = emby._items(recipient, {
+        'Recursive': 'true',
+        'IncludeItemTypes': 'Episode',
+        'ParentId': series_id,
+        'Fields': 'Path,ParentIndexNumber,IndexNumber',
+        'StartIndex': 0,
+        'Limit': 500,
+    }, 500)
+    for r in ep_rows:
+        eid = r.get('Id')
+        if not eid:
+            continue
+        if (
+            target == 'title'
+            or (r.get('Path') in file_paths)
+            or ((r.get('ParentIndexNumber'), r.get('IndexNumber')) in affected_se)
+        ):
+            ids.add(eid)
+    return ids
+
+
+def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
     q = call['request']
     lib_name = q['library']
     lib = block['libraries'][lib_name]
@@ -1412,17 +1523,23 @@ def op_remove(call, block, arr_factory, qbit_factory):
         refuse('recycle_bin_unset', 'Arr recycle bin is not configured')
 
     target = q['target']
+    keep_set = set(q['keep_emby_ids'])
     files = []
     episode_ids_to_unmonitor = []
     episode_file_ids_to_delete = []
     delete_title = target == 'title'
     hashes_every_deleted = {}
+    selected_eps = []
+    provider_key = None
+    provider_val = None
+    item_path = None
 
     if kind == 'movie':
         m = api.get(f"/api/v3/movie/{q['arr_id']}")
         need(type(m) is dict and m.get('id') == q['arr_id']
              and _in_root(m.get('path'), lib['root_folder_path']), FAILURE)
         title = m.get('title') or ''
+        provider_key, provider_val, item_path = 'Tmdb', m.get('tmdbId'), m.get('path')
         if m.get('hasFile') and type(m.get('movieFile')) is dict:
             mf = m['movieFile']
             fpath = mf.get('path') or (m['path'].rstrip('/') + '/' + str(mf.get('relativePath') or ''))
@@ -1440,6 +1557,7 @@ def op_remove(call, block, arr_factory, qbit_factory):
         need(type(s) is dict and s.get('id') == q['arr_id']
              and _in_root(s.get('path'), lib['root_folder_path']), FAILURE)
         title = s.get('title') or ''
+        provider_key, provider_val, item_path = 'Tvdb', s.get('tvdbId'), s.get('path')
         raw_eps = api.get(f"/api/v3/episode?seriesId={q['arr_id']}&includeEpisodeFile=true")
         need(type(raw_eps) is list, FAILURE)
         by_id = {e['id']: e for e in raw_eps if type(e) is dict and type(e.get('id')) is int}
@@ -1485,6 +1603,18 @@ def op_remove(call, block, arr_factory, qbit_factory):
                     if eid in by_id and by_id[eid].get('hasFile')
                 }
                 hashes_every_deleted[dl] = (len(other_eps_with_files) == 0)
+
+    if keep_set:
+        emby = emby_factory()
+        need(emby is not None, FAILURE)
+        emby_ids = _resolve_remove_emby_ids(
+            emby, call['recipient'], lib['library_id'], kind,
+            provider_key=provider_key, provider_val=provider_val,
+            item_path=item_path, file_paths=[f['path'] for f in files],
+            target=target, selected_eps=selected_eps,
+        )
+        if emby_ids & keep_set:
+            refuse('keep_listed', 'Title is protected by keep list')
 
     files.sort(key=lambda f: (f['path'], f['id']))
     if len(files) > block['limits']['remove_max_files']:
@@ -1612,7 +1742,7 @@ def execute(policy, call, guard, config):
         if op == 'library-grab':
             return op_grab(call, block, arr_factory)
         if op == 'library-remove':
-            return op_remove(call, block, arr_factory, qbit_factory)
+            return op_remove(call, block, arr_factory, qbit_factory, emby_factory)
         need(False, 'Unsupported operation')
     finally:
         for client in arr_clients.values():

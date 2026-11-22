@@ -532,7 +532,8 @@
       "library": "movies",
       "arr_id": 18,
       "target": "title",
-      "remove_torrents": true
+      "remove_torrents": true,
+      "keep_emby_ids": []
     }
   },
   "library_remove_preview": {
@@ -595,6 +596,7 @@
       "arr_id": 18,
       "target": "title",
       "remove_torrents": true,
+      "keep_emby_ids": [],
       "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "plan_sha256": "7f3f2fbbcf493b8ec0fb461876fb62d00bc1a54a6ea0f2e48a114cc6e1bf923b"
     }
@@ -679,6 +681,15 @@
         "code": "refused",
         "reason": "already_in_library",
         "message": "Title is already in library"
+      }
+    },
+    "keep_listed": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "keep_listed",
+        "message": "Title is protected by keep list"
       }
     },
     "image_subtitle": {
