@@ -19,7 +19,7 @@ import emby_operator_socket as sock
 import emby_operator_torrents as tor
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
-FIXTURE_SHA256 = '36ee37185e989c26093aa56f1383680943009287886326404f1cd5fc08f9d22d'
+FIXTURE_SHA256 = 'c69074f78e698db884d77949a8e72cf3e4896fe5a8c538193d645e86eb54244b'
 
 RADARR_KEY = '1' * 32
 SONARR_KEY = '2' * 32
@@ -174,6 +174,29 @@ class FakeState:
         self.radarr_recommendations = []
         self.sonarr_exclusions = []
         self.sonarr_importlists = []
+        self.radarr_queue_override = None
+        self.sonarr_queue_override = None
+        self.radarr_manualimport = {}
+        self.sonarr_manualimport = {
+            'a' * 40: [{
+                'path': '/mnt/shared/downloads/complete/tv/Synthetic.Anime.S01/Synthetic.Anime.S01E01.1080p.DualAudio.mkv',
+                'relativePath': 'Synthetic.Anime.S01E01.1080p.DualAudio.mkv',
+                'size': 2048,
+                'quality': {'quality': {'id': 7, 'name': 'Bluray-1080p'}, 'revision': {'version': 1, 'real': 0}},
+                'languages': [{'id': 1, 'name': 'English'}, {'id': 8, 'name': 'Japanese'}],
+                'releaseGroup': 'DualGroup',
+                'downloadId': 'a' * 40,
+                'series': {'id': 26, 'title': 'Synthetic Anime'},
+                'seasonNumber': 1,
+                'episodes': [{'id': 101, 'seriesId': 26, 'seasonNumber': 1, 'episodeNumber': 1, 'title': 'Ep One'}],
+                'rejections': [{'reason': 'Existing file meets cutoff'}],
+            }],
+        }
+        self.manualimport_queries = []
+        self.commands_submitted = []
+        self.command_poll_statuses = []
+        self.fail_command_post = False
+        self.torrent_files = {}
 
 
 def make_radarr_handler(state):
@@ -241,8 +264,16 @@ def make_radarr_handler(state):
                     'approved': True, 'rejections': [],
                 }])
             if u.path == '/api/v3/queue':
-                total = state.queue_total_records if state.queue_total_records is not None else 0
-                return self._send(200, {'records': [], 'totalRecords': total})
+                recs = state.radarr_queue_override if state.radarr_queue_override is not None else []
+                total = state.queue_total_records if state.queue_total_records is not None else len(recs)
+                return self._send(200, {'records': recs, 'totalRecords': total})
+            if u.path == '/api/v3/manualimport':
+                state.manualimport_queries.append(('radarr', u.query))
+                dl = urllib.parse.parse_qs(u.query).get('downloadId', [''])[0]
+                return self._send(200, state.radarr_manualimport.get(dl, []))
+            if u.path.startswith('/api/v3/command/'):
+                status = state.command_poll_statuses.pop(0) if state.command_poll_statuses else 'completed'
+                return self._send(200, {'id': 701, 'status': status})
             if u.path.startswith('/api/v3/moviefile/'):
                 try:
                     fid = int(u.path.rsplit('/', 1)[-1])
@@ -292,6 +323,11 @@ def make_radarr_handler(state):
                     return self._send(404, {'message': 'release expired'})
                 state.grabbed.append(body)
                 return self._send(200, {'ok': True})
+            if self.path == '/api/v3/command':
+                if state.fail_command_post:
+                    return self._send(500, {'error': 'command failed'})
+                state.commands_submitted.append(('radarr', body))
+                return self._send(201, {'id': 701, 'status': 'queued'})
             return self._send(404, {})
 
         def do_DELETE(self):
@@ -392,15 +428,25 @@ def make_sonarr_handler(state):
                     },
                 ])
             if u.path == '/api/v3/queue':
-                recs = [{
-                    'title': 'Synthetic Anime S01 1080p', 'seriesId': 26, 'episodeId': 101,
-                    'series': state.series[0],
-                    'status': 'downloading', 'trackedDownloadState': 'downloading',
-                    'size': 2048, 'sizeleft': 1024, 'timeleft': '00:05:00',
-                    'downloadClient': 'qBittorrent', 'statusMessages': [],
-                }]
+                if state.sonarr_queue_override is not None:
+                    recs = state.sonarr_queue_override
+                else:
+                    recs = [{
+                        'title': 'Synthetic Anime S01 1080p', 'seriesId': 26, 'episodeId': 101,
+                        'series': state.series[0],
+                        'status': 'downloading', 'trackedDownloadState': 'downloading',
+                        'size': 2048, 'sizeleft': 1024, 'timeleft': '00:05:00',
+                        'downloadClient': 'qBittorrent', 'statusMessages': [],
+                    }]
                 total = state.queue_total_records if state.queue_total_records is not None else len(recs)
                 return self._send(200, {'records': recs, 'totalRecords': total})
+            if u.path == '/api/v3/manualimport':
+                state.manualimport_queries.append(('sonarr', u.query))
+                dl = urllib.parse.parse_qs(u.query).get('downloadId', [''])[0]
+                return self._send(200, state.sonarr_manualimport.get(dl, []))
+            if u.path.startswith('/api/v3/command/'):
+                status = state.command_poll_statuses.pop(0) if state.command_poll_statuses else 'completed'
+                return self._send(200, {'id': 701, 'status': status})
             if u.path.startswith('/api/v3/episodefile/'):
                 try:
                     fid = int(u.path.rsplit('/', 1)[-1])
@@ -450,6 +496,11 @@ def make_sonarr_handler(state):
                     return self._send(404, {'message': 'release expired'})
                 state.grabbed.append(body)
                 return self._send(200, {'ok': True})
+            if self.path == '/api/v3/command':
+                if state.fail_command_post:
+                    return self._send(500, {'error': 'command failed'})
+                state.commands_submitted.append(('sonarr', body))
+                return self._send(201, {'id': 701, 'status': 'queued'})
             return self._send(404, {})
 
         def do_PUT(self):
@@ -509,6 +560,11 @@ def make_qbit_handler(state):
                 hashes = urllib.parse.parse_qs(u.query).get('hashes', [''])[0].split('|')
                 rows = [state.torrents[h] for h in hashes if h in state.torrents]
                 return self._send(200, json.dumps(rows).encode('utf-8'))
+            if u.path == '/api/v2/torrents/files':
+                h = urllib.parse.parse_qs(u.query).get('hash', [''])[0]
+                if h in state.torrent_files:
+                    return self._send(200, json.dumps(state.torrent_files[h]).encode('utf-8'))
+                return self._send(404, b'')
             return self._send(404, b'')
     return Handler
 
@@ -1091,11 +1147,12 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertEqual(trunc_res['plan']['torrents'][0]['reason'], 'ownership_incomplete')
         self.state.history_truncated = False
 
-        # 4. Sonarr history query failure while removing a movie -> kept with ownership_unverified.
+        # 4. Sonarr history query failure while removing a movie -> hardlink fallback fails closed on unmapped save_path.
         self.state.sonarr_history_fail = True
         fail_res = self._run(self.fixture['library_remove_preview_frame'])
         self.assertEqual(fail_res['plan']['torrents'][0]['action'], 'keep')
-        self.assertEqual(fail_res['plan']['torrents'][0]['reason'], 'ownership_unverified')
+        self.assertEqual(fail_res['plan']['torrents'][0]['reason'], 'hardlink_path_unmapped')
+        self.assertEqual(fail_res['plan']['torrents'][0]['ownership_proof'], 'none')
         self.state.sonarr_history_fail = False
 
     def test_r1_3_and_p1_4_emby_unresolved_fail_closed_and_movie_path_mapping(self):
@@ -1283,14 +1340,15 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertEqual(res['plan']['torrents'][0]['reason'], 'ownership_incomplete')
         self.state.history_missing_total = False
 
-        # 2. Empty histories in both Arrs -> kept with ownership_unverified.
+        # 2. Empty histories in both Arrs -> hardlink fallback fails closed when save_path is unmapped.
         self.state.radarr_history_by_dl = {}
         self.state.sonarr_history_by_dl = {}
         res = self._run(self.fixture['library_remove_preview_frame'])
         self.assertEqual(res['plan']['torrents'][0]['action'], 'keep')
-        self.assertEqual(res['plan']['torrents'][0]['reason'], 'ownership_unverified')
+        self.assertEqual(res['plan']['torrents'][0]['reason'], 'hardlink_path_unmapped')
+        self.assertEqual(res['plan']['torrents'][0]['ownership_proof'], 'none')
 
-        # 3. Grabbed-only history (no import record) -> kept with ownership_unverified.
+        # 3. Grabbed-only history (no import record) -> hardlink fallback fails closed when save_path is unmapped.
         self.state.radarr_history_by_dl = {
             TORRENT_HASH_OK: [
                 {'id': 1, 'downloadId': TORRENT_HASH_OK, 'movieId': 18, 'eventType': 'grabbed'},
@@ -1298,7 +1356,8 @@ class LibraryWorkerTests(unittest.TestCase):
         }
         res = self._run(self.fixture['library_remove_preview_frame'])
         self.assertEqual(res['plan']['torrents'][0]['action'], 'keep')
-        self.assertEqual(res['plan']['torrents'][0]['reason'], 'ownership_unverified')
+        self.assertEqual(res['plan']['torrents'][0]['reason'], 'hardlink_path_unmapped')
+        self.assertEqual(res['plan']['torrents'][0]['ownership_proof'], 'none')
 
         # 4. Multi-page history: 3 pages of 1 record each; exclusive import -> removed.
         self.state.history_page_size = 1
@@ -1720,6 +1779,36 @@ class LibraryWorkerTests(unittest.TestCase):
             self._run(frame)
         self.assertEqual(ctx.exception.reason, 'recommendations_disabled')
 
+    def test_recommendations_anime_merge_and_cache_warning_validation(self):
+        existing = {
+            'kind': 'series', 'mediatype': 'show', 'sources': ['Top TV'],
+            'ids': {'tmdb': None, 'tvdb': 888002, 'imdb': None}, 'scores': {},
+        }
+        incoming = copy.deepcopy(existing)
+        incoming.update(kind='anime', sources=['Top Anime'])
+        lib._merge_recommendation(existing, incoming)
+        self.assertEqual(existing['kind'], 'anime')
+        self.assertEqual(existing['sources'], ['Top TV', 'Top Anime'])
+        self.assertEqual(lib._recommendation_add_target(existing),
+                         {'library': 'anime', 'tvdb_id': 888002})
+        # A later general-TV row cannot downgrade an anime classification.
+        incoming.update(kind='series')
+        lib._merge_recommendation(existing, incoming)
+        self.assertEqual(existing['kind'], 'anime')
+
+        cache = {'fetched_at_ts': 1, 'fetched_at': 'synthetic',
+                 'items': [], 'lists': [], 'warnings': ['Synthetic warning']}
+        with patch.object(lib, '_read_state_json', return_value=cache):
+            self.assertIs(lib._load_cache(0), cache)
+            for invalid in (None, 'warning', {}, [{}], [1], ['x' * 513],
+                            ['warning'] * 65):
+                cache['warnings'] = invalid
+                self.assertIsNone(lib._load_cache(0))
+            del cache['warnings']
+            self.assertIsNone(lib._load_cache(0))
+            cache['warnings'] = []
+            self.assertIs(lib._load_cache(0), cache)
+
     def test_recommendations_normalization_radarr_membership_and_warnings(self):
         state_dir = self._make_recs_state_dir('norm')
         pol = self._recs_policy(state_dir)
@@ -2063,6 +2152,327 @@ class LibraryWorkerTests(unittest.TestCase):
         link.symlink_to(key_file)
         with self.assertRaises(lib.Refused):
             lib.read_mdblist_key(str(link))
+
+    def test_queue_dedupe_sonarr_season_pack_and_bounds(self):
+        dl_pack = 'A' * 40
+        dl_single = 'B' * 40
+        self.state.sonarr_queue_override = [
+            {
+                'title': 'Synthetic.Anime.S01.1080p.DualAudio',
+                'seriesId': 26, 'episodeId': 102, 'seasonNumber': 1,
+                'series': self.state.series[0],
+                'downloadId': dl_pack,
+                'status': 'completed', 'trackedDownloadState': 'importBlocked',
+                'size': 4096, 'sizeleft': 0, 'timeleft': None,
+                'downloadClient': 'qBittorrent',
+                'statusMessages': [{'title': 'S01E02', 'messages': ['Existing file meets cutoff']}],
+            },
+            {
+                'title': 'Synthetic.Anime.S01.1080p.DualAudio',
+                'seriesId': 26, 'episodeId': 101,
+                'episode': {'seasonNumber': 1},
+                'series': self.state.series[0],
+                'downloadId': dl_pack.lower(),
+                'status': 'completed', 'trackedDownloadState': 'importBlocked',
+                'size': 4096, 'sizeleft': 0, 'timeleft': '00:00:00',
+                'downloadClient': 'qBittorrent',
+                'statusMessages': [
+                    {'title': 'S01E02', 'messages': ['Existing file meets cutoff']},
+                    {'title': 'S01E01', 'messages': ['Not an upgrade']},
+                ],
+            },
+            {
+                'title': 'Synthetic.Anime.S02E01.1080p',
+                'seriesId': 26, 'episodeId': 201, 'seasonNumber': 2,
+                'series': self.state.series[0],
+                'downloadId': dl_single,
+                'status': 'downloading', 'trackedDownloadState': 'downloading',
+                'size': 1024, 'sizeleft': 512, 'timeleft': '00:02:00',
+                'downloadClient': 'qBittorrent', 'statusMessages': [],
+            },
+        ]
+        self.state.radarr_queue_override = [{
+            'title': 'Synthetic.Movie.2024.1080p', 'movieId': 18,
+            'downloadId': 'C' * 40,
+            'status': 'downloading', 'trackedDownloadState': 'downloading',
+            'size': 8192, 'sizeleft': 2048, 'timeleft': '00:10:00',
+            'downloadClient': 'qBittorrent', 'statusMessages': [],
+        }]
+
+        all_frame = copy.deepcopy(self.fixture['library_queue_frame'])
+        all_frame['request'] = {}
+        res = self._run(all_frame)
+        self.assertFalse(res['truncated'])
+        self.assertEqual(len(res['items']), 3)
+        # Radarr item unchanged (with download_id).
+        self.assertEqual(res['items'][0]['library'], 'movies')
+        self.assertEqual(res['items'][0]['arr_id'], 18)
+        self.assertEqual(res['items'][0]['download_id'], 'C' * 40)
+        # Sonarr season pack collapsed into one entry.
+        pack = res['items'][1]
+        self.assertEqual(pack['library'], 'anime')
+        self.assertEqual(pack['series_title'], 'Synthetic Anime')
+        self.assertEqual(pack['download_id'], dl_pack)
+        self.assertEqual(pack['seasons'], [1])
+        self.assertEqual(pack['episode_count'], 2)
+        self.assertEqual(pack['episode_ids'], [101, 102])
+        self.assertEqual(pack['time_left'], '00:00:00')
+        self.assertEqual(pack['status_messages'], ['S01E02: Existing file meets cutoff', 'S01E01: Not an upgrade'])
+        # Separate download stays separate.
+        self.assertEqual(res['items'][2]['download_id'], dl_single)
+        self.assertEqual(res['items'][2]['seasons'], [2])
+        self.assertEqual(res['items'][2]['episode_count'], 1)
+
+        # Bounding: >100 episode IDs truncates list to 100 and sets truncated=True.
+        big_dl = 'D' * 40
+        self.state.sonarr_queue_override = [
+            {
+                'title': 'Huge Pack', 'seriesId': 26, 'episodeId': 1000 + i, 'seasonNumber': 1,
+                'series': self.state.series[0], 'downloadId': big_dl,
+                'status': 'downloading', 'trackedDownloadState': 'downloading',
+                'size': 10000, 'sizeleft': 5000, 'timeleft': '01:00:00',
+                'downloadClient': 'qBittorrent',
+                'statusMessages': [{'title': f'M{i}', 'messages': [f'msg {i}']}],
+            }
+            for i in range(105)
+        ]
+        res_big = self._run(self.fixture['library_queue_frame'])
+        self.assertTrue(res_big['truncated'])
+        self.assertEqual(len(res_big['items']), 1)
+        self.assertEqual(res_big['items'][0]['episode_count'], 105)
+        self.assertEqual(len(res_big['items'][0]['episode_ids']), 100)
+        self.assertEqual(len(res_big['items'][0]['status_messages']), 20)
+
+    def test_import_preview_apply_and_refusals(self):
+        # 1. Exact fixture round-trip (Sonarr anime preview & apply).
+        prev = self._run(self.fixture['library_import_preview_frame'])
+        self.assertEqual(prev, self.fixture['library_import_preview']['result'])
+        self.assertIn(('sonarr', f"downloadId={'a' * 40}&filterExistingFiles=false"), self.state.manualimport_queries)
+        for _, qs in self.state.manualimport_queries:
+            self.assertNotIn('seriesId=', qs)
+            self.assertNotIn('folder=', qs)
+
+        applied = self._run(self.fixture['library_import_apply_frame'])
+        self.assertEqual(applied, self.fixture['library_import_apply']['result'])
+        self.assertEqual(len(self.state.commands_submitted), 1)
+        backend, cmd = self.state.commands_submitted[0]
+        self.assertEqual(backend, 'sonarr')
+        self.assertEqual(cmd['name'], 'ManualImport')
+        self.assertEqual(cmd['importMode'], 'auto')
+        self.assertEqual(cmd['files'][0]['seriesId'], 26)
+        self.assertEqual(cmd['files'][0]['episodeIds'], [101])
+
+        # 2. Optional wait=True polls /api/v3/command/<id> until completed.
+        self.state.command_poll_statuses = ['started', 'completed']
+        wait_frame = copy.deepcopy(self.fixture['library_import_apply_frame'])
+        wait_frame['request']['wait'] = True
+        with patch.object(lib.time, 'sleep', return_value=None):
+            waited = self._run(wait_frame)
+        self.assertEqual(waited['command_status'], 'completed')
+
+        # 3. Radarr movie preview & apply.
+        dl_movie = 'b' * 40
+        self.state.radarr_manualimport[dl_movie] = [{
+            'path': '/mnt/shared/downloads/complete/movies/Synthetic.Movie.2024.Dual.mkv',
+            'relativePath': 'Synthetic.Movie.2024.Dual.mkv',
+            'size': 8192,
+            'quality': {'quality': {'id': 7, 'name': 'Bluray-1080p'}},
+            'languages': [{'id': 1, 'name': 'English'}, {'id': 8, 'name': 'Japanese'}],
+            'releaseGroup': 'DualGrp',
+            'downloadId': dl_movie,
+            'movie': {'id': 18, 'title': 'Synthetic Movie'},
+            'rejections': [{'reason': 'Existing file is higher quality'}],
+        }]
+        m_prev_frame = copy.deepcopy(self.fixture['library_import_preview_frame'])
+        m_prev_frame['request'] = {
+            'mode': 'preview', 'library': 'movies', 'arr_id': 18, 'download_id': dl_movie,
+        }
+        m_prev = self._run(m_prev_frame)
+        self.assertEqual(m_prev['plan']['files'][0]['movie_id'], 18)
+        self.assertEqual(m_prev['plan']['files'][0]['replaces']['id'], 501)
+        self.assertIn(('radarr', f'downloadId={dl_movie}'), self.state.manualimport_queries)
+        m_apply_frame = copy.deepcopy(m_prev_frame)
+        m_apply_frame['request'].update({
+            'mode': 'apply', 'operation_id': 'e' * 32, 'plan_sha256': m_prev['plan_sha256'],
+        })
+        m_apply = self._run(m_apply_frame)
+        self.assertTrue(m_apply['applied'])
+        self.assertEqual(self.state.commands_submitted[-1][0], 'radarr')
+        self.assertEqual(self.state.commands_submitted[-1][1]['files'][0]['movieId'], 18)
+
+        # 4. Refusal: target_mismatch when any candidate maps to a different arr_id.
+        bad_dl = 'c' * 40
+        self.state.sonarr_manualimport[bad_dl] = [
+            self.state.sonarr_manualimport['a' * 40][0],
+            dict(self.state.sonarr_manualimport['a' * 40][0], series={'id': 30, 'title': 'Synthetic TV'}),
+        ]
+        bad_frame = copy.deepcopy(self.fixture['library_import_preview_frame'])
+        bad_frame['request'] = {
+            'mode': 'preview', 'library': 'anime', 'arr_id': 26, 'download_id': bad_dl,
+        }
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(bad_frame)
+        self.assertEqual(ctx.exception.reason, 'target_mismatch')
+
+        # 5. Refusal: recycle_bin_unset.
+        orig_recycle = self.state.sonarr_recycle
+        self.state.sonarr_recycle = ''
+        try:
+            with self.assertRaises(lib.LibraryRefusal) as ctx:
+                self._run(self.fixture['library_import_preview_frame'])
+            self.assertEqual(ctx.exception.reason, 'recycle_bin_unset')
+        finally:
+            self.state.sonarr_recycle = orig_recycle
+
+        # 6. Refusal: no_import_candidates.
+        empty_frame = copy.deepcopy(self.fixture['library_import_preview_frame'])
+        empty_frame['request'] = {
+            'mode': 'preview', 'library': 'anime', 'arr_id': 26, 'download_id': '0' * 40,
+        }
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(empty_frame)
+        self.assertEqual(ctx.exception.reason, 'no_import_candidates')
+
+        # 7. Refusal: plan_changed on digest mismatch.
+        wrong_sha = copy.deepcopy(self.fixture['library_import_apply_frame'])
+        wrong_sha['request']['plan_sha256'] = '0' * 64
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(wrong_sha)
+        self.assertEqual(ctx.exception.reason, 'plan_changed')
+
+        # Changes to command metadata must invalidate the preview, even if names match.
+        candidate = self.state.sonarr_manualimport['a' * 40][0]
+        original_quality_id = candidate['quality']['quality']['id']
+        candidate['quality']['quality']['id'] = 99
+        try:
+            with self.assertRaises(lib.LibraryRefusal) as ctx:
+                self._run(self.fixture['library_import_apply_frame'])
+            self.assertEqual(ctx.exception.reason, 'plan_changed')
+        finally:
+            candidate['quality']['quality']['id'] = original_quality_id
+
+        original_episode_id = candidate['episodes'][0]['id']
+        candidate['episodes'][0]['id'] = 999999
+        try:
+            with self.assertRaises(lib.LibraryRefusal) as ctx:
+                self._run(self.fixture['library_import_preview_frame'])
+            self.assertEqual(ctx.exception.reason, 'target_mismatch')
+        finally:
+            candidate['episodes'][0]['id'] = original_episode_id
+
+        # 8. Post-dispatch failure raises LibraryPostDispatchError('uncertain').
+        self.state.fail_command_post = True
+        try:
+            with self.assertRaises(lib.LibraryPostDispatchError) as ctx:
+                self._run(self.fixture['library_import_apply_frame'])
+            self.assertEqual(ctx.exception.code, 'uncertain')
+        finally:
+            self.state.fail_command_post = False
+
+    def test_remove_hardlink_ownership_proof(self):
+        base = Path(os.environ['TMPDIR']) / f'holonet-hardlink-{os.getpid()}'
+        if base.exists():
+            import shutil
+            shutil.rmtree(base)
+        lib_root = base / 'media' / 'movies'
+        dl_root = base / 'downloads' / 'complete' / 'movies'
+        other_root = base / 'other'
+        movie_dir = lib_root / 'Synthetic Movie (2024)'
+        torrent_dir = dl_root / 'Synthetic.Movie.2024'
+        movie_dir.mkdir(parents=True)
+        torrent_dir.mkdir(parents=True)
+        other_root.mkdir(parents=True)
+
+        try:
+            lib_file = movie_dir / 'Synthetic.mkv'
+            tor_main = torrent_dir / 'Synthetic.mkv'
+            tor_nfo = torrent_dir / 'info.nfo'
+            tor_main.write_bytes(b'video-bytes')
+            os.link(tor_main, lib_file)  # st_nlink == 2, same (dev, ino)
+            tor_nfo.write_bytes(b'nfo-extra')  # st_nlink == 1
+
+            # Point policy/descriptors/fake movie to our scratch roots and clear Arr history
+            # so Arr history returns ownership_unverified and hardlink proof runs.
+            self.policy['library']['libraries']['movies']['root_folder_path'] = str(lib_root)
+            self.descriptors['/etc/holonet-playlists/qbit.json']['payload_prefixes'] = [str(dl_root)]
+            self.state.movies[0]['path'] = str(movie_dir)
+            self.state.movies[0]['movieFile']['path'] = str(lib_file)
+            self.state.radarr_history_by_dl = {}
+            self.state.sonarr_history_by_dl = {}
+            self.state.torrents[TORRENT_HASH_OK]['save_path'] = str(dl_root)
+            self.state.torrent_files[TORRENT_HASH_OK] = [
+                {'name': 'Synthetic.Movie.2024/Synthetic.mkv'},
+                {'name': 'Synthetic.Movie.2024/info.nfo'},
+            ]
+
+            # 1. Exclusive ownership proven via hardlink -> remove, proof='hardlink'.
+            res = self._run(self.fixture['library_remove_preview_frame'])
+            t0 = res['plan']['torrents'][0]
+            self.assertEqual(t0['action'], 'remove')
+            self.assertEqual(t0['reason'], 'meets_threshold')
+            self.assertEqual(t0['ownership_proof'], 'hardlink')
+
+            # 2. Seeding threshold still enforced after hardlink proof.
+            orig_ratio = self.state.torrents[TORRENT_HASH_OK]['ratio']
+            orig_seed = self.state.torrents[TORRENT_HASH_OK]['seeding_time']
+            self.state.torrents[TORRENT_HASH_OK]['ratio'] = 0.1
+            self.state.torrents[TORRENT_HASH_OK]['seeding_time'] = 60
+            res_low = self._run(self.fixture['library_remove_preview_frame'])
+            self.assertEqual(res_low['plan']['torrents'][0]['action'], 'keep')
+            self.assertEqual(res_low['plan']['torrents'][0]['reason'], 'seeding_threshold_not_met')
+            self.assertEqual(res_low['plan']['torrents'][0]['ownership_proof'], 'hardlink')
+            self.state.torrents[TORRENT_HASH_OK]['ratio'] = orig_ratio
+            self.state.torrents[TORRENT_HASH_OK]['seeding_time'] = orig_seed
+
+            # 3. nlink > 2 (3rd hardlink elsewhere) -> kept with hardlink_extra_links.
+            third = other_root / 'third.mkv'
+            os.link(tor_main, third)
+            res_n3 = self._run(self.fixture['library_remove_preview_frame'])
+            self.assertEqual(res_n3['plan']['torrents'][0]['action'], 'keep')
+            self.assertEqual(res_n3['plan']['torrents'][0]['reason'], 'hardlink_extra_links')
+            self.assertEqual(res_n3['plan']['torrents'][0]['ownership_proof'], 'none')
+            third.unlink()
+
+            # 4. Non-deleted extra file hardlinked elsewhere -> hardlink_linked_elsewhere.
+            nfo_other = other_root / 'other.nfo'
+            os.link(tor_nfo, nfo_other)
+            res_else = self._run(self.fixture['library_remove_preview_frame'])
+            self.assertEqual(res_else['plan']['torrents'][0]['action'], 'keep')
+            self.assertEqual(res_else['plan']['torrents'][0]['reason'], 'hardlink_linked_elsewhere')
+            nfo_other.unlink()
+
+            # 5. Symlink in torrent -> hardlink_symlink.
+            sym = torrent_dir / 'sym.mkv'
+            sym.symlink_to(tor_main)
+            self.state.torrent_files[TORRENT_HASH_OK].append({'name': 'Synthetic.Movie.2024/sym.mkv'})
+            res_sym = self._run(self.fixture['library_remove_preview_frame'])
+            self.assertEqual(res_sym['plan']['torrents'][0]['action'], 'keep')
+            self.assertEqual(res_sym['plan']['torrents'][0]['reason'], 'hardlink_symlink')
+            self.state.torrent_files[TORRENT_HASH_OK].pop()
+            sym.unlink()
+
+            # 6. Missing torrent file -> hardlink_missing.
+            self.state.torrent_files[TORRENT_HASH_OK].append({'name': 'Synthetic.Movie.2024/gone.mkv'})
+            res_miss = self._run(self.fixture['library_remove_preview_frame'])
+            self.assertEqual(res_miss['plan']['torrents'][0]['action'], 'keep')
+            self.assertEqual(res_miss['plan']['torrents'][0]['reason'], 'hardlink_missing')
+            self.state.torrent_files[TORRENT_HASH_OK].pop()
+
+            # 7. Path outside download root -> hardlink_outside_download_root.
+            self.state.torrents[TORRENT_HASH_OK]['save_path'] = str(other_root)
+            res_out = self._run(self.fixture['library_remove_preview_frame'])
+            self.assertEqual(res_out['plan']['torrents'][0]['action'], 'keep')
+            self.assertEqual(res_out['plan']['torrents'][0]['reason'], 'hardlink_outside_download_root')
+            self.state.torrents[TORRENT_HASH_OK]['save_path'] = str(dl_root)
+
+            # 8. No torrent file matches deleted file (all nlink == 1) -> hardlink_no_match.
+            self.state.torrent_files[TORRENT_HASH_OK] = [{'name': 'Synthetic.Movie.2024/info.nfo'}]
+            res_nomatch = self._run(self.fixture['library_remove_preview_frame'])
+            self.assertEqual(res_nomatch['plan']['torrents'][0]['action'], 'keep')
+            self.assertEqual(res_nomatch['plan']['torrents'][0]['reason'], 'hardlink_no_match')
+        finally:
+            import shutil
+            shutil.rmtree(base, ignore_errors=True)
 
 
 if __name__ == '__main__':
