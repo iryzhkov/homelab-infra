@@ -430,7 +430,8 @@ return {'aud': 'https://akasha.ryzhkov.dev',
 
     def shizune_budget_mapping(self, hosts, baselines, create=False):
         return self._ensure_mapping(HOST_MAPPING_SPECS["shizune_budget_mapping"],
-                                    hosts, baselines, create=create)
+                                    hosts, baselines, create=create,
+                                    precondition=lambda: any("shizune" in MATRIX[h["host"]] for h in hosts))
 
     def resources(self, hosts, baselines, only=None):
         # Inspect public provider bodies only. Never open an OAuth2 secret.

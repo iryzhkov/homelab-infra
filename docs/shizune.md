@@ -147,9 +147,13 @@ sudo /usr/local/sbin/authentik-signer enrollment ansible-playbook -i "$PROTECTED
 This narrow producer creates only shizune.budget.write with an initial deny
 expression, attaches its API-returned UUID to the owned Shizune provider, and
 records each mutation in hosts.json. Unknown outcomes remain pending and refuse
-replay. Its final expression grants only the two named legacy Shizune accounts,
+replay. Its legacy fallback grants the two named legacy Shizune accounts,
 with exact owner attribute and group membership and both scopes requested.
-It grants no budget writes to M3 host accounts. It refuses simultaneous host
+The M3 accounts chaldea-laptop and chaldea-omarchy-pc also receive the optional
+scope through their existing Shizune owner grant; no other host has that grant.
+The claims function is embedded in every coexistence mapping, so this operation
+intentionally updates all those expression bytes under their existing receipts.
+It refuses simultaneous host
 lifecycle or rotation changes. Do not supply a new mapping baseline; provenance
 comes from the producer's own journal. The legacy blueprint baseline stays
 unchanged because no stored blueprint is reapplied.
@@ -157,7 +161,11 @@ unchanged because no stored blueprint is reapplied.
 After an accepted change, retain the new mapping ID/expression and attachment
 receipt, update the protected signer's Shizune property_mappings contract to the
 exact live attachment set, and run approve-contracts and publish through the
-maintained signer procedure. Require zero-change enrollment repeat and verify
+maintained signer procedure immediately after REAL. Until approve-contracts,
+signer rotate/publish refuses the changed attachment set and leaves signing
+unchanged; keep its timer off and retain the common enrollment lock boundary.
+Enrollment repeat can precede approval because the wrapper does not run signer
+preflight. Require zero-change enrollment repeat and verify
 both use-only and combined-scope token claims. Never use bootstrap to evade
 a signer or ownership refusal.
 

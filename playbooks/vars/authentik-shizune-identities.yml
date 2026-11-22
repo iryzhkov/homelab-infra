@@ -12,6 +12,8 @@ authentik_machine_services:
     client_id: shizune-mcp-machine
     resource: https://shizune.mcp.ryzhkov.dev/mcp
     signing_key: 8bbd6516-af33-4e64-a73b-caa39e692c29
+    # Source contract only after signer enrollment; the M3 producer owns the new scope.
+    # Never reapply this frozen blueprint to create a duplicate mapping.
     scope: shizune.use shizune.budget.write
     token_seconds: 300
     issuer: https://auth.ryzhkov.dev/application/o/shizune-mcp/

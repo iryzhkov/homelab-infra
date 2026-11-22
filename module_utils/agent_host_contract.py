@@ -441,6 +441,10 @@ def claims(service, grant, requested):
         if personal:
             result["ov_personal"] = dict(grant["ov_personal"], actions=personal)
         return copy.deepcopy(result)
+    if service == "shizune":
+        if "shizune.use" not in scopes or not scopes <= {"shizune.use", "shizune.budget.write"}:
+            return {}
+        return copy.deepcopy(grant)
     exact = {"jocasta": {"jocasta.read", "jocasta.write"}, "ha": {"ha.read"},
              "homelab": {"homelab.read"}, "shizune": {"shizune.use"}}
     if scopes != exact[service]:
@@ -571,7 +575,7 @@ def scope_expression(service, scope, users, original, original_writer=None):
     # All host-shaped accounts, including ungranted hosts, are denied before the
     # legacy expression. Legacy account expressions remain byte-for-byte intact.
     if service == "shizune" and scope == "shizune.budget.write":
-        return SHIZUNE_BUDGET_EXPRESSION
+        original = SHIZUNE_BUDGET_EXPRESSION
     select = """requested = token.scope
 if not isinstance(requested, list) or not requested or len(requested) != len(set(requested)):
     return {}
