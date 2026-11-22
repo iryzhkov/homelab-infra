@@ -441,6 +441,10 @@ def claims(service, grant, requested):
         if personal:
             result["ov_personal"] = dict(grant["ov_personal"], actions=personal)
         return copy.deepcopy(result)
+    if service == "shizune":
+        if "shizune.use" not in scopes or not scopes <= {"shizune.use", "shizune.budget.write"}:
+            return {}
+        return copy.deepcopy(grant)
     exact = {"jocasta": {"jocasta.read", "jocasta.write"}, "ha": {"ha.read"},
              "homelab": {"homelab.read"}, "shizune": {"shizune.use"}}
     if scopes != exact[service]:
@@ -563,11 +567,15 @@ def readback_sha256(value):
     import json
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
+SHIZUNE_BUDGET_EXPRESSION = "# Fixed legacy Shizune budget writers; no host-account or caller-selected grants.\nrequested = token.scope\nif (not isinstance(requested, list) or len(requested) != 2\n        or set(requested) != {'shizune.use', 'shizune.budget.write'}\n        or not user or str(user.type) != 'service_account'\n        or user.username not in ('chaldea-omarchy-pc-shizune-interactive', 'chaldea-laptop-shizune-interactive')\n        or user.attributes.get('chaldea_shizune') != {'shizune_owner': 'igor'}\n        or not ak_is_group_member(user, name='shizune-mcp-machine-identities')):\n    return {}\nreturn {'aud': 'https://shizune.mcp.ryzhkov.dev/mcp', 'shizune_owner': 'igor'}"
+
 def scope_expression(service, scope, users, original, original_writer=None):
     public_users(users)
     expected = expected_users(users, service)
     # All host-shaped accounts, including ungranted hosts, are denied before the
     # legacy expression. Legacy account expressions remain byte-for-byte intact.
+    if service == "shizune" and scope == "shizune.budget.write":
+        original = SHIZUNE_BUDGET_EXPRESSION
     select = """requested = token.scope
 if not isinstance(requested, list) or not requested or len(requested) != len(set(requested)):
     return {}

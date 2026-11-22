@@ -82,6 +82,27 @@ def function(source, **context):
     return namespace["run"]()
 
 class Contract(unittest.TestCase):
+    def test_shizune_optional_write_scope(self):
+        both = ["shizune.use", "shizune.budget.write"]
+        for host in ("laptop", "omarchy-pc"):
+            grant = c.MATRIX[host]["shizune"]
+            self.assertEqual(c.claims("shizune", grant, ["shizune.use"]), grant)
+            self.assertEqual(c.claims("shizune", grant, both), grant)
+            user = NS(username="chaldea-" + host + "-shizune-interactive",
+                      path="homelab-infra/machine-identities",
+                      type="service_account", attributes={"chaldea_shizune": grant})
+            expression = c.scope_expression("shizune", "shizune.budget.write", [], "return {}")
+            def run(scopes, member=True):
+                return function(expression, user=user, token=NS(scope=scopes),
+                                ak_is_group_member=lambda u, name: member)
+            self.assertEqual(run(both), dict(grant, aud=c.RESOURCES["shizune"]))
+            for scopes in ([], ["shizune.use"], ["shizune.budget.write"],
+                           both + ["shizune.use"], both + ["foreign"]):
+                self.assertEqual(run(scopes), {})
+            self.assertEqual(run(both, False), {})
+            user.username = "foreign"
+            self.assertEqual(run(both), {})
+
     def test_exact_matrix(self):
         self.assertEqual(set(c.MATRIX), {"laptop", "omarchy-pc", "agent-a", "agent-b", "homelab", "normandy"})
         expected = {"laptop": {"jocasta", "ov", "holonet", "shizune"},
@@ -959,7 +980,7 @@ class Lifecycle(unittest.TestCase):
             selected = [b for b in baselines if b["service"] == service and b["kind"] == "mapping"]
             ids = [b["pk"] for b in selected]
             pk = 99 if service == "holonet" else 200 + index
-            name = slug = "chaldea-" + service
+            name = slug = "shizune-mcp" if service == "shizune" else "chaldea-" + service
             app = {"pk": service, "slug": slug, "provider": pk,
                    "backchannel_providers": [], "policy_engine_mode": "any"}
             binding = {"pk": service, "target": service, "group": c.GROUP_IDS.get(service),
@@ -1220,6 +1241,67 @@ class Lifecycle(unittest.TestCase):
         token_writes = [(m, p) for m, p, _ in self.api.calls[calls:]
                         if m != "GET" and p.startswith(e.PATHS["token"])]
         self.assertEqual(token_writes, [])
+
+    def budget_params(self):
+        baselines = self.mapping_fixture()
+        self.resource_fixture(baselines)
+        return dict(hosts=[item()], owner=OWNER, receipt_dir=self.temp.name,
+                    baselines=baselines, api_token="SYNTHETIC-invalid-token",
+                    reenable_host="", rotation_signing_key="", original_writer_read={},
+                    create_original_writer_read_mapping=False, create_library_mapping=False,
+                    create_shizune_budget_mapping=True, original_writer_previous_sha256="")
+
+    def test_budget_requires_shizune_host_before_mutation(self):
+        params = self.budget_params()
+        x = self.enrollment()
+        calls = len(self.api.calls)
+        with self.assertRaises(ValueError):
+            x.shizune_budget_mapping([item("agent-a")], params["baselines"], True)
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+
+    def test_budget_unknown_create_never_replays(self):
+        params = self.budget_params()
+        request = self.api.request
+        def unknown(method, path, body=None):
+            result = request(method, path, body)
+            if method == "POST" and path == e.PATHS["mapping"]:
+                raise OSError("uncertain budget create")
+            return result
+        self.api.request = unknown
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertIsNotNone(e.read_private(self.fd, "hosts.json")["pending"])
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertEqual(len(self.api.calls), calls)
+
+    def test_budget_refuses_lifecycle_and_reenable(self):
+        params = self.budget_params()
+        for change in ({"reenable_host": "laptop"},
+                       {"hosts": [item(), item("omarchy-pc")]}):
+            calls = len(self.api.calls)
+            self.assertTrue(self.main_run(params | change)["failed"])
+            self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+
+    def test_shizune_budget_mapping_create_repeat_and_collision(self):
+        params = self.budget_params()
+        calls = len(self.api.calls)
+        self.assertNotIn("failed", self.main_run(params, True))
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        result = self.main_run(params)
+        self.assertNotIn("failed", result)
+        self.assertEqual(result["delivery"], [])
+        record = e.read_private(self.fd, "hosts.json")["shizune_budget_mapping"]
+        mapping = next(m for m in self.api.data["mapping"] if m["pk"] == record["pk"])
+        self.assertEqual(mapping["scope_name"], "shizune.budget.write")
+        self.assertIn(c.SHIZUNE_BUDGET_EXPRESSION, mapping["expression"])
+        params["create_shizune_budget_mapping"] = False
+        calls = len(self.api.calls)
+        self.assertFalse(self.main_run(params)["changed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
+        self.api.data["mapping"].append(dict(mapping, pk="foreign"))
+        calls = len(self.api.calls)
+        self.assertTrue(self.main_run(params)["failed"])
+        self.assertTrue(all(m == "GET" for m, _, _ in self.api.calls[calls:]))
 
     def test_library_mapping_create_attach_upgrade_and_repeat(self):
         hosts = [item("laptop"), item("omarchy-pc")]

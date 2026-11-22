@@ -1,0 +1,8 @@
+[Unit]
+Description=Relay private Shizune budget event counts
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/shizune-feed-relay
+UMask=0077
+Environment=PATH=/home/iryzhkov/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TimeoutStartSec=55min

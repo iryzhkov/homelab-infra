@@ -44,6 +44,26 @@ class ShizuneTest(unittest.TestCase):
             with self.assertRaises(base.mi.AnsibleFilterError):
                 spec([account()], {"shizune": app() | {"scope": scope}})
 
+    def test_optional_budget_scope(self):
+        from deepmerge import always_merger
+        a = spec([account()], {"shizune": app() | {"scope": "shizune.use shizune.budget.write"}})["services"]["shizune"]
+        user = types.SimpleNamespace(username="chaldea-agent-one-shizune-interactive",
+            type="service_account", attributes={"chaldea_shizune": {"shizune_owner": "igor"}})
+        user.username = next(iter(a["account_grants"]))
+        expected = {"aud": a["resource"], "shizune_owner": "igor"}
+        for scopes in (["shizune.use"], ["shizune.use", "shizune.budget.write"],
+                       ["shizune.budget.write", "shizune.use"]):
+            result = {}
+            for scope in scopes:
+                result = always_merger.merge(result, evaluate(
+                    base.mi._bounded_expression(a, "shizune", scope), user, a["group"], scopes))
+            self.assertEqual(result, expected)
+        for scopes in ([], ["shizune.budget.write"], ["shizune.use", "ov.read"],
+                       ["shizune.use", "shizune.use"]):
+            for scope in a["scope_mappings"]:
+                self.assertEqual(evaluate(base.mi._bounded_expression(a, "shizune", scope),
+                    user, a["group"], scopes), {})
+
     def test_source_accounts_and_bound_paths(self):
         values = yaml.safe_load((ROOT / "playbooks/vars/authentik-shizune-identities.yml").read_text())
         items = values["authentik_machine_identities"]
