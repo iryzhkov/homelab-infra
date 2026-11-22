@@ -811,7 +811,9 @@ def library_install_plan(value):
     require(torrents_path == TORRENT_DESCRIPTOR, "library torrents must reuse existing qBit descriptor")
     thresh = data.get("removal_thresholds", {"min_ratio": 1.0, "min_seeding_days": 14})
     keys(thresh, ("min_ratio", "min_seeding_days"))
-    require(type(thresh["min_ratio"]) in (int, float) and 0.0 <= float(thresh["min_ratio"]) <= 1000.0,
+    # isinstance, not type(): Ansible 2.19 passes extra-vars floats as a tagged subclass.
+    require(isinstance(thresh["min_ratio"], (int, float)) and not isinstance(thresh["min_ratio"], bool)
+            and 0.0 <= float(thresh["min_ratio"]) <= 1000.0,
             "invalid min_ratio")
     integer(thresh["min_seeding_days"], 0, 3650)
     limits = data.get("limits", {

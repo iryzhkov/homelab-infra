@@ -2608,6 +2608,18 @@ class CoexistencePackaging(unittest.TestCase):
         self.assertEqual(policy["library"]["libraries"]["anime"]["library_id"], "615")
         self.assertEqual(policy["library"]["removal_thresholds"], {"min_ratio": 1.0, "min_seeding_days": 14})
         self.assertEqual(policy["library"]["limits"]["remove_max_files"], 500)
+        # Ansible 2.19 passes extra-vars floats as a float subclass; it must validate.
+        class TaggedFloat(float):
+            pass
+        tagged = copy.deepcopy(endpoint)
+        tagged["library"]["removal_thresholds"] = {"min_ratio": TaggedFloat(1.5), "min_seeding_days": 7}
+        self.assertEqual(contract.playlist_operator_plan(tagged)["policy"]["library"]["removal_thresholds"],
+                         {"min_ratio": 1.5, "min_seeding_days": 7})
+        for bad in (True, "1.0", -0.5):
+            broken = copy.deepcopy(endpoint)
+            broken["library"]["removal_thresholds"] = {"min_ratio": bad, "min_seeding_days": 7}
+            with self.subTest(min_ratio=bad), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(broken)
         sys.path.insert(0, str(ROOT / "scripts"))
         try:
             import emby_operator_socket as worker
