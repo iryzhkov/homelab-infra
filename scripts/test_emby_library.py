@@ -1373,6 +1373,19 @@ class LibraryWorkerTests(unittest.TestCase):
         self.assertEqual(len(m_prev['plan']['files']), 1)
         self.assertEqual(m_prev['plan']['files'][0]['id'], 505)
 
+    def test_lookup_stats_unknown_when_detail_vanishes(self):
+        # A 404 (None) or mismatched detail must not leave zeros that look valid.
+        for detail in (None, {'id': 999}):
+            series = {'arr_id': 26, 'size_on_disk': 0,
+                      'seasons': [{'season': 1, 'monitored': True, 'episode_count': 0, 'episode_file_count': 0}]}
+            lib._fill_lookup_stats(series, detail, 'series')
+            self.assertIsNone(series['size_on_disk'])
+            self.assertIsNone(series['seasons'][0]['episode_count'])
+            self.assertIsNone(series['seasons'][0]['episode_file_count'])
+            movie = {'arr_id': 216, 'size_on_disk': 0}
+            lib._fill_lookup_stats(movie, detail, 'movie')
+            self.assertIsNone(movie['size_on_disk'])
+
     def test_lookup_enriches_in_library_stats_for_movies_and_series(self):
         # Movie lookup: statistics.sizeOnDisk (Radarr) for in-library row; 0 for not-in-library row.
         self.state.movies[0]['sizeOnDisk'] = 0

@@ -661,6 +661,12 @@ def _project_lookup_row(raw, kind, *, in_library):
 
 def _fill_lookup_stats(row, detail, kind):
     if type(detail) is not dict or detail.get('id') != row.get('arr_id'):
+        # The in-library title vanished or no longer matches between the lookup
+        # and its detail GET: report the statistics as unknown, never as zero.
+        row['size_on_disk'] = None
+        for season in row.get('seasons') or []:
+            season['episode_count'] = None
+            season['episode_file_count'] = None
         return
     stats = detail.get('statistics') if type(detail.get('statistics')) is dict else {}
     if kind == 'movie':
