@@ -3,13 +3,16 @@
 #
 # The second edge VM, 10.42.0.10, joined 2026-10-02. The same as public-api's
 # configuration apart from its own certificate; see public-api.yml.j2 for why
-# the relay and punchy blocks are there. The open inbound rule is what lets
-# mesh clients reach its dnsmasq and Traefik, as on public-api.
+# the relay and punchy blocks are there. The inbound rules admit the mesh's
+# lighthouse, server and client groups, which is what lets mesh clients reach
+# its dnsmasq and Traefik, as on public-api.
 
 pki:
   ca: /etc/nebula/ca.crt
   cert: /etc/nebula/public-api-b.crt
   key: /etc/nebula/public-api-b.key
+  # No certificate is blocked today; add fingerprints here to revoke one.
+  blocklist: []
 
 static_host_map:
   "10.42.0.1": ["150.230.40.9:4242"]
@@ -46,7 +49,16 @@ firewall:
       proto: any
       host: any
 
+  # Separate entries are OR. Every mesh node carries one of these groups; any
+  # other identity (an agent, a car) is refused. This node does not trust the
+  # car-only CA.
   inbound:
     - port: any
       proto: any
-      host: any
+      group: lighthouse
+    - port: any
+      proto: any
+      group: server
+    - port: any
+      proto: any
+      group: client

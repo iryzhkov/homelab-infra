@@ -10,6 +10,8 @@ pki:
   ca: /etc/nebula/ca.crt
   cert: /etc/nebula/proxmox-a.crt
   key: /etc/nebula/proxmox-a.key
+  # No certificate is blocked today; add fingerprints here to revoke one.
+  blocklist: []
 
 static_host_map:
   "10.42.0.1": ["150.230.40.9:4242"]
@@ -46,7 +48,16 @@ firewall:
     - port: any
       proto: any
       host: any
+  # Separate entries are OR. Every mesh node carries one of these groups; any
+  # other identity (an agent, a car) is refused. This node does not trust the
+  # car-only CA.
   inbound:
     - port: any
       proto: any
-      host: any
+      group: lighthouse
+    - port: any
+      proto: any
+      group: server
+    - port: any
+      proto: any
+      group: client
