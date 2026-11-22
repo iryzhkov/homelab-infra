@@ -2696,10 +2696,10 @@ def _import_rejections_allowed(raw):
     if type(raw) is not list:
         return False
     patterns = (
-        r'not an upgrade(?: for existing .*file)?[.!]?',
+        r'not an upgrade(?: for existing (?:movie |episode )?file)?[.!]?',
         r'existing file (?:meets cutoff|is higher quality)[.!]?',
-        r'(?:quality|custom[ -]format|custom format score).* (?:is not|isn.t|not) (?:an? )?upgrade.*',
-        r'(?:quality|custom[ -]format|custom format score) (?:cutoff (?:already )?met|upgrade (?:is )?not (?:allowed|required|needed)).*',
+        r'(?:quality|custom[ -]format|custom format score) (?:is not|isn.t|not) (?:an? )?upgrade[.!]?',
+        r'(?:quality|custom[ -]format|custom format score) (?:cutoff (?:already )?met|upgrade (?:is )?not (?:allowed|required|needed))[.!]?',
     )
     for rejection in raw:
         reason = rejection.get('reason') if type(rejection) is dict else rejection

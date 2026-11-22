@@ -2391,7 +2391,8 @@ class LibraryWorkerTests(unittest.TestCase):
     def test_import_candidate_gates_and_completion(self):
         frame = copy.deepcopy(self.fixture['library_import_preview_frame'])
         candidate = self.state.sonarr_manualimport['a' * 40][0]
-        for reason in ('Sample', 'Unable to parse file', 'Unknown', 'Not an upgrade; Sample'):
+        for reason in ('Sample', 'Unable to parse file', 'Unknown', 'Not an upgrade; Sample',
+                       'Quality is not an upgrade; Sample', 'Not an upgrade for existing sample file'):
             with self.subTest(reason=reason):
                 candidate['rejections'] = [{'reason': reason}]
                 with self.assertRaises(lib.LibraryRefusal) as ctx:
