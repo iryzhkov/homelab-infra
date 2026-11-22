@@ -110,7 +110,9 @@ ceiling into `/etc/holonet-playlists/policy.json`:
     `remove_max_files` (500).
   - `recommendations` (optional; omitted disables `library-recommendations`):
     - `mdblist_key_file`: normalized absolute path, default
-      `/etc/holonet/mdblist.key` (0400 `root:root`).
+      `/etc/holonet/mdblist.key` (0400 `root:root`). The deployment does not
+      install the key; it was placed on homelab by hand, and the recovery copy is
+      `secrets/mdblist.sops.yaml` (field `mdblist_api_key`).
     - `lists`: 1–16 `{slug, kind}` mappings (`kind` in `movie|series|anime`),
       matched by slug against `/lists/user` (e.g., `top-movies -> movie`,
       `top-anime-movies -> anime`, `top-tv -> series`, `top-anime -> anime`).
