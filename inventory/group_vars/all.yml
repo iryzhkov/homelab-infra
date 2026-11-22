@@ -65,11 +65,13 @@ gatus_public_from_lan:
 #                 Nebula address); it is rendered for the routers' tls block.
 #   cartest.yml   the Bellerophon test car on gaming-pc, adopted from
 #                 public-api on 2026-10-02
+#   carviews.yml  Bellerophon design previews on gaming-pc, over the mesh
 traefik_rendered_files:
   - admin.yml
   - whisper.yml
   - t3.yml
   - cartest.yml
+  - carviews.yml
   - akasha.yml
 #   catchall.yml  the wildcard-certificate 404 for unclaimed hostnames
 traefik_static_files:

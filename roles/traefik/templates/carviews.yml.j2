@@ -1,0 +1,24 @@
+# Bellerophon design previews (static mockups such as the lap-timing views), served by
+# the user service bellerophon-views on gaming-pc, port 18810. LAN-only: no Cloudflare
+# Tunnel hostname exists for it; AdGuard's *.ryzhkov.dev wildcard resolves it on the LAN.
+# The backend is reached over the Nebula mesh (gaming-pc is 10.42.0.6), so no UniFi port
+# group change is needed; gaming-pc's ufw admits 18810 from 10.42.0.0/24.
+{#
+  Added 2026-11-22. Remove when the previews are no longer needed: drop carviews.yml
+  from traefik_rendered_files and add it to the removal list in tasks/main.yml.
+#}
+
+http:
+  routers:
+    carviews-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`carviews.ryzhkov.dev`) && !HeaderRegexp(`Cf-Ray`, `.+`)"
+      service: carviews-service
+{% include 'router-tls.j2' %}
+
+  services:
+    carviews-service:
+      loadBalancer:
+        servers:
+          - url: "http://10.42.0.6:18810"
