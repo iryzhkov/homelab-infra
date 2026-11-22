@@ -218,7 +218,8 @@
           "download_client": "qBittorrent",
           "status_messages": []
         }
-      ]
+      ],
+      "truncated": false
     }
   },
   "library_subtitles_frame": {
@@ -547,6 +548,7 @@
         "title": "Synthetic Movie",
         "target": "title",
         "delete_title": true,
+        "affected_episode_arr_ids": [],
         "recycle_bin": "/mnt/shared/holonet-recycle/radarr",
         "files": [
           {
@@ -569,7 +571,7 @@
           }
         ]
       },
-      "plan_sha256": "7f3f2fbbcf493b8ec0fb461876fb62d00bc1a54a6ea0f2e48a114cc6e1bf923b"
+      "plan_sha256": "60abbd309eba340bfd176e0facbb40a077563c292263a1886977e7c733f1c544"
     }
   },
   "library_remove_apply_frame": {
@@ -598,7 +600,7 @@
       "remove_torrents": true,
       "keep_emby_ids": [],
       "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "plan_sha256": "7f3f2fbbcf493b8ec0fb461876fb62d00bc1a54a6ea0f2e48a114cc6e1bf923b"
+      "plan_sha256": "60abbd309eba340bfd176e0facbb40a077563c292263a1886977e7c733f1c544"
     }
   },
   "library_remove_apply": {
@@ -613,6 +615,7 @@
         "title": "Synthetic Movie",
         "target": "title",
         "delete_title": true,
+        "affected_episode_arr_ids": [],
         "recycle_bin": "/mnt/shared/holonet-recycle/radarr",
         "files": [
           {
@@ -635,7 +638,7 @@
           }
         ]
       },
-      "plan_sha256": "7f3f2fbbcf493b8ec0fb461876fb62d00bc1a54a6ea0f2e48a114cc6e1bf923b",
+      "plan_sha256": "60abbd309eba340bfd176e0facbb40a077563c292263a1886977e7c733f1c544",
       "applied": true,
       "title_deleted": true,
       "deleted_file_count": 1,
@@ -690,6 +693,35 @@
         "code": "refused",
         "reason": "keep_listed",
         "message": "Title is protected by keep list"
+      }
+    },
+    "emby_unresolved": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "emby_unresolved",
+        "message": "Cannot unambiguously resolve movie in Emby to verify keep list"
+      }
+    },
+    "partial": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "partial",
+        "message": "Episode file delete failed after dispatch; verify state in library detail",
+        "completed": [
+          "episodes_unmonitored:1"
+        ]
+      }
+    },
+    "uncertain": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "uncertain",
+        "message": "Title delete dispatched; verify state in library detail",
+        "completed": []
       }
     },
     "image_subtitle": {

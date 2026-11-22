@@ -42,7 +42,8 @@ from emby_operator_acquire import (OPERATIONS as ACQUIRE_OPERATIONS, SECONDS as 
     actions as acquire_actions, execute as acquire_execute)
 from emby_operator_library import (OPERATIONS as LIBRARY_OPERATIONS, SECONDS as LIBRARY_SECONDS,
     ALLOWED_ACTIONS as LIBRARY_ALLOWED_ACTIONS, NAMESPACE as LIBRARY_NAMESPACE,
-    LibraryRefusal, validate_block as library_block, request as library_request,
+    FAILURE as LIBRARY_FAILURE, LibraryRefusal, LibraryPostDispatchError,
+    validate_block as library_block, request as library_request,
     required_action as library_required_action, execute as library_execute)
 from emby_operator_entry import invoke, operator_session
 from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT,
@@ -125,6 +126,7 @@ POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'}
 # without series_libraries it permits no Series read or typed list state.
 POLICY_OPTIONAL = frozenset({'subjects', 'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause', 'janitor_custody', 'janitor_torrents', 'janitor_seed_join', 'janitor_acquire', 'library'})
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
+LIBRARY_ERROR_CODES = ERROR_CODES | frozenset({'partial', 'uncertain'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
 ACTION = re.compile(r'[A-Za-z0-9._:-]{1,64}')
@@ -138,12 +140,14 @@ STOPPED = {'deadline': 'Stopped at caller deadline; use show before resubmitting
 
 class WireError(Exception):
     """One typed response error with fixed safe text."""
-    def __init__(self, code, message, operation=None, list_id=None, reason=None):
+    def __init__(self, code, message, operation=None, list_id=None, reason=None, completed=None):
         super().__init__(message)
-        assert code in ERROR_CODES and SAFE_TEXT.fullmatch(message)
+        assert code in LIBRARY_ERROR_CODES and SAFE_TEXT.fullmatch(message)
         assert reason is None or re.fullmatch(r'[a-z0-9_]{1,64}', reason)
+        if completed is not None:
+            assert isinstance(completed, list) and all(isinstance(c, str) and re.fullmatch(r'[a-z0-9_:-]{1,128}', c) for c in completed)
         self.code, self.message = code, message
-        self.operation, self.list_id, self.reason = operation, list_id, reason
+        self.operation, self.list_id, self.reason, self.completed = operation, list_id, reason, completed
 
 
 def check(condition, code, message):
@@ -960,6 +964,8 @@ def handle(conn):
         try:
             config = selected_config(policy, call['recipient'])
             return library_execute(policy, call, guard, config)
+        except LibraryPostDispatchError as error:
+            raise WireError(error.code, safe_message(error), completed=error.completed) from None
         except LibraryRefusal as error:
             raise WireError('refused', safe_message(error), reason=error.reason) from None
         except WireError:
@@ -967,6 +973,8 @@ def handle(conn):
         except Refused as error:
             if guard.tripped or guard.expired():
                 raise WireError('deadline', STOPPED[guard.tripped or 'deadline']) from None
+            if str(error) == LIBRARY_FAILURE:
+                raise WireError('unavailable', LIBRARY_FAILURE) from None
             raise WireError('refused', safe_message(error)) from None
         except Exception:
             if guard.tripped or guard.expired():
@@ -1017,6 +1025,8 @@ def envelope(result=None, error=None):
     body = {'code': error.code, 'message': error.message}
     if error.reason is not None:
         body['reason'] = error.reason
+    if error.completed is not None:
+        body['completed'] = error.completed
     if error.operation is not None:
         body['operation'] = error.operation
     if error.list_id is not None:

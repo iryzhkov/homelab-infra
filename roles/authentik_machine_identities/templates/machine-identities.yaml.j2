@@ -63,10 +63,11 @@ entries:
 {% endfor %}
   # --- Service-independent: accounts, app passwords, membership. ---
 {% for item in spec.identities if item.state == 'present' %}
+{% set user_key = 'user-' ~ loop.index %}
   # {{ item.host }} / {{ item.profile }}: an ordinary service account with no
   # roles; its only group is the one bound to the application below.
   - model: authentik_core.user
-    id: user-{{ loop.index }}
+    id: {{ user_key }}
     identifiers:
       username: {{ item.username | to_json }}
     attrs:
@@ -82,7 +83,7 @@ entries:
     identifiers:
       identifier: {{ item.token | to_json }}
     attrs:
-      user: !KeyOf user-{{ loop.index }}
+      user: !KeyOf {{ user_key }}
       intent: app_password
       expiring: true
       expires: {{ item.expires | to_json }}
@@ -92,7 +93,7 @@ entries:
     identifiers:
       identifier: {{ extra.token | to_json }}
     attrs:
-      user: !KeyOf user-{{ loop.index }}
+      user: !KeyOf {{ user_key }}
       intent: app_password
       expiring: true
       expires: {{ extra.expires | to_json }}

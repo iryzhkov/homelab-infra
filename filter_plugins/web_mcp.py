@@ -98,9 +98,9 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "554a4dbe0caf317f1fbc159a9a1535939bd91c377ce58a0304b184b544a97256",
+    "emby_operator_library.py": "ca7407889221f212351a3a65a32c99a10765c595d466a0702700514e466e7c99",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
-    "emby_operator_socket.py": "9049c8142c3964b1f43da1cdd589c9094f42184d0d56023c28ad5daf006472f1",
+    "emby_operator_socket.py": "bb513c3f7c3809bce5d2202e4e03ccc80db7181a87b9e5f46383f17a36f11209",
     "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
     "emby_operator_custody.py": "09bbaf1a9a59ca2a2df533d5fdae669cfda4170cd0d3ecb7250cdcde34c3b79c",
     "emby_operator_seed_join.py": "deb669172df79565cd17a8774c827604432936eb2404e86a49e59b8e68eb21d2",
@@ -313,7 +313,7 @@ def observer_config(config):
 def holonet_config(config):
     keys(config, ("resource", "issuer", "jwks_url", "server_id", "backend_url",
                   "credential_file", "policy_revision", "policy", "library_guids"),
-         ("recommendations", "playlist_operator", "playback", "janitor", "purpose_grants"))
+         ("recommendations", "playlist_operator", "playback", "janitor", "library", "purpose_grants"))
     require(config["resource"] == "https://media.mcp.ryzhkov.dev/mcp",
             "HoloNet resource is fixed")
     trust(config, "resource", "issuer", ha_canonical_url)
@@ -325,12 +325,24 @@ def holonet_config(config):
             "HoloNet backend must be trusted HTTPS /emby or exact host-local Emby")
     require(config["credential_file"] == "/etc/holonet/backend.json",
             "HoloNet runtime credential path is fixed")
+    if "library" in config:
+        lib_cfg = config["library"]
+        keys(lib_cfg, ("enabled",))
+        require(type(lib_cfg["enabled"]) is bool, "library enabled must be a boolean")
+        if lib_cfg["enabled"]:
+            operator = config.get("playlist_operator")
+            janitor = config.get("janitor")
+            require(operator is not None and janitor is not None
+                    and operator["subject"] == janitor["subject"]
+                    and operator["library"] == janitor["library"],
+                    "library requires playlist_operator and janitor on the same writer binding")
     policy = config["policy"]
     keys(policy, ("Server", "Actions", "Libraries", "CatalogUsers", "HistoryUsers"))
     playback = config.get("playback") is not None
     require(policy["Server"] == config["server_id"], "policy server must be the configured server")
     if not playback:
-        require(policy["Actions"] == ["catalog.read"] + janitor_read_actions(config) and policy["HistoryUsers"] == [],
+        require(policy["Actions"] == ["catalog.read"] + janitor_read_actions(config) + library_read_actions(config)
+                and policy["HistoryUsers"] == [],
                 "initial HoloNet release is catalog-only")
     libraries = records(policy["Libraries"], 1, 1)
     users = records(policy["CatalogUsers"], 1, 1)
@@ -384,7 +396,7 @@ def holonet_playback(config):
     except ValueError:
         require(False, "credential expiry must be a valid UTC time")
     policy = config["policy"]
-    require(policy["Actions"] == ["catalog.read", "history.read"] + janitor_read_actions(config),
+    require(policy["Actions"] == ["catalog.read", "history.read"] + janitor_read_actions(config) + library_read_actions(config),
             "playback adds only history.read to the catalog ceiling")
     history = records(policy["HistoryUsers"], 1, 16)
     require(all(isinstance(u, str) for u in history), "invalid history user")
@@ -568,6 +580,14 @@ CUSTODY_ACTIONS = ["janitor.importers.read", "janitor.custody.read"]
 CUSTODY_DESCRIPTOR = "/etc/holonet-playlists/radarr.json"
 
 
+LIBRARY_ACTIONS = ["library.read", "library.manage"]
+
+
+def library_read_actions(config):
+    lib = config.get("library")
+    return list(LIBRARY_ACTIONS) if isinstance(lib, dict) and lib.get("enabled") is True else []
+
+
 def janitor_read_actions(config):
     if "janitor" not in config:
         return []
@@ -719,24 +739,28 @@ LIBRARY_SPECS = {
 
 def library_install_plan(value):
     """Explicit default-off library management root ceiling. No guessed root folders or profiles."""
+    config = value["config"]
+    go_lib = config.get("library")
+    go_enabled = bool(go_lib.get("enabled")) if isinstance(go_lib, dict) else False
     if "library" not in value:
+        require(not go_enabled, "Go config library.enabled requires worker library block")
         return None
     require(value["service"] == "holonet", "library management is HoloNet only")
-    config = value["config"]
     operator = config.get("playlist_operator")
     require(operator is not None, "library management requires playlist_operator")
     data = value["library"]
     keys(data, ("libraries", "allowed_categories"), ("enabled", "removal_thresholds", "limits", "torrents"))
     enabled = data.get("enabled", False)
     require(type(enabled) is bool, "library enabled must be a boolean")
+    require(go_enabled == enabled, "Go config library.enabled must match worker library.enabled")
     libs = data["libraries"]
     require(isinstance(libs, dict) and set(libs) == set(LIBRARY_SPECS),
             "library mapping must declare exactly movies, tv and anime")
     rendered_libs = {}
     for name, spec in LIBRARY_SPECS.items():
         entry = libs[name]
-        keys(entry, ("root_folder_path", "quality_profile_id"),
-             ("library_id", "kind", "arr", "descriptor"))
+        opt_keys = ("library_id", "kind", "arr", "descriptor", "minimum_availability") if name == "movies" else ("library_id", "kind", "arr", "descriptor")
+        keys(entry, ("root_folder_path", "quality_profile_id"), opt_keys)
         if "library_id" in entry:
             require(entry["library_id"] == spec["library_id"], f"{name} library_id mismatch")
         if "kind" in entry:
@@ -754,7 +778,7 @@ def library_install_plan(value):
         desc = entry.get("descriptor", spec["descriptor"])
         require(isinstance(desc, str) and desc == spec["descriptor"],
                 f"{name} descriptor must match fixed Arr descriptor path")
-        rendered_libs[name] = {
+        rendered_entry = {
             "library_id": spec["library_id"],
             "kind": spec["kind"],
             "arr": spec["arr"],
@@ -762,6 +786,11 @@ def library_install_plan(value):
             "root_folder_path": rf,
             "quality_profile_id": qp,
         }
+        if name == "movies" and "minimum_availability" in entry:
+            require(entry["minimum_availability"] in ("announced", "inCinemas", "released"),
+                    "movies minimum_availability must be announced, inCinemas, or released")
+            rendered_entry["minimum_availability"] = entry["minimum_availability"]
+        rendered_libs[name] = rendered_entry
     cats = records(data["allowed_categories"], 1, 16)
     require(all(isinstance(c, str) and 1 <= len(c.encode("utf-8")) <= 64 and c.isprintable() for c in cats),
             "invalid allowed_categories")

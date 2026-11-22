@@ -89,6 +89,15 @@ class LibraryRefusal(Refused):
         self.reason = reason
 
 
+class LibraryPostDispatchError(Exception):
+    """Failure after at least one mutating call was sent; effects may be partial or uncertain."""
+    def __init__(self, code, message, completed=None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.completed = list(completed or [])
+
+
 def need(condition, message=FAILURE):
     if not condition:
         raise Refused(message)
@@ -142,15 +151,17 @@ def validate_block(value):
     need(type(libs) is dict and set(libs) == set(LIBRARY_SPECS), 'Invalid library policy')
     for name, spec in LIBRARY_SPECS.items():
         entry = libs[name]
-        need(type(entry) is dict and set(entry) == {
-            'library_id', 'kind', 'arr', 'descriptor', 'root_folder_path', 'quality_profile_id',
-        }, 'Invalid library policy')
+        req_keys = {'library_id', 'kind', 'arr', 'descriptor', 'root_folder_path', 'quality_profile_id'}
+        opt_keys = {'minimum_availability'} if name == 'movies' else set()
+        need(type(entry) is dict and req_keys <= set(entry) <= (req_keys | opt_keys), 'Invalid library policy')
         need(entry['library_id'] == spec['library_id']
              and entry['kind'] == spec['kind']
              and entry['arr'] == spec['arr'], 'Invalid library policy')
         safe_path(entry['descriptor'])
         safe_path(entry['root_folder_path'])
         need(integer(entry['quality_profile_id'], 1, 2 ** 31 - 1), 'Invalid library policy')
+        if 'minimum_availability' in entry:
+            need(entry['minimum_availability'] in ('announced', 'inCinemas', 'released'), 'Invalid library policy')
     safe_path(value['torrents'])
     cats = value['allowed_categories']
     need(type(cats) is list and 1 <= len(cats) <= 16
@@ -417,6 +428,14 @@ class LibraryArrClient(ImporterInventoryAdapter):
         need(status == 200, FAILURE)
         return data
 
+    def get_optional(self, route):
+        self.verify_version()
+        status, data = self._request('GET', route, accept_statuses=(200, 404))
+        if status == 404:
+            return None
+        need(status == 200, FAILURE)
+        return data
+
     def post(self, route, body, *, accept_statuses=(200, 201)):
         self.verify_version()
         return self._request('POST', route, body, accept_statuses=accept_statuses)
@@ -648,6 +667,99 @@ def _extract_file_info(f, emby_item_id=None):
     }
 
 
+def _relative_under_root(path, root):
+    if not isinstance(path, str) or not isinstance(root, str) or not path or not root:
+        return None
+    r = root.rstrip('/')
+    p = path.rstrip('/')
+    if p == r:
+        return ''
+    if p.startswith(r + '/'):
+        return p[len(r) + 1:]
+    return None
+
+
+def _emby_path_matches(emby_path, arr_path, arr_root=None):
+    if not isinstance(emby_path, str) or not emby_path or not isinstance(arr_path, str) or not arr_path:
+        return False
+    ep = emby_path.rstrip('/')
+    ap = arr_path.rstrip('/')
+    if ep == ap:
+        return True
+    if arr_root:
+        rel = _relative_under_root(ap, arr_root)
+        if rel and (ep == arr_root.rstrip('/') + '/' + rel or ep.endswith('/' + rel)):
+            return True
+    # Radarr may mount /movies while Emby mounts /mnt/shared/media/movies (policy root_folder_path).
+    if ap.startswith('/movies/'):
+        rel_movies = ap[len('/movies/'):]
+        if rel_movies:
+            if arr_root and ep == arr_root.rstrip('/') + '/' + rel_movies:
+                return True
+            if ep.endswith('/' + rel_movies):
+                return True
+    return False
+
+
+def _resolve_movie_emby_ids(emby, recipient, library_id, *, tmdb_id=None, item_path=None, file_path=None, arr_root=None):
+    """Resolve Emby Movie IDs via provider-id query with path-mapping fallback.
+
+    Returns (ids_list, ambiguous_bool). Raises on Emby transport/API errors.
+    """
+    def path_hits(rows):
+        out = []
+        for r in rows:
+            eid = r.get('Id')
+            rpath = r.get('Path') or ''
+            if not eid or not rpath:
+                continue
+            if (
+                (file_path and _emby_path_matches(rpath, file_path, arr_root))
+                or (item_path and (_in_root(rpath, item_path) or _emby_path_matches(rpath, item_path, arr_root)))
+            ):
+                out.append(eid)
+        return out
+
+    if tmdb_id is not None:
+        rows = emby._items(recipient, {
+            'Recursive': 'true',
+            'IncludeItemTypes': 'Movie',
+            'ParentId': library_id,
+            'Fields': 'Path,ProviderIds',
+            'AnyProviderIdEquals': f'Tmdb.{tmdb_id}',
+            'StartIndex': 0,
+            'Limit': 50,
+        }, 50)
+        prov_rows = [
+            r for r in rows
+            if r.get('Id') and (
+                not r.get('ProviderIds')
+                or (r.get('ProviderIds') or {}).get('Tmdb') == str(tmdb_id)
+            )
+        ]
+        if prov_rows:
+            matched = path_hits(prov_rows)
+            if len(matched) == 1:
+                return matched, False
+            if len(prov_rows) == 1:
+                return [prov_rows[0]['Id']], False
+            if matched:
+                return matched, len(matched) > 1
+            return [r['Id'] for r in prov_rows], True
+
+    # Fallback: query movies in this library and match by exact or mapped path.
+    all_rows = emby._items(recipient, {
+        'Recursive': 'true',
+        'IncludeItemTypes': 'Movie',
+        'ParentId': library_id,
+        'Fields': 'Path,ProviderIds',
+        'StartIndex': 0,
+        'Limit': 500,
+    }, 500)
+    matched = path_hits(all_rows)
+    return matched, len(matched) > 1
+
+
 def _resolve_emby_map(emby, recipient, library_id, kind, *, provider_key=None, provider_val=None, series_path=None):
     """Best-effort mapping of file path -> Emby item id inside the authorized library."""
     if emby is None:
@@ -711,47 +823,54 @@ def op_lookup(call, block, arr_factory):
     cap = block['limits']['lookup_max_rows']
     api = arr_factory(lib['arr'], lib['descriptor'], SECONDS['library-lookup'])
     endpoint = '/api/v3/movie' if kind == 'movie' else '/api/v3/series'
-    existing_raw = api.get(endpoint)
-    need(type(existing_raw) is list, FAILURE)
-
-    # Filter to this library's root folder.
-    existing = [r for r in existing_raw if type(r) is dict and _in_root(r.get('path'), lib['root_folder_path'])]
     term = q.get('term')
     arr_id = q.get('arr_id')
     matched = []
     seen_ext = set()
     ext_field = 'tmdbId' if kind == 'movie' else 'tvdbId'
 
-    for r in existing:
-        if arr_id is not None and r.get('id') != arr_id:
-            continue
-        if term is not None:
-            t_low = term.lower()
-            title_match = t_low in str(r.get('title', '')).lower()
-            imdb_match = t_low == str(r.get('imdbId') or '').lower()
-            ext_match = t_low == str(r.get(ext_field) or '').lower()
-            if not (title_match or imdb_match or ext_match):
-                continue
-        matched.append(_project_lookup_row(r, kind, in_library=True))
-        if r.get(ext_field) is not None:
-            seen_ext.add(r[ext_field])
+    def matches_term(r):
+        if term is None:
+            return True
+        t_low = term.lower()
+        title_match = t_low in str(r.get('title', '')).lower()
+        imdb_match = t_low == str(r.get('imdbId') or '').lower()
+        ext_match = t_low == str(r.get(ext_field) or '').lower()
+        return title_match or imdb_match or ext_match
 
-    if term is not None and arr_id is None:
+    if arr_id is not None:
+        r = api.get_optional(f'{endpoint}/{arr_id}')
+        if type(r) is dict and r.get('id') == arr_id and _in_root(r.get('path'), lib['root_folder_path']):
+            if matches_term(r):
+                matched.append(_project_lookup_row(r, kind, in_library=True))
+    elif term is not None:
         lookup_route = f'{endpoint}/lookup?' + urllib.parse.urlencode({'term': term})
         lookup_raw = api.get(lookup_route)
         need(type(lookup_raw) is list, FAILURE)
+        in_lib_rows = []
+        new_rows = []
         for r in lookup_raw:
             if type(r) is not dict:
                 continue
             ext_id = r.get(ext_field)
             if ext_id is not None and ext_id in seen_ext:
                 continue
-            # Also skip if Arr lookup returned an item that is already in Arr (e.g. another root).
             if type(r.get('id')) is int and r['id'] > 0:
+                if _in_root(r.get('path'), lib['root_folder_path']):
+                    if ext_id is not None:
+                        seen_ext.add(ext_id)
+                    in_lib_rows.append(_project_lookup_row(r, kind, in_library=True))
                 continue
             if ext_id is not None:
                 seen_ext.add(ext_id)
-            matched.append(_project_lookup_row(r, kind, in_library=False))
+            new_rows.append(_project_lookup_row(r, kind, in_library=False))
+        matched = in_lib_rows + new_rows
+    else:
+        existing_raw = api.get(endpoint)
+        need(type(existing_raw) is list, FAILURE)
+        for r in existing_raw:
+            if type(r) is dict and _in_root(r.get('path'), lib['root_folder_path']):
+                matched.append(_project_lookup_row(r, kind, in_library=True))
 
     truncated = len(matched) > cap
     return {
@@ -773,15 +892,23 @@ def op_detail(call, block, arr_factory, emby_factory):
         m = api.get(f"/api/v3/movie/{q['arr_id']}")
         need(type(m) is dict and m.get('id') == q['arr_id']
              and _in_root(m.get('path'), lib['root_folder_path']), FAILURE)
-        emby_map = _resolve_emby_map(
-            emby, call['recipient'], lib['library_id'], 'movie',
-            provider_key='Tmdb', provider_val=m.get('tmdbId'),
-        )
         file_obj = None
         if m.get('hasFile') and type(m.get('movieFile')) is dict:
             mf = m['movieFile']
             full_path = mf.get('path') or (m['path'].rstrip('/') + '/' + str(mf.get('relativePath') or ''))
-            file_obj = _extract_file_info(mf, emby_item_id=emby_map.get(full_path))
+            emby_item_id = None
+            if emby is not None:
+                try:
+                    m_ids, ambig = _resolve_movie_emby_ids(
+                        emby, call['recipient'], lib['library_id'],
+                        tmdb_id=m.get('tmdbId'), item_path=m.get('path'),
+                        file_path=full_path, arr_root=lib['root_folder_path'],
+                    )
+                    if not ambig and len(m_ids) == 1:
+                        emby_item_id = m_ids[0]
+                except Exception:
+                    emby_item_id = None
+            file_obj = _extract_file_info(mf, emby_item_id=emby_item_id)
         return {
             'library': lib_name,
             'kind': 'movie',
@@ -866,6 +993,9 @@ def op_releases(call, block, arr_factory):
         need(type(s) is dict and s.get('id') == q['arr_id']
              and _in_root(s.get('path'), lib['root_folder_path']), FAILURE)
         if 'episode_arr_id' in q:
+            ep = api.get(f"/api/v3/episode/{q['episode_arr_id']}")
+            need(type(ep) is dict and ep.get('id') == q['episode_arr_id']
+                 and ep.get('seriesId') == q['arr_id'], FAILURE)
             route = '/api/v3/release?' + urllib.parse.urlencode({'episodeId': q['episode_arr_id']})
         else:
             route = '/api/v3/release?' + urllib.parse.urlencode({
@@ -955,12 +1085,15 @@ def op_queue(call, block, arr_factory):
     q = call['request']
     wanted = q.get('library')
     items = []
+    truncated = False
 
     if wanted in (None, 'movies'):
         lib = block['libraries']['movies']
         api = arr_factory('radarr', lib['descriptor'], SECONDS['library-queue'])
         data = api.get('/api/v3/queue?page=1&pageSize=100&includeUnknownMovieItems=false')
         need(type(data) is dict and type(data.get('records')) is list, FAILURE)
+        if type(data.get('totalRecords')) is int and data['totalRecords'] > len(data['records']):
+            truncated = True
         for r in data['records']:
             if type(r) is not dict:
                 continue
@@ -985,25 +1118,36 @@ def op_queue(call, block, arr_factory):
     if wanted in (None, 'tv', 'anime'):
         sonarr_desc = block['libraries']['tv']['descriptor']
         api = arr_factory('sonarr', sonarr_desc, SECONDS['library-queue'])
-        series_list = api.get('/api/v3/series')
-        need(type(series_list) is list, FAILURE)
-        series_lib = {}
         tv_root = block['libraries']['tv']['root_folder_path']
         anime_root = block['libraries']['anime']['root_folder_path']
-        for s in series_list:
-            if type(s) is not dict or type(s.get('id')) is not int:
-                continue
-            if _in_root(s.get('path'), anime_root):
-                series_lib[s['id']] = 'anime'
-            elif _in_root(s.get('path'), tv_root):
-                series_lib[s['id']] = 'tv'
-        data = api.get('/api/v3/queue?page=1&pageSize=100&includeUnknownSeriesItems=false')
+        data = api.get('/api/v3/queue?page=1&pageSize=100&includeUnknownSeriesItems=false&includeSeries=true')
         need(type(data) is dict and type(data.get('records')) is list, FAILURE)
+        if type(data.get('totalRecords')) is int and data['totalRecords'] > len(data['records']):
+            truncated = True
+        series_lib = {}
+
+        def classify_series(sid, embedded=None):
+            if sid in series_lib:
+                return series_lib[sid]
+            s_obj = embedded if type(embedded) is dict and isinstance(embedded.get('path'), str) else None
+            if s_obj is None:
+                s_obj = api.get_optional(f'/api/v3/series/{sid}')
+            lib_match = None
+            if type(s_obj) is dict:
+                if _in_root(s_obj.get('path'), anime_root):
+                    lib_match = 'anime'
+                elif _in_root(s_obj.get('path'), tv_root):
+                    lib_match = 'tv'
+            series_lib[sid] = lib_match
+            return lib_match
+
         for r in data['records']:
             if type(r) is not dict:
                 continue
             sid = r.get('seriesId')
-            lib_name = series_lib.get(sid)
+            if type(sid) is not int:
+                continue
+            lib_name = classify_series(sid, r.get('series'))
             if lib_name is None:
                 continue
             if wanted is not None and lib_name != wanted:
@@ -1015,7 +1159,7 @@ def op_queue(call, block, arr_factory):
             items.append({
                 'library': lib_name,
                 'title': r.get('title') or '',
-                'arr_id': sid if type(sid) is int else None,
+                'arr_id': sid,
                 'episode_ids': ep_ids,
                 'status': r.get('status') or '',
                 'tracked_state': r.get('trackedDownloadState') or '',
@@ -1027,7 +1171,7 @@ def op_queue(call, block, arr_factory):
                 'status_messages': _queue_messages(r.get('statusMessages')),
             })
 
-    return {'library': wanted, 'items': items}
+    return {'library': wanted, 'items': items, 'truncated': truncated}
 
 
 def _is_image_subtitle(stream):
@@ -1070,11 +1214,12 @@ def op_subtitles(call, block, arr_factory, emby_factory):
             target_path = m['movieFile'].get('path') or (
                 m['path'].rstrip('/') + '/' + str(m['movieFile'].get('relativePath') or '')
             )
-            emby_map = _resolve_emby_map(
-                emby, recipient, lib['library_id'], 'movie',
-                provider_key='Tmdb', provider_val=m.get('tmdbId'),
+            m_ids, ambig = _resolve_movie_emby_ids(
+                emby, recipient, lib['library_id'],
+                tmdb_id=m.get('tmdbId'), item_path=m.get('path'),
+                file_path=target_path, arr_root=lib['root_folder_path'],
             )
-            eid = emby_map.get(target_path)
+            eid = m_ids[0] if not ambig and len(m_ids) == 1 else None
             need(eid is not None, 'Emby item not found for movie')
         else:
             need('episode_arr_id' in q, 'Episode ID or Emby item ID required')
@@ -1200,14 +1345,13 @@ def op_add(call, block, arr_factory):
 
     if kind == 'movie':
         tmdb_id = q['tmdb_id']
-        existing = api.get('/api/v3/movie')
-        need(type(existing) is list, FAILURE)
-        if any(type(m) is dict and m.get('tmdbId') == tmdb_id for m in existing):
-            refuse('already_in_library', 'Title is already in library')
         found = api.get('/api/v3/movie/lookup?' + urllib.parse.urlencode({'term': f'tmdb:{tmdb_id}'}))
         need(type(found) is list, FAILURE)
         match = next((m for m in found if type(m) is dict and m.get('tmdbId') == tmdb_id), None)
         need(match is not None, 'Title not found in Arr lookup')
+        if type(match.get('id')) is int and match['id'] > 0:
+            refuse('already_in_library', 'Title is already in library')
+        min_avail = lib.get('minimum_availability', 'released')
         plan = {
             'library': lib_name,
             'kind': 'movie',
@@ -1217,6 +1361,7 @@ def op_add(call, block, arr_factory):
             'imdb_id': match.get('imdbId') or None,
             'root_folder_path': lib['root_folder_path'],
             'quality_profile_id': lib['quality_profile_id'],
+            'minimum_availability': min_avail,
             'monitor': q['monitor'],
             'search_now': q['search_now'],
         }
@@ -1231,11 +1376,17 @@ def op_add(call, block, arr_factory):
             'year': match.get('year'),
             'qualityProfileId': lib['quality_profile_id'],
             'rootFolderPath': lib['root_folder_path'],
+            'minimumAvailability': min_avail,
             'monitored': q['monitor'] != 'none',
             'addOptions': {'searchForMovie': q['search_now']},
         }
-        status, created = api.post('/api/v3/movie', payload, accept_statuses=(200, 201))
-        need(status in (200, 201) and type(created) is dict and integer(created.get('id')), FAILURE)
+        try:
+            status, created = api.post('/api/v3/movie', payload, accept_statuses=(200, 201))
+            need(status in (200, 201) and type(created) is dict and integer(created.get('id')), FAILURE)
+        except Exception:
+            raise LibraryPostDispatchError(
+                'uncertain', 'Movie add dispatched; verify state in library detail', completed=[],
+            ) from None
         return {
             'mode': 'apply',
             'operation_id': q['operation_id'],
@@ -1247,14 +1398,12 @@ def op_add(call, block, arr_factory):
         }
 
     tvdb_id = q['tvdb_id']
-    existing = api.get('/api/v3/series')
-    need(type(existing) is list, FAILURE)
-    if any(type(s) is dict and s.get('tvdbId') == tvdb_id for s in existing):
-        refuse('already_in_library', 'Title is already in library')
     found = api.get('/api/v3/series/lookup?' + urllib.parse.urlencode({'term': f'tvdb:{tvdb_id}'}))
     need(type(found) is list, FAILURE)
     match = next((s for s in found if type(s) is dict and s.get('tvdbId') == tvdb_id), None)
     need(match is not None, 'Title not found in Arr lookup')
+    if type(match.get('id')) is int and match['id'] > 0:
+        refuse('already_in_library', 'Title is already in library')
     selected_seasons = sorted(q['seasons']) if 'seasons' in q else None
     plan = {
         'library': lib_name,
@@ -1298,8 +1447,13 @@ def op_add(call, block, arr_factory):
             'searchForMissingEpisodes': q['search_now'],
         },
     }
-    status, created = api.post('/api/v3/series', payload, accept_statuses=(200, 201))
-    need(status in (200, 201) and type(created) is dict and integer(created.get('id')), FAILURE)
+    try:
+        status, created = api.post('/api/v3/series', payload, accept_statuses=(200, 201))
+        need(status in (200, 201) and type(created) is dict and integer(created.get('id')), FAILURE)
+    except Exception:
+        raise LibraryPostDispatchError(
+            'uncertain', 'Series add dispatched; verify state in library detail', completed=[],
+        ) from None
     return {
         'mode': 'apply',
         'operation_id': q['operation_id'],
@@ -1344,14 +1498,22 @@ def op_grab(call, block, arr_factory):
         refuse('plan_changed', 'Plan changed since preview')
     if not q['approved'] and not allow_rejected:
         refuse('rejected_release', 'Rejected release requires allow_rejected true')
-    status, data = api.post(
-        '/api/v3/release',
-        {'guid': q['guid'], 'indexerId': q['indexer_id']},
-        accept_statuses=(200, 201, 202),
-    )
+    try:
+        status, data = api.post(
+            '/api/v3/release',
+            {'guid': q['guid'], 'indexerId': q['indexer_id']},
+            accept_statuses=(200, 201, 202),
+        )
+    except Exception:
+        raise LibraryPostDispatchError(
+            'uncertain', 'Release grab dispatched; verify state in library queue', completed=[],
+        ) from None
     if status in (400, 404, 410):
         refuse('release_expired', 'Release no longer cached by Arr; search again')
-    need(status in (200, 201, 202), FAILURE)
+    if status not in (200, 201, 202):
+        raise LibraryPostDispatchError(
+            'uncertain', 'Release grab response unexpected; verify state in library queue', completed=[],
+        )
     return {
         'mode': 'apply',
         'operation_id': q['operation_id'],
@@ -1362,10 +1524,10 @@ def op_grab(call, block, arr_factory):
     }
 
 
-def _evaluate_torrents(qbit, hashes_info, *, remove_torrents, allowed_categories, min_ratio, min_seeding_days):
-    if not hashes_info:
+def _evaluate_torrents(qbit, hashes_ownership, *, remove_torrents, allowed_categories, min_ratio, min_seeding_days):
+    if not hashes_ownership:
         return []
-    hashes = sorted(hashes_info)
+    hashes = sorted(hashes_ownership)
     torrents_raw = qbit.info_by_hashes(hashes)
     by_hash = {
         str(t.get('hash', '')).lower(): t
@@ -1380,13 +1542,13 @@ def _evaluate_torrents(qbit, hashes_info, *, remove_torrents, allowed_categories
         cat = str(t.get('category') or '')
         ratio = float(t.get('ratio') or 0.0)
         seeding_time = int(t.get('seeding_time') or 0)
-        every_file_deleted = hashes_info[h]
+        exclusive, keep_reason = hashes_ownership[h]
         if not remove_torrents:
             action, reason = 'keep', 'remove_torrents_false'
         elif cat not in allowed_categories:
             action, reason = 'keep', 'category_not_allowed'
-        elif not every_file_deleted:
-            action, reason = 'keep', 'partially_kept'
+        elif not exclusive:
+            action, reason = 'keep', keep_reason or 'partially_kept'
         elif ratio < min_ratio and seeding_time < min_seeding_seconds:
             action, reason = 'keep', 'seeding_threshold_not_met'
         else:
@@ -1403,41 +1565,119 @@ def _evaluate_torrents(qbit, hashes_info, *, remove_torrents, allowed_categories
     return out
 
 
+def _check_torrent_exclusivity(block, arr_factory, candidate_hashes, *, kind, arr_id, affected_ep_ids, by_id):
+    """Establish exclusive torrent ownership across both Radarr and Sonarr history."""
+    ownership = {}
+    if not candidate_hashes:
+        return ownership
+    radarr_lib = block['libraries']['movies']
+    sonarr_lib = block['libraries']['tv']
+    try:
+        radarr_api = arr_factory('radarr', radarr_lib['descriptor'], SECONDS['library-remove'])
+    except Exception:
+        radarr_api = None
+    try:
+        sonarr_api = arr_factory('sonarr', sonarr_lib['descriptor'], SECONDS['library-remove'])
+    except Exception:
+        sonarr_api = None
+
+    for dl in sorted(candidate_hashes):
+        if radarr_api is None or sonarr_api is None:
+            ownership[dl] = (False, 'ownership_unverified')
+            continue
+        qs = urllib.parse.urlencode({'downloadId': dl, 'page': 1, 'pageSize': 200})
+        try:
+            r_hist = radarr_api.get(f'/api/v3/history?{qs}')
+            s_hist = sonarr_api.get(f'/api/v3/history?{qs}')
+        except Exception:
+            ownership[dl] = (False, 'ownership_unverified')
+            continue
+
+        if (
+            type(r_hist) is not dict or type(r_hist.get('records')) is not list
+            or type(s_hist) is not dict or type(s_hist.get('records')) is not list
+        ):
+            ownership[dl] = (False, 'ownership_incomplete')
+            continue
+        r_recs = r_hist['records']
+        s_recs = s_hist['records']
+        r_total = r_hist.get('totalRecords', len(r_recs))
+        s_total = s_hist.get('totalRecords', len(s_recs))
+        if (
+            not integer(r_total, 0) or r_total > len(r_recs)
+            or not integer(s_total, 0) or s_total > len(s_recs)
+        ):
+            ownership[dl] = (False, 'ownership_incomplete')
+            continue
+
+        exclusive = True
+        keep_reason = None
+
+        # Check all Radarr history records for this downloadId.
+        for rec in r_recs:
+            if type(rec) is not dict:
+                exclusive, keep_reason = False, 'ownership_incomplete'
+                break
+            ev = rec.get('eventType')
+            if ev in ('movieFileDeleted', 'downloadFailed', 'downloadIgnored'):
+                continue
+            mid = rec.get('movieId')
+            if type(mid) is not int:
+                exclusive, keep_reason = False, 'ownership_incomplete'
+                break
+            if kind != 'movie' or mid != arr_id:
+                exclusive, keep_reason = False, 'shared_torrent'
+                break
+
+        # Check all Sonarr history records for this downloadId.
+        if exclusive:
+            for rec in s_recs:
+                if type(rec) is not dict:
+                    exclusive, keep_reason = False, 'ownership_incomplete'
+                    break
+                ev = rec.get('eventType')
+                if ev in ('episodeFileDeleted', 'downloadFailed', 'downloadIgnored'):
+                    continue
+                sid = rec.get('seriesId')
+                eid = rec.get('episodeId')
+                if type(sid) is not int:
+                    exclusive, keep_reason = False, 'ownership_incomplete'
+                    break
+                if kind != 'series' or sid != arr_id:
+                    exclusive, keep_reason = False, 'shared_torrent'
+                    break
+                if ev == 'grabbed' and eid is None:
+                    continue
+                if type(eid) is not int:
+                    exclusive, keep_reason = False, 'ownership_incomplete'
+                    break
+                if eid not in affected_ep_ids:
+                    if eid not in by_id or by_id[eid].get('hasFile'):
+                        exclusive, keep_reason = False, 'partially_kept'
+                        break
+
+        ownership[dl] = (exclusive, keep_reason)
+    return ownership
+
+
 def _resolve_remove_emby_ids(
     emby, recipient, library_id, kind, *,
     provider_key=None, provider_val=None, item_path=None,
-    file_paths=None, target='title', selected_eps=None,
+    file_paths=None, arr_root=None, target='title', affected_eps=None,
 ):
-    """Resolve Emby item IDs affected by a library-remove request (fail-closed on Emby errors)."""
+    """Resolve Emby item IDs affected by a library-remove request (fail-closed)."""
     ids = set()
-    file_paths = set(file_paths or ())
+    file_paths = list(file_paths or ())
     if kind == 'movie':
-        query = {
-            'Recursive': 'true',
-            'IncludeItemTypes': 'Movie',
-            'ParentId': library_id,
-            'Fields': 'Path,ProviderIds',
-            'StartIndex': 0,
-            'Limit': 50,
-        }
-        if provider_key and provider_val is not None:
-            query['AnyProviderIdEquals'] = f'{provider_key}.{provider_val}'
-        rows = emby._items(recipient, query, 50)
-        for r in rows:
-            eid = r.get('Id')
-            if not eid:
-                continue
-            prov_match = (
-                provider_key and provider_val is not None
-                and (r.get('ProviderIds') or {}).get(provider_key) == str(provider_val)
-            )
-            rpath = r.get('Path') or ''
-            path_match = bool(rpath) and (
-                rpath in file_paths
-                or (item_path and _in_root(rpath, item_path))
-            )
-            if prov_match or path_match:
-                ids.add(eid)
+        first_file = file_paths[0] if file_paths else None
+        m_ids, ambig = _resolve_movie_emby_ids(
+            emby, recipient, library_id,
+            tmdb_id=provider_val if provider_key == 'Tmdb' else None,
+            item_path=item_path, file_path=first_file, arr_root=arr_root,
+        )
+        if ambig or not m_ids:
+            refuse('emby_unresolved', 'Cannot unambiguously resolve movie in Emby to verify keep list')
+        ids.update(m_ids)
         return ids
 
     s_query = {
@@ -1451,22 +1691,37 @@ def _resolve_remove_emby_ids(
     if provider_key and provider_val is not None:
         s_query['AnyProviderIdEquals'] = f'{provider_key}.{provider_val}'
     s_rows = emby._items(recipient, s_query, 20)
-    series_id = None
+    matched_series = []
     for r in s_rows:
-        if provider_key and provider_val is not None and (r.get('ProviderIds') or {}).get(provider_key) == str(provider_val):
-            series_id = r.get('Id')
-            break
-        if item_path and r.get('Path') and r['Path'].rstrip('/') == item_path.rstrip('/'):
-            series_id = r.get('Id')
-            break
-    if not series_id:
-        return ids
+        eid = r.get('Id')
+        if not eid:
+            continue
+        prov_hit = provider_key and provider_val is not None and (r.get('ProviderIds') or {}).get(provider_key) == str(provider_val)
+        path_hit = item_path and _emby_path_matches(r.get('Path') or '', item_path, arr_root)
+        if prov_hit or path_hit:
+            matched_series.append(eid)
+    if not matched_series and provider_key and provider_val is not None and item_path:
+        # Fallback to path search across series in this library.
+        s_all = emby._items(recipient, {
+            'Recursive': 'true',
+            'IncludeItemTypes': 'Series',
+            'ParentId': library_id,
+            'Fields': 'Path,ProviderIds',
+            'StartIndex': 0,
+            'Limit': 500,
+        }, 500)
+        for r in s_all:
+            if r.get('Id') and _emby_path_matches(r.get('Path') or '', item_path, arr_root):
+                matched_series.append(r['Id'])
+    if len(set(matched_series)) != 1:
+        refuse('emby_unresolved', 'Cannot unambiguously resolve series in Emby to verify keep list')
+    series_id = matched_series[0]
     ids.add(series_id)
 
-    selected_eps = list(selected_eps or ())
+    affected_eps = list(affected_eps or ())
     affected_seasons = {
         int(e.get('seasonNumber'))
-        for e in selected_eps
+        for e in affected_eps
         if type(e.get('seasonNumber')) is int
     }
     season_rows = emby._items(recipient, {
@@ -1482,11 +1737,6 @@ def _resolve_remove_emby_ids(
         if eid and (target == 'title' or r.get('IndexNumber') in affected_seasons):
             ids.add(eid)
 
-    affected_se = {
-        (int(e.get('seasonNumber')), int(e.get('episodeNumber')))
-        for e in selected_eps
-        if type(e.get('seasonNumber')) is int and type(e.get('episodeNumber')) is int
-    }
     ep_rows = emby._items(recipient, {
         'Recursive': 'true',
         'IncludeItemTypes': 'Episode',
@@ -1495,16 +1745,37 @@ def _resolve_remove_emby_ids(
         'StartIndex': 0,
         'Limit': 500,
     }, 500)
-    for r in ep_rows:
-        eid = r.get('Id')
-        if not eid:
-            continue
-        if (
-            target == 'title'
-            or (r.get('Path') in file_paths)
-            or ((r.get('ParentIndexNumber'), r.get('IndexNumber')) in affected_se)
-        ):
-            ids.add(eid)
+    if target == 'title':
+        for r in ep_rows:
+            if r.get('Id'):
+                ids.add(r['Id'])
+        return ids
+
+    # For season/episode removal, every affected episode that has a file must resolve in Emby.
+    for ep in affected_eps:
+        se = (
+            (int(ep['seasonNumber']), int(ep['episodeNumber']))
+            if type(ep.get('seasonNumber')) is int and type(ep.get('episodeNumber')) is int
+            else None
+        )
+        ep_fpath = None
+        if ep.get('hasFile') and type(ep.get('episodeFile')) is dict:
+            ef = ep['episodeFile']
+            ep_fpath = ef.get('path') or (
+                (item_path.rstrip('/') + '/' + str(ef.get('relativePath') or '')) if item_path else None
+            )
+        ep_matches = []
+        for r in ep_rows:
+            eid = r.get('Id')
+            if not eid:
+                continue
+            path_hit = ep_fpath and _emby_path_matches(r.get('Path') or '', ep_fpath, arr_root)
+            se_hit = se is not None and (r.get('ParentIndexNumber'), r.get('IndexNumber')) == se
+            if path_hit or se_hit:
+                ep_matches.append(eid)
+        if ep.get('hasFile') and not ep_matches:
+            refuse('emby_unresolved', 'Cannot resolve affected episode in Emby to verify keep list')
+        ids.update(ep_matches)
     return ids
 
 
@@ -1528,8 +1799,10 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
     episode_ids_to_unmonitor = []
     episode_file_ids_to_delete = []
     delete_title = target == 'title'
-    hashes_every_deleted = {}
-    selected_eps = []
+    candidate_hashes = set()
+    affected_eps = []
+    affected_ep_ids = set()
+    by_id = {}
     provider_key = None
     provider_val = None
     item_path = None
@@ -1551,7 +1824,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
                 continue
             dl = str(h_row.get('downloadId') or '').lower()
             if HEX40.fullmatch(dl):
-                hashes_every_deleted[dl] = True
+                candidate_hashes.add(dl)
     else:
         s = api.get(f"/api/v3/series/{q['arr_id']}")
         need(type(s) is dict and s.get('id') == q['arr_id']
@@ -1571,38 +1844,45 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
             for eid in target['episode_arr_ids']:
                 need(eid in by_id, 'Episode not found in series')
                 selected_eps.append(by_id[eid])
-        selected_ep_ids = {e['id'] for e in selected_eps}
-        episode_ids_to_unmonitor = sorted(selected_ep_ids)
+
+        def ep_file_id(ep):
+            ef = ep.get('episodeFile')
+            if ep.get('hasFile') and type(ef) is dict and type(ef.get('id')) is int:
+                return ef['id']
+            if type(ep.get('episodeFileId')) is int and ep['episodeFileId'] > 0:
+                return ep['episodeFileId']
+            return None
+
         seen_file_ids = set()
         for e in selected_eps:
             ef = e.get('episodeFile') if e.get('hasFile') and type(e.get('episodeFile')) is dict else None
-            if ef is not None and type(ef.get('id')) is int and ef['id'] not in seen_file_ids:
-                seen_file_ids.add(ef['id'])
-                episode_file_ids_to_delete.append(ef['id'])
-                fpath = ef.get('path') or (s['path'].rstrip('/') + '/' + str(ef.get('relativePath') or ''))
-                files.append({'id': ef['id'], 'path': fpath, 'size': int(ef.get('size') or 0)})
+            fid = ep_file_id(e)
+            if fid is not None and fid not in seen_file_ids:
+                seen_file_ids.add(fid)
+                episode_file_ids_to_delete.append(fid)
+                if ef is not None:
+                    fpath = ef.get('path') or (s['path'].rstrip('/') + '/' + str(ef.get('relativePath') or ''))
+                    files.append({'id': fid, 'path': fpath, 'size': int(ef.get('size') or 0)})
         episode_file_ids_to_delete.sort()
+
+        # Expand selection to include all sibling episodes sharing any deleted multi-episode file.
+        affected_ep_ids = {e['id'] for e in selected_eps}
+        if seen_file_ids:
+            for e in by_id.values():
+                if ep_file_id(e) in seen_file_ids:
+                    affected_ep_ids.add(e['id'])
+        affected_eps = [by_id[eid] for eid in sorted(affected_ep_ids)]
+        episode_ids_to_unmonitor = sorted(affected_ep_ids)
 
         history = api.get(f"/api/v3/history/series?seriesId={q['arr_id']}")
         need(type(history) is list, FAILURE)
-        # Track every episode each downloadId supplied across the series.
-        dl_episodes = {}
         for h_row in history:
             if type(h_row) is not dict:
                 continue
             dl = str(h_row.get('downloadId') or '').lower()
             ep_id = h_row.get('episodeId')
-            if HEX40.fullmatch(dl) and type(ep_id) is int:
-                dl_episodes.setdefault(dl, set()).add(ep_id)
-        for dl, ep_set in dl_episodes.items():
-            if ep_set & selected_ep_ids:
-                # Only allow torrent removal if every episode still having a file (or supplied by
-                # this torrent) is being deleted.
-                other_eps_with_files = {
-                    eid for eid in (ep_set - selected_ep_ids)
-                    if eid in by_id and by_id[eid].get('hasFile')
-                }
-                hashes_every_deleted[dl] = (len(other_eps_with_files) == 0)
+            if HEX40.fullmatch(dl) and (ep_id in affected_ep_ids or target == 'title'):
+                candidate_hashes.add(dl)
 
     if keep_set:
         emby = emby_factory()
@@ -1611,7 +1891,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
             emby, call['recipient'], lib['library_id'], kind,
             provider_key=provider_key, provider_val=provider_val,
             item_path=item_path, file_paths=[f['path'] for f in files],
-            target=target, selected_eps=selected_eps,
+            arr_root=lib['root_folder_path'], target=target, affected_eps=affected_eps,
         )
         if emby_ids & keep_set:
             refuse('keep_listed', 'Title is protected by keep list')
@@ -1620,15 +1900,20 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
     if len(files) > block['limits']['remove_max_files']:
         refuse('file_limit_exceeded', 'Removal exceeds per-call file limit')
 
+    hashes_ownership = _check_torrent_exclusivity(
+        block, arr_factory, candidate_hashes,
+        kind=kind, arr_id=q['arr_id'], affected_ep_ids=affected_ep_ids, by_id=by_id,
+    )
+
     qbit = None
     torrents = []
     try:
-        if hashes_every_deleted:
+        if hashes_ownership:
             qbit = qbit_factory(block['torrents'])
             qbit.login()
             torrents = _evaluate_torrents(
                 qbit,
-                hashes_every_deleted,
+                hashes_ownership,
                 remove_torrents=q['remove_torrents'],
                 allowed_categories=set(block['allowed_categories']),
                 min_ratio=float(block['removal_thresholds']['min_ratio']),
@@ -1641,6 +1926,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
             'title': title,
             'target': target,
             'delete_title': delete_title,
+            'affected_episode_arr_ids': sorted(affected_ep_ids),
             'recycle_bin': recycle_bin,
             'files': files,
             'total_bytes': sum(f['size'] for f in files),
@@ -1653,29 +1939,56 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
         if digest != q['plan_sha256']:
             refuse('plan_changed', 'Plan changed since preview')
 
+        completed = []
         unmonitored_count = 0
         if delete_title:
-            if kind == 'movie':
-                st, _ = api.delete(f"/api/v3/movie/{q['arr_id']}?deleteFiles=true&addImportExclusion=false")
-            else:
-                st, _ = api.delete(f"/api/v3/series/{q['arr_id']}?deleteFiles=true&addImportListExclusion=false")
-            need(st in (200, 204), FAILURE)
+            try:
+                if kind == 'movie':
+                    st, _ = api.delete(f"/api/v3/movie/{q['arr_id']}?deleteFiles=true&addImportExclusion=false")
+                else:
+                    st, _ = api.delete(f"/api/v3/series/{q['arr_id']}?deleteFiles=true&addImportListExclusion=false")
+                need(st in (200, 204), FAILURE)
+            except Exception:
+                raise LibraryPostDispatchError(
+                    'uncertain', 'Title delete dispatched; verify state in library detail', completed=completed,
+                ) from None
+            completed.append('title_deleted')
         else:
             if episode_ids_to_unmonitor:
-                st, _ = api.put('/api/v3/episode/monitor', {
-                    'episodeIds': episode_ids_to_unmonitor,
-                    'monitored': False,
-                }, accept_statuses=(200, 202))
-                need(st in (200, 202), FAILURE)
+                try:
+                    st, _ = api.put('/api/v3/episode/monitor', {
+                        'episodeIds': episode_ids_to_unmonitor,
+                        'monitored': False,
+                    }, accept_statuses=(200, 202))
+                    need(st in (200, 202), FAILURE)
+                except Exception:
+                    raise LibraryPostDispatchError(
+                        'uncertain', 'Episode unmonitor dispatched; verify state in library detail', completed=completed,
+                    ) from None
                 unmonitored_count = len(episode_ids_to_unmonitor)
+                completed.append(f'episodes_unmonitored:{unmonitored_count}')
             for fid in episode_file_ids_to_delete:
-                st, _ = api.delete(f'/api/v3/episodefile/{fid}')
-                need(st in (200, 204), FAILURE)
+                try:
+                    st, _ = api.delete(f'/api/v3/episodefile/{fid}')
+                    need(st in (200, 204), FAILURE)
+                except Exception:
+                    code = 'partial' if completed else 'uncertain'
+                    raise LibraryPostDispatchError(
+                        code, 'Episode file delete failed after dispatch; verify state in library detail', completed=completed,
+                    ) from None
+                completed.append(f'episode_file_deleted:{fid}')
 
         to_remove = [t['hash'] for t in torrents if t['action'] == 'remove']
         to_keep = [t['hash'] for t in torrents if t['action'] != 'remove']
         if to_remove and qbit is not None:
-            qbit.delete_torrents(to_remove)
+            try:
+                qbit.delete_torrents(to_remove)
+            except Exception:
+                code = 'partial' if completed else 'uncertain'
+                raise LibraryPostDispatchError(
+                    code, 'Torrent delete failed after media removal; verify state in library detail', completed=completed,
+                ) from None
+            completed.append(f'torrents_removed:{len(to_remove)}')
 
         return {
             'mode': 'apply',

@@ -2630,6 +2630,64 @@ class CoexistencePackaging(unittest.TestCase):
         with self.assertRaises(AnsibleFilterError):
             contract.endpoint_contract(bad_enabled)
 
+        # R1-6 / P1-1: Go config library.enabled must match worker library.enabled and add library actions.
+        enabled_ep = copy.deepcopy(endpoint)
+        enabled_ep["library"]["enabled"] = True
+        enabled_ep["library"]["libraries"]["movies"]["minimum_availability"] = "released"
+        enabled_ep["config"]["library"] = {"enabled": True}
+        enabled_ep["config"]["policy"]["Actions"] = list(enabled_ep["config"]["policy"]["Actions"]) + [
+            "library.read", "library.manage",
+        ]
+        operator = enabled_ep["config"]["playlist_operator"]
+        enabled_ep["config"]["purpose_grants"] = {
+            "library": {
+                "subjects": [operator["subject"]],
+                "scopes": ["holonet.library"],
+                "namespace": "managed-library",
+                "libraries": ["3", "615", "1132"],
+                "catalog_users": [],
+                "history_users": [],
+                "target_users": [],
+                "actions": ["library.read", "library.manage"],
+            },
+        }
+        self.assertEqual(contract.endpoint_contract(enabled_ep), enabled_ep)
+        enabled_policy = contract.playlist_operator_plan(enabled_ep)["policy"]
+        self.assertTrue(enabled_policy["library"]["enabled"])
+        self.assertEqual(enabled_policy["library"]["libraries"]["movies"]["minimum_availability"], "released")
+        # Verify Go config invariants: policy.Actions contains library actions & purpose_grants["library"] actions are in policy.Actions.
+        self.assertTrue({"library.read", "library.manage"} <= set(enabled_ep["config"]["policy"]["Actions"]))
+        self.assertTrue(set(enabled_ep["config"]["purpose_grants"]["library"]["actions"]) <= set(enabled_ep["config"]["policy"]["Actions"]))
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(enabled_policy)
+        finally:
+            sys.path.pop(0)
+
+        # Mismatched Go vs worker library.enabled must be refused.
+        for label_case, bad_ep in (
+            ("go_on_worker_off", dict(copy.deepcopy(enabled_ep), library=dict(enabled_ep["library"], enabled=False))),
+            ("go_off_worker_on", dict(copy.deepcopy(endpoint), library=dict(endpoint["library"], enabled=True))),
+        ):
+            with self.subTest(case=label_case), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad_ep)
+
+        # Go library enabled without worker library block must be refused.
+        no_worker_lib = copy.deepcopy(enabled_ep)
+        del no_worker_lib["library"]
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(no_worker_lib)
+
+        # Go library enabled without library actions in policy.Actions must be refused.
+        missing_actions = copy.deepcopy(enabled_ep)
+        missing_actions["config"]["policy"]["Actions"] = [
+            a for a in missing_actions["config"]["policy"]["Actions"]
+            if a not in ("library.read", "library.manage")
+        ]
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(missing_actions)
+
 
 if __name__ == "__main__":
     expected = ROOT / ".cache/web-mcp-tests/home"

@@ -144,6 +144,66 @@ class LibraryGrantTests(unittest.TestCase):
                 hosts={'omarchy-pc': {'ssh_user': 'igor', 'connection': 'ssh'}},
             )
 
+    def test_template_extra_token_references_outer_writer_user_key(self):
+        import json as _json
+        from pathlib import Path
+        import jinja2
+
+        catalog_item = dict(
+            service='holonet',
+            host='homelab',
+            profile='holonet-catalog',
+            generation=1,
+            expires=writers.seed_join_writer()['expires'],
+            state='present',
+            holonet_server=writers.seed_join_writer()['holonet_server'],
+            holonet_libraries=['3'],
+            holonet_catalog_users=writers.seed_join_writer()['holonet_catalog_users'],
+            holonet_history_users=[],
+            holonet_target_users=[],
+            holonet_actions=['catalog.read'],
+            holonet_namespace='movies-catalog',
+        )
+        writer_item = writers.seed_join_writer() | {
+            'holonet_libraries': ['3', '615', '1132'],
+            'holonet_acquire': {'library': '3', 'actions': list(mi.HOLONET_ACQUIRE_ACTIONS[:1])},
+            'holonet_library': {
+                'libraries': list(mi.HOLONET_LIBRARY_LIBRARIES),
+                'actions': list(mi.HOLONET_LIBRARY_ACTIONS),
+            },
+            'extra_tokens': [{
+                'host': 'omarchy-pc',
+                'generation': 1,
+                'expires': writers.seed_join_writer()['expires'],
+                'state': 'present',
+            }],
+        }
+        inv_hosts = dict(profiles.base.HOSTS)
+        inv_hosts['homelab'] = {'ssh_user': 'igor', 'connection': 'ssh'}
+        inv_hosts['omarchy-pc'] = {'ssh_user': 'igor', 'connection': 'ssh'}
+        spec = mi.machine_identity_spec(
+            [catalog_item, writer_item], profiles.base.ACCESS, inv_hosts, 180,
+            profiles.base.NOW.strftime('%Y-%m-%dT%H:%M:%SZ'),
+            {'holonet': writers.app() | {'scope': ' '.join(mi.HOLONET_LIBRARY_APP_SCOPES)}},
+        )
+        self.assertEqual(len(spec['identities']), 2)
+        writer_ident = spec['identities'][1]
+        self.assertEqual(len(writer_ident['extra_tokens']), 1)
+        extra_token_id = writer_ident['extra_tokens'][0]['token']
+
+        template_path = Path(__file__).resolve().parents[1] / 'templates/machine-identities.yaml.j2'
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env.filters['to_json'] = _json.dumps
+        rendered = env.from_string(template_path.read_text()).render(
+            ansible_managed='synthetic',
+            authentik_machine_identities_blueprint_name='test-blueprint',
+            machine_identity_spec=spec,
+        )
+        # Verify the writer is user-2 and its extra token references !KeyOf user-2 (not user-1).
+        self.assertIn(f'    id: user-2\n    identifiers:\n      username: "{writer_ident["username"]}"', rendered)
+        marker = f'      identifier: "{extra_token_id}"\n    attrs:\n      user: !KeyOf user-2\n'
+        self.assertIn(marker, rendered)
+
 
 if __name__ == '__main__':
     unittest.main()
