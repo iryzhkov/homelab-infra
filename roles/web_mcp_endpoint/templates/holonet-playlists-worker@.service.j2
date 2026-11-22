@@ -51,6 +51,10 @@ ReadWritePaths={{ web_mcp_operator.journals | join(' ') }}
 # Fixed acquisition staging only; ownership/export qualification is independent.
 ReadWritePaths=/mnt/shared/downloads/staging/holonet
 {% endif %}
+{% if web_mcp_operator.policy.library is defined and web_mcp_operator.policy.library.recommendations is defined %}
+# Root-only recommendations cache and daily mdblist quota counter.
+ReadWritePaths={{ web_mcp_operator.policy.library.recommendations.state_dir }}
+{% endif %}
 MemoryMax=128M
 CPUQuota=50%
 TasksMax=8

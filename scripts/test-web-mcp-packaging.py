@@ -2717,6 +2717,52 @@ class CoexistencePackaging(unittest.TestCase):
         with self.assertRaises(AnsibleFilterError):
             contract.endpoint_contract(missing_actions)
 
+        # Optional library.recommendations policy block validation and defaults.
+        recs_ep = copy.deepcopy(enabled_ep)
+        recs_ep["library"]["recommendations"] = {
+            "lists": [
+                {"slug": "top-movies", "kind": "movie"},
+                {"slug": "top-anime-movies", "kind": "anime"},
+                {"slug": "top-tv", "kind": "series"},
+                {"slug": "top-anime", "kind": "anime"},
+            ],
+        }
+        self.assertEqual(contract.endpoint_contract(recs_ep), recs_ep)
+        recs_policy = contract.playlist_operator_plan(recs_ep)["policy"]
+        self.assertEqual(recs_policy["library"]["recommendations"], {
+            "mdblist_key_file": "/etc/holonet/mdblist.key",
+            "state_dir": "/var/lib/holonet-operator/recommendations",
+            "lists": [
+                {"slug": "top-movies", "kind": "movie"},
+                {"slug": "top-anime-movies", "kind": "anime"},
+                {"slug": "top-tv", "kind": "series"},
+                {"slug": "top-anime", "kind": "anime"},
+            ],
+            "daily_ceiling": 100,
+            "cache_ttl_seconds": 21600,
+            "min_refresh_age_seconds": 3600,
+        })
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(recs_policy)
+        finally:
+            sys.path.pop(0)
+        for label_case, mut in (
+            ("empty_lists", {"lists": []}),
+            ("dup_slug", {"lists": [{"slug": "top-movies", "kind": "movie"}, {"slug": "top-movies", "kind": "anime"}]}),
+            ("bad_kind", {"lists": [{"slug": "top-movies", "kind": "music"}]}),
+            ("bad_state_dir", {"lists": [{"slug": "top-movies", "kind": "movie"}], "state_dir": "/tmp/recs"}),
+            ("bad_key_path", {"lists": [{"slug": "top-movies", "kind": "movie"}], "mdblist_key_file": "../key"}),
+            ("bad_ceiling", {"lists": [{"slug": "top-movies", "kind": "movie"}], "daily_ceiling": 200}),
+            ("short_cache", {"lists": [{"slug": "top-movies", "kind": "movie"}], "cache_ttl_seconds": 300}),
+            ("short_refresh", {"lists": [{"slug": "top-movies", "kind": "movie"}], "min_refresh_age_seconds": 60}),
+        ):
+            bad_recs = copy.deepcopy(enabled_ep)
+            bad_recs["library"]["recommendations"] = mut
+            with self.subTest(recs=label_case), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad_recs)
+
 
 if __name__ == "__main__":
     expected = ROOT / ".cache/web-mcp-tests/home"

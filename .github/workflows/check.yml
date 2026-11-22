@@ -72,7 +72,9 @@ jobs:
           python3 scripts/test_emby_custody.py
           python3 scripts/test_emby_torrents.py
           python3 scripts/test_emby_acquire.py
-          python3 scripts/test_emby_library.py
+          library_fixture_home=/root/.cache/holonet-library-tests/home
+          install -d -m 0700 "$library_fixture_home" "$library_fixture_home/tmp"
+          env HOME="$library_fixture_home" TMPDIR="$library_fixture_home/tmp" python3 scripts/test_emby_library.py
           python3 scripts/test_emby_seed_join.py
           ansible-playbook playbooks/emby-operator-viewers.yml --syntax-check
       - name: Test opt-in Jocasta MCP stack configuration

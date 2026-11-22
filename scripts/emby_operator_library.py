@@ -5,11 +5,19 @@ and write-ahead intent journal. All effects happen through existing Arr/qBit/Emb
 HTTP APIs; no direct filesystem writes or new credentials.
 """
 import copy
+import fcntl
 import hashlib
 import http.client
 import json
 import math
+import os
+from pathlib import PurePosixPath
+import queue
 import re
+import secrets
+import ssl
+import stat
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -17,6 +25,7 @@ import urllib.request
 
 from emby_operator_adapter import (
     ImporterInventoryAdapter,
+    NoRedirect,
     OperatorAdapter,
     catalog_id,
     importer_key,
@@ -40,6 +49,7 @@ READ_OPERATIONS = (
     'library-releases',
     'library-queue',
     'library-subtitles',
+    'library-recommendations',
 )
 MANAGE_OPERATIONS = (
     'library-add',
@@ -54,10 +64,25 @@ SECONDS = {
     'library-releases': 180,
     'library-queue': 20,
     'library-subtitles': 120,
+    'library-recommendations': 60,
     'library-add': 60,
     'library-grab': 60,
     'library-remove': 120,
 }
+
+MDBLIST_ORIGIN = 'https://api.mdblist.com'
+MDBLIST_MAX_BYTES = 4 * 1024 * 1024
+MDBLIST_CACHE_MAX_BYTES = 8 * 1024 * 1024
+MDBLIST_QUOTA_MAX_BYTES = 16 * 1024
+RECOMMENDATION_KINDS = frozenset({'movie', 'series', 'anime'})
+RECOMMENDATION_FILTER_KINDS = RECOMMENDATION_KINDS | frozenset({'all'})
+RECOMMENDATION_SOURCES = frozenset({'mdblist', 'radarr', 'all'})
+RECOMMENDATION_SLUG = re.compile(r'[a-z0-9][a-z0-9_-]{0,127}')
+DEFAULT_MDBLIST_KEY_FILE = '/etc/holonet/mdblist.key'
+DEFAULT_RECOMMENDATIONS_STATE_DIR = '/var/lib/holonet-operator/recommendations'
+DEFAULT_RECOMMENDATIONS_DAILY_CEILING = 100
+DEFAULT_RECOMMENDATIONS_CACHE_TTL = 21600
+DEFAULT_RECOMMENDATIONS_MIN_REFRESH_AGE = 3600
 
 LIBRARY_SPECS = {
     'movies': {'library_id': '3', 'kind': 'movie', 'arr': 'radarr'},
@@ -140,10 +165,12 @@ def required_action(operation):
 
 
 def validate_block(value):
-    need(type(value) is dict and set(value) == {
+    req_block_keys = {
         'enabled', 'target_library', 'revision', 'subjects', 'libraries',
         'torrents', 'allowed_categories', 'removal_thresholds', 'limits',
-    }, 'Invalid library policy')
+    }
+    need(type(value) is dict and req_block_keys <= set(value) <= (req_block_keys | {'recommendations'}),
+         'Invalid library policy')
     need(type(value['enabled']) is bool, 'Invalid library policy')
     need(catalog_id(value['target_library']) and isinstance(value['revision'], str)
          and re.fullmatch(r'[0-9a-f]{40,64}', value['revision']), 'Invalid library policy')
@@ -187,6 +214,27 @@ def validate_block(value):
          and integer(limits['subtitles_max_chars'], 1, 60000)
          and limits['subtitles_default_chars'] <= limits['subtitles_max_chars']
          and integer(limits['remove_max_files'], 1, 500), 'Invalid library policy')
+    if 'recommendations' in value:
+        recs = value['recommendations']
+        need(type(recs) is dict and set(recs) == {
+            'mdblist_key_file', 'state_dir', 'lists',
+            'daily_ceiling', 'cache_ttl_seconds', 'min_refresh_age_seconds',
+        }, 'Invalid library policy')
+        safe_path(recs['mdblist_key_file'])
+        safe_path(recs['state_dir'])
+        lists = recs['lists']
+        need(type(lists) is list and 1 <= len(lists) <= 16, 'Invalid library policy')
+        seen_slugs = set()
+        for entry in lists:
+            need(type(entry) is dict and set(entry) == {'slug', 'kind'}, 'Invalid library policy')
+            slug = entry['slug']
+            need(isinstance(slug, str) and RECOMMENDATION_SLUG.fullmatch(slug) is not None
+                 and slug not in seen_slugs, 'Invalid library policy')
+            need(entry['kind'] in RECOMMENDATION_KINDS, 'Invalid library policy')
+            seen_slugs.add(slug)
+        need(integer(recs['daily_ceiling'], 1, 100)
+             and integer(recs['cache_ttl_seconds'], 21600, 86400)
+             and integer(recs['min_refresh_age_seconds'], 3600, 21600), 'Invalid library policy')
     return copy.deepcopy(value)
 
 
@@ -247,6 +295,25 @@ def request(operation, value):
             need(value['end_seconds'] >= value['start_seconds'], 'Invalid library request')
         if 'max_chars' in value:
             need(integer(value['max_chars'], 1, 60000), 'Invalid library request')
+    elif operation == 'library-recommendations':
+        need(fields <= {'kind', 'source', 'limit', 'include_in_library', 'include_excluded', 'min_score', 'refresh'},
+             'Invalid library request')
+        if 'kind' in value:
+            need(isinstance(value['kind'], str) and value['kind'] in RECOMMENDATION_FILTER_KINDS,
+                 'Invalid library request')
+        if 'source' in value:
+            need(isinstance(value['source'], str) and value['source'] in RECOMMENDATION_SOURCES,
+                 'Invalid library request')
+        if 'limit' in value:
+            need(integer(value['limit'], 1, 50), 'Invalid library request')
+        if 'include_in_library' in value:
+            need(type(value['include_in_library']) is bool, 'Invalid library request')
+        if 'include_excluded' in value:
+            need(type(value['include_excluded']) is bool, 'Invalid library request')
+        if 'min_score' in value:
+            need(integer(value['min_score'], 0, 100), 'Invalid library request')
+        if 'refresh' in value:
+            need(type(value['refresh']) is bool, 'Invalid library request')
     elif operation == 'library-add':
         mode = value.get('mode')
         need(mode in ('preview', 'apply'), 'Invalid library request')
@@ -359,7 +426,8 @@ class LibraryArrClient(ImporterInventoryAdapter):
     def _response_limit(self, route):
         if route.startswith('/api/v3/release'):
             return 4 * 1024 * 1024
-        if route.startswith(('/api/v3/movie', '/api/v3/series', '/api/v3/episode', '/api/v3/history')):
+        if route.startswith(('/api/v3/movie', '/api/v3/series', '/api/v3/episode',
+                             '/api/v3/history', '/api/v3/importlist')):
             return 4 * 1024 * 1024
         return 512 * 1024
 
@@ -2192,6 +2260,835 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
             qbit.logout()
 
 
+def read_mdblist_key(path):
+    """Read the root-only mdblist API key file using directory-FD O_NOFOLLOW custody.
+
+    All ancestors must be root-owned and not group/world writable; immediate
+    parent must have no group write or world access (0700 or 0750); leaf must
+    be a root-owned regular single-link file with mode 0400 or 0600.
+    """
+    fd = None
+    try:
+        p = PurePosixPath(path)
+        need(p.is_absolute() and str(p) == path and '..' not in p.parts and len(p.parts) > 2,
+             'Invalid mdblist key path')
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in p.parts[1:-1]:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            s = os.fstat(fd)
+            need(s.st_uid == 0 and not (s.st_mode & 0o022), 'Unsafe mdblist key ancestor')
+        parent_stat = os.fstat(fd)
+        need(not (parent_stat.st_mode & 0o027), 'Unsafe mdblist key directory')
+        leaf = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        try:
+            s = os.fstat(leaf)
+            need(stat.S_ISREG(s.st_mode) and s.st_uid == 0
+                 and stat.S_IMODE(s.st_mode) in (0o400, 0o600)
+                 and s.st_nlink == 1 and 0 < s.st_size <= 1024,
+                 'Unsafe mdblist key file')
+            with os.fdopen(leaf, 'rb', closefd=False) as stream:
+                raw = stream.read(1025)
+            need(0 < len(raw) <= 1024, 'Unsafe mdblist key file')
+            key = raw.decode('utf-8').rstrip('\r\n')
+            need(re.fullmatch(r'[A-Za-z0-9._-]{8,128}', key) is not None,
+                 'Invalid mdblist API key')
+            return key
+        finally:
+            os.close(leaf)
+    except Refused:
+        raise
+    except (OSError, ValueError, TypeError, UnicodeError):
+        raise Refused('mdblist key unavailable or unsafe') from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _open_state_dir(path):
+    """Open a root-owned 0700 state directory via directory FDs with O_NOFOLLOW."""
+    fd = None
+    try:
+        p = PurePosixPath(path)
+        need(p.is_absolute() and str(p) == path and '..' not in p.parts and len(p.parts) > 2,
+             'Invalid recommendations state path')
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in p.parts[1:]:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            s = os.fstat(fd)
+            need(s.st_uid == 0 and not (s.st_mode & 0o022), 'Unsafe recommendations state ancestor')
+        need(stat.S_IMODE(os.fstat(fd).st_mode) == 0o700, 'Recommendations state directory must be 0700')
+        out = fd
+        fd = None
+        return out
+    except Refused:
+        raise
+    except (OSError, ValueError, TypeError):
+        raise Refused('Recommendations state directory unavailable') from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _read_state_json(dir_fd, filename, limit):
+    """Read a root-owned 0600 JSON state file from dir_fd, or return None if absent."""
+    try:
+        leaf = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise Refused('Recommendations state unreadable') from None
+    try:
+        s = os.fstat(leaf)
+        need(stat.S_ISREG(s.st_mode) and s.st_uid == 0
+             and stat.S_IMODE(s.st_mode) == 0o600
+             and s.st_nlink == 1 and s.st_size <= limit,
+             'Unsafe recommendations state file')
+        with os.fdopen(leaf, 'rb', closefd=False) as stream:
+            raw = stream.read(limit + 1)
+        need(len(raw) <= limit, 'Recommendations state file too large')
+        return strict_json(raw)
+    except Refused:
+        raise
+    except (OSError, ValueError, TypeError, UnicodeError):
+        raise Refused('Recommendations state unreadable') from None
+    finally:
+        os.close(leaf)
+
+
+def _write_state_json(dir_fd, filename, payload):
+    """Atomically write a root-owned 0600 JSON state file into dir_fd."""
+    raw = json.dumps(payload, separators=(',', ':'), allow_nan=False, ensure_ascii=True).encode('utf-8')
+    tmp_name = f'.{filename}.tmp.{os.getpid()}.{secrets.token_hex(6)}'
+    tmp_fd = None
+    try:
+        tmp_fd = os.open(
+            tmp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=dir_fd,
+        )
+        os.fchmod(tmp_fd, 0o600)
+        view = memoryview(raw)
+        written = 0
+        while written < len(raw):
+            n = os.write(tmp_fd, view[written:])
+            need(n > 0, 'Recommendations state write failed')
+            written += n
+        os.fsync(tmp_fd)
+        os.close(tmp_fd)
+        tmp_fd = None
+        os.replace(tmp_name, filename, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        os.fsync(dir_fd)
+    except Refused:
+        raise
+    except OSError:
+        raise Refused('Recommendations state write failed') from None
+    finally:
+        if tmp_fd is not None:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            except OSError:
+                pass
+
+
+class MdblistClient:
+    """Bounded HTTPS-only client for api.mdblist.com; no redirects, 4 MiB cap."""
+
+    def __init__(self, api_key, *, request_guard, budget_seconds=60):
+        need(isinstance(api_key, str) and len(api_key) >= 8, 'Invalid mdblist API key')
+        need(callable(request_guard), 'Deadline guard required')
+        self._key = api_key
+        self._guard = request_guard
+        self._deadline = time.monotonic() + min(budget_seconds, request_guard())
+        self._ssl_context = ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            NoRedirect(),
+            urllib.request.HTTPSHandler(context=self._ssl_context),
+        )
+
+    def close(self):
+        self._key = None
+
+    def get_json(self, route, params=None):
+        """GET one JSON endpoint on api.mdblist.com. Returns (status, data, rate_limit_remaining)."""
+        need(self._key is not None and isinstance(route, str) and route.startswith('/'), FAILURE)
+        remaining = min(self._deadline - time.monotonic(), self._guard())
+        need(remaining > 0, 'Caller deadline exceeded')
+        query = {'apikey': self._key}
+        if params:
+            for k, v in params.items():
+                query[k] = str(v)
+        url = f'{MDBLIST_ORIGIN}{route}?{urllib.parse.urlencode(query)}'
+        parsed = urllib.parse.urlsplit(url)
+        need(parsed.scheme == 'https' and parsed.netloc == 'api.mdblist.com', FAILURE)
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'}, method='GET')
+        completed = queue.Queue(maxsize=1)
+        opener = self._opener
+
+        def _parse_remaining(headers):
+            if headers is None:
+                return None
+            val = headers.get('X-RateLimit-Remaining')
+            if isinstance(val, str) and val.strip().isdigit():
+                return int(val.strip())
+            return None
+
+        def io():
+            try:
+                with opener.open(req, timeout=remaining) as resp:
+                    status = resp.status
+                    rl = _parse_remaining(resp.headers)
+                    data = importer_response_bytes(resp, limit=MDBLIST_MAX_BYTES)
+                completed.put((status, data, rl, False))
+            except urllib.error.HTTPError as err:
+                rl = _parse_remaining(err.headers)
+                completed.put((err.code, b'', rl, False))
+            except Exception:
+                completed.put((None, b'', None, True))
+
+        threading.Thread(target=io, daemon=True).start()
+        try:
+            status, data, rl, failed = completed.get(timeout=remaining)
+        except queue.Empty:
+            raise Refused('Caller deadline exceeded') from None
+        need(not failed, FAILURE)
+        need(time.monotonic() < self._deadline and self._guard() > 0, 'Caller deadline exceeded')
+        if status == 429:
+            return 429, None, rl
+        need(status == 200 and bool(data), FAILURE)
+        return 200, strict_json(data), rl
+
+
+def _truncate_description(text, limit=300):
+    if not isinstance(text, str):
+        return ''
+    cleaned = ' '.join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit - 3].rstrip() + '...'
+
+
+def _opt_pos_int(value):
+    if type(value) is int and 1 <= value <= 2 ** 31 - 1:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        if 1 <= parsed <= 2 ** 31 - 1:
+            return parsed
+    return None
+
+
+def _opt_nonneg_int(value):
+    if type(value) is int and 0 <= value <= 2 ** 31 - 1:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        if 0 <= parsed <= 2 ** 31 - 1:
+            return parsed
+    return None
+
+
+def _opt_float(value):
+    if type(value) in (int, float) and not isinstance(value, bool) and math.isfinite(value):
+        return round(float(value), 2)
+    return None
+
+
+def _opt_str(value, max_len=128):
+    if isinstance(value, str):
+        s = value.strip()
+        if s:
+            return s[:max_len]
+    return None
+
+
+def _extract_mdblist_genres(raw_genres):
+    if not isinstance(raw_genres, list):
+        return []
+    out = []
+    for g in raw_genres:
+        if isinstance(g, str) and g.strip():
+            out.append(g.strip()[:64])
+        elif isinstance(g, dict):
+            name = g.get('title') or g.get('name')
+            if isinstance(name, str) and name.strip():
+                out.append(name.strip()[:64])
+        if len(out) >= 16:
+            break
+    return out
+
+
+def _extract_mdblist_scores(item):
+    mdblist_score = None
+    imdb_val = None
+    imdb_votes = None
+    tmdb_val = None
+    ratings = item.get('ratings')
+    if isinstance(ratings, list):
+        for r in ratings:
+            if type(r) is not dict:
+                continue
+            src = str(r.get('source') or '').strip().lower()
+            if src == 'mdblist':
+                v = r.get('score') if r.get('score') is not None else r.get('value')
+                if type(v) in (int, float) and not isinstance(v, bool) and math.isfinite(v):
+                    mdblist_score = int(round(v))
+            elif src == 'imdb':
+                if imdb_val is None:
+                    imdb_val = _opt_float(r.get('value'))
+                if imdb_votes is None:
+                    imdb_votes = _opt_nonneg_int(r.get('votes'))
+            elif src == 'tmdb':
+                if tmdb_val is None:
+                    v = r.get('value') if r.get('value') is not None else r.get('score')
+                    tmdb_val = _opt_float(v)
+    if mdblist_score is None:
+        top_score = item.get('score')
+        if type(top_score) in (int, float) and not isinstance(top_score, bool) and math.isfinite(top_score):
+            mdblist_score = int(round(top_score))
+    return {
+        'mdblist': mdblist_score,
+        'imdb': imdb_val,
+        'imdb_votes': imdb_votes,
+        'tmdb': tmdb_val,
+    }
+
+
+def _normalize_mdblist_item(raw, kind, mediatype, list_name):
+    if type(raw) is not dict:
+        return None
+    mediatype = raw.get('mediatype', mediatype)
+    if mediatype not in ('movie', 'show'):
+        return None
+    kind = 'anime' if kind == 'anime' else ('movie' if mediatype == 'movie' else 'series')
+    title = _opt_str(raw.get('title'), 256)
+    if not title:
+        return None
+    ids_obj = raw.get('ids') if type(raw.get('ids')) is dict else {}
+    tmdb_id = _opt_pos_int(ids_obj.get('tmdb')) or _opt_pos_int(raw.get('id'))
+    tvdb_id = _opt_pos_int(ids_obj.get('tvdb')) or _opt_pos_int(raw.get('tvdb_id'))
+    imdb_id = _opt_str(ids_obj.get('imdb'), 32) or _opt_str(raw.get('imdb_id'), 32)
+    year = _opt_pos_int(raw.get('release_year')) or _opt_pos_int(raw.get('year'))
+    language = _opt_str(raw.get('language'), 32) or _opt_str(raw.get('spoken_language'), 32)
+    country = _opt_str(raw.get('country'), 32)
+    status = _opt_str(raw.get('status'), 64)
+    runtime = _opt_nonneg_int(raw.get('runtime'))
+    genres = _extract_mdblist_genres(raw.get('genre'))
+    description = _truncate_description(raw.get('description') or '', 300)
+    scores = _extract_mdblist_scores(raw)
+    return {
+        'title': title,
+        'year': year,
+        'kind': kind,
+        'mediatype': mediatype,
+        'ids': {'tmdb': tmdb_id, 'tvdb': tvdb_id, 'imdb': imdb_id},
+        'language': _language_code(language),
+        'country': country,
+        'genres': genres,
+        'description': description,
+        'status': status,
+        'runtime': runtime,
+        'scores': scores,
+        'rank': _opt_pos_int(raw.get('rank')),
+        'sources': [list_name],
+    }
+
+
+def _language_code(value):
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    common = {
+        'english': 'en', 'japanese': 'ja', 'french': 'fr', 'german': 'de',
+        'spanish': 'es', 'italian': 'it', 'portuguese': 'pt', 'russian': 'ru',
+        'chinese': 'zh', 'mandarin': 'zh', 'cantonese': 'zh', 'korean': 'ko',
+        'hindi': 'hi', 'arabic': 'ar', 'dutch': 'nl', 'swedish': 'sv',
+        'norwegian': 'no', 'danish': 'da', 'finnish': 'fi', 'polish': 'pl',
+        'turkish': 'tr', 'thai': 'th', 'indonesian': 'id', 'vietnamese': 'vi',
+        'czech': 'cs', 'greek': 'el', 'hebrew': 'he', 'ukrainian': 'uk',
+    }
+    codes = set(common.values())
+    return value if value in codes else common.get(value)
+
+
+def _recommendation_score(item):
+    scores = item['scores']
+    value = scores.get('mdblist')
+    if value is None:
+        rating = scores.get('imdb')
+        if rating is None:
+            rating = scores.get('tmdb')
+        value = rating * 10 if rating is not None else None
+    return max(0, min(100, value)) if value is not None else None
+
+
+def _radarr_language(raw):
+    lang = raw.get('originalLanguage')
+    if type(lang) is dict:
+        return _language_code(lang.get('name'))
+    return _language_code(lang)
+
+
+def _normalize_radarr_rec(raw):
+    if type(raw) is not dict or raw.get('isRecommendation') is not True:
+        return None
+    title = _opt_str(raw.get('title'), 256)
+    tmdb_id = _opt_pos_int(raw.get('tmdbId'))
+    if not title or tmdb_id is None:
+        return None
+    genres = [g.strip()[:64] for g in (raw.get('genres') or []) if isinstance(g, str) and g.strip()][:16]
+    lang = _radarr_language(raw)
+    is_ja = isinstance(lang, str) and lang.lower() in ('ja', 'japanese')
+    is_anim = any(g.lower() == 'animation' for g in genres)
+    kind = 'anime' if (is_ja and is_anim) else 'movie'
+    ratings = raw.get('ratings') if type(raw.get('ratings')) is dict else {}
+    imdb_r = ratings.get('imdb') if type(ratings.get('imdb')) is dict else {}
+    tmdb_r = ratings.get('tmdb') if type(ratings.get('tmdb')) is dict else {}
+    return {
+        'title': title,
+        'year': _opt_pos_int(raw.get('year')),
+        'kind': kind,
+        'mediatype': 'movie',
+        'ids': {
+            'tmdb': tmdb_id,
+            'tvdb': None,
+            'imdb': _opt_str(raw.get('imdbId'), 32),
+        },
+        'language': 'ja' if is_ja else lang,
+        'country': None,
+        'genres': genres,
+        'description': _truncate_description(raw.get('overview') or '', 300),
+        'status': _opt_str(raw.get('status'), 64),
+        'runtime': _opt_nonneg_int(raw.get('runtime')),
+        'scores': {
+            'mdblist': None,
+            'imdb': _opt_float(imdb_r.get('value')),
+            'imdb_votes': _opt_nonneg_int(imdb_r.get('votes')),
+            'tmdb': _opt_float(tmdb_r.get('value')),
+        },
+        'sources': ['radarr-recommendation'],
+        '_radarr_existing': raw.get('isExisting') is True,
+        '_radarr_excluded': raw.get('isExcluded') is True,
+    }
+
+
+def _dedup_key(item):
+    mt = item.get('mediatype', 'movie')
+    ids = item['ids']
+    if mt == 'show':
+        if ids.get('tvdb') is not None:
+            return ('show', 'tvdb', ids['tvdb'])
+        if ids.get('tmdb') is not None:
+            return ('show', 'tmdb', ids['tmdb'])
+        if ids.get('imdb') is not None:
+            return ('show', 'imdb', ids['imdb'])
+    else:
+        if ids.get('tmdb') is not None:
+            return ('movie', 'tmdb', ids['tmdb'])
+        if ids.get('imdb') is not None:
+            return ('movie', 'imdb', ids['imdb'])
+    return (mt, 'title', item['title'].lower(), item.get('year'))
+
+
+def _merge_recommendation(existing, incoming):
+    for src in incoming['sources']:
+        if src not in existing['sources']:
+            existing['sources'].append(src)
+    if existing['kind'] == 'movie' and incoming['kind'] == 'anime':
+        existing['kind'] = 'anime'
+    for id_key in ('tmdb', 'tvdb', 'imdb'):
+        if existing['ids'].get(id_key) is None and incoming['ids'].get(id_key) is not None:
+            existing['ids'][id_key] = incoming['ids'][id_key]
+    for score_key in ('mdblist', 'imdb', 'imdb_votes', 'tmdb'):
+        if existing['scores'].get(score_key) is None and incoming['scores'].get(score_key) is not None:
+            existing['scores'][score_key] = incoming['scores'][score_key]
+    if not existing.get('description') and incoming.get('description'):
+        existing['description'] = incoming['description']
+    if not existing.get('genres') and incoming.get('genres'):
+        existing['genres'] = list(incoming['genres'])
+    if existing.get('language') is None and incoming.get('language') is not None:
+        existing['language'] = incoming['language']
+    if existing.get('country') is None and incoming.get('country') is not None:
+        existing['country'] = incoming['country']
+    if existing.get('status') is None and incoming.get('status') is not None:
+        existing['status'] = incoming['status']
+    if existing.get('runtime') is None and incoming.get('runtime') is not None:
+        existing['runtime'] = incoming['runtime']
+    if incoming.get('_radarr_existing'):
+        existing['_radarr_existing'] = True
+    if incoming.get('_radarr_excluded'):
+        existing['_radarr_excluded'] = True
+
+
+def _recommendation_add_target(item):
+    mt = item.get('mediatype', 'movie')
+    ids = item['ids']
+    if mt == 'movie':
+        if ids.get('tmdb') is not None:
+            return {'library': 'movies', 'tmdb_id': ids['tmdb']}
+        return None
+    if ids.get('tvdb') is not None:
+        lib_name = 'anime' if item['kind'] == 'anime' else 'tv'
+        return {'library': lib_name, 'tvdb_id': ids['tvdb']}
+    return None
+
+
+def _load_quota(dir_fd, today):
+    raw = _read_state_json(dir_fd, 'quota.json', MDBLIST_QUOTA_MAX_BYTES)
+    if type(raw) is dict and raw.get('date') == today and type(raw.get('calls')) is int and raw['calls'] >= 0:
+        rl = raw.get('mdblist_remaining')
+        return {
+            'date': today,
+            'calls': raw['calls'],
+            'mdblist_remaining': rl if (type(rl) is int and rl >= 0) else None,
+        }
+    return {'date': today, 'calls': 0, 'mdblist_remaining': None}
+
+
+def _load_cache(dir_fd):
+    raw = _read_state_json(dir_fd, 'cache.json', MDBLIST_CACHE_MAX_BYTES)
+    if (type(raw) is dict and type(raw.get('fetched_at_ts')) in (int, float)
+            and isinstance(raw.get('fetched_at'), str)
+            and type(raw.get('items')) is list
+            and type(raw.get('lists')) is list):
+        return raw
+    return None
+
+
+def op_recommendations(call, block, arr_factory, *, mdblist_factory=None, request_guard=lambda: 60):
+    recs_cfg = block.get('recommendations')
+    if recs_cfg is None:
+        refuse('recommendations_disabled', 'Library recommendations not configured by policy')
+
+    req = call['request']
+    kind_filter = req.get('kind', 'all')
+    source_filter = req.get('source', 'all')
+    limit = req.get('limit', 20)
+    include_in_library = req.get('include_in_library', False)
+    include_excluded = req.get('include_excluded', False)
+    min_score = req.get('min_score')
+    want_refresh = req.get('refresh', False)
+
+    daily_ceiling = recs_cfg['daily_ceiling']
+    cache_ttl = recs_cfg['cache_ttl_seconds']
+    min_refresh_age = recs_cfg['min_refresh_age_seconds']
+    budget = SECONDS['library-recommendations']
+
+    warnings = []
+    now = time.time()
+    today = time.strftime('%Y-%m-%d', time.gmtime(now))
+
+    lock_deadline = time.monotonic() + budget
+    dir_fd = _open_state_dir(recs_cfg['state_dir'])
+    lock_fd = None
+    try:
+        lock_fd = os.open('.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
+        ls = os.fstat(lock_fd)
+        need(stat.S_ISREG(ls.st_mode) and ls.st_uid == 0 and stat.S_IMODE(ls.st_mode) == 0o600,
+             'Unsafe recommendations lock file')
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = min(lock_deadline - time.monotonic(), request_guard())
+                need(remaining > 0, 'Caller deadline exceeded waiting for recommendations lock')
+                time.sleep(min(0.05, remaining))
+
+        quota = _load_quota(dir_fd, today)
+        cache = _load_cache(dir_fd)
+        stale = False
+
+        if source_filter in ('mdblist', 'all'):
+            age_seconds = max(0, int(now - cache['fetched_at_ts'])) if cache is not None else None
+            expired = cache is None or age_seconds >= cache_ttl
+            forced_refresh = want_refresh and cache is not None and age_seconds >= min_refresh_age
+            need_fetch = expired or forced_refresh
+            if want_refresh and not need_fetch:
+                warnings.append('refresh ignored: cache is younger than the minimum refresh age')
+
+            if need_fetch:
+                if quota['calls'] >= daily_ceiling:
+                    if cache is not None:
+                        stale = True
+                        warnings.append('mdblist daily quota ceiling reached; serving cached recommendations')
+                    else:
+                        refuse('quota_exhausted', 'Daily mdblist quota ceiling reached and no cache is available')
+                else:
+                    client = None
+                    try:
+                        need(mdblist_factory is not None, FAILURE)
+                        client = mdblist_factory(recs_cfg)
+                        rate_limited = False
+                        quota_hit = False
+
+                        quota['calls'] += 1
+                        _write_state_json(dir_fd, 'quota.json', quota)
+                        status, user_lists, rl = client.get_json('/lists/user')
+                        if rl is not None:
+                            quota['mdblist_remaining'] = rl
+                        _write_state_json(dir_fd, 'quota.json', quota)
+
+                        if status == 429:
+                            rate_limited = True
+                        else:
+                            need(type(user_lists) is list, FAILURE)
+                            by_slug = {}
+                            for entry in user_lists:
+                                if type(entry) is dict and isinstance(entry.get('slug'), str):
+                                    by_slug[entry['slug']] = entry
+
+                            fetched_lists = []
+                            fetched_items = []
+                            for cfg_list in recs_cfg['lists']:
+                                slug = cfg_list['slug']
+                                cfg_kind = cfg_list['kind']
+                                meta = by_slug.get(slug)
+                                if meta is None:
+                                    warnings.append(f'Configured mdblist slug not found: {slug}')
+                                    continue
+                                list_id = _opt_pos_int(meta.get('id'))
+                                if list_id is None:
+                                    warnings.append(f'Configured mdblist slug has invalid id: {slug}')
+                                    continue
+                                if quota['calls'] >= daily_ceiling:
+                                    quota_hit = True
+                                    break
+                                quota['calls'] += 1
+                                _write_state_json(dir_fd, 'quota.json', quota)
+                                st_items, payload, rl = client.get_json(
+                                    f'/lists/{list_id}/items',
+                                    params={
+                                        'limit': 500,
+                                        'append_to_response': 'genre,description,ratings',
+                                    },
+                                )
+                                if rl is not None:
+                                    quota['mdblist_remaining'] = rl
+                                _write_state_json(dir_fd, 'quota.json', quota)
+                                if st_items == 429:
+                                    rate_limited = True
+                                    break
+                                need(type(payload) is dict, FAILURE)
+                                list_name = _opt_str(meta.get('name'), 128) or slug
+                                list_mediatype = _opt_str(meta.get('mediatype'), 32) or (
+                                    'movie' if cfg_kind == 'movie' else 'show'
+                                )
+                                list_updated = _opt_str(meta.get('last_updated_at'), 64)
+                                movies_arr = payload.get('movies') if type(payload.get('movies')) is list else []
+                                shows_arr = payload.get('shows') if type(payload.get('shows')) is list else []
+                                count = 0
+                                for raw_item in movies_arr:
+                                    norm = _normalize_mdblist_item(raw_item, cfg_kind, 'movie', list_name)
+                                    if norm is not None:
+                                        fetched_items.append(norm)
+                                        count += 1
+                                for raw_item in shows_arr:
+                                    norm = _normalize_mdblist_item(raw_item, cfg_kind, 'show', list_name)
+                                    if norm is not None:
+                                        fetched_items.append(norm)
+                                        count += 1
+                                fetched_lists.append({
+                                    'name': list_name,
+                                    'mediatype': list_mediatype,
+                                    'item_count': _opt_nonneg_int(meta.get('items')) if meta.get('items') is not None else count,
+                                    'updated_at': list_updated,
+                                })
+
+                            if not rate_limited and not quota_hit:
+                                fetched_at_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
+                                cache = {
+                                    'fetched_at': fetched_at_iso,
+                                    'fetched_at_ts': now,
+                                    'lists': fetched_lists,
+                                    'items': fetched_items,
+                                    'warnings': list(warnings),
+                                }
+                                _write_state_json(dir_fd, 'cache.json', cache)
+                                stale = False
+
+                        if rate_limited:
+                            if cache is not None:
+                                stale = True
+                                warnings.append('mdblist returned HTTP 429; serving cached recommendations')
+                            else:
+                                refuse('quota_exhausted', 'mdblist rate limit reached and no cache is available')
+                        elif quota_hit:
+                            if cache is not None:
+                                stale = True
+                                warnings.append('mdblist daily quota ceiling reached; serving cached recommendations')
+                            else:
+                                refuse('quota_exhausted', 'Daily mdblist quota ceiling reached and no cache is available')
+                    except LibraryRefusal:
+                        raise
+                    except Exception:
+                        if cache is None:
+                            raise Refused('mdblist request failed and no cache is available') from None
+                        stale = True
+                        warnings.append('mdblist request failed; serving cached recommendations')
+                    finally:
+                        if client is not None:
+                            client.close()
+
+        if cache is not None:
+            warnings = list(dict.fromkeys(warnings + cache.get('warnings', [])))
+        cache_meta = {
+            'fetched_at': cache['fetched_at'] if cache is not None else None,
+            'age_seconds': max(0, int(now - cache['fetched_at_ts'])) if cache is not None else None,
+            'stale': stale,
+        }
+        quota_meta = {
+            'mdblist_calls_today': quota['calls'],
+            'daily_ceiling': daily_ceiling,
+            'mdblist_remaining': quota['mdblist_remaining'],
+        }
+        cached_lists = list(cache['lists']) if cache is not None else []
+        mdblist_items = copy.deepcopy(cache['items']) if (cache is not None and source_filter in ('mdblist', 'all')) else []
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_fd)
+        os.close(dir_fd)
+
+    # Fetch live Arr state (membership, exclusions, auto-add warnings, and optional Radarr recommendations).
+    radarr = arr_factory('radarr', block['libraries']['movies']['descriptor'], budget)
+    sonarr = arr_factory('sonarr', block['libraries']['tv']['descriptor'], budget)
+
+    radarr_movies = radarr.get('/api/v3/movie')
+    need(type(radarr_movies) is list, FAILURE)
+    radarr_tmdb_ids = {
+        m['tmdbId'] for m in radarr_movies
+        if type(m) is dict and type(m.get('tmdbId')) is int
+    }
+
+    radarr_exclusions = radarr.get('/api/v3/exclusions')
+    need(type(radarr_exclusions) is list, FAILURE)
+    radarr_excluded_ids = {
+        e['tmdbId'] for e in radarr_exclusions
+        if type(e) is dict and type(e.get('tmdbId')) is int
+    }
+
+    radarr_importlists = radarr.get('/api/v3/importlist')
+    need(type(radarr_importlists) is list, FAILURE)
+    for il in radarr_importlists:
+        if type(il) is dict and il.get('enabled') is True and il.get('enableAuto') is True:
+            name = _opt_str(il.get('name'), 128) or str(il.get('id', '?'))
+            warnings.append(f"Radarr import list '{name}' has automatic add enabled")
+
+    radarr_rec_items = []
+    if source_filter in ('radarr', 'all'):
+        raw_recs = radarr.get('/api/v3/importlist/movie?includeRecommendations=true&includeTrending=false&includePopular=false')
+        need(type(raw_recs) is list, FAILURE)
+        for raw_rec in raw_recs:
+            norm = _normalize_radarr_rec(raw_rec)
+            if norm is not None:
+                radarr_rec_items.append(norm)
+
+    sonarr_series = sonarr.get('/api/v3/series')
+    need(type(sonarr_series) is list, FAILURE)
+    sonarr_tvdb_ids = {
+        s['tvdbId'] for s in sonarr_series
+        if type(s) is dict and type(s.get('tvdbId')) is int
+    }
+
+    sonarr_exclusions = sonarr.get('/api/v3/importlistexclusion')
+    need(type(sonarr_exclusions) is list, FAILURE)
+    sonarr_excluded_ids = {
+        e['tvdbId'] for e in sonarr_exclusions
+        if type(e) is dict and type(e.get('tvdbId')) is int
+    }
+
+    sonarr_importlists = sonarr.get('/api/v3/importlist')
+    need(type(sonarr_importlists) is list, FAILURE)
+    for il in sonarr_importlists:
+        if type(il) is dict and il.get('enableAutomaticAdd') is True:
+            name = _opt_str(il.get('name'), 128) or str(il.get('id', '?'))
+            warnings.append(f"Sonarr import list '{name}' has automatic add enabled")
+
+    merged = {}
+    for item in mdblist_items + radarr_rec_items:
+        key = _dedup_key(item)
+        if key in merged:
+            _merge_recommendation(merged[key], item)
+        else:
+            merged[key] = item
+
+    results = []
+    for item in merged.values():
+        mt = item.get('mediatype', 'movie')
+        ids = item['ids']
+        if mt == 'movie':
+            in_lib = (ids.get('tmdb') in radarr_tmdb_ids) or bool(item.get('_radarr_existing'))
+            excluded = (ids.get('tmdb') in radarr_excluded_ids) or bool(item.get('_radarr_excluded'))
+        else:
+            in_lib = ids.get('tvdb') in sonarr_tvdb_ids
+            excluded = ids.get('tvdb') in sonarr_excluded_ids
+
+        if kind_filter != 'all' and item['kind'] != kind_filter:
+            continue
+        if not include_in_library and in_lib:
+            continue
+        if excluded and not include_excluded:
+            continue
+        if min_score is not None:
+            sc = _recommendation_score(item)
+            if sc is None or sc < min_score:
+                continue
+
+        results.append({
+            'title': item['title'],
+            'year': item['year'],
+            'kind': item['kind'],
+            'ids': dict(item['ids']),
+            'language': item['language'],
+            'country': item['country'],
+            'genres': list(item['genres']),
+            'description': item['description'],
+            'status': item['status'],
+            'runtime': item['runtime'],
+            'rank': item.get('rank'),
+            'score': _recommendation_score(item),
+            'scores': dict(item['scores']),
+            'sources': list(item['sources']),
+            'in_library': in_lib,
+            'excluded': excluded,
+            'add': _recommendation_add_target(item),
+        })
+
+    def _sort_key(row):
+        score = row['score']
+        votes = row['scores'].get('imdb_votes')
+        return (
+            -(score if score is not None else -1),
+            row.get('rank') if row.get('rank') is not None else 2 ** 31,
+            -(votes if votes is not None else -1),
+            row['title'].lower(),
+        )
+
+    results.sort(key=_sort_key)
+    results = results[:limit]
+
+    return {
+        'items': results,
+        'lists': cached_lists,
+        'cache': cache_meta,
+        'quota': quota_meta,
+        'warnings': warnings,
+    }
+
+
 def execute(policy, call, guard, config):
     """Run one validated library management operation with fresh sessions."""
     block = validate_block(policy['library'])
@@ -2208,6 +3105,10 @@ def execute(policy, call, guard, config):
             need(type(desc) is dict and desc.get('backend') == backend, FAILURE)
             arr_clients[desc_path] = LibraryArrClient(desc, request_guard=guard, budget_seconds=budget)
         return arr_clients[desc_path]
+
+    def mdblist_factory(recs_cfg):
+        key = read_mdblist_key(recs_cfg['mdblist_key_file'])
+        return MdblistClient(key, request_guard=guard, budget_seconds=SECONDS['library-recommendations'])
 
     def emby_factory():
         if emby_client[0] is None and config is not None:
@@ -2235,6 +3136,8 @@ def execute(policy, call, guard, config):
             return op_queue(call, block, arr_factory)
         if op == 'library-subtitles':
             return op_subtitles(call, block, arr_factory, emby_factory)
+        if op == 'library-recommendations':
+            return op_recommendations(call, block, arr_factory, mdblist_factory=mdblist_factory, request_guard=guard)
         if op == 'library-add':
             return op_add(call, block, arr_factory)
         if op == 'library-grab':
