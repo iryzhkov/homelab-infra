@@ -40,6 +40,10 @@ from emby_operator_seed_join import (OPERATION as SEED_JOIN_OPERATION, ACTIONS a
 from emby_operator_acquire import (OPERATIONS as ACQUIRE_OPERATIONS, SECONDS as ACQUIRE_SECONDS,
     validate_block as acquire_block, request as acquire_request,
     actions as acquire_actions, execute as acquire_execute)
+from emby_operator_library import (OPERATIONS as LIBRARY_OPERATIONS, SECONDS as LIBRARY_SECONDS,
+    ALLOWED_ACTIONS as LIBRARY_ALLOWED_ACTIONS, NAMESPACE as LIBRARY_NAMESPACE,
+    LibraryRefusal, validate_block as library_block, request as library_request,
+    required_action as library_required_action, execute as library_execute)
 from emby_operator_entry import invoke, operator_session
 from emby_operator_recommendations import (DONE_LIMIT, LIST_OPERATIONS, RETIRE_AT,
                                            TYPED_OPERATIONS, Journal, Refused, canonical_id,
@@ -109,7 +113,7 @@ CATALOG_REQUIRED = frozenset({'library_id', 'limit'})
 CATALOG_OPTIONAL = frozenset({'offset', 'person_id', 'person_role'})
 WORKER_OPERATIONS = ('show', 'reconcile', 'preview', 'apply', METADATA_OPERATION,
                      *SERIES_OPERATIONS, JANITOR_OPERATION, *IMPORTER_OPERATIONS, CUSTODY_OPERATION, TORRENT_OPERATION,
-                     SEED_JOIN_OPERATION, *ACQUIRE_OPERATIONS)
+                     SEED_JOIN_OPERATION, *ACQUIRE_OPERATIONS, *LIBRARY_OPERATIONS)
 REQUEST_FIELDS = frozenset({'version', 'caller', 'recipient', 'deadline_unix_ms',
                             'operation', 'request'})
 PINNED_CALLER = ('issuer', 'subject', 'namespace', 'server', 'library', 'catalog_user')
@@ -119,7 +123,7 @@ SERIES_CALLER_FIELDS = HISTORY_CALLER_FIELDS | {'series_libraries'}
 POLICY_FIELDS = frozenset({'version', 'enabled', 'peer', 'caller', 'recipients'})
 # Optional opt-ins: without history_users the policy permits no history read;
 # without series_libraries it permits no Series read or typed list state.
-POLICY_OPTIONAL = frozenset({'subjects', 'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause', 'janitor_custody', 'janitor_torrents', 'janitor_seed_join', 'janitor_acquire'})
+POLICY_OPTIONAL = frozenset({'subjects', 'history_users', 'series_libraries', 'janitor', 'janitor_importers', 'janitor_importers_pause', 'janitor_custody', 'janitor_torrents', 'janitor_seed_join', 'janitor_acquire', 'library'})
 ERROR_CODES = frozenset({'refused', 'busy', 'unfinished', 'deadline', 'unavailable'})
 HEX32 = re.compile('[0-9a-f]{32}')
 HEX64 = re.compile('[0-9a-f]{64}')
@@ -134,11 +138,12 @@ STOPPED = {'deadline': 'Stopped at caller deadline; use show before resubmitting
 
 class WireError(Exception):
     """One typed response error with fixed safe text."""
-    def __init__(self, code, message, operation=None, list_id=None):
+    def __init__(self, code, message, operation=None, list_id=None, reason=None):
         super().__init__(message)
         assert code in ERROR_CODES and SAFE_TEXT.fullmatch(message)
+        assert reason is None or re.fullmatch(r'[a-z0-9_]{1,64}', reason)
         self.code, self.message = code, message
-        self.operation, self.list_id = operation, list_id
+        self.operation, self.list_id, self.reason = operation, list_id, reason
 
 
 def check(condition, code, message):
@@ -269,6 +274,12 @@ def validate_policy(value):
                set(block['series_libraries']) <= set(value.get('series_libraries', {})))
         except (Refused, ValueError, TypeError, UnicodeError):
             ok(False)
+    if 'library' in value:
+        try:
+            block = library_block(value['library'])
+            ok(block['target_library'] == caller['library'])
+        except (Refused, ValueError, TypeError, UnicodeError):
+            ok(False)
     return copy.deepcopy(value)
 
 
@@ -351,7 +362,7 @@ def parse_request(frame):
     series_read = value['operation'] in SERIES_OPERATIONS
     janitor = value['operation'] == JANITOR_OPERATION
     importer = value['operation'] in (*IMPORTER_OPERATIONS, CUSTODY_OPERATION, TORRENT_OPERATION,
-                                      SEED_JOIN_OPERATION, *ACQUIRE_OPERATIONS)
+                                      SEED_JOIN_OPERATION, *ACQUIRE_OPERATIONS, *LIBRARY_OPERATIONS)
     allowed = ((IMPORTER_CALLER_FIELDS,) if importer else (JANITOR_CALLER_FIELDS,) if janitor else
                (HISTORY_CALLER_FIELDS,) if metadata else (SERIES_CALLER_FIELDS,) if series_read
                else (CALLER_FIELDS, CALLER_FIELDS | {'series_libraries'}))
@@ -382,6 +393,11 @@ def parse_request(frame):
 def typed_request(operation, request):
     check(type(request) is dict, 'refused', 'Invalid request fields')
     fields = set(request)
+    if operation in LIBRARY_OPERATIONS:
+        try:
+            return library_request(operation, request)
+        except (Refused, ValueError, TypeError, UnicodeError):
+            raise WireError('refused', 'Invalid library request') from None
     if operation in ACQUIRE_OPERATIONS:
         try:
             return acquire_request(operation, request)
@@ -507,6 +523,22 @@ def series_request(operation, request):
 def authorize(call, policy):
     """Intersect the verified caller with the root ceiling on every request."""
     caller = call['caller']
+    if call['operation'] in LIBRARY_OPERATIONS:
+        block = policy.get('library')
+        check(block is not None and block.get('enabled') is True,
+              'refused', 'Library management not enabled by policy')
+        check(caller['subject'] == policy['caller']['subject'] and
+              all(caller[k] == policy['caller'][k] for k in ('issuer', 'server')) and
+              caller['namespace'] == LIBRARY_NAMESPACE and
+              caller['target_library'] == block['target_library'] and
+              caller['policy_revision'] == block['revision'] and
+              call['recipient'] in policy['recipients'] and
+              bool(caller['actions']) and
+              set(caller['actions']) <= LIBRARY_ALLOWED_ACTIONS,
+              'refused', 'Caller outside library policy')
+        check(library_required_action(call['operation']) in caller['actions'],
+              'refused', 'Missing required library action')
+        return
     if call['operation'] in ACQUIRE_OPERATIONS:
         block = policy.get('janitor_acquire')
         check(block is not None, 'refused', 'Acquisition not enabled by policy')
@@ -642,7 +674,7 @@ def authorize(call, policy):
 
 def remaining_seconds(call, now_ms):
     """min(token expiry, caller deadline, worker ceiling) from now; never renewed."""
-    ceiling = {TORRENT_OPERATION: 10, SEED_JOIN_OPERATION: 25, **ACQUIRE_SECONDS}.get(call.get('operation'), MAX_SECONDS)
+    ceiling = {TORRENT_OPERATION: 10, SEED_JOIN_OPERATION: 25, **ACQUIRE_SECONDS, **LIBRARY_SECONDS}.get(call.get('operation'), MAX_SECONDS)
     end = min(call['caller']['expires_at'] * 1000, call['deadline_unix_ms'], now_ms + ceiling * 1000)
     check(end > now_ms, 'deadline', 'Deadline or token expiry already reached')
     return (end - now_ms) / 1000
@@ -924,6 +956,22 @@ def handle(conn):
     authorize(call, policy)
     guard = Guard(conn, time.monotonic() + remaining_seconds(call, int(time.time() * 1000)))
     check(peer_state(conn) == 'open', 'refused', 'Trailing data or early close')
+    if call['operation'] in LIBRARY_OPERATIONS:
+        try:
+            config = selected_config(policy, call['recipient'])
+            return library_execute(policy, call, guard, config)
+        except LibraryRefusal as error:
+            raise WireError('refused', safe_message(error), reason=error.reason) from None
+        except WireError:
+            raise
+        except Refused as error:
+            if guard.tripped or guard.expired():
+                raise WireError('deadline', STOPPED[guard.tripped or 'deadline']) from None
+            raise WireError('refused', safe_message(error)) from None
+        except Exception:
+            if guard.tripped or guard.expired():
+                raise WireError('deadline', STOPPED[guard.tripped or 'deadline']) from None
+            raise WireError('unavailable', 'Library backend unavailable') from None
     if call['operation'] in ACQUIRE_OPERATIONS:
         try:
             config = selected_config(policy, call['recipient'])
@@ -967,6 +1015,8 @@ def envelope(result=None, error=None):
     if error is None:
         return {'version': VERSION, 'ok': True, 'result': result}
     body = {'code': error.code, 'message': error.message}
+    if error.reason is not None:
+        body['reason'] = error.reason
     if error.operation is not None:
         body['operation'] = error.operation
     if error.list_id is not None:

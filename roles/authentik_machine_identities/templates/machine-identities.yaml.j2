@@ -87,6 +87,17 @@ entries:
       expiring: true
       expires: {{ item.expires | to_json }}
       description: {{ ('Chaldea ' ~ item.host ~ ' ' ~ item.profile ~ ' ' ~ ('Jocasta' if item.service == 'jocasta' else item.service) ~ ' access, generation ' ~ item.generation) | to_json }}
+{% for extra in item.extra_tokens | default([]) if extra.state == 'present' %}
+  - model: authentik_core.token
+    identifiers:
+      identifier: {{ extra.token | to_json }}
+    attrs:
+      user: !KeyOf user-{{ loop.index }}
+      intent: app_password
+      expiring: true
+      expires: {{ extra.expires | to_json }}
+      description: {{ ('Chaldea ' ~ extra.host ~ ' ' ~ extra.profile ~ ' ' ~ extra.service ~ ' access, generation ' ~ extra.generation) | to_json }}
+{% endfor %}
 {% endfor %}
 {% for service, access in spec.services.items() %}
 {% if access.state == 'present' %}
@@ -126,6 +137,14 @@ entries:
     state: absent
     identifiers:
       identifier: {{ token | to_json }}
+{% endfor %}
+{% for extra in item.extra_tokens | default([]) %}
+{% for token in extra.old_tokens + ([extra.token] if extra.state == 'absent' else []) %}
+  - model: authentik_core.token
+    state: absent
+    identifiers:
+      identifier: {{ token | to_json }}
+{% endfor %}
 {% endfor %}
 {% if item.state == 'absent' %}
   - model: authentik_core.user

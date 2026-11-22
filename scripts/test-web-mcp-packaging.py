@@ -2585,6 +2585,51 @@ class CoexistencePackaging(unittest.TestCase):
         self.assertFalse(policy["janitor_acquire"]["start_enabled"])
         self.assertFalse(policy["janitor_acquire"]["media_enabled"])
 
+    def test_library_management_policy_ceiling_requires_explicit_inputs(self):
+        endpoint = copy.deepcopy(self.acquire_fixture())
+        endpoint["artifact"].update(
+            source_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+            contract_revision=contract.HOLONET_COEXISTENCE_SOURCE,
+            sha256=contract.HOLONET_COEXISTENCE_SHA256,
+        )
+        endpoint["library"] = {
+            "libraries": {
+                "movies": {"root_folder_path": "/mnt/shared/media/movies", "quality_profile_id": 11},
+                "tv": {"root_folder_path": "/mnt/shared/media/tv shows", "quality_profile_id": 6},
+                "anime": {"root_folder_path": "/mnt/shared/media/anime", "quality_profile_id": 6},
+            },
+            "allowed_categories": ["radarr-movies", "tv-sonarr"],
+        }
+        self.assertEqual(contract.endpoint_contract(endpoint), endpoint)
+        policy = contract.playlist_operator_plan(endpoint)["policy"]
+        self.assertFalse(policy["library"]["enabled"])
+        self.assertEqual(policy["library"]["libraries"]["movies"]["library_id"], "3")
+        self.assertEqual(policy["library"]["libraries"]["tv"]["library_id"], "1132")
+        self.assertEqual(policy["library"]["libraries"]["anime"]["library_id"], "615")
+        self.assertEqual(policy["library"]["removal_thresholds"], {"min_ratio": 1.0, "min_seeding_days": 14})
+        self.assertEqual(policy["library"]["limits"]["remove_max_files"], 500)
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(policy)
+        finally:
+            sys.path.pop(0)
+        # Extended qBit descriptor with tv-sonarr is accepted when library is configured.
+        extended = copy.deepcopy(endpoint)
+        extended["torrents"]["descriptor"]["categories"] = ["radarr-movies", "tv-sonarr"]
+        self.assertEqual(contract.endpoint_contract(extended), extended)
+        # Missing root_folder_path or quality_profile_id refuses (no guessed defaults).
+        for field in ("root_folder_path", "quality_profile_id"):
+            bad = copy.deepcopy(endpoint)
+            del bad["library"]["libraries"]["movies"][field]
+            with self.subTest(missing=field), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad)
+        # Non-boolean enabled refuses.
+        bad_enabled = copy.deepcopy(endpoint)
+        bad_enabled["library"]["enabled"] = "true"
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(bad_enabled)
+
 
 if __name__ == "__main__":
     expected = ROOT / ".cache/web-mcp-tests/home"

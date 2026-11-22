@@ -67,6 +67,8 @@
           - not (holonet_catalog_torrents_enabled | bool)
           - not (holonet_catalog_seed_join_enabled | bool)
           - not (holonet_catalog_acquire_enabled | bool)
+          - not (holonet_catalog_library_enabled | bool)
+          - not (holonet_catalog_gaming_pc_writer_token_enabled | bool)
           - not (holonet_catalog_apply | default(false) | bool)
           - not (holonet_catalog_online_check | default(false) | bool)
           - holonet_catalog_baseline_checkpoint | default('historical') in ['historical', 'ordinary-reader', 'series-writer-20261102']
@@ -422,6 +424,60 @@
         quiet: true
       when: holonet_catalog_acquire_enabled
 
+    - name: Require explicit existing writer library management enrollment
+      ansible.builtin.assert:
+        that:
+          - holonet_catalog_library_enabled is boolean
+          - not holonet_catalog_library_enabled or holonet_catalog_acquire_enabled
+          - not holonet_catalog_library_enabled or holonet_catalog_series_enabled
+          - not holonet_catalog_library_enabled or authentik_machine_identity_existing_owned_only
+          - not holonet_catalog_library_enabled or holonet_catalog_recommendations_identity.generation == 1
+          - not holonet_catalog_library_enabled or holonet_catalog_recommendations_identity.state == 'present'
+        quiet: true
+
+    - name: Add library management purpose without changing old grants
+      ansible.builtin.set_fact:
+        authentik_machine_identities: >-
+          {{ authentik_machine_identities[:-1] +
+             [authentik_machine_identities[-1] | combine({'holonet_library':
+               {'libraries': ['3', '615', '1132'], 'actions': ['library.read', 'library.manage']}})] }}
+        authentik_machine_services: "{{ authentik_machine_services | combine({'holonet': authentik_machine_services.holonet | combine({'scope': 'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents holonet.seedjoin holonet.acquire holonet.acquire.start holonet.acquire.media holonet.library'})}) }}"
+      when: holonet_catalog_library_enabled
+
+    - name: Refuse overridden library projection before credentials
+      ansible.builtin.assert:
+        that:
+          - >-
+            authentik_machine_identities[-1].holonet_library ==
+            {'libraries': ['3', '615', '1132'], 'actions': ['library.read', 'library.manage']}
+          - >-
+            authentik_machine_services.holonet.scope ==
+            'holonet.read holonet.curate holonet.home holonet.janitor holonet.torrents holonet.seedjoin holonet.acquire holonet.acquire.start holonet.acquire.media holonet.library'
+        quiet: true
+      when: holonet_catalog_library_enabled
+
+    - name: Require explicit opt-in for separate gaming-pc writer token
+      ansible.builtin.assert:
+        that:
+          - holonet_catalog_gaming_pc_writer_token_enabled is boolean
+          - holonet_catalog_gaming_pc_writer_token_generation is integer
+          - 1 <= holonet_catalog_gaming_pc_writer_token_generation <= 1000
+          - not holonet_catalog_gaming_pc_writer_token_enabled or (holonet_catalog_recommendations_enabled | bool)
+          - not holonet_catalog_gaming_pc_writer_token_enabled or authentik_machine_identity_existing_owned_only
+          - not holonet_catalog_gaming_pc_writer_token_enabled or holonet_catalog_recommendations_identity.state == 'present'
+        quiet: true
+
+    - name: Attach separate omarchy-pc app password token to existing writer account
+      ansible.builtin.set_fact:
+        authentik_machine_identities: >-
+          {{ authentik_machine_identities[:-1] +
+             [authentik_machine_identities[-1] | combine({'extra_tokens': [
+               {'host': 'omarchy-pc',
+                'generation': holonet_catalog_gaming_pc_writer_token_generation,
+                'expires': holonet_catalog_recommendations_identity.expires,
+                'state': 'present'}]})] }}
+      when: holonet_catalog_gaming_pc_writer_token_enabled
+
     - name: Require a fresh public baseline for renewal or scoped playback
       ansible.builtin.assert:
         that:
@@ -431,14 +487,15 @@
         fail_msg: Renewal and scoped playback need an explicit fresh public baseline of the current four-account content.
         quiet: true
       when: >-
-        (holonet_catalog_acquire_enabled | bool or holonet_catalog_seed_join_enabled | bool or holonet_catalog_torrents_enabled | bool or holonet_catalog_janitor_enabled | bool or holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
+        (holonet_catalog_library_enabled | bool or holonet_catalog_gaming_pc_writer_token_enabled | bool or holonet_catalog_acquire_enabled | bool or holonet_catalog_seed_join_enabled | bool or holonet_catalog_torrents_enabled | bool or holonet_catalog_janitor_enabled | bool or holonet_catalog_playback_enabled | bool or holonet_catalog_identity_expires != '2026-11-20T00:00:00Z')
         and (not ansible_check_mode or holonet_catalog_online_check | default(false) | bool)
 
     - name: Require both destinations bound before any host is touched
       ansible.builtin.assert:
         that: >-
-          authentik_machine_identity_destinations | default({}) | list | sort == ['homelab', 'laptop']
-        fail_msg: Supply authentik_machine_identity_destinations binding exactly homelab and laptop.
+          authentik_machine_identity_destinations | default({}) | list | sort ==
+          (['homelab', 'laptop', 'omarchy-pc'] if holonet_catalog_gaming_pc_writer_token_enabled | bool else ['homelab', 'laptop'])
+        fail_msg: Supply authentik_machine_identity_destinations binding every declared host.
         quiet: true
       when: not holonet_catalog_baseline_mode | bool
 

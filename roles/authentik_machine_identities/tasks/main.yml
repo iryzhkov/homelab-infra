@@ -56,12 +56,21 @@
     # optional home and its connection. A host missing here is refused.
     machine_identity_hosts: >-
       {%- set found = {} -%}
-      {%- for item in authentik_machine_identities if item.host | default('') in groups['all'] -%}
-      {%-   set host = hostvars[item.host] -%}
-      {%-   set _ = found.update({item.host: {
-              'ssh_user': host.ssh_user | default(''),
-              'home': host.authentik_machine_identity_home | default(''),
-              'connection': host.ansible_connection | default('ssh')}}) -%}
+      {%- for item in authentik_machine_identities -%}
+      {%-   if item.host | default('') in groups['all'] -%}
+      {%-     set host = hostvars[item.host] -%}
+      {%-     set _ = found.update({item.host: {
+                'ssh_user': host.ssh_user | default(''),
+                'home': host.authentik_machine_identity_home | default(''),
+                'connection': host.ansible_connection | default('ssh')}}) -%}
+      {%-   endif -%}
+      {%-   for extra in item.extra_tokens | default([]) if extra.host | default('') in groups['all'] -%}
+      {%-     set ehost = hostvars[extra.host] -%}
+      {%-     set _ = found.update({extra.host: {
+                'ssh_user': ehost.ssh_user | default(''),
+                'home': ehost.authentik_machine_identity_home | default(''),
+                'connection': ehost.ansible_connection | default('ssh')}}) -%}
+      {%-   endfor -%}
       {%- endfor -%}
       {{ found }}
 
@@ -192,7 +201,7 @@
 # stops the run while nothing has been issued or deleted yet.
 - name: Inspect every destination
   ansible.builtin.include_tasks: host.yml
-  loop: "{{ machine_identity_spec.identities }}"
+  loop: "{{ machine_identity_spec.deliveries | default(machine_identity_spec.identities) }}"
   loop_control:
     loop_var: machine_identity
     label: "{{ machine_identity.host }} {{ machine_identity.profile }}"
@@ -341,7 +350,7 @@
     # whose account does not look exactly as declared.
     - name: Deliver or remove each host's app password
       ansible.builtin.include_tasks: host.yml
-      loop: "{{ machine_identity_spec.identities }}"
+      loop: "{{ machine_identity_spec.deliveries | default(machine_identity_spec.identities) }}"
       loop_control:
         loop_var: machine_identity
         label: "{{ machine_identity.host }} {{ machine_identity.profile }}"

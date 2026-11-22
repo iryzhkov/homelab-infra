@@ -1,0 +1,733 @@
+{
+  "provenance": "Canonical synthetic library management wire v1 from homelab-infra; matching producer/consumer schemas, not live backend evidence.",
+  "contract": "jocasta:d07e09665f67d1ea7b2fb00eae9b6fe0@1",
+  "contract_sha256": "d9b8f591b5f08cbfc88fcfa4983acb03ba6abe2231de1dc9cf0e024a589d658a",
+  "library_lookup_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000025000,
+    "operation": "library-lookup",
+    "request": {
+      "library": "anime",
+      "term": "Synthetic"
+    }
+  },
+  "library_lookup": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "library": "anime",
+      "kind": "series",
+      "items": [
+        {
+          "arr_id": 26,
+          "title": "Synthetic Anime",
+          "year": 2022,
+          "imdb_id": "tt12590266",
+          "in_library": true,
+          "monitored": true,
+          "path": "/mnt/shared/media/anime/Synthetic Anime (2022) [tvdb-384541]",
+          "tvdb_id": 384541,
+          "size_on_disk": 4096,
+          "seasons": [
+            {
+              "season": 1,
+              "monitored": true,
+              "episode_count": 2,
+              "episode_file_count": 2
+            }
+          ]
+        },
+        {
+          "arr_id": null,
+          "title": "Synthetic New Anime",
+          "year": 2025,
+          "imdb_id": "tt9990001",
+          "in_library": false,
+          "monitored": false,
+          "path": null,
+          "tvdb_id": 999001,
+          "size_on_disk": 0,
+          "seasons": [
+            {
+              "season": 1,
+              "monitored": false,
+              "episode_count": 0,
+              "episode_file_count": 0
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    }
+  },
+  "library_detail_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000025000,
+    "operation": "library-detail",
+    "request": {
+      "library": "movies",
+      "arr_id": 18
+    }
+  },
+  "library_detail": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "library": "movies",
+      "kind": "movie",
+      "arr_id": 18,
+      "title": "Synthetic Movie",
+      "year": 2024,
+      "tmdb_id": 603,
+      "imdb_id": "tt0133093",
+      "monitored": true,
+      "path": "/mnt/shared/media/movies/Synthetic Movie (2024)",
+      "size_on_disk": 4096,
+      "has_file": true,
+      "file": {
+        "relative_path": "Synthetic.mkv",
+        "size": 4096,
+        "quality": "WEBDL-1080p",
+        "audio_languages": "eng",
+        "subtitle_languages": "eng",
+        "date_added": "2026-11-01T00:00:00Z",
+        "emby_item_id": "44801"
+      }
+    }
+  },
+  "library_releases_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000180000,
+    "operation": "library-releases",
+    "request": {
+      "library": "anime",
+      "arr_id": 26,
+      "season": 1
+    }
+  },
+  "library_releases": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "library": "anime",
+      "arr_id": 26,
+      "releases": [
+        {
+          "handle": "60a8c35e440c487c2fb4e453a07e9ce8d324cd4b0515fec9d6875dce385e31cb",
+          "guid": "https://indexer.invalid/release/1",
+          "indexer_id": 1,
+          "title": "Synthetic Anime S01 1080p",
+          "indexer": "Synthetic",
+          "size": 2048,
+          "seeders": 12,
+          "leechers": 1,
+          "age_days": 5,
+          "quality": "WEBDL-1080p",
+          "languages": [
+            "English",
+            "Japanese"
+          ],
+          "custom_format_score": 100,
+          "full_season": true,
+          "approved": true,
+          "rejections": []
+        }
+      ],
+      "truncated": false
+    }
+  },
+  "library_queue_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000020000,
+    "operation": "library-queue",
+    "request": {
+      "library": "anime"
+    }
+  },
+  "library_queue": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "library": "anime",
+      "items": [
+        {
+          "library": "anime",
+          "title": "Synthetic Anime S01 1080p",
+          "arr_id": 26,
+          "episode_ids": [
+            101
+          ],
+          "status": "downloading",
+          "tracked_state": "downloading",
+          "progress": 0.5,
+          "size": 2048,
+          "size_left": 1024,
+          "time_left": "00:05:00",
+          "download_client": "qBittorrent",
+          "status_messages": []
+        }
+      ]
+    }
+  },
+  "library_subtitles_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000120000,
+    "operation": "library-subtitles",
+    "request": {
+      "library": "movies",
+      "arr_id": 18,
+      "emby_item_id": "44801",
+      "start_seconds": 0,
+      "end_seconds": 120,
+      "max_chars": 20000
+    }
+  },
+  "library_subtitles": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "library": "movies",
+      "arr_id": 18,
+      "emby_item_id": "44801",
+      "streams": [
+        {
+          "index": 2,
+          "language": "eng",
+          "codec": "subrip",
+          "title": "English (SUBRIP)",
+          "forced": false,
+          "external": false,
+          "is_text": true
+        }
+      ],
+      "selected_stream": {
+        "index": 2,
+        "language": "eng",
+        "codec": "subrip",
+        "title": "English (SUBRIP)",
+        "forced": false,
+        "external": false,
+        "is_text": true
+      },
+      "status": "ok",
+      "lines": [
+        "[00:00:01] Synthetic line one.",
+        "[00:00:05] Synthetic line two."
+      ],
+      "truncated": false
+    }
+  },
+  "library_add_preview_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "library-add",
+    "request": {
+      "mode": "preview",
+      "library": "anime",
+      "tvdb_id": 999001,
+      "monitor": "all",
+      "seasons": [
+        1
+      ],
+      "search_now": true
+    }
+  },
+  "library_add_preview": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "preview",
+      "plan": {
+        "library": "anime",
+        "kind": "series",
+        "title": "Synthetic New Anime",
+        "year": 2025,
+        "tvdb_id": 999001,
+        "imdb_id": "tt9990001",
+        "root_folder_path": "/mnt/shared/media/anime",
+        "quality_profile_id": 6,
+        "monitor": "all",
+        "seasons": [
+          1
+        ],
+        "search_now": true
+      },
+      "plan_sha256": "2663a0611b4bff560a593854718194c4cd6d2f9286e4c8a8b3b3e7577a42d65b"
+    }
+  },
+  "library_add_apply_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "library-add",
+    "request": {
+      "mode": "apply",
+      "library": "anime",
+      "tvdb_id": 999001,
+      "monitor": "all",
+      "seasons": [
+        1
+      ],
+      "search_now": true,
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "plan_sha256": "2663a0611b4bff560a593854718194c4cd6d2f9286e4c8a8b3b3e7577a42d65b"
+    }
+  },
+  "library_add_apply": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "apply",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "plan": {
+        "library": "anime",
+        "kind": "series",
+        "title": "Synthetic New Anime",
+        "year": 2025,
+        "tvdb_id": 999001,
+        "imdb_id": "tt9990001",
+        "root_folder_path": "/mnt/shared/media/anime",
+        "quality_profile_id": 6,
+        "monitor": "all",
+        "seasons": [
+          1
+        ],
+        "search_now": true
+      },
+      "plan_sha256": "2663a0611b4bff560a593854718194c4cd6d2f9286e4c8a8b3b3e7577a42d65b",
+      "applied": true,
+      "arr_id": 99,
+      "path": "/mnt/shared/media/anime/Synthetic New Anime (2025) [tvdb-999001]"
+    }
+  },
+  "library_grab_preview_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "library-grab",
+    "request": {
+      "mode": "preview",
+      "library": "anime",
+      "arr_id": 26,
+      "search_id": "dddddddddddddddddddddddddddddddd",
+      "handle": "60a8c35e440c487c2fb4e453a07e9ce8d324cd4b0515fec9d6875dce385e31cb",
+      "guid": "https://indexer.invalid/release/1",
+      "indexer_id": 1,
+      "title": "Synthetic Anime S01 1080p",
+      "indexer": "Synthetic",
+      "size": 2048,
+      "approved": true,
+      "rejections": [],
+      "allow_rejected": false
+    }
+  },
+  "library_grab_preview": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "preview",
+      "plan": {
+        "library": "anime",
+        "arr_id": 26,
+        "target_title": "Synthetic Anime",
+        "search_id": "dddddddddddddddddddddddddddddddd",
+        "handle": "60a8c35e440c487c2fb4e453a07e9ce8d324cd4b0515fec9d6875dce385e31cb",
+        "title": "Synthetic Anime S01 1080p",
+        "indexer": "Synthetic",
+        "indexer_id": 1,
+        "size": 2048,
+        "approved": true,
+        "rejections": [],
+        "allow_rejected": false
+      },
+      "plan_sha256": "ea4f293377b68c9b8d0f5699a083c151cdcd3569c410db5bd2c4d3b227f67cce"
+    }
+  },
+  "library_grab_apply_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "library-grab",
+    "request": {
+      "mode": "apply",
+      "library": "anime",
+      "arr_id": 26,
+      "search_id": "dddddddddddddddddddddddddddddddd",
+      "handle": "60a8c35e440c487c2fb4e453a07e9ce8d324cd4b0515fec9d6875dce385e31cb",
+      "guid": "https://indexer.invalid/release/1",
+      "indexer_id": 1,
+      "title": "Synthetic Anime S01 1080p",
+      "indexer": "Synthetic",
+      "size": 2048,
+      "approved": true,
+      "rejections": [],
+      "allow_rejected": false,
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "plan_sha256": "ea4f293377b68c9b8d0f5699a083c151cdcd3569c410db5bd2c4d3b227f67cce"
+    }
+  },
+  "library_grab_apply": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "apply",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "plan": {
+        "library": "anime",
+        "arr_id": 26,
+        "target_title": "Synthetic Anime",
+        "search_id": "dddddddddddddddddddddddddddddddd",
+        "handle": "60a8c35e440c487c2fb4e453a07e9ce8d324cd4b0515fec9d6875dce385e31cb",
+        "title": "Synthetic Anime S01 1080p",
+        "indexer": "Synthetic",
+        "indexer_id": 1,
+        "size": 2048,
+        "approved": true,
+        "rejections": [],
+        "allow_rejected": false
+      },
+      "plan_sha256": "ea4f293377b68c9b8d0f5699a083c151cdcd3569c410db5bd2c4d3b227f67cce",
+      "applied": true,
+      "grabbed": true
+    }
+  },
+  "library_remove_preview_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000120000,
+    "operation": "library-remove",
+    "request": {
+      "mode": "preview",
+      "library": "movies",
+      "arr_id": 18,
+      "target": "title",
+      "remove_torrents": true
+    }
+  },
+  "library_remove_preview": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "preview",
+      "plan": {
+        "library": "movies",
+        "arr_id": 18,
+        "title": "Synthetic Movie",
+        "target": "title",
+        "delete_title": true,
+        "recycle_bin": "/mnt/shared/holonet-recycle/radarr",
+        "files": [
+          {
+            "id": 501,
+            "path": "/mnt/shared/media/movies/Synthetic Movie (2024)/Synthetic.mkv",
+            "size": 4096
+          }
+        ],
+        "total_bytes": 4096,
+        "remove_torrents": true,
+        "torrents": [
+          {
+            "hash": "ffffffffffffffffffffffffffffffffffffffff",
+            "name": "Synthetic.Movie.2024",
+            "category": "radarr-movies",
+            "ratio": 1.5,
+            "seeding_time_seconds": 1296000,
+            "action": "remove",
+            "reason": "meets_threshold"
+          }
+        ]
+      },
+      "plan_sha256": "7f3f2fbbcf493b8ec0fb461876fb62d00bc1a54a6ea0f2e48a114cc6e1bf923b"
+    }
+  },
+  "library_remove_apply_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000120000,
+    "operation": "library-remove",
+    "request": {
+      "mode": "apply",
+      "library": "movies",
+      "arr_id": 18,
+      "target": "title",
+      "remove_torrents": true,
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "plan_sha256": "7f3f2fbbcf493b8ec0fb461876fb62d00bc1a54a6ea0f2e48a114cc6e1bf923b"
+    }
+  },
+  "library_remove_apply": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "apply",
+      "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "plan": {
+        "library": "movies",
+        "arr_id": 18,
+        "title": "Synthetic Movie",
+        "target": "title",
+        "delete_title": true,
+        "recycle_bin": "/mnt/shared/holonet-recycle/radarr",
+        "files": [
+          {
+            "id": 501,
+            "path": "/mnt/shared/media/movies/Synthetic Movie (2024)/Synthetic.mkv",
+            "size": 4096
+          }
+        ],
+        "total_bytes": 4096,
+        "remove_torrents": true,
+        "torrents": [
+          {
+            "hash": "ffffffffffffffffffffffffffffffffffffffff",
+            "name": "Synthetic.Movie.2024",
+            "category": "radarr-movies",
+            "ratio": 1.5,
+            "seeding_time_seconds": 1296000,
+            "action": "remove",
+            "reason": "meets_threshold"
+          }
+        ]
+      },
+      "plan_sha256": "7f3f2fbbcf493b8ec0fb461876fb62d00bc1a54a6ea0f2e48a114cc6e1bf923b",
+      "applied": true,
+      "title_deleted": true,
+      "deleted_file_count": 1,
+      "unmonitored_episode_count": 0,
+      "removed_torrent_hashes": [
+        "ffffffffffffffffffffffffffffffffffffffff"
+      ],
+      "kept_torrent_hashes": []
+    }
+  },
+  "refusals": {
+    "plan_changed": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "plan_changed",
+        "message": "Plan changed since preview"
+      }
+    },
+    "recycle_bin_unset": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "recycle_bin_unset",
+        "message": "Arr recycle bin is not configured"
+      }
+    },
+    "release_expired": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "release_expired",
+        "message": "Release no longer cached by Arr; search again"
+      }
+    },
+    "already_in_library": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "already_in_library",
+        "message": "Title is already in library"
+      }
+    },
+    "image_subtitle": {
+      "version": 1,
+      "ok": true,
+      "result": {
+        "library": "movies",
+        "arr_id": 18,
+        "emby_item_id": "44801",
+        "streams": [
+          {
+            "index": 3,
+            "language": "eng",
+            "codec": "pgssub",
+            "title": "English (PGSSUB)",
+            "forced": false,
+            "external": false,
+            "is_text": false
+          }
+        ],
+        "selected_stream": {
+          "index": 3,
+          "language": "eng",
+          "codec": "pgssub",
+          "title": "English (PGSSUB)",
+          "forced": false,
+          "external": false,
+          "is_text": false
+        },
+        "status": "image_subtitle",
+        "lines": [],
+        "truncated": false
+      }
+    },
+    "disabled_policy": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "message": "Library management not enabled by policy"
+      }
+    },
+    "missing_action": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "message": "Missing required library action"
+      }
+    }
+  }
+}

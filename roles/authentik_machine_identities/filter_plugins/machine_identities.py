@@ -302,6 +302,10 @@ HOLONET_ACQUIRE_SCOPES = HOLONET_JANITOR_SCOPES + ("holonet.acquire",)
 HOLONET_ACQUIRE_ACTIONS = ("janitor.acquire.read", "janitor.acquire.start", "janitor.acquire.media")
 HOLONET_ACQUIRE_APP_SCOPES = HOLONET_SEED_JOIN_APP_SCOPES + (
     "holonet.acquire", "holonet.acquire.start", "holonet.acquire.media")
+HOLONET_LIBRARY_SCOPES = ("holonet.library",)
+HOLONET_LIBRARY_ACTIONS = ("library.read", "library.manage")
+HOLONET_LIBRARY_LIBRARIES = ("3", "615", "1132")
+HOLONET_LIBRARY_APP_SCOPES = HOLONET_ACQUIRE_APP_SCOPES + ("holonet.library",)
 
 
 def _holonet_grant(item, name):
@@ -357,6 +361,17 @@ def _holonet_grant(item, name):
                     list(HOLONET_ACQUIRE_ACTIONS))):
             _refuse(name + " acquisition requires the exact existing Anime writer purpose grant")
         grant["holonet_acquire"] = {"library": "3", "actions": list(acquire["actions"])}
+    if "holonet_library" in item:
+        library = _keys(item["holonet_library"], {"libraries", "actions"}, name + " library grant")
+        if (grant["holonet_namespace"] != "managed-recommendations"
+                or grant["holonet_actions"] == ["catalog.read"]
+                or library["libraries"] != list(HOLONET_LIBRARY_LIBRARIES)
+                or not set(HOLONET_LIBRARY_LIBRARIES) <= set(grant["holonet_libraries"])
+                or library["actions"] not in (
+                    list(HOLONET_LIBRARY_ACTIONS[:1]),
+                    list(HOLONET_LIBRARY_ACTIONS))):
+            _refuse(name + " library requires the exact existing writer library purpose grant")
+        grant["holonet_library"] = {"libraries": list(library["libraries"]), "actions": list(library["actions"])}
     if grant["holonet_actions"] == ["catalog.read"]:
         # Catalog readers never carry history, targets or userdata.
         if grant["holonet_history_users"] != []:
@@ -398,6 +413,23 @@ def _bounded_expression(access, service, scope=None):
         "    return {}",
     ]
     if service == "holonet":
+        if "holonet.library" in access["scope_mappings"]:
+            lines += [
+                "requested = token.scope",
+                f"if (isinstance(requested, list) and len(requested) == 1",
+                f"        and set(requested) == set({list(HOLONET_LIBRARY_SCOPES)!r})):",
+                "    library = grant.get('holonet_library')",
+                f"    if not library or {scope!r} != sorted(requested)[0]:",
+                "        return {}",
+                f"    return {{'aud': {access['resource']!r},",
+                "            'holonet_server': grant['holonet_server'],",
+                "            'holonet_libraries': list(library['libraries']),",
+                "            'holonet_catalog_users': [], 'holonet_history_users': [],",
+                "            'holonet_target_users': [],",
+                "            'holonet_actions': list(library['actions']),",
+                "            'holonet_namespace': 'managed-library'}",
+                "grant = {key: value for key, value in grant.items() if key != 'holonet_library'}",
+            ]
         if "holonet.acquire" in access["scope_mappings"]:
             for extra, needed in (("", HOLONET_ACQUIRE_ACTIONS[:1]),
                     ("holonet.acquire.start", HOLONET_ACQUIRE_ACTIONS[:2]),
@@ -563,7 +595,7 @@ SERVICES = {
     "shizune": {"name": "shizune", "account_keys": {"shizune_owner"}, "scope": "shizune.use",
                 "resource": "https://shizune.mcp.ryzhkov.dev/mcp", "grant": _shizune_grant},
     "holonet": {"name": "holonet", "account_keys": HOLONET_FIELDS,
-                "optional_account_keys": {"holonet_janitor", "holonet_torrents", "holonet_seed_join", "holonet_acquire"}, "scope": "holonet.read",
+                "optional_account_keys": {"holonet_janitor", "holonet_torrents", "holonet_seed_join", "holonet_acquire", "holonet_library", "extra_tokens"}, "scope": "holonet.read",
                 "resource": "https://media.mcp.ryzhkov.dev/mcp", "grant": _holonet_grant},
     "jocasta": SERVICE,
     "ov": {"name": "ov", "account_keys": {"ov_namespaces"}, "optional_account_keys": {"ov_actions", "ov_personal"},
@@ -593,7 +625,8 @@ def _application(raw, service):
             scopes = ("ha.read", "ha.control", "ha.read ha.control", "ha.control ha.read")
         elif service == "holonet":
             scopes = ("holonet.read", " ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES),
-                      " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES))
+                      " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES),
+                      " ".join(HOLONET_ACQUIRE_APP_SCOPES), " ".join(HOLONET_LIBRARY_APP_SCOPES))
         elif service == "ov":
             # ov.read first, then any optional families in canonical order.
             optional = OV_SCOPES[1:] + OV_PERSONAL_SCOPES
@@ -631,6 +664,8 @@ def _service_specs(spec):
         for i in identities:
             names.add(("user", i["username"]))
             names.update(("token", t) for t in [i["token"]] + i["old_tokens"])
+            for extra in i.get("extra_tokens", []):
+                names.update(("token", t) for t in [extra["token"]] + extra["old_tokens"])
         yield {"access": access, "identities": identities,
                "objects": [o for o in spec["objects"] if tuple(o[:2]) in names]}
 
@@ -650,6 +685,8 @@ def _destinations(value, identities):
     if not isinstance(value, dict):
         _refuse("authentik_machine_identity_destinations must be a mapping")
     declared = {item["host"] for item in identities}
+    for item in identities:
+        declared.update(extra["host"] for extra in item.get("extra_tokens", []))
     if set(value) != declared:
         _refuse("destination bindings must name exactly the declared identity hosts")
     for host, binding in value.items():
@@ -704,16 +741,18 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         name = f"identity {host}/{profile}"
         grant, grant_attributes = profile_spec["grant"](item, name)
         if (service == "holonet" and grant["holonet_actions"] != ["catalog.read"]
-                and access["scope"] not in (" ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES))):
+                and access["scope"] not in (" ".join(HOLONET_WRITER_SCOPES), " ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES), " ".join(HOLONET_LIBRARY_APP_SCOPES))):
             _refuse(name + " managed recommendations require the explicit writer application")
-        if service == "holonet" and "holonet_janitor" in grant and access["scope"] not in (" ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES)):
+        if service == "holonet" and "holonet_janitor" in grant and access["scope"] not in (" ".join(HOLONET_EXTENDED_SCOPES), " ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES), " ".join(HOLONET_LIBRARY_APP_SCOPES)):
             _refuse(name + " janitor requires its explicit scope on the existing application")
-        if service == "holonet" and "holonet_torrents" in grant and access["scope"] not in (" ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES)):
+        if service == "holonet" and "holonet_torrents" in grant and access["scope"] not in (" ".join(HOLONET_TORRENT_APP_SCOPES), " ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES), " ".join(HOLONET_LIBRARY_APP_SCOPES)):
             _refuse(name + " torrents require their explicit scope on the existing application")
-        if service == "holonet" and "holonet_seed_join" in grant and access["scope"] not in (" ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES)):
+        if service == "holonet" and "holonet_seed_join" in grant and access["scope"] not in (" ".join(HOLONET_SEED_JOIN_APP_SCOPES), " ".join(HOLONET_ACQUIRE_APP_SCOPES), " ".join(HOLONET_LIBRARY_APP_SCOPES)):
             _refuse(name + " seed join requires its explicit scope on the existing application")
-        if service == "holonet" and "holonet_acquire" in grant and access["scope"] != " ".join(HOLONET_ACQUIRE_APP_SCOPES):
+        if service == "holonet" and "holonet_acquire" in grant and access["scope"] not in (" ".join(HOLONET_ACQUIRE_APP_SCOPES), " ".join(HOLONET_LIBRARY_APP_SCOPES)):
             _refuse(name + " acquisition requires its explicit purpose scopes")
+        if service == "holonet" and "holonet_library" in grant and access["scope"] != " ".join(HOLONET_LIBRARY_APP_SCOPES):
+            _refuse(name + " library requires its explicit purpose scope")
         if service == "ha":
             scopes = access["scope"].split(" ")
             for action in grant["ha_actions"]:
@@ -758,8 +797,56 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
             _refuse(name + " is declared twice or its account name collides with another")
         seen_pairs.add((host, profile))
         seen_users.add(username)
+        extra_tokens_out = []
+        if "extra_tokens" in item:
+            raw_extras = item["extra_tokens"]
+            if (service != "holonet" or grant["holonet_namespace"] != "managed-recommendations"
+                    or not isinstance(raw_extras, list) or not 1 <= len(raw_extras) <= 4):
+                _refuse(name + " extra_tokens requires a bounded list on the HoloNet writer account")
+            seen_extra_hosts = {host}
+            for en, raw_extra in enumerate(raw_extras):
+                ename = f"{name} extra_token {en}"
+                extra = _keys(raw_extra, {"host", "generation", "expires", "state"}, ename)
+                ehost = _match(HOST, extra["host"], ename + " host")
+                if ehost in seen_extra_hosts:
+                    _refuse(ename + " host collides with primary or another extra token")
+                seen_extra_hosts.add(ehost)
+                estate = extra["state"]
+                if estate not in STATES:
+                    _refuse(ename + " state must be present or absent")
+                if state == "absent" and estate != "absent":
+                    _refuse(ename + " must be absent when account is absent")
+                egen = extra["generation"]
+                if not isinstance(egen, int) or isinstance(egen, bool) or not 1 <= egen <= 1000:
+                    _refuse(ename + " generation must be 1..1000")
+                eexp = _time(extra["expires"], ename + " expires")
+                if estate == "present":
+                    if eexp < now + MIN_REMAINING:
+                        _refuse(ename + " app password expires within a day; set a later expiry or a higher generation")
+                    if eexp > now + timedelta(days=max_days):
+                        _refuse(f"{ename} expiry is more than {max_days} days ahead")
+                if ehost not in hosts:
+                    _refuse(ename + " host is not in the inventory")
+                etarget = hosts[ehost] if isinstance(hosts[ehost], dict) else {}
+                eowner = _match(LOGIN, etarget.get("ssh_user"), ename + " host ssh_user")
+                econn = etarget.get("connection") or "ssh"
+                if econn not in ("ssh", "local"):
+                    _refuse(ename + " host must be reached over ssh or be the local controller")
+                ehome = etarget.get("home") or f"/home/{eowner}"
+                if not HOME.match(ehome) or posixpath.normpath(ehome) != ehome or "/.." in ehome or "/./" in ehome:
+                    _refuse(ename + " home is not a normalized absolute path")
+                edir = f"{ehome}/.config/chaldea/authentik"
+                extra_tokens_out.append({
+                    "host": ehost, "profile": profile, "service": service, "state": estate,
+                    "generation": egen, "expires": extra["expires"], "username": username,
+                    "token": f"{username}-{ehost}-g{egen}",
+                    "old_tokens": [f"{username}-{ehost}-g{g}" for g in range(1, egen)],
+                    "owner": eowner, "connection": econn, "home": ehome,
+                    "ancestors": [ehome, f"{ehome}/.config", f"{ehome}/.config/chaldea", edir],
+                    "directory": edir, "secret_path": f"{edir}/{profile}.app-password",
+                })
         directory = f"{home}/.config/chaldea/authentik"
-        out.append({
+        entry = {
             "host": host, "profile": profile, "service": service, "grant": grant, "state": state,
             "generation": generation, "expires": item["expires"],
             "username": username, "token": f"{username}-g{generation}",
@@ -770,11 +857,17 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
             "grant_attributes": grant_attributes,
             "attributes": grant_attributes | {MAX_LIFETIME: f"days={max_days}",
                                               "homelab-infra": {"host": host, "profile": profile}},
-        })
+        }
+        if extra_tokens_out:
+            entry["extra_tokens"] = extra_tokens_out
+        out.append(entry)
     for host, binding in _destinations(destinations, out).items():
         for item in out:
             if item["host"] == host:
                 item["destination"] = dict(binding)
+            for extra in item.get("extra_tokens", []):
+                if extra["host"] == host:
+                    extra["destination"] = dict(binding)
 
     objects = []
     for service, access in services.items():
@@ -796,10 +889,18 @@ def machine_identity_spec(identities, access, hosts, max_days, now, services=Non
         objects.append(["user", item["username"], item["state"]])
         objects.append(["token", item["token"], item["state"]])
         objects.extend(["token", old, "absent"] for old in item["old_tokens"])
+        for extra in item.get("extra_tokens", []):
+            objects.append(["token", extra["token"], extra["state"]])
+            objects.extend(["token", old, "absent"] for old in extra["old_tokens"])
+    deliveries = []
+    for item in out:
+        deliveries.append(item)
+        deliveries.extend(item.get("extra_tokens", []))
     marker = OWNED_PREFIX + json.dumps({"version": 1, "objects": sorted(objects)},
                                        sort_keys=True, separators=(",", ":"))
     return {"access": services.get("jocasta", next(iter(services.values()))),
-            "services": services, "identities": out, "objects": sorted(objects), "marker": marker}
+            "services": services, "identities": out, "deliveries": deliveries,
+            "objects": sorted(objects), "marker": marker}
 
 
 def machine_identity_owned(content):
@@ -1035,12 +1136,19 @@ def _binding_problems(spec, found, owned_names):
     problems = []
     access = spec["access"]
     expected_users = {i["username"]: i for i in spec["identities"]}
+    token_owners = {}
+    for i in spec["identities"]:
+        for t in [i["token"]] + i["old_tokens"]:
+            token_owners[t] = i["username"]
+        for extra in i.get("extra_tokens", []):
+            for t in [extra["token"]] + extra["old_tokens"]:
+                token_owners[t] = i["username"]
     for (kind, ident), obj in found.items():
         if not isinstance(obj, dict) or (kind, ident) not in owned_names:
             continue
         if kind == "token":
             owner = (obj.get("user_obj") or {}).get("username", MISSING)
-            base = ident.rsplit("-g", 1)[0]
+            base = token_owners.get(ident, ident.rsplit("-g", 1)[0])
             if owner != base or obj.get("intent") != "app_password":
                 problems.append(f"token {ident}: owner or intent is not this role's; inspect it")
         elif kind == "user":
@@ -1100,7 +1208,7 @@ def _service_refusals(spec, owned, results, applications):
     access = spec["access"]
     if access["service"] == "holonet":
         for identity in spec["identities"]:
-            if not ({"holonet_janitor", "holonet_torrents", "holonet_seed_join", "holonet_acquire"} & set(identity["grant"])):
+            if not ({"holonet_janitor", "holonet_torrents", "holonet_seed_join", "holonet_acquire", "holonet_library"} & set(identity["grant"])):
                 continue
             user_key, token_key = ("user", identity["username"]), ("token", identity["token"])
             token = found.get(token_key)
@@ -1230,6 +1338,17 @@ def _single_problems(spec, results, applications, bindings, checks):
             expect(token, "expiring", True, f"token {item['token']}")
             if not _same_time(token.get("expires"), item["expires"]):
                 problems.append(f"token {item['token']}: expiry is not as declared")
+        for extra in item.get("extra_tokens", []):
+            if extra["state"] != "present":
+                continue
+            etoken = need("token", extra["token"])
+            if etoken:
+                if (etoken.get("user_obj") or {}).get("username") != item["username"]:
+                    problems.append(f"token {extra['token']}: owned by another account")
+                expect(etoken, "intent", "app_password", f"token {extra['token']}")
+                expect(etoken, "expiring", True, f"token {extra['token']}")
+                if not _same_time(etoken.get("expires"), extra["expires"]):
+                    problems.append(f"token {extra['token']}: expiry is not as declared")
 
     try:
         apps = _complete_rows(applications, "applications", "slug")
