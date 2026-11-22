@@ -9,7 +9,7 @@ Normative contract: `tooling/contracts/holonet-library-v1-2026-11-22.md`
 
 ## What it does
 
-`scripts/emby_operator_library.py` adds nine worker operations dispatched over
+`scripts/emby_operator_library.py` adds ten worker operations dispatched over
 the existing root operator socket (`scripts/emby_operator_socket.py`):
 
 Read operations (require `library.read`):
@@ -19,7 +19,12 @@ Read operations (require `library.read`):
   best-effort Emby item IDs.
 - `library-releases`: Arr interactive search returning up to 50 releases with
   stable handles (budget 180 s).
-- `library-queue`: Radarr/Sonarr download queue status and messages.
+- `library-queue`: Radarr/Sonarr download queue status and messages. Sonarr
+  records sharing the same `downloadId` (e.g. season packs) are grouped into one
+  entry carrying `series_title`, `download_id`, sorted `seasons`,
+  `episode_count`, and bounded `episode_ids` (cap 100 items, 100 episode IDs,
+  20 deduplicated status messages per entry); Radarr records are ungrouped and
+  also expose `download_id`.
 - `library-subtitles`: list subtitle streams for an Emby item in libraries `3`,
   `615`, or `1132`, and extract one text stream as `[hh:mm:ss] text` lines
   (default 20,000 chars, cap 60,000, budget 120 s). When `stream_index` is
@@ -61,8 +66,39 @@ and `mode: "apply"` with canonical `plan_sha256` verification):
   `/mnt/shared/.recycle/sonarr`), `keep_listed` when any resolved Emby ID for
   the title/season/episodes is in `keep_emby_ids`, `file_limit_exceeded` over
   500 files, and `plan_changed`. Matching qBittorrent torrents are deleted
-  only when `remove_torrents: true`, category is allowed, every supplied library
-  file is deleted, and seeding meets the threshold (ratio >= 1.0 or >= 14 days).
+  only when `remove_torrents: true`, category is allowed, exclusive ownership is
+  proven, and seeding meets the threshold (ratio >= 1.0 or >= 14 days).
+  Exclusive ownership is proven first by complete Radarr+Sonarr history
+  (`ownership_proof: "arr_history"`), and if history returns
+  `ownership_unverified`, by bounded `O_PATH`/`O_NOFOLLOW` hardlink evidence
+  (`ownership_proof: "hardlink"`): every torrent file under the configured
+  `payload_prefixes` must either share `(st_dev, st_ino)` with a deleted library
+  file and have `st_nlink == 2` (at least one must match), or have
+  `st_nlink == 1`; any other case keeps the torrent with a specific reason
+  (`hardlink_extra_links`, `hardlink_linked_elsewhere`, `hardlink_no_match`,
+  `hardlink_missing`, `hardlink_unreadable`, `hardlink_symlink`,
+  `hardlink_outside_download_root`, `hardlink_path_unmapped`, etc.).
+- `library-import`: preview/apply Arr manual import (`GET /api/v3/manualimport?downloadId=<id>`,
+  with `filterExistingFiles=false` on Sonarr; never `seriesId` or `folder` modes)
+  followed by `POST /api/v3/command` (`ManualImport`, `importMode: "auto"`),
+  allowing replacement of existing files even when Arr rejects automatic import
+  (e.g. swapping a single-audio 2160p file for dual-audio 1080p). Accepts
+  `library`, `arr_id`, `download_id`, optional `season` or `episode_arr_ids`
+  restriction (for `tv`/`anime`), and optional `wait: true` on apply to poll the
+  command briefly within the call budget. Refuses `recycle_bin_unset` when Arr's
+  `recycleBin` is empty, `no_import_candidates` when no candidates match,
+  `target_mismatch` unless every candidate in the download maps to the requested
+  `arr_id`, `file_limit_exceeded` over 200 files, and `plan_changed`.
+  Movies require exactly one candidate, and series candidates must not overlap
+  episode IDs. Only upgrade-class rejections may be overridden; sample, unparsed
+  and unknown rejections refuse the import. Candidate paths must be outside the
+  title's library folder and within configured download payload roots.
+  Preview and apply require finished Arr queue records or qBittorrent progress
+  of 1; the completion evidence is bound into the plan digest.
+  Hardlink removal pins library inodes across torrent checks and rechecks library
+  paths and link counts. Immediately before torrent deletion, every proven
+  payload path must still resolve to the same inode with exactly one link after
+  Arr deletion; changes keep the torrent with `hardlink_changed_before_delete`.
 
 All effects occur through existing Arr, qBittorrent, and Emby HTTP APIs; when
 `library.recommendations` is configured, the worker unit adds

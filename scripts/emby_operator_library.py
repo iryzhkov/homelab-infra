@@ -5,6 +5,7 @@ and write-ahead intent journal. All effects happen through existing Arr/qBit/Emb
 HTTP APIs; no direct filesystem writes or new credentials.
 """
 import copy
+import errno
 import fcntl
 import hashlib
 import http.client
@@ -35,6 +36,7 @@ from emby_operator_adapter import (
     private_read,
     strict_json,
 )
+from emby_operator_custody import mount_id
 from emby_operator_recommendations import Refused
 from emby_operator_torrents import TorrentAdapter, descriptor as torrent_descriptor, json_body, path as safe_path, within
 
@@ -55,6 +57,7 @@ MANAGE_OPERATIONS = (
     'library-add',
     'library-grab',
     'library-remove',
+    'library-import',
 )
 OPERATIONS = READ_OPERATIONS + MANAGE_OPERATIONS
 
@@ -68,7 +71,26 @@ SECONDS = {
     'library-add': 60,
     'library-grab': 60,
     'library-remove': 120,
+    'library-import': 120,
 }
+
+DOWNLOAD_ID_RE = re.compile(r'[A-Za-z0-9._:-]{1,128}')
+QUEUE_MAX_ITEMS = 100
+QUEUE_MAX_EPISODE_IDS = 100
+QUEUE_MAX_MESSAGES = 20
+QUEUE_MAX_SEASONS = 50
+IMPORT_MAX_FILES = 200
+IMPORT_WAIT_MAX_SECONDS = 15.0
+IMPORT_WAIT_POLL_INTERVAL = 0.5
+HARDLINK_MAX_TORRENTS = 16
+HARDLINK_MAX_FILES_PER_TORRENT = 256
+HARDLINK_MAX_TOTAL_STATS = 1024
+HARDLINK_MAX_COMPONENTS = 64
+HARDLINK_DIR_FLAGS = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+HARDLINK_LEAF_FLAGS = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
+HARDLINK_MISSING = frozenset({errno.ENOENT, errno.ESTALE})
+HARDLINK_DENIED = frozenset({errno.EACCES, errno.EPERM})
+HARDLINK_SYMLINK = frozenset({errno.ELOOP, errno.ENOTDIR})
 
 MDBLIST_ORIGIN = 'https://api.mdblist.com'
 MDBLIST_MAX_BYTES = 4 * 1024 * 1024
@@ -395,6 +417,30 @@ def request(operation, value):
                  'Invalid library request')
         else:
             need(False, 'Invalid library request')
+    elif operation == 'library-import':
+        mode = value.get('mode')
+        need(mode in ('preview', 'apply'), 'Invalid library request')
+        base_req = {'mode', 'library', 'arr_id', 'download_id'}
+        opt = {'season', 'episode_arr_ids'} if value.get('library') in ('tv', 'anime') else set()
+        if mode == 'apply':
+            base_req |= {'operation_id', 'plan_sha256'}
+            opt |= {'wait'}
+        need(base_req <= fields <= base_req | opt, 'Invalid library request')
+        _check_library_name(value['library'])
+        need(integer(value['arr_id']), 'Invalid library request')
+        need(isinstance(value['download_id'], str)
+             and DOWNLOAD_ID_RE.fullmatch(value['download_id']) is not None,
+             'Invalid library request')
+        need(not ('season' in value and 'episode_arr_ids' in value), 'Invalid library request')
+        if 'season' in value:
+            need(integer(value['season'], 0, 999), 'Invalid library request')
+        if 'episode_arr_ids' in value:
+            ids = value['episode_arr_ids']
+            need(type(ids) is list and 1 <= len(ids) <= 500
+                 and all(integer(i) for i in ids) and len(set(ids)) == len(ids),
+                 'Invalid library request')
+        if 'wait' in value:
+            need(type(value['wait']) is bool, 'Invalid library request')
 
     if 'operation_id' in value:
         need(isinstance(value['operation_id'], str) and HEX32.fullmatch(value['operation_id']),
@@ -428,7 +474,7 @@ class LibraryArrClient(ImporterInventoryAdapter):
         if route.startswith('/api/v3/release'):
             return 4 * 1024 * 1024
         if route.startswith(('/api/v3/movie', '/api/v3/series', '/api/v3/episode',
-                             '/api/v3/history', '/api/v3/importlist')):
+                             '/api/v3/history', '/api/v3/importlist', '/api/v3/manualimport')):
             return 4 * 1024 * 1024
         return 512 * 1024
 
@@ -532,7 +578,7 @@ class LibraryTorrentClient(TorrentAdapter):
         self._extra_routes = set()
 
     def call_limit(self):
-        return 16
+        return 64
 
     def allowed_exchanges(self):
         return {
@@ -583,6 +629,16 @@ class LibraryTorrentClient(TorrentAdapter):
         if not hashes:
             return []
         route = '/api/v2/torrents/info?hashes=' + '|'.join(hashes)
+        self._extra_routes.add(('GET', route))
+        status, _, raw = self.exchange('GET', route)
+        need(status == 200, FAILURE)
+        rows = json_body(raw)
+        need(type(rows) is list, FAILURE)
+        return rows
+
+    def files_by_hash(self, torrent_hash):
+        need(isinstance(torrent_hash, str) and HEX40.fullmatch(torrent_hash), FAILURE)
+        route = '/api/v2/torrents/files?hash=' + torrent_hash
         self._extra_routes.add(('GET', route))
         status, _, raw = self.exchange('GET', route)
         need(status == 200, FAILURE)
@@ -1198,10 +1254,13 @@ def op_queue(call, block, arr_factory):
             size = float(r.get('size') or 0)
             size_left = float(r.get('sizeleft') or 0)
             prog = round((size - size_left) / size, 4) if size > 0 else 0.0
+            dl_raw = r.get('downloadId')
+            dl_id = dl_raw.strip() if isinstance(dl_raw, str) and dl_raw.strip() else None
             items.append({
                 'library': 'movies',
                 'title': r.get('title') or '',
                 'arr_id': r.get('movieId') if type(r.get('movieId')) is int else None,
+                'download_id': dl_id,
                 'episode_ids': [],
                 'status': r.get('status') or '',
                 'tracked_state': r.get('trackedDownloadState') or '',
@@ -1210,7 +1269,7 @@ def op_queue(call, block, arr_factory):
                 'size_left': int(size_left),
                 'time_left': r.get('timeleft') or None,
                 'download_client': r.get('downloadClient') or None,
-                'status_messages': _queue_messages(r.get('statusMessages')),
+                'status_messages': _queue_messages(r.get('statusMessages'))[:QUEUE_MAX_MESSAGES],
             })
 
     if wanted in (None, 'tv', 'anime'):
@@ -1218,57 +1277,125 @@ def op_queue(call, block, arr_factory):
         api = arr_factory('sonarr', sonarr_desc, SECONDS['library-queue'])
         tv_root = block['libraries']['tv']['root_folder_path']
         anime_root = block['libraries']['anime']['root_folder_path']
-        data = api.get('/api/v3/queue?page=1&pageSize=100&includeUnknownSeriesItems=false&includeSeries=true')
+        data = api.get(
+            '/api/v3/queue?page=1&pageSize=100&includeUnknownSeriesItems=false&includeSeries=true&includeEpisode=true'
+        )
         need(type(data) is dict and type(data.get('records')) is list, FAILURE)
         if type(data.get('totalRecords')) is int and data['totalRecords'] > len(data['records']):
             truncated = True
-        series_lib = {}
+        series_meta = {}
 
         def classify_series(sid, embedded=None):
-            if sid in series_lib:
-                return series_lib[sid]
+            if sid in series_meta:
+                return series_meta[sid]
             s_obj = embedded if type(embedded) is dict and isinstance(embedded.get('path'), str) else None
             if s_obj is None:
                 s_obj = api.get_optional(f'/api/v3/series/{sid}')
             lib_match = None
+            s_title = ''
             if type(s_obj) is dict:
+                s_title = s_obj.get('title') or ''
                 if _in_root(s_obj.get('path'), anime_root):
                     lib_match = 'anime'
                 elif _in_root(s_obj.get('path'), tv_root):
                     lib_match = 'tv'
-            series_lib[sid] = lib_match
-            return lib_match
+            series_meta[sid] = (lib_match, s_title)
+            return lib_match, s_title
 
-        for r in data['records']:
+        groups = {}
+        group_order = []
+        for idx, r in enumerate(data['records']):
             if type(r) is not dict:
                 continue
             sid = r.get('seriesId')
             if type(sid) is not int:
                 continue
-            lib_name = classify_series(sid, r.get('series'))
+            lib_name, series_title = classify_series(sid, r.get('series'))
             if lib_name is None:
                 continue
             if wanted is not None and lib_name != wanted:
                 continue
+            dl_raw = r.get('downloadId')
+            dl_id = dl_raw.strip() if isinstance(dl_raw, str) and dl_raw.strip() else None
+            group_key = ('dl', lib_name, sid, dl_id.lower()) if dl_id is not None else ('ungrouped', idx)
             size = float(r.get('size') or 0)
             size_left = float(r.get('sizeleft') or 0)
             prog = round((size - size_left) / size, 4) if size > 0 else 0.0
-            ep_ids = [r['episodeId']] if type(r.get('episodeId')) is int else []
+            ep_id = r.get('episodeId') if type(r.get('episodeId')) is int else None
+            season_num = r.get('seasonNumber') if type(r.get('seasonNumber')) is int else None
+            if season_num is None and type(r.get('episode')) is dict:
+                ep_sn = r['episode'].get('seasonNumber')
+                if type(ep_sn) is int:
+                    season_num = ep_sn
+            msgs = _queue_messages(r.get('statusMessages'))
+
+            if group_key not in groups:
+                groups[group_key] = {
+                    'library': lib_name,
+                    'title': r.get('title') or '',
+                    'series_title': series_title,
+                    'arr_id': sid,
+                    'download_id': dl_id,
+                    'seasons': set(),
+                    'episode_ids': set(),
+                    'status': r.get('status') or '',
+                    'tracked_state': r.get('trackedDownloadState') or '',
+                    'progress': max(0.0, min(1.0, prog)),
+                    'size': int(size),
+                    'size_left': int(size_left),
+                    'time_left': r.get('timeleft') or None,
+                    'download_client': r.get('downloadClient') or None,
+                    'status_messages': [],
+                    '_seen_messages': set(),
+                }
+                group_order.append(group_key)
+
+            g = groups[group_key]
+            if ep_id is not None:
+                g['episode_ids'].add(ep_id)
+            if season_num is not None:
+                g['seasons'].add(season_num)
+            if g['time_left'] is None and r.get('timeleft'):
+                g['time_left'] = r.get('timeleft')
+            for m in msgs:
+                if m not in g['_seen_messages']:
+                    g['_seen_messages'].add(m)
+                    if len(g['status_messages']) < QUEUE_MAX_MESSAGES:
+                        g['status_messages'].append(m)
+
+        for key in group_order:
+            g = groups[key]
+            all_seasons = sorted(g['seasons'])
+            if len(all_seasons) > QUEUE_MAX_SEASONS:
+                all_seasons = all_seasons[:QUEUE_MAX_SEASONS]
+                truncated = True
+            all_eps = sorted(g['episode_ids'])
+            ep_count = len(all_eps)
+            if len(all_eps) > QUEUE_MAX_EPISODE_IDS:
+                all_eps = all_eps[:QUEUE_MAX_EPISODE_IDS]
+                truncated = True
             items.append({
-                'library': lib_name,
-                'title': r.get('title') or '',
-                'arr_id': sid,
-                'episode_ids': ep_ids,
-                'status': r.get('status') or '',
-                'tracked_state': r.get('trackedDownloadState') or '',
-                'progress': max(0.0, min(1.0, prog)),
-                'size': int(size),
-                'size_left': int(size_left),
-                'time_left': r.get('timeleft') or None,
-                'download_client': r.get('downloadClient') or None,
-                'status_messages': _queue_messages(r.get('statusMessages')),
+                'library': g['library'],
+                'title': g['title'],
+                'series_title': g['series_title'],
+                'arr_id': g['arr_id'],
+                'download_id': g['download_id'],
+                'seasons': all_seasons,
+                'episode_count': ep_count,
+                'episode_ids': all_eps,
+                'status': g['status'],
+                'tracked_state': g['tracked_state'],
+                'progress': g['progress'],
+                'size': g['size'],
+                'size_left': g['size_left'],
+                'time_left': g['time_left'],
+                'download_client': g['download_client'],
+                'status_messages': g['status_messages'],
             })
 
+    if len(items) > QUEUE_MAX_ITEMS:
+        items = items[:QUEUE_MAX_ITEMS]
+        truncated = True
     return {'library': wanted, 'items': items, 'truncated': truncated}
 
 
@@ -1643,7 +1770,211 @@ def op_grab(call, block, arr_factory):
     }
 
 
-def _evaluate_torrents(qbit, hashes_ownership, *, remove_torrents, allowed_categories, min_ratio, min_seeding_days):
+class _HardlinkCheckFailed(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _walk_stat_regular(path, root_depth, stat_budget, held=None):
+    """Walk path from / with O_PATH|O_NOFOLLOW and return (st_dev, st_ino, st_nlink)."""
+    if stat_budget[0] <= 0:
+        raise _HardlinkCheckFailed('hardlink_file_limit_exceeded')
+    stat_budget[0] -= 1
+    try:
+        safe_path(path, absolute=True)
+    except Exception:
+        raise _HardlinkCheckFailed('hardlink_unsafe_path') from None
+    parts = path.split('/')[1:]
+    if not (root_depth < len(parts) <= HARDLINK_MAX_COMPONENTS):
+        raise _HardlinkCheckFailed('hardlink_unsafe_path')
+    fd = None
+    try:
+        fd = os.open('/', HARDLINK_DIR_FLAGS)
+        root_mount = None
+        info = None
+        for index, part in enumerate(parts, 1):
+            flags = HARDLINK_LEAF_FLAGS if index == len(parts) else HARDLINK_DIR_FLAGS
+            nxt = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            info = os.fstat(fd)
+            try:
+                mnt = mount_id(fd)
+            except Exception:
+                raise _HardlinkCheckFailed('hardlink_stat_failed') from None
+            if index == root_depth:
+                root_mount = mnt
+            elif index > root_depth and mnt != root_mount:
+                raise _HardlinkCheckFailed('hardlink_unsafe_path')
+        if stat.S_ISLNK(info.st_mode):
+            raise _HardlinkCheckFailed('hardlink_symlink')
+        if not stat.S_ISREG(info.st_mode):
+            raise _HardlinkCheckFailed('hardlink_unsafe_path')
+        if held is not None:
+            held.append(fd)
+            fd = None
+        return (info.st_dev, info.st_ino, info.st_nlink)
+    except _HardlinkCheckFailed:
+        raise
+    except OSError as err:
+        if err.errno in HARDLINK_MISSING:
+            raise _HardlinkCheckFailed('hardlink_missing') from None
+        if err.errno in HARDLINK_DENIED:
+            raise _HardlinkCheckFailed('hardlink_unreadable') from None
+        if err.errno in HARDLINK_SYMLINK:
+            raise _HardlinkCheckFailed('hardlink_symlink') from None
+        raise _HardlinkCheckFailed('hardlink_stat_failed') from None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _map_library_host_path(fpath, lib_name, root_folder_path):
+    """Map an Arr library file path to the worker's host view under root_folder_path."""
+    if not isinstance(fpath, str) or not isinstance(root_folder_path, str):
+        return None, None
+    root = root_folder_path.rstrip('/')
+    cand = fpath.rstrip('/')
+    if not cand or not root:
+        return None, None
+    if _in_root(cand, root) and cand != root:
+        mapped = cand
+    elif lib_name == 'movies' and _in_root(cand, '/movies') and cand != '/movies':
+        mapped = root + cand[len('/movies'):]
+    else:
+        return None, None
+    try:
+        safe_path(mapped, absolute=True)
+        safe_path(root, absolute=True)
+    except Exception:
+        return None, None
+    return mapped, root
+
+
+def _verify_torrent_hardlinks(
+    qbit, torrent_row, torrent_hash, *,
+    deleted_inodes_cache, files, lib_name, root_folder_path, stat_budget,
+):
+    """Prove exclusive torrent ownership via hardlink (dev, ino, st_nlink) evidence.
+
+    Returns (True, None) only if at least one torrent file shares (st_dev, st_ino)
+    with a deleted library file and every torrent file either shares (st_dev, st_ino)
+    with a deleted library file with st_nlink == 2 or has st_nlink == 1.
+    Otherwise returns (False, specific_reason).
+    """
+    payload_prefixes = list((qbit.config.get('payload_prefixes') or []))
+    if not payload_prefixes:
+        return False, 'hardlink_path_unmapped'
+
+    raw_save = torrent_row.get('save_path')
+    if not isinstance(raw_save, str) or not raw_save:
+        return False, 'hardlink_path_unmapped'
+    save_path = raw_save.rstrip('/')
+    try:
+        safe_path(save_path, absolute=True)
+    except Exception:
+        return False, 'hardlink_outside_download_root'
+
+    try:
+        t_files = qbit.files_by_hash(torrent_hash)
+    except Exception:
+        return False, 'hardlink_files_unavailable'
+    if not t_files:
+        return False, 'hardlink_no_files'
+    if len(t_files) > HARDLINK_MAX_FILES_PER_TORRENT:
+        return False, 'hardlink_file_limit_exceeded'
+
+    # Validate and map all torrent file paths against payload_prefixes first.
+    mapped_torrent_files = []
+    for tf in t_files:
+        if type(tf) is not dict:
+            return False, 'hardlink_files_unavailable'
+        rel = tf.get('name')
+        try:
+            safe_path(rel, absolute=False)
+        except Exception:
+            return False, 'hardlink_outside_download_root'
+        full = save_path + '/' + rel
+        try:
+            safe_path(full, absolute=True)
+        except Exception:
+            return False, 'hardlink_outside_download_root'
+        matched_prefix = next(
+            (p.rstrip('/') for p in payload_prefixes if within(full, p.rstrip('/')) and full != p.rstrip('/')),
+            None,
+        )
+        if matched_prefix is None:
+            return False, 'hardlink_outside_download_root'
+        mapped_torrent_files.append((full, matched_prefix.count('/')))
+
+    if not files:
+        return False, 'hardlink_no_match'
+
+    # Pin library inodes until all torrent stats and library path rechecks finish.
+    held = []
+    library_evidence = []
+    torrent_evidence = []
+    try:
+        deleted_inodes = set()
+        for f in files:
+            path, root = _map_library_host_path(f.get('path'), lib_name, root_folder_path)
+            if path is None:
+                raise _HardlinkCheckFailed('hardlink_path_unmapped')
+            identity = _walk_stat_regular(path, root.count('/'), stat_budget, held)
+            library_evidence.append((path, root.count('/'), identity, held[-1]))
+            deleted_inodes.add(identity[:2])
+
+        matched_any = False
+        for full, depth in mapped_torrent_files:
+            identity = _walk_stat_regular(full, depth, stat_budget)
+            dev, ino, nlink = identity
+            if (dev, ino) in deleted_inodes:
+                if nlink != 2:
+                    raise _HardlinkCheckFailed('hardlink_extra_links')
+                matched_any = True
+            elif nlink != 1:
+                raise _HardlinkCheckFailed('hardlink_linked_elsewhere')
+            torrent_evidence.append((full, depth, identity[:2]))
+        for path, depth, identity, fd in library_evidence:
+            info = os.fstat(fd)
+            try:
+                current = _walk_stat_regular(path, depth, stat_budget)
+            except _HardlinkCheckFailed:
+                raise _HardlinkCheckFailed('hardlink_library_changed') from None
+            if current != identity or (info.st_dev, info.st_ino, info.st_nlink) != identity:
+                raise _HardlinkCheckFailed('hardlink_library_changed')
+        if not matched_any:
+            return False, 'hardlink_no_match'
+        deleted_inodes_cache[torrent_hash] = torrent_evidence
+        return True, None
+    except _HardlinkCheckFailed as err:
+        return False, err.reason
+    finally:
+        for fd in held:
+            os.close(fd)
+
+
+def _hardlink_after_media_removal(evidence):
+    """After Arr deletion, payload paths must still name the proven, now unlinked inodes."""
+    try:
+        budget = [HARDLINK_MAX_TOTAL_STATS]
+        for path, depth, identity in evidence:
+            current = _walk_stat_regular(path, depth, budget)
+            if current[:2] != identity or current[2] != 1:
+                return False
+        return bool(evidence)
+    except _HardlinkCheckFailed:
+        return False
+
+
+def _evaluate_torrents(
+    qbit, hashes_ownership, *, remove_torrents, allowed_categories, min_ratio, min_seeding_days,
+    files=None, lib_name=None, root_folder_path=None, hardlink_evidence=None,
+):
     if not hashes_ownership:
         return []
     hashes = sorted(hashes_ownership)
@@ -1653,6 +1984,9 @@ def _evaluate_torrents(qbit, hashes_ownership, *, remove_torrents, allowed_categ
         for t in torrents_raw if type(t) is dict and t.get('hash')
     }
     min_seeding_seconds = min_seeding_days * 86400
+    stat_budget = [HARDLINK_MAX_TOTAL_STATS]
+    deleted_inodes_cache = hardlink_evidence if hardlink_evidence is not None else {}
+    hardlink_checked = 0
     out = []
     for h in hashes:
         t = by_hash.get(h)
@@ -1662,12 +1996,35 @@ def _evaluate_torrents(qbit, hashes_ownership, *, remove_torrents, allowed_categ
         ratio = float(t.get('ratio') or 0.0)
         seeding_time = int(t.get('seeding_time') or 0)
         exclusive, keep_reason = hashes_ownership[h]
+        proof = 'arr_history' if exclusive else 'none'
         if not remove_torrents:
             action, reason = 'keep', 'remove_torrents_false'
         elif cat not in allowed_categories:
             action, reason = 'keep', 'category_not_allowed'
         elif not exclusive:
-            action, reason = 'keep', keep_reason or 'partially_kept'
+            if keep_reason == 'ownership_unverified':
+                if hardlink_checked >= HARDLINK_MAX_TORRENTS:
+                    action, reason = 'keep', 'hardlink_torrent_limit_exceeded'
+                else:
+                    hardlink_checked += 1
+                    hl_ok, hl_reason = _verify_torrent_hardlinks(
+                        qbit, t, h,
+                        deleted_inodes_cache=deleted_inodes_cache,
+                        files=files or [],
+                        lib_name=lib_name,
+                        root_folder_path=root_folder_path,
+                        stat_budget=stat_budget,
+                    )
+                    if hl_ok:
+                        proof = 'hardlink'
+                        if ratio < min_ratio and seeding_time < min_seeding_seconds:
+                            action, reason = 'keep', 'seeding_threshold_not_met'
+                        else:
+                            action, reason = 'remove', 'meets_threshold'
+                    else:
+                        action, reason = 'keep', hl_reason
+            else:
+                action, reason = 'keep', keep_reason or 'partially_kept'
         elif ratio < min_ratio and seeding_time < min_seeding_seconds:
             action, reason = 'keep', 'seeding_threshold_not_met'
         else:
@@ -1680,6 +2037,7 @@ def _evaluate_torrents(qbit, hashes_ownership, *, remove_torrents, allowed_categ
             'seeding_time_seconds': seeding_time,
             'action': action,
             'reason': reason,
+            'ownership_proof': proof,
         })
     return out
 
@@ -2161,6 +2519,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
 
     qbit = None
     torrents = []
+    hardlink_evidence = {}
     try:
         if hashes_ownership:
             qbit = qbit_factory(block['torrents'])
@@ -2172,6 +2531,10 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
                 allowed_categories=set(block['allowed_categories']),
                 min_ratio=float(block['removal_thresholds']['min_ratio']),
                 min_seeding_days=int(block['removal_thresholds']['min_seeding_days']),
+                files=files,
+                lib_name=lib_name,
+                root_folder_path=lib['root_folder_path'],
+                hardlink_evidence=hardlink_evidence,
             )
 
         plan = {
@@ -2232,6 +2595,10 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
                     ) from None
                 completed.append(f'episode_file_deleted:{fid}')
 
+        for torrent in torrents:
+            if torrent['action'] == 'remove' and torrent.get('ownership_proof') == 'hardlink':
+                if not _hardlink_after_media_removal(hardlink_evidence.get(torrent['hash'], [])):
+                    torrent.update(action='keep', reason='hardlink_changed_before_delete')
         to_remove = [t['hash'] for t in torrents if t['action'] == 'remove']
         to_keep = [t['hash'] for t in torrents if t['action'] != 'remove']
         if to_remove and qbit is not None:
@@ -2259,6 +2626,401 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
     finally:
         if qbit is not None:
             qbit.logout()
+
+
+def _extract_language_names(raw_languages):
+    out = []
+    for item in raw_languages or []:
+        if type(item) is dict and isinstance(item.get('name'), str) and item['name']:
+            out.append(item['name'])
+        elif isinstance(item, str) and item:
+            out.append(item)
+    return out
+
+
+def _extract_rejections(raw_rejections):
+    out = []
+    for item in (raw_rejections or [])[:16]:
+        if type(item) is dict and isinstance(item.get('reason'), str) and item['reason']:
+            out.append(item['reason'])
+        elif isinstance(item, str) and item:
+            out.append(item)
+    return out
+
+
+def _existing_file_summary(f, fallback_id=None):
+    if type(f) is not dict:
+        return None
+    mi = f.get('mediaInfo') if type(f.get('mediaInfo')) is dict else {}
+    quality = (f.get('quality') or {}).get('quality', {}).get('name')
+    return {
+        'id': int(f.get('id') or fallback_id or 0),
+        'relative_path': f.get('relativePath') or '',
+        'size': int(f.get('size') or 0),
+        'quality': quality or None,
+        'languages': _extract_language_names(f.get('languages')),
+        'audio_languages': mi.get('audioLanguages') or None,
+    }
+
+
+def _import_completion(api, download_id, block, qbit_factory):
+    qs = urllib.parse.urlencode({'page': 1, 'pageSize': 1000, 'downloadId': download_id})
+    queue = api.get('/api/v3/queue?' + qs)
+    records = queue.get('records') if type(queue) is dict else None
+    need(type(records) is list, FAILURE)
+    matching = [r for r in records if type(r) is dict
+                and str(r.get('downloadId') or '').lower() == download_id.lower()]
+    finished = lambda r: (str(r.get('trackedDownloadState') or '').lower()
+                         in {'importpending', 'importblocked', 'importfailed'}
+                         or str(r.get('status') or '').lower() == 'completed')
+    if matching and all(finished(r) for r in matching):
+        return {'source': 'arr_queue', 'records': sorted(
+            [{'status': r.get('status'), 'tracked_download_state': r.get('trackedDownloadState')}
+             for r in matching], key=lambda r: json.dumps(r, sort_keys=True))}
+    if qbit_factory is not None:
+        qbit = qbit_factory(block['torrents'])
+        try:
+            qbit.login()
+            rows = qbit.info_by_hashes([download_id])
+            if any(type(r) is dict and str(r.get('hash') or '').lower() == download_id.lower()
+                   and type(r.get('progress')) in (int, float) and r['progress'] == 1 for r in rows):
+                return {'source': 'qbittorrent', 'progress': 1}
+        finally:
+            qbit.logout()
+    refuse('download_incomplete', 'Download completion could not be verified')
+
+
+def _import_rejections_allowed(raw):
+    if raw is None:
+        return True
+    if type(raw) is not list:
+        return False
+    patterns = (
+        # Sonarr v4.0.20.3014 / Radarr v6.4.4.10685:
+        # DecisionEngine/Specifications/{UpgradeDisk,UpgradeAllowed}Specification.cs
+        # MediaFiles/{Episode,Movie}Import/Specifications/UpgradeSpecification.cs
+        r'existing file meets cutoff: [^;\r\n]+',
+        r'existing file on disk is of equal or higher (?:preference|revision): [^;\r\n]+',
+        r'existing file on disk meets (?:quality|custom format) cutoff: [^;\r\n]+',
+        r'existing file on disk has a equal or higher custom format score: -?\d+',
+        r'existing file on disk has custom format score within custom format score increment: -?\d+',
+        r"existing file on disk and quality profile '[^'\r\n]+' does not allow upgrades",
+        r'existing file and the quality profile does not allow upgrades',
+        r'not an upgrade for existing (?:episode file\(s\)|movie file)\. existing quality: [^;\r\n]+\. new quality [^;\r\n]+\.',
+        r'not a quality revision upgrade for existing (?:episode|movie) file\(s\)',
+        r'not a custom format upgrade for existing (?:episode|movie) file\(s\)\. new: \[[^;\r\n]*\] \(-?\d+\) do not improve on existing: \[[^;\r\n]*\] \(-?\d+\)',
+        r'not an upgrade(?: for existing (?:movie |episode )?file)?[.!]?',
+        r'existing file (?:meets cutoff|is higher quality)[.!]?',
+        r'(?:quality|custom[ -]format|custom format score) (?:is not|isn.t|not) (?:an? )?upgrade[.!]?',
+        r'(?:quality|custom[ -]format|custom format score) (?:cutoff (?:already )?met|upgrade (?:is )?not (?:allowed|required|needed))[.!]?',
+    )
+    for rejection in raw:
+        reason = rejection.get('reason') if type(rejection) is dict else rejection
+        if not isinstance(reason, str) or not any(re.fullmatch(p, reason.strip().lower()) for p in patterns):
+            return False
+    return True
+
+
+def op_import(call, block, arr_factory, qbit_factory=None):
+    q = call['request']
+    lib_name = q['library']
+    lib = block['libraries'][lib_name]
+    kind = lib['kind']
+    arr_id = q['arr_id']
+    download_id = q['download_id']
+    api = arr_factory(lib['arr'], lib['descriptor'], SECONDS['library-import'])
+
+    # Refuse if recycle bin is unset (replaced files go to Arr recycle bin).
+    mm = api.get('/api/v3/config/mediamanagement')
+    need(type(mm) is dict, FAILURE)
+    recycle_bin = str(mm.get('recycleBin') or '').strip()
+    if not recycle_bin:
+        refuse('recycle_bin_unset', 'Arr recycle bin is not configured')
+
+    if kind == 'movie':
+        item = api.get(f'/api/v3/movie/{arr_id}')
+        need(type(item) is dict and item.get('id') == arr_id
+             and _in_root(item.get('path'), lib['root_folder_path']), FAILURE)
+        title = item.get('title') or ''
+        mf = item.get('movieFile') if type(item.get('movieFile')) is dict else None
+        mf_id = item.get('movieFileId') if type(item.get('movieFileId')) is int and item['movieFileId'] > 0 else None
+        if mf is None and mf_id is not None:
+            fetched = api.get_optional(f'/api/v3/moviefile/{mf_id}')
+            if type(fetched) is dict and fetched.get('id') == mf_id:
+                mf = fetched
+        existing_movie_file = _existing_file_summary(mf, fallback_id=mf_id) if mf is not None else None
+        qs = urllib.parse.urlencode({'downloadId': download_id})
+        raw_candidates = api.get(f'/api/v3/manualimport?{qs}')
+    else:
+        item = api.get(f'/api/v3/series/{arr_id}')
+        need(type(item) is dict and item.get('id') == arr_id
+             and _in_root(item.get('path'), lib['root_folder_path']), FAILURE)
+        title = item.get('title') or ''
+        raw_eps = api.get(f'/api/v3/episode?seriesId={arr_id}&includeEpisodeFile=true')
+        need(type(raw_eps) is list, FAILURE)
+        ep_by_id = {e['id']: e for e in raw_eps if type(e) is dict and type(e.get('id')) is int}
+        if 'episode_arr_ids' in q:
+            for eid in q['episode_arr_ids']:
+                need(eid in ep_by_id, 'Episode not found in series')
+        qs = urllib.parse.urlencode({'downloadId': download_id, 'filterExistingFiles': 'false'})
+        raw_candidates = api.get(f'/api/v3/manualimport?{qs}')
+
+    need(type(raw_candidates) is list, FAILURE)
+    if not raw_candidates:
+        refuse('no_import_candidates', 'No manual import candidates found for download_id')
+    if len(raw_candidates) > IMPORT_MAX_FILES:
+        refuse('file_limit_exceeded', 'Download exceeds per-call import file limit')
+
+    # Fail closed unless EVERY candidate in the download maps to this exact arr_id.
+    validated = []
+    prefixes = (qbit_factory(block['torrents']).config.get('payload_prefixes') or []) if qbit_factory else []
+    for c in raw_candidates:
+        if type(c) is not dict:
+            refuse('target_mismatch', 'Manual import candidate is malformed')
+        c_path = c.get('path')
+        if not isinstance(c_path, str) or not c_path:
+            refuse('target_mismatch', 'Manual import candidate is missing path')
+        try:
+            safe_path(c_path, absolute=True)
+        except Exception:
+            refuse('import_path_unsafe', 'Manual import candidate path is unsafe')
+        if _in_root(c_path, item['path']):
+            refuse('import_path_in_library', 'Manual import candidate is inside the title library folder')
+        if prefixes and not any(within(c_path, p.rstrip('/')) and c_path != p.rstrip('/') for p in prefixes):
+            refuse('import_path_outside_download_root', 'Manual import candidate is outside download payload roots')
+        if not _import_rejections_allowed(c.get('rejections')):
+            refuse('import_candidate_rejected', 'Manual import candidate has a non-upgrade rejection')
+        if type(c.get('quality')) is not dict:
+            refuse('target_mismatch', 'Manual import candidate is missing quality')
+
+        if kind == 'movie':
+            cand_movie = c.get('movie') if type(c.get('movie')) is dict else None
+            cand_mid = cand_movie.get('id') if cand_movie is not None else c.get('movieId')
+            if cand_mid != arr_id:
+                refuse('target_mismatch', 'Manual import candidate does not map to requested arr_id')
+            validated.append((c, None))
+        else:
+            cand_series = c.get('series') if type(c.get('series')) is dict else None
+            cand_sid = cand_series.get('id') if cand_series is not None else c.get('seriesId')
+            if cand_sid != arr_id:
+                refuse('target_mismatch', 'Manual import candidate does not map to requested arr_id')
+            cand_eps = c.get('episodes')
+            if type(cand_eps) is not list or not cand_eps:
+                refuse('target_mismatch', 'Manual import candidate has no mapped episodes')
+            ep_ids = []
+            for ce in cand_eps:
+                if type(ce) is not dict or not integer(ce.get('id')):
+                    refuse('target_mismatch', 'Manual import candidate has invalid episode mapping')
+                if ce.get('seriesId') is not None and ce.get('seriesId') != arr_id:
+                    refuse('target_mismatch', 'Manual import candidate episode belongs to another series')
+                if ce['id'] not in ep_by_id or ep_by_id[ce['id']].get('seriesId') != arr_id:
+                    refuse('target_mismatch', 'Manual import candidate episode is not in requested series')
+                ep_ids.append(ce['id'])
+            ep_ids = sorted(set(ep_ids))
+            validated.append((c, ep_ids))
+
+    # Apply optional season/episode restriction for series.
+    selected = []
+    if kind == 'movie':
+        selected = validated
+    else:
+        wanted_season = q.get('season')
+        wanted_ep_set = set(q['episode_arr_ids']) if 'episode_arr_ids' in q else None
+        for c, ep_ids in validated:
+            if wanted_season is not None:
+                cand_seasons = set()
+                for ce in c.get('episodes') or []:
+                    sn = ce.get('seasonNumber')
+                    if type(sn) is not int and ce.get('id') in ep_by_id:
+                        sn = ep_by_id[ce['id']].get('seasonNumber')
+                    if type(sn) is int:
+                        cand_seasons.add(sn)
+                if cand_seasons != {wanted_season}:
+                    continue
+            elif wanted_ep_set is not None:
+                if not set(ep_ids) <= wanted_ep_set:
+                    continue
+            selected.append((c, ep_ids))
+        if not selected:
+            refuse('no_import_candidates', 'No manual import candidates match the requested restriction')
+
+    if kind == 'movie' and len(selected) != 1:
+        refuse('ambiguous_import_candidates', 'Movie import requires exactly one candidate')
+    seen_episodes = set()
+    for _, ep_ids in selected:
+        if ep_ids is not None:
+            if seen_episodes.intersection(ep_ids):
+                refuse('ambiguous_import_candidates', 'Episode appears in more than one import candidate')
+            seen_episodes.update(ep_ids)
+    completion = _import_completion(api, download_id, block, qbit_factory)
+    selected.sort(key=lambda pair: pair[0]['path'])
+
+    plan_files = []
+    command_files = []
+    for c, ep_ids in selected:
+        c_path = c['path']
+        rel_path = c.get('relativePath') or PurePosixPath(c_path).name
+        qual_name = (c.get('quality') or {}).get('quality', {}).get('name') or None
+        langs = _extract_language_names(c.get('languages'))
+        rejections = _extract_rejections(c.get('rejections'))
+        size = int(c.get('size') or 0)
+        rel_group = c.get('releaseGroup') or None
+        if kind == 'movie':
+            plan_files.append({
+                'path': c_path,
+                'relative_path': rel_path,
+                'size': size,
+                'quality': qual_name,
+                'languages': langs,
+                'release_group': rel_group,
+                'rejections': rejections,
+                'movie_id': arr_id,
+                'replaces': existing_movie_file,
+            })
+            cmd_entry = {
+                'path': c_path,
+                'movieId': arr_id,
+                'quality': c['quality'],
+                'languages': c.get('languages') if type(c.get('languages')) is list else [],
+                'downloadId': download_id,
+                'releaseGroup': c.get('releaseGroup') or '',
+            }
+            if 'indexerFlags' in c:
+                cmd_entry['indexerFlags'] = c['indexerFlags']
+            command_files.append(cmd_entry)
+        else:
+            ep_summaries = []
+            replaces_by_fid = {}
+            cand_seasons = set()
+            for eid in ep_ids:
+                ep_row = ep_by_id.get(eid) or next(
+                    (ce for ce in (c.get('episodes') or []) if type(ce) is dict and ce.get('id') == eid), {}
+                )
+                sn = ep_row.get('seasonNumber') if type(ep_row.get('seasonNumber')) is int else None
+                en = ep_row.get('episodeNumber') if type(ep_row.get('episodeNumber')) is int else None
+                if sn is not None:
+                    cand_seasons.add(sn)
+                ep_summaries.append({
+                    'arr_id': eid,
+                    'season': sn,
+                    'episode': en,
+                    'title': ep_row.get('title') or '',
+                })
+                if eid in ep_by_id:
+                    full_ep = ep_by_id[eid]
+                    fid = _ep_file_id(full_ep)
+                    if fid is not None and fid not in replaces_by_fid:
+                        ef = full_ep.get('episodeFile') if type(full_ep.get('episodeFile')) is dict else None
+                        if ef is None:
+                            fetched = api.get_optional(f'/api/v3/episodefile/{fid}')
+                            if type(fetched) is dict and fetched.get('id') == fid:
+                                ef = fetched
+                        if ef is not None:
+                            replaces_by_fid[fid] = _existing_file_summary(ef, fallback_id=fid)
+            replaces_list = [replaces_by_fid[fid] for fid in sorted(replaces_by_fid)]
+            season_val = next(iter(cand_seasons)) if len(cand_seasons) == 1 else (
+                c.get('seasonNumber') if type(c.get('seasonNumber')) is int else None
+            )
+            plan_files.append({
+                'path': c_path,
+                'relative_path': rel_path,
+                'size': size,
+                'quality': qual_name,
+                'languages': langs,
+                'release_group': rel_group,
+                'rejections': rejections,
+                'series_id': arr_id,
+                'season': season_val,
+                'episode_arr_ids': ep_ids,
+                'episodes': ep_summaries,
+                'replaces': replaces_list,
+            })
+            cmd_entry = {
+                'path': c_path,
+                'seriesId': arr_id,
+                'episodeIds': ep_ids,
+                'quality': c['quality'],
+                'languages': c.get('languages') if type(c.get('languages')) is list else [],
+                'downloadId': download_id,
+                'releaseGroup': c.get('releaseGroup') or '',
+            }
+            if 'indexerFlags' in c:
+                cmd_entry['indexerFlags'] = c['indexerFlags']
+            if 'releaseType' in c:
+                cmd_entry['releaseType'] = c['releaseType']
+            command_files.append(cmd_entry)
+
+    plan = {
+        'library': lib_name,
+        'arr_id': arr_id,
+        'title': title,
+        'download_id': download_id,
+        'recycle_bin': recycle_bin,
+        'season': q.get('season'),
+        'episode_arr_ids': sorted(q['episode_arr_ids']) if 'episode_arr_ids' in q else None,
+        'files': plan_files,
+        # Bind exact Arr command metadata, including quality and language IDs.
+        'command_files': command_files,
+        'download_completion': completion,
+        'total_bytes': sum(f['size'] for f in plan_files),
+    }
+    digest = plan_digest(plan)
+    if q['mode'] == 'preview':
+        return {'mode': 'preview', 'plan': plan, 'plan_sha256': digest}
+    if digest != q['plan_sha256']:
+        refuse('plan_changed', 'Plan changed since preview')
+
+    payload = {
+        'name': 'ManualImport',
+        'importMode': 'auto',
+        'files': command_files,
+    }
+    try:
+        status, cmd = api.post('/api/v3/command', payload, accept_statuses=(200, 201, 202))
+        need(status in (200, 201, 202) and type(cmd) is dict and integer(cmd.get('id')), FAILURE)
+    except Exception:
+        raise LibraryPostDispatchError(
+            'uncertain', 'Manual import command dispatched; verify state in library detail', completed=[],
+        ) from None
+
+    command_id = cmd['id']
+    command_status = str(cmd.get('status') or 'queued')
+    if q.get('wait'):
+        terminal = {'completed', 'failed', 'aborted', 'orphaned'}
+        wait_deadline = min(
+            time.monotonic() + IMPORT_WAIT_MAX_SECONDS,
+            api._deadline - 3.0,
+        )
+        while command_status.lower() not in terminal and time.monotonic() < wait_deadline:
+            try:
+                guard_rem = api._guard()
+            except Exception:
+                break
+            if guard_rem <= 3.0:
+                break
+            try:
+                polled = api.get(f'/api/v3/command/{command_id}')
+                if type(polled) is dict and isinstance(polled.get('status'), str):
+                    command_status = polled['status']
+            except Exception:
+                break
+            if command_status.lower() in terminal:
+                break
+            sleep_for = min(IMPORT_WAIT_POLL_INTERVAL, max(0.0, wait_deadline - time.monotonic()))
+            if sleep_for <= 0:
+                break
+            time.sleep(sleep_for)
+
+    return {
+        'mode': 'apply',
+        'operation_id': q['operation_id'],
+        'plan': plan,
+        'plan_sha256': digest,
+        'applied': True,
+        'command_id': command_id,
+        'command_status': command_status,
+        'file_count': len(plan_files),
+    }
 
 
 def read_mdblist_key(path):
@@ -2708,7 +3470,7 @@ def _merge_recommendation(existing, incoming):
     for src in incoming['sources']:
         if src not in existing['sources']:
             existing['sources'].append(src)
-    if existing['kind'] == 'movie' and incoming['kind'] == 'anime':
+    if incoming['kind'] == 'anime':
         existing['kind'] = 'anime'
     for id_key in ('tmdb', 'tvdb', 'imdb'):
         if existing['ids'].get(id_key) is None and incoming['ids'].get(id_key) is not None:
@@ -2764,7 +3526,10 @@ def _load_cache(dir_fd):
     if (type(raw) is dict and type(raw.get('fetched_at_ts')) in (int, float)
             and isinstance(raw.get('fetched_at'), str)
             and type(raw.get('items')) is list
-            and type(raw.get('lists')) is list):
+            and type(raw.get('lists')) is list
+            and type(raw.get('warnings')) is list
+            and len(raw['warnings']) <= 64
+            and all(clean_text(w, 512) for w in raw['warnings'])):
         return raw
     return None
 
@@ -3149,6 +3914,8 @@ def execute(policy, call, guard, config):
             return op_grab(call, block, arr_factory)
         if op == 'library-remove':
             return op_remove(call, block, arr_factory, qbit_factory, emby_factory)
+        if op == 'library-import':
+            return op_import(call, block, arr_factory, qbit_factory)
         need(False, 'Unsupported operation')
     finally:
         for client in arr_clients.values():

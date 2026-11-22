@@ -205,9 +205,16 @@
         {
           "library": "anime",
           "title": "Synthetic Anime S01 1080p",
+          "series_title": "Synthetic Anime",
           "arr_id": 26,
+          "download_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "seasons": [
+            1
+          ],
+          "episode_count": 2,
           "episode_ids": [
-            101
+            101,
+            102
           ],
           "status": "downloading",
           "tracked_state": "downloading",
@@ -339,7 +346,7 @@
             "mdblist": 88,
             "imdb": 8.2,
             "imdb_votes": 125000,
-            "tmdb": 8.0
+            "tmdb": 8
           },
           "sources": [
             "Top Movies",
@@ -700,11 +707,12 @@
             "ratio": 1.5,
             "seeding_time_seconds": 1296000,
             "action": "remove",
-            "reason": "meets_threshold"
+            "reason": "meets_threshold",
+            "ownership_proof": "arr_history"
           }
         ]
       },
-      "plan_sha256": "60abbd309eba340bfd176e0facbb40a077563c292263a1886977e7c733f1c544"
+      "plan_sha256": "53c63ed99d7a819fb561b63842a61232f7c41943bfd56321e36fdb9c9a89f7a1"
     }
   },
   "library_remove_apply_frame": {
@@ -733,7 +741,7 @@
       "remove_torrents": true,
       "keep_emby_ids": [],
       "operation_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "plan_sha256": "60abbd309eba340bfd176e0facbb40a077563c292263a1886977e7c733f1c544"
+      "plan_sha256": "53c63ed99d7a819fb561b63842a61232f7c41943bfd56321e36fdb9c9a89f7a1"
     }
   },
   "library_remove_apply": {
@@ -767,11 +775,12 @@
             "ratio": 1.5,
             "seeding_time_seconds": 1296000,
             "action": "remove",
-            "reason": "meets_threshold"
+            "reason": "meets_threshold",
+            "ownership_proof": "arr_history"
           }
         ]
       },
-      "plan_sha256": "60abbd309eba340bfd176e0facbb40a077563c292263a1886977e7c733f1c544",
+      "plan_sha256": "53c63ed99d7a819fb561b63842a61232f7c41943bfd56321e36fdb9c9a89f7a1",
       "applied": true,
       "title_deleted": true,
       "deleted_file_count": 1,
@@ -780,6 +789,259 @@
         "ffffffffffffffffffffffffffffffffffffffff"
       ],
       "kept_torrent_hashes": []
+    }
+  },
+  "library_import_preview_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000120000,
+    "operation": "library-import",
+    "request": {
+      "mode": "preview",
+      "library": "anime",
+      "arr_id": 26,
+      "download_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "season": 1
+    }
+  },
+  "library_import_preview": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "preview",
+      "plan": {
+        "library": "anime",
+        "arr_id": 26,
+        "title": "Synthetic Anime",
+        "download_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "recycle_bin": "/mnt/shared/.recycle/sonarr",
+        "season": 1,
+        "episode_arr_ids": null,
+        "files": [
+          {
+            "path": "/mnt/shared/downloads/complete/tv/Synthetic.Anime.S01/Synthetic.Anime.S01E01.1080p.DualAudio.mkv",
+            "relative_path": "Synthetic.Anime.S01E01.1080p.DualAudio.mkv",
+            "size": 2048,
+            "quality": "Bluray-1080p",
+            "languages": [
+              "English",
+              "Japanese"
+            ],
+            "release_group": "DualGroup",
+            "rejections": [
+              "Existing file meets cutoff"
+            ],
+            "series_id": 26,
+            "season": 1,
+            "episode_arr_ids": [
+              101
+            ],
+            "episodes": [
+              {
+                "arr_id": 101,
+                "season": 1,
+                "episode": 1,
+                "title": "Ep One"
+              }
+            ],
+            "replaces": [
+              {
+                "id": 601,
+                "relative_path": "Season 01/S01E01.mkv",
+                "size": 2048,
+                "quality": "WEBDL-1080p",
+                "languages": [],
+                "audio_languages": "jpn/eng"
+              }
+            ]
+          }
+        ],
+        "total_bytes": 2048,
+        "command_files": [
+          {
+            "path": "/mnt/shared/downloads/complete/tv/Synthetic.Anime.S01/Synthetic.Anime.S01E01.1080p.DualAudio.mkv",
+            "seriesId": 26,
+            "episodeIds": [
+              101
+            ],
+            "quality": {
+              "quality": {
+                "id": 7,
+                "name": "Bluray-1080p"
+              },
+              "revision": {
+                "version": 1,
+                "real": 0
+              }
+            },
+            "languages": [
+              {
+                "id": 1,
+                "name": "English"
+              },
+              {
+                "id": 8,
+                "name": "Japanese"
+              }
+            ],
+            "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "releaseGroup": "DualGroup"
+          }
+        ],
+        "download_completion": {
+          "source": "arr_queue",
+          "records": [
+            {
+              "status": "completed",
+              "tracked_download_state": "importBlocked"
+            }
+          ]
+        }
+      },
+      "plan_sha256": "c0653fc3cd42e9411b10b43fec8be020cbfacb9ef0953333190ebb53789e6a6a"
+    }
+  },
+  "library_import_apply_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read",
+        "library.manage"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000120000,
+    "operation": "library-import",
+    "request": {
+      "mode": "apply",
+      "library": "anime",
+      "arr_id": 26,
+      "download_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "season": 1,
+      "operation_id": "dddddddddddddddddddddddddddddddd",
+      "plan_sha256": "c0653fc3cd42e9411b10b43fec8be020cbfacb9ef0953333190ebb53789e6a6a"
+    }
+  },
+  "library_import_apply": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "mode": "apply",
+      "operation_id": "dddddddddddddddddddddddddddddddd",
+      "plan": {
+        "library": "anime",
+        "arr_id": 26,
+        "title": "Synthetic Anime",
+        "download_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "recycle_bin": "/mnt/shared/.recycle/sonarr",
+        "season": 1,
+        "episode_arr_ids": null,
+        "files": [
+          {
+            "path": "/mnt/shared/downloads/complete/tv/Synthetic.Anime.S01/Synthetic.Anime.S01E01.1080p.DualAudio.mkv",
+            "relative_path": "Synthetic.Anime.S01E01.1080p.DualAudio.mkv",
+            "size": 2048,
+            "quality": "Bluray-1080p",
+            "languages": [
+              "English",
+              "Japanese"
+            ],
+            "release_group": "DualGroup",
+            "rejections": [
+              "Existing file meets cutoff"
+            ],
+            "series_id": 26,
+            "season": 1,
+            "episode_arr_ids": [
+              101
+            ],
+            "episodes": [
+              {
+                "arr_id": 101,
+                "season": 1,
+                "episode": 1,
+                "title": "Ep One"
+              }
+            ],
+            "replaces": [
+              {
+                "id": 601,
+                "relative_path": "Season 01/S01E01.mkv",
+                "size": 2048,
+                "quality": "WEBDL-1080p",
+                "languages": [],
+                "audio_languages": "jpn/eng"
+              }
+            ]
+          }
+        ],
+        "total_bytes": 2048,
+        "command_files": [
+          {
+            "path": "/mnt/shared/downloads/complete/tv/Synthetic.Anime.S01/Synthetic.Anime.S01E01.1080p.DualAudio.mkv",
+            "seriesId": 26,
+            "episodeIds": [
+              101
+            ],
+            "quality": {
+              "quality": {
+                "id": 7,
+                "name": "Bluray-1080p"
+              },
+              "revision": {
+                "version": 1,
+                "real": 0
+              }
+            },
+            "languages": [
+              {
+                "id": 1,
+                "name": "English"
+              },
+              {
+                "id": 8,
+                "name": "Japanese"
+              }
+            ],
+            "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "releaseGroup": "DualGroup"
+          }
+        ],
+        "download_completion": {
+          "source": "arr_queue",
+          "records": [
+            {
+              "status": "completed",
+              "tracked_download_state": "importBlocked"
+            }
+          ]
+        }
+      },
+      "plan_sha256": "c0653fc3cd42e9411b10b43fec8be020cbfacb9ef0953333190ebb53789e6a6a",
+      "applied": true,
+      "command_id": 701,
+      "command_status": "queued",
+      "file_count": 1
     }
   },
   "refusals": {
@@ -853,6 +1115,24 @@
         "code": "refused",
         "reason": "quota_exhausted",
         "message": "Daily mdblist quota ceiling reached and no cache is available"
+      }
+    },
+    "target_mismatch": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "target_mismatch",
+        "message": "Manual import candidate does not map to requested arr_id"
+      }
+    },
+    "no_import_candidates": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "no_import_candidates",
+        "message": "No manual import candidates found for download_id"
       }
     },
     "partial": {
