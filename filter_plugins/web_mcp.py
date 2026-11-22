@@ -17,13 +17,16 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-# CLI 5786c1a preserves acquisition/coexistence and admits exact Emby 4.10.2.0
-# for catalog reads. Chaldea Go 1.25 package 8f6b62f9-0c43-4174-9c33-24b31bf9e544,
-# tree 603272bbadb7e6994993f0e4ad4e98f37af76801.
-HOLONET_COEXISTENCE_SOURCE = "5786c1a735ca2be3c7c1a4c6282673b3e23b939e"
-HOLONET_COEXISTENCE_SHA256 = "e20f38beeb200b023bdbf2a9b582884027ab672b47e89088b9adb491c997e626"
-# The previously installed coexistence build stays admissible for rollback.
+# CLI a209dfd adds the library management tools (homelab-cli PR 60) on top of
+# 5786c1a, which preserves acquisition/coexistence and admits exact Emby
+# 4.10.2.0 for catalog reads. Chaldea Go 1.25.0 package jobs d7e2cc0a and
+# 696f26d0 (byte-identical), tree 732d84048cbd8c8bcf357e2f536ba69e0718b9f8.
+HOLONET_COEXISTENCE_SOURCE = "a209dfdcfcb5be82dcd300f9f80d3b7ebb74c8ce"
+HOLONET_COEXISTENCE_SHA256 = "a0ab6ce564a6d907c94f44691517f52687d0c642196ffd62e7af8d2503ba33d0"
+# The previously installed coexistence builds stay admissible for rollback.
 HOLONET_COEXISTENCE_ROLLBACK = {
+    "5786c1a735ca2be3c7c1a4c6282673b3e23b939e":
+        "e20f38beeb200b023bdbf2a9b582884027ab672b47e89088b9adb491c997e626",
     "74745a2c3cd72acbbaa519ef07210cf978dcabf6":
         "55ac2e95ffbd594107e810960c43dc2852842ba5b6a4312fc138e314bd295aa0",
     "9230187a4cf3058f316f0c06cfcac0a848fc910c":
