@@ -3527,6 +3527,26 @@ class LibraryPruneTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_activity_entries_with_numeric_user_ids_are_attributed(self):
+        # Live Emby 4.x activity entries carry the user's short internal number
+        # ("6"), not the 32-hex user Id. Those plays must still protect titles.
+        w = self.world
+        w.movie(1, 3 * TIB, profile=13)
+        w.movie(2, 100 * GIB)
+        w.movie(3, 100 * GIB)
+        for item, user, name in ((emby_movie_id(2), '6', 'Viewer is playing Movie 2 '),
+                                 (emby_movie_id(2), '9', 'Someone is playing Movie 2 ')):
+            w.activity.append({'Id': len(w.activity) + 1, 'Type': 'playback.start', 'ItemId': item,
+                               'UserId': user, 'Name': name, 'Date': prune.iso(NOW - 5 * prune.DAY)})
+        out = prune.op_watch_history({'request': {}}, self.block, lambda b, d, s: FakePruneArr(w, b),
+                                     lambda: FakePruneEmby(w), now=NOW)
+        self.assertEqual(out['history']['unattributable_in_window'], 0)
+        self.assertEqual([(i['arr_id'], i['play_count'], i['users']) for i in out['items']],
+                         [(2, 2, ['Viewer', 'user 9'])])
+        summary, marks = self.run_prune()
+        self.assertNotIn(('movies', 2), marks)
+        self.assertIn(('movies', 3), marks)
+
     def test_watch_history_operation(self):
         w = self.world
         w.movie(1, 100 * GIB)
