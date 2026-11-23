@@ -10,4 +10,9 @@ swapfile_size_mb: 1024
 # which keepalived cannot cover when both do it the same night.
 unattended_upgrades_absent: true
 
+# The cohort is enrolled and its original key is published. Keep the exact
+# JWKS overlay across routine Traefik convergence; signer edge checks require it.
+authentik_signer_routes_enabled: true
+authentik_signer_akasha_enrolled: true
+
 resolved_llmnr: "no"

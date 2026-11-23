@@ -554,6 +554,10 @@ def main():
     parser.add_argument("command", choices=("snapshot", "bootstrap", "enrollment", "approve-contracts", "rotate", "publish", "rollback"))
     parser.add_argument("enrollment_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    # REMAINDER is for enrollment only. Never execute rotate/publish when an
+    # operator supplies a misspelled option or asks for command-specific help.
+    if args.command not in ("enrollment", "bootstrap") and args.enrollment_args:
+        parser.error("this command accepts no arguments; use --help before the command")
     require(os.geteuid() == 0)
     require(STATE.is_dir() and not STATE.is_symlink())
     st = STATE.stat()

@@ -73,6 +73,12 @@
     backup: true
   when: drift_check_reports | default(true)
 
+- name: Install the reviewed ownership registry for standalone managers
+  ansible.builtin.copy:
+    src: drift-owners.json
+    dest: "{{ ansible_env.HOME }}/.local/share/homelab-infra/drift-owners.json"
+    mode: "0644"
+
 - name: Install the checker
   ansible.builtin.copy:
     src: homelab-drift-check

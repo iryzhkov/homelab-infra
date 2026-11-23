@@ -394,6 +394,9 @@ jobs:
           export TMPDIR="$HOME/tmp" WEBMCP_TEST_HOME="$HOME" PYTHONDONTWRITEBYTECODE=1
           mkdir -p "$TMPDIR"
           python3 -B scripts/test-authentik-signer.py -v
+          python3 -B scripts/test-signer-cli.py -v
+          ansible-playbook playbooks/authentik-signer-routes.yml --syntax-check
+          ansible-playbook playbooks/drift-check-observer.yml --syntax-check
           python3 -B scripts/test-agent-host-identities.py -v
           python3 -B scripts/test-webmcp-managed-interactive.py -v
           ansible-playbook playbooks/authentik-signer.yml --syntax-check

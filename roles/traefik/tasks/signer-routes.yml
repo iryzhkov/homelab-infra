@@ -1,0 +1,9 @@
+---
+- name: Require explicit route activation
+  ansible.builtin.assert:
+    that: authentik_signer_routes_enabled | bool
+- name: Render exact cohort routes from the owning template
+  ansible.builtin.template:
+    src: authentik-jwks.yml.j2
+    dest: "{{ traefik_dynamic_dir }}/authentik-jwks.yml"
+    mode: "0644"

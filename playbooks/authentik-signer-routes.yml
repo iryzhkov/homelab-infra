@@ -1,0 +1,10 @@
+---
+# Repair only the cohort overlay; do not render unrelated application routes.
+- name: Install the enrolled cohort JWKS overlay on both edges
+  hosts: edge_proxy
+  gather_facts: false
+  tasks:
+    - name: Load Traefik defaults and only the cohort overlay tasks
+      ansible.builtin.import_role:
+        name: traefik
+        tasks_from: signer-routes
