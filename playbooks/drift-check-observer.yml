@@ -1,7 +1,10 @@
 ---
 # Update observers only; retain manifests from the actual stack/SSO deployments.
+# Every host with drift_check_enabled is listed. public-api does not report on
+# its own (homelab runs its checker over SSH), but its installed checker and
+# registry decide its findings, so it needs the same update.
 - name: Install drift observation and reviewed standalone ownership
-  hosts: homelab:normandy
+  hosts: homelab:normandy:public-api
   gather_facts: true
   tasks:
     - name: Install observer files without redeploying applications or credentials

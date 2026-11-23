@@ -39,6 +39,22 @@ Deploy the observer with playbooks/drift-check-observer.yml. It deliberately
 retains the manifests from actual deployments, rather than rebaselining drift.
 Normal drift_check role deployments install the same ownership registry.
 
+### public-api follow-up, 2026-11-23
+
+The registry already held public-api/observability-socket-proxy, but the
+observer playbook targeted only homelab and normandy, so public-api kept a
+checker without the ownership functions. The playbook now includes public-api.
+The proxy there is the same observability_collector deployment (exact path
+/opt/observability/docker-socket-proxy/docker-compose.yml, Ansible-managed
+header) and Alloy holds live Unix-socket connections to it.
+
+The traefik finding on public-api was a stale manifest checksum, not a host
+edit. The deployed Compose file is byte-identical to stacks/traefik at
+7d0d5c5; the manifest recorded the version before aaf2936, which added the
+in-use 8443 observability ingest port. The fix is a targeted converge through
+the stack's owner (`site.yml -l public-api -e only=traefik`), which updates only
+that manifest entry; nothing is reverted.
+
 ## Signer
 
 Feed entry 1000000000935 coincided with Shizune enrollment, contract approval
