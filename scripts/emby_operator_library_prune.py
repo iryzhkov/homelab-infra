@@ -445,6 +445,16 @@ def collect_history(emby, resolver, users, *, now, window_start):
     entries = _emby_pages(emby, path, {'MinDate': iso(window_start)}, page_size=ACTIVITY_PAGE,
                           max_pages=ACTIVITY_MAX_PAGES, failure=HISTORY_FAILURE)
     names = {u['id']: u['name'] for u in users}
+    by_name = sorted(((u['name'], u['name']) for u in users if u['name']), key=lambda p: -len(p[0]))
+
+    def who(uid, entry):
+        if uid in names:
+            return names[uid]
+        text = entry.get('Name') if isinstance(entry.get('Name'), str) else ''
+        for name, label in by_name:
+            if text.startswith(name + ' '):
+                return label
+        return 'user ' + uid[:8]
     events, unattributable, first_attributable = [], 0, None
     for e in entries:
         ts = parse_time(e.get('Date'))
@@ -453,22 +463,25 @@ def collect_history(emby, resolver, users, *, now, window_start):
         if e.get('Type') not in PLAYBACK_START_TYPES:
             continue
         item, uid = e.get('ItemId'), e.get('UserId')
-        if catalog_id(item) and isinstance(uid, str) and HEX32.fullmatch(uid):
-            events.append((item, uid, ts))
+        # Emby 4.x activity entries name the user by its short internal
+        # number ("6"), not the 32-hex user Id. Protection only needs the
+        # item; the user is resolved for display when it can be.
+        if catalog_id(item) and isinstance(uid, str) and (HEX32.fullmatch(uid) or catalog_id(uid)):
+            events.append((item, uid, ts, who(uid, e)))
             first_attributable = ts if first_attributable is None else min(first_attributable, ts)
         else:
             unattributable += 1
-    item_ids = {item for item, _, _ in events}
+    item_ids = {item for item, _, _, _ in events}
     rows = _lookup(emby, resolver.routes, item_ids, 'ProviderIds,Path,SeriesId')
     by_user = {}
-    for item, uid, _ in events:
+    for item, uid, _, _ in events:
         if item not in rows and uid in names:
             by_user.setdefault(uid, set()).add(item)
     for uid, ids in by_user.items():
         rows.update(_lookup(emby, [_user_route(emby, uid)], ids, 'ProviderIds,Path,SeriesId'))
     keys, _ = resolver.keys(list(rows.values()), required=False)
     plays, unmapped, unmapped_managed = {}, 0, 0
-    for item, uid, ts in events:
+    for item, uid, ts, label in events:
         key = keys.get(item)
         if key is None:
             # Deleted or re-imported items: a file change also resets the
@@ -481,7 +494,7 @@ def collect_history(emby, resolver, users, *, now, window_start):
                 # complete and played titles stay protected.
                 unmapped_managed += 1
             continue
-        plays.setdefault(key, []).append((ts, names.get(uid, uid[:8])))
+        plays.setdefault(key, []).append((ts, label))
     complete = (retention_since is not None and retention_since <= window_start
                 and unattributable == 0 and unmapped_managed == 0)
     return {

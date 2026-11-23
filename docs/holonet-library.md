@@ -206,7 +206,10 @@ live homelab on 2026-11-22 and carries no `LastPlayedDate` (and `PlayCount` 0)
 even for played items, so it cannot date a play. Jellystat history starts on
 2026-07-16, shorter than the 180-day window, and would need a new credential.
 The activity log names item and user for every `playback.start` since
-2026-08-29; older entries (`VideoPlayback`) carry no item. The prune therefore
+2026-08-29; older entries (`VideoPlayback`) carry no item. Emby 4.x writes the
+user as its short internal number (for example `"6"`), not the 32-hex user Id,
+so an entry is attributable when it names a catalog item and either form of user
+ID; the display name comes from the entry text. The prune therefore
 treats the window as complete only when the log reaches back past the window
 start and every playback start inside it is attributable. Until then (about
 February 2027 with the default window), a title is eligible only if no Emby
