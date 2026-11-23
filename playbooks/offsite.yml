@@ -11,3 +11,4 @@
       ansible.builtin.include_role:
         name: offsite_phone
       when: offsite_enabled | default(false)
+      tags: offsite_ssh

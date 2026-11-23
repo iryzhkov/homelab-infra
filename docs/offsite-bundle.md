@@ -61,6 +61,21 @@ its SSH config from the inventory. The key it uses is authorised on the phone
 with `restrict,from="10.42.0.2"`, so it cannot be used from anywhere else and
 cannot open a shell beyond the copy.
 
+The offsite role creates `~/.ssh/id_ed25519_offsite` on the sender without
+replacing an existing key, and selects it only for `Host phone`. Its public
+half must be enrolled on the phone with `restrict,from="10.42.0.2"` through
+an existing trusted operator connection (Normandy's `s25m` alias works).
+Never move the private half off homelab. To configure only this identity,
+run `playbooks/offsite.yml --limit homelab --tags offsite_ssh`.
+The fleet peer role still owns the phone address, port and user.
+
+On 2026-11-22 the phone answered SSH, but homelab offered no key: its default
+SSH identity was absent and the phone alias selected none explicitly.
+The phone's newest bundle and the sender's delivery stamp both dated to
+October 2. Why the old identity disappeared was not established. A reachable
+SSH server reporting permission denied is an authentication failure; opening
+Termux or changing Nebula does not fix it.
+
 A single missed delivery is normal and silent. Each required destination (OCI
 and phone) has its own delivery timestamp. Three days without a copy produces
 a feed warning, a notification, and a failed service result even when the other
