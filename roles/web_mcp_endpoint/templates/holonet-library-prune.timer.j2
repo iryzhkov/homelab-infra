@@ -1,0 +1,13 @@
+# Managed by homelab-infra holonet-playlists
+[Unit]
+Description=Weekly HoloNet library prune
+
+[Timer]
+# Sunday early morning; a missed run starts after the next boot.
+OnCalendar=Sun *-*-* 04:30:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=holonet-library-prune.service
+
+[Install]
+WantedBy=timers.target

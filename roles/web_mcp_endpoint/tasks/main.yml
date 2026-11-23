@@ -457,6 +457,39 @@
             mode: "0644"
           register: web_mcp_operator_socket
 
+    # Weekly prune of old unwatched titles: root state plus a oneshot unit and
+    # timer that run the staged release, never the socket worker.
+    - name: Install the weekly library prune units for configured prune
+      when: >-
+        web_mcp_operator.selected and web_mcp_operator.policy.library is defined
+        and web_mcp_operator.policy.library.prune is defined
+      block:
+        - name: Create the private root library prune state directory
+          ansible.builtin.file:
+            path: "{{ web_mcp_operator.policy.library.prune.state_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Install the weekly library prune unit
+          ansible.builtin.template:
+            src: holonet-library-prune.service.j2
+            dest: /etc/systemd/system/holonet-library-prune.service
+            owner: root
+            group: root
+            mode: "0644"
+          register: web_mcp_prune_service
+
+        - name: Install the weekly library prune timer
+          ansible.builtin.template:
+            src: holonet-library-prune.timer.j2
+            dest: /etc/systemd/system/holonet-library-prune.timer
+            owner: root
+            group: root
+            mode: "0644"
+          register: web_mcp_prune_timer
+
     - name: Install the root-owned hardened endpoint unit
       ansible.builtin.template:
         src: endpoint.service.j2
@@ -478,6 +511,14 @@
         web_mcp_operator.selected and not ansible_check_mode
         and (web_mcp_operator_service is changed or web_mcp_operator_socket is changed)
 
+    - name: Reload when the library prune units changed
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: >-
+        web_mcp_operator.selected and not ansible_check_mode
+        and web_mcp_prune_service is defined
+        and (web_mcp_prune_service is changed or web_mcp_prune_timer is changed)
+
     - name: Create the declared socket parent before the first activation
       ansible.builtin.command:
         argv: [systemd-tmpfiles, --create, /etc/tmpfiles.d/holonet-playlists.conf]
@@ -491,6 +532,42 @@
         enabled: true
         state: "{{ 'restarted' if web_mcp_operator_socket is changed else 'started' }}"
       when: web_mcp_operator.selected and web_mcp_activate | bool and not ansible_check_mode
+
+    # The timer runs only when prune is explicitly enabled. Marks and the last
+    # run summary stay in place when it is disabled or removed.
+    - name: Enable the weekly library prune timer only with explicit activation
+      ansible.builtin.systemd_service:
+        name: holonet-library-prune.timer
+        enabled: true
+        state: started
+      when: >-
+        web_mcp_operator.selected and web_mcp_activate | bool and not ansible_check_mode
+        and web_mcp_operator.policy.library is defined
+        and web_mcp_operator.policy.library.enabled
+        and web_mcp_operator.policy.library.prune is defined
+        and web_mcp_operator.policy.library.prune.enabled
+
+    - name: Inspect an installed library prune timer
+      ansible.builtin.stat:
+        path: /etc/systemd/system/holonet-library-prune.timer
+        follow: false
+        get_checksum: false
+      register: web_mcp_prune_timer_unit
+      when: web_mcp.service == 'holonet'
+
+    - name: Stop and disable the library prune timer unless prune is enabled
+      ansible.builtin.systemd_service:
+        name: holonet-library-prune.timer
+        enabled: false
+        state: stopped
+      when: >-
+        web_mcp.service == 'holonet' and not ansible_check_mode
+        and web_mcp_prune_timer_unit.stat.exists | default(false)
+        and not (web_mcp_operator.selected
+                 and web_mcp_operator.policy.library is defined
+                 and web_mcp_operator.policy.library.enabled
+                 and web_mcp_operator.policy.library.prune is defined
+                 and web_mcp_operator.policy.library.prune.enabled)
 
     # Rollback: release, policy, configs, journals and credential stay in place.
     - name: Stop and disable an installed socket when management is not configured

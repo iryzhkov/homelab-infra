@@ -21,7 +21,8 @@
       - media_recovery_before.json.id == 1
       - media_recovery_before.json.recycleBin is string
       - media_recovery_before.json.recycleBinCleanupDays is number
-      - media_recovery_before.json.recycleBin in ['', '/mnt/shared/.recycle/' ~ media_recovery_app.name]
+      - media_recovery_before.json.recycleBin in ['', media_recovery_app.recycle]
+      - media_recovery_cleanup_days is number and 0 <= media_recovery_cleanup_days <= 365
     fail_msg: Existing recycle policy differs; reconcile it before applying.
   no_log: true
 
@@ -58,8 +59,8 @@
     path: "{{ item }}"
     follow: false
   loop:
-    - /mnt/shared/.recycle
-    - "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+    - "{{ media_recovery_app.recycle | dirname }}"
+    - "{{ media_recovery_app.recycle }}"
   register: media_recovery_paths
 
 - name: Refuse symlinks or non-directory recovery paths
@@ -71,21 +72,21 @@
 
 - name: Create private recovery parent
   ansible.builtin.file:
-    path: /mnt/shared/.recycle
+    path: "{{ media_recovery_app.recycle | dirname }}"
     state: directory
     mode: "0710"
   become: false
 
 - name: Create application-owned recovery directory outside library roots
   ansible.builtin.file:
-    path: "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+    path: "{{ media_recovery_app.recycle }}"
     state: directory
     mode: "0770"
   become: false
 
 - name: Verify NAS-mapped recovery group without changing ownership
   ansible.builtin.stat:
-    path: "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+    path: "{{ media_recovery_app.recycle }}"
   register: media_recovery_directory
   when: not ansible_check_mode
 
@@ -109,7 +110,7 @@
       - -c
       - 'test -r "$1" && test -w "$1" && test -x "$1"'
       - access-check
-      - "/mnt/shared/.recycle/{{ media_recovery_app.name }}"
+      - "{{ media_recovery_app.recycle }}"
   changed_when: false
   when: not ansible_check_mode
 
@@ -132,27 +133,27 @@
   no_log: true
   diff: false
 
-- name: Set recycle path and disable automatic expiry while preserving other settings
+- name: Set recycle path and cleanup days while preserving other settings
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ media_recovery_app.port }}/api/v3/config/mediamanagement/1"
     method: PUT
     headers:
       X-Api-Key: "{{ (media_recovery_config.content | b64decode | regex_findall('<ApiKey>([^<]+)</ApiKey>')) | first }}"
     body_format: json
-    body: "{{ media_recovery_before.json | combine({'recycleBin': '/mnt/shared/.recycle/' ~ media_recovery_app.name, 'recycleBinCleanupDays': 0}) }}"
+    body: "{{ media_recovery_before.json | combine({'recycleBin': media_recovery_app.recycle, 'recycleBinCleanupDays': media_recovery_cleanup_days}) }}"
     return_content: true
     status_code: [200, 202]
   when:
     - not ansible_check_mode
-    - media_recovery_before.json.recycleBin != '/mnt/shared/.recycle/' ~ media_recovery_app.name or media_recovery_before.json.recycleBinCleanupDays != 0
+    - media_recovery_before.json.recycleBin != media_recovery_app.recycle or media_recovery_before.json.recycleBinCleanupDays != media_recovery_cleanup_days
   changed_when: true
   no_log: true
   diff: false
 
 - name: Report proposed settings in check mode
   ansible.builtin.debug:
-    msg: "{{ media_recovery_app.name }} recycle path=/mnt/shared/.recycle/{{ media_recovery_app.name }}, automatic expiry disabled"
-  changed_when: media_recovery_before.json.recycleBin != '/mnt/shared/.recycle/' ~ media_recovery_app.name or media_recovery_before.json.recycleBinCleanupDays != 0
+    msg: "{{ media_recovery_app.name }} recycle path={{ media_recovery_app.recycle }}, cleanup days={{ media_recovery_cleanup_days }}"
+  changed_when: media_recovery_before.json.recycleBin != media_recovery_app.recycle or media_recovery_before.json.recycleBinCleanupDays != media_recovery_cleanup_days
   when: ansible_check_mode
 
 - name: Read back and compare settings
@@ -169,7 +170,7 @@
   ansible.builtin.assert:
     that:
       - >-
-        media_recovery_after.json == media_recovery_before.json | combine({'recycleBin': '/mnt/shared/.recycle/' ~ media_recovery_app.name, 'recycleBinCleanupDays': 0})
+        media_recovery_after.json == media_recovery_before.json | combine({'recycleBin': media_recovery_app.recycle, 'recycleBinCleanupDays': media_recovery_cleanup_days})
     success_msg: "{{ media_recovery_app.name }} recovery settings verified; all unrelated fields preserved."
   no_log: true
   when: not ansible_check_mode

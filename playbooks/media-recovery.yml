@@ -1,5 +1,7 @@
 ---
 # Configuration only: no worker, receiver, timer or application code is installed.
+# Previously applied settings with zero cleanup days are an accepted earlier
+# state and are moved to the configured retention.
 - name: Preserve replaced media using the existing arr recycle bins
   hosts: homelab
   become: true
@@ -16,11 +18,16 @@
       ansible.builtin.assert:
         that: media_recovery_mount.stdout in ['nfs', 'nfs4']
 
-    - name: Configure independent recycle paths without automatic expiry
+    # Removed media stays recoverable for 30 days, then Arr empties its recycle
+    # bin. The bins share the NFS volume, so zero days (keep forever) would
+    # free nothing when the HoloNet library prune removes titles.
+    - name: Configure independent recycle paths with 30-day automatic expiry
       ansible.builtin.include_tasks: media-recovery-app.yml
+      vars:
+        media_recovery_cleanup_days: 30
       loop:
-        - {name: sonarr, stack: sonarr-tv, port: 8989}
-        - {name: radarr, stack: radarr-movie, port: 7878}
+        - {name: sonarr, stack: sonarr-tv, port: 8989, recycle: /mnt/shared/.recycle/sonarr}
+        - {name: radarr, stack: radarr-movie, port: 7878, recycle: /mnt/shared/holonet-recycle/radarr}
       loop_control:
         loop_var: media_recovery_app
         label: "{{ media_recovery_app.name }}"

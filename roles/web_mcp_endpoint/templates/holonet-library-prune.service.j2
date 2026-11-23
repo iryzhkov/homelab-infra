@@ -1,0 +1,57 @@
+# Managed by homelab-infra holonet-playlists
+# Weekly HoloNet library prune (docs/holonet-library.md). Root, like the socket
+# worker, but never reachable from the MCP service: only the timer starts it.
+[Unit]
+Description=HoloNet library prune of old unwatched titles
+After=network-online.target
+Wants=network-online.target
+# The keep list lives in the HoloNet janitor journal (holonet:holonet 0600).
+# systemd hands a read-only snapshot to this unit; a missing journal fails
+# the start, so no run ever proceeds without the keep list.
+AssertPathExists={{ web_mcp_operator.policy.library.prune.keep_journal }}
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+{% if web_mcp_custody_group_read | default(false) or (web_mcp_operator.policy.janitor_acquire is defined and web_mcp_operator.policy.janitor_acquire.start_enabled) %}
+# Existing media group only, as for library-remove on the socket worker.
+SupplementaryGroups=988
+{% endif %}
+WorkingDirectory=/
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+LoadCredential=holonet-janitor-state:{{ web_mcp_operator.policy.library.prune.keep_journal }}
+ExecStart=/usr/bin/python3 -E -s -B {{ web_mcp_operator.release_directory }}/emby_operator_library_prune.py run
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=holonet-library-prune
+TimeoutStartSec=3300
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Only the root-owned prune state (marks, last run, lock) is writable.
+ReadWritePaths={{ web_mcp_operator.policy.library.prune.state_dir }}
+MemoryMax=512M
+CPUQuota=50%
+TasksMax=16
+LimitNOFILE=256

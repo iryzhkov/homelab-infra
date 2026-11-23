@@ -174,6 +174,10 @@ class TorrentAdapter:
     def before_send(self, method, route):
         pass
 
+    def response_limit(self, route):
+        """Optional larger body bound for one fixed route; None keeps the shared default."""
+        return None
+
     def content_type(self):
         return 'application/x-www-form-urlencoded'
 
@@ -214,7 +218,9 @@ class TorrentAdapter:
                 self.before_send(method, route)
                 conn.request(method, route, body=body, headers=headers)
                 response = conn.getresponse()
-                raw = importer_response_bytes(response)
+                limit = self.response_limit(route)
+                raw = (importer_response_bytes(response) if limit is None
+                       else importer_response_bytes(response, limit=limit))
                 completed.put((response.status, response.headers, raw))
             except Exception:
                 completed.put(None)

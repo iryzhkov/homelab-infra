@@ -2,13 +2,16 @@
 
 No production credentials, live network calls, or writes outside scratch HOME.
 """
+import contextlib
 import copy
 import hashlib
 import http.server
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import stat
 import threading
 import unittest
 from unittest.mock import patch
@@ -16,6 +19,7 @@ import urllib.parse
 
 import emby_operator_adapter as adapter
 import emby_operator_library as lib
+import emby_operator_library_prune as prune
 import emby_operator_socket as sock
 import emby_operator_torrents as tor
 
@@ -26,7 +30,7 @@ contract = importlib.util.module_from_spec(_contract_spec)
 _contract_spec.loader.exec_module(contract)
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
-FIXTURE_SHA256 = '3b7427d186e6b3fada64f9da91436d51d2bf865aa8e48d6d379d548dba769569'
+FIXTURE_SHA256 = '651bce5b5fcaefe367d9e23bf7b38034877aa4f7fba4c5d8650c76838af8528a'
 
 RADARR_KEY = '1' * 32
 SONARR_KEY = '2' * 32
@@ -969,6 +973,87 @@ class LibraryWorkerTests(unittest.TestCase):
         with self.assertRaises(lib.LibraryRefusal) as ctx:
             self._run(self.fixture['library_remove_preview_frame'])
         self.assertEqual(ctx.exception.reason, 'recycle_bin_unset')
+
+    def test_remove_digest_ignores_live_seeding_counters(self):
+        # A seeding torrent's ratio and seeding time advance between preview and
+        # apply; the plan stays the same plan, so apply must not refuse.
+        torrent = self.state.torrents[TORRENT_HASH_OK]
+        torrent['content_path'] = '/mnt/shared/downloads/complete/movies/Synthetic.Movie.2024'
+        preview = self._run(self.fixture['library_remove_preview_frame'])
+        apply_frame = copy.deepcopy(self.fixture['library_remove_apply_frame'])
+        apply_frame['request']['plan_sha256'] = preview['plan_sha256']
+        # The content path stays bound: a moved payload is a different plan.
+        torrent['content_path'] = '/mnt/shared/downloads/complete/movies/Other'
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(apply_frame)
+        self.assertEqual(ctx.exception.reason, 'plan_changed')
+        torrent['content_path'] = '/mnt/shared/downloads/complete/movies/Synthetic.Movie.2024'
+        # So does the decision the counters made: dropping under the threshold flips it.
+        torrent.update(ratio=0.1, seeding_time=60)
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(apply_frame)
+        self.assertEqual(ctx.exception.reason, 'plan_changed')
+        self.assertEqual(self.state.deleted_movies, [])
+        torrent.update(ratio=1.5 + 0.25, seeding_time=15 * 86400 + 3600)
+        applied = self._run(apply_frame)
+        self.assertEqual(applied['plan_sha256'], preview['plan_sha256'])
+        self.assertEqual(applied['plan']['torrents'][0]['seeding_time_seconds'], 15 * 86400 + 3600)
+        self.assertEqual(applied['removed_torrent_hashes'], [TORRENT_HASH_OK])
+        # The same holds with remove_torrents false.
+        keep_preview = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+        keep_preview['request']['remove_torrents'] = False
+        preview = self._run(keep_preview)
+        keep_apply = copy.deepcopy(apply_frame)
+        keep_apply['request'].update(remove_torrents=False, plan_sha256=preview['plan_sha256'],
+                                     operation_id='c' * 32)
+        torrent.update(ratio=2.5, seeding_time=16 * 86400)
+        applied = self._run(keep_apply)
+        self.assertEqual(applied['kept_torrent_hashes'], [TORRENT_HASH_OK])
+
+    def test_prune_retires_torrents_only_with_hardlink_proof(self):
+        # Prune drives the real library-remove. Arr history proves exclusive
+        # ownership of the fixture torrent, but the hardlink verifier never runs
+        # for it, so prune must keep it seeding.
+        test = self
+
+        class RealRemove:
+            def remove(self, request):
+                frame = copy.deepcopy(test.fixture['library_remove_preview_frame'])
+                frame['request'] = request
+                return test._run(frame)
+
+            def qbit_rows(self):
+                return [seed_row('c' * 40, 25 * TIB, 30),
+                        seed_row(TORRENT_HASH_OK, 4096, 30, OTHER_TRACKER)]
+
+        calls = []
+
+        def must_be_called(qbit, torrent, torrent_hash, **kwargs):
+            calls.append(torrent_hash)
+            kwargs['deleted_inodes_cache'][torrent_hash] = [('/synthetic', 1, (1, 1))]
+            return True, None
+
+        title = {'library': 'movies', 'arr_id': 18}
+        with patch.object(lib, '_verify_torrent_hardlinks', side_effect=must_be_called), \
+             patch.object(lib, '_hardlink_after_media_removal', return_value=True):
+            prepared = prune._prepare_removal(RealRemove(), title, {})
+            self.assertEqual(prepared['plan']['torrents'][0]['ownership_proof'], 'arr_history')
+            self.assertEqual((prepared['with_torrents'], prepared['torrent_gate']),
+                             (False, {'ownership_not_hardlink': 1}))
+            applied = prune._apply_removal(RealRemove(), prepared)
+            self.assertEqual(calls, [])
+            self.assertEqual(self.state.deleted_torrents, [])
+            self.assertEqual(applied['kept_torrent_hashes'], [TORRENT_HASH_OK])
+            self.assertEqual(len(self.state.deleted_movies), 1)
+            # Without Arr history the verifier runs; only its pass lets the torrent go.
+            self.state.radarr_history_by_dl = {}
+            self.state.sonarr_history_by_dl = {}
+            prepared = prune._prepare_removal(RealRemove(), title, {})
+            self.assertEqual(calls, [TORRENT_HASH_OK])
+            self.assertEqual(prepared['plan']['torrents'][0]['ownership_proof'], 'hardlink')
+            self.assertEqual((prepared['with_torrents'], prepared['torrent_gate']), (True, {}))
+            prune._apply_removal(RealRemove(), prepared)
+        self.assertEqual(self.state.deleted_torrents, [{'hashes': [TORRENT_HASH_OK], 'deleteFiles': ['true']}])
 
     def test_remove_seeding_threshold_and_season_pack_partially_kept(self):
         # Low ratio / low seeding time -> torrent kept.
@@ -2666,6 +2751,997 @@ class LibraryWorkerTests(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(base, ignore_errors=True)
+
+
+# --- Library prune ------------------------------------------------------------
+
+TIB = 1 << 40
+GIB = 1 << 30
+NOW = prune.parse_time('2026-11-22T00:00:00Z')
+OLD = NOW - 400 * prune.DAY
+ADMIN = 'b' * 32
+VIEWER = 'c' * 32
+SEEDPOOL = 'https://tracker.seedpool.org/announce'
+OTHER_TRACKER = 'https://tracker.example.org/announce'
+
+
+def emby_movie_id(arr_id):
+    return str(40000 + arr_id)
+
+
+class PruneWorld:
+    """Synthetic Radarr/Sonarr/Emby/qBittorrent facts for prune tests."""
+
+    def __init__(self):
+        self.movies = []
+        self.series = []
+        self.episode_files = {}
+        self.profiles = {
+            'radarr': [{'id': 11, 'name': 'English Movies'}, {'id': 13, 'name': prune.PROTECTED_PROFILE}],
+            'sonarr': [{'id': 6, 'name': 'HD - 720p/1080p'}, {'id': 7, 'name': prune.PROTECTED_PROFILE}],
+        }
+        self.queue = {'radarr': [], 'sonarr': []}
+        self.items = {}
+        self.favorites = {}
+        self.played = {}
+        self.resumable = {}
+        self.activity = [{'Id': 1, 'Type': 'system.backupcompleted', 'Date': prune.iso(OLD)}]
+        self.torrents = []
+        self.arr_fail = set()
+        self.emby_fail = False
+        self.history_fail = False
+        self.qbit_fail = False
+        self.arr_calls = []
+        self.remove_calls = []
+        self.removed = []
+        self.plan_torrents = []
+        self.plan_bytes = {}
+        self.remove_error = None
+        self.apply_errors = {}
+        self.post_dispatch_on = None
+        self.on_preview = None
+        self.after_apply = None
+        self.seed_clock = 0
+
+    def movie(self, arr_id, size, *, added=OLD, file_added=OLD, profile=11, title=None):
+        self.movies.append({
+            'id': arr_id, 'title': title or f'Movie {arr_id}', 'year': 2001, 'tmdbId': 100 + arr_id,
+            'path': f'/mnt/shared/media/movies/Movie {arr_id} (2001)', 'sizeOnDisk': size,
+            'added': prune.iso(added), 'hasFile': True,
+            'movieFile': {'dateAdded': prune.iso(file_added)}, 'qualityProfileId': profile,
+            'genres': ['Drama'],
+        })
+        self.items[emby_movie_id(arr_id)] = {
+            'Id': emby_movie_id(arr_id), 'Type': 'Movie',
+            'ProviderIds': {'Tmdb': str(100 + arr_id)},
+            'Path': f'/mnt/shared/media/movies/Movie {arr_id} (2001)/movie.mkv',
+        }
+
+    def show(self, arr_id, size, *, library='tv', added=OLD, file_added=OLD, profile=6):
+        root = '/mnt/shared/media/anime' if library == 'anime' else '/mnt/shared/media/tv shows'
+        self.series.append({
+            'id': arr_id, 'title': f'Show {arr_id}', 'year': 2010, 'tvdbId': 7000 + arr_id,
+            'path': f'{root}/Show {arr_id}', 'statistics': {'sizeOnDisk': size},
+            'added': prune.iso(added), 'qualityProfileId': profile, 'genres': ['Comedy'],
+        })
+        self.episode_files[arr_id] = [{'id': arr_id * 10, 'dateAdded': prune.iso(file_added)}]
+        sid = str(70000 + arr_id)
+        self.items[sid] = {'Id': sid, 'Type': 'Series', 'ProviderIds': {'Tvdb': str(7000 + arr_id)},
+                           'Path': f'{root}/Show {arr_id}'}
+        self.items[str(80000 + arr_id)] = {'Id': str(80000 + arr_id), 'Type': 'Episode', 'SeriesId': sid,
+                                           'Path': f'{root}/Show {arr_id}/S01E01.mkv'}
+
+    def play(self, item_id, ts, user=VIEWER, kind='playback.start'):
+        self.activity.append({'Id': len(self.activity) + 1, 'Type': kind, 'ItemId': item_id,
+                              'UserId': user, 'Date': prune.iso(ts)})
+
+
+class FakePruneArr:
+    def __init__(self, world, backend):
+        self.world, self.backend = world, backend
+
+    def get(self, route):
+        self.world.arr_calls.append((self.backend, route))
+        if self.backend in self.world.arr_fail:
+            raise prune.Refused(lib.FAILURE)
+        if route == '/api/v3/movie':
+            return copy.deepcopy(self.world.movies)
+        if route == '/api/v3/series':
+            return copy.deepcopy(self.world.series)
+        if route == '/api/v3/qualityprofile':
+            return copy.deepcopy(self.world.profiles[self.backend])
+        for prefix, rows in (('/api/v3/movie/', self.world.movies), ('/api/v3/series/', self.world.series)):
+            if route.startswith(prefix):
+                found = [r for r in rows if r['id'] == int(route[len(prefix):])]
+                if not found:
+                    raise prune.Refused(lib.FAILURE)
+                return copy.deepcopy(found[0])
+        if route.startswith('/api/v3/queue?page=1&pageSize=200&'):
+            recs = self.world.queue[self.backend]
+            return {'page': 1, 'pageSize': 200, 'totalRecords': len(recs), 'records': recs}
+        if route.startswith('/api/v3/episodefile?seriesId='):
+            return copy.deepcopy(self.world.episode_files[int(route.split('=')[1])])
+        raise AssertionError(route)
+
+    def close(self):
+        pass
+
+
+class FakePruneEmby:
+    actor_id = ADMIN
+
+    def __init__(self, world):
+        self.world = world
+        self.allowed = {'/Users'}
+
+    def allow_read(self, path):
+        assert lib.LibraryEmbyClient.PRUNE_READ_ROUTE.fullmatch(path), path
+        self.allowed.add(path)
+
+    def close(self):
+        pass
+
+    @staticmethod
+    def _page(rows, query):
+        start, limit = int(query.get('StartIndex', 0)), int(query.get('Limit', 500))
+        return {'TotalRecordCount': len(rows), 'Items': copy.deepcopy(rows[start:start + limit])}
+
+    def _http(self, method, path, query=None):
+        assert method == 'GET' and path in self.allowed, path
+        query = query or {}
+        if self.world.emby_fail:
+            raise prune.Refused('Operator HTTP failed; no retry')
+        if path == '/Users':
+            return [{'Id': ADMIN, 'Name': 'Admin'}, {'Id': VIEWER, 'Name': 'Viewer'}]
+        if path == '/System/ActivityLog/Entries':
+            if self.world.history_fail:
+                raise prune.Refused('Operator HTTP failed; no retry')
+            rows = sorted(self.world.activity, key=lambda e: e['Date'], reverse=True)
+            if 'MinDate' in query:
+                rows = [e for e in rows if e['Date'] >= query['MinDate']]
+            return self._page(rows, query)
+        user = path.split('/')[2]
+        if 'Ids' in query:
+            rows = [self.world.items[i] for i in query['Ids'].split(',') if i in self.world.items]
+        else:
+            source = {'IsFavorite': self.world.favorites, 'IsPlayed': self.world.played,
+                      'IsResumable': self.world.resumable}[query['Filters']]
+            rows = [self.world.items[i] for i in source.get(user, [])]
+        return self._page(rows, query)
+
+
+class FakePruneBackends:
+    def __init__(self, world):
+        self.world = world
+
+    def arr(self, backend):
+        return FakePruneArr(self.world, backend)
+
+    def emby(self):
+        return FakePruneEmby(self.world)
+
+    def _tick(self):
+        # Live seeding counters advance on every read, as on a seeding client.
+        self.world.seed_clock += 1
+        for row in self.world.torrents:
+            if type(row.get('seeding_time')) is int:
+                row['seeding_time'] += 60
+            row['ratio'] = round(row.get('ratio', 1.0) + 0.01, 4)
+
+    def qbit_rows(self):
+        if self.world.qbit_fail:
+            raise prune.Refused(prune.QBIT_FAILURE)
+        self._tick()
+        return copy.deepcopy(self.world.torrents)
+
+    def remove(self, req):
+        self.world.remove_calls.append(copy.deepcopy(req))
+        if self.world.remove_error is not None:
+            raise self.world.remove_error
+        key = (req['library'], req['arr_id'])
+        if req['mode'] == 'apply' and key in self.world.apply_errors:
+            raise self.world.apply_errors[key]
+        movie = [m for m in self.world.movies if m['id'] == req['arr_id']]
+        show = [s for s in self.world.series if s['id'] == req['arr_id']]
+        size = movie[0]['sizeOnDisk'] if req['library'] == 'movies' else show[0]['statistics']['sizeOnDisk']
+        size = self.world.plan_bytes.get(key, size)
+        self._tick()
+        clock = self.world.seed_clock
+        torrents = [dict(t, action=t['action'] if req['remove_torrents'] else 'keep',
+                         reason='meets_threshold' if req['remove_torrents'] else 'remove_torrents_false',
+                         ratio=1.0 + clock / 100, seeding_time_seconds=15 * prune.DAY + clock * 60)
+                    for t in self.world.plan_torrents]
+        plan = {'library': req['library'], 'arr_id': req['arr_id'], 'delete_title': True,
+                'remove_torrents': req['remove_torrents'], 'torrents': torrents, 'total_bytes': size}
+        # The production digest: it must not move with the advancing counters.
+        digest = lib.remove_plan_digest(plan)
+        if req['mode'] == 'preview':
+            if self.world.on_preview is not None:
+                self.world.on_preview(req)
+            return {'mode': 'preview', 'plan': plan, 'plan_sha256': digest}
+        if req['plan_sha256'] != digest:
+            raise lib.LibraryRefusal('plan_changed', 'Plan changed since preview')
+        if self.world.post_dispatch_on == key:
+            raise lib.LibraryPostDispatchError('uncertain', 'Title delete dispatched', [])
+        self.world.removed.append(key)
+        if self.world.after_apply is not None:
+            self.world.after_apply(req)
+        return {'mode': 'apply', 'plan': plan,
+                'removed_torrent_hashes': [t['hash'] for t in torrents if t['action'] == 'remove'],
+                'kept_torrent_hashes': [t['hash'] for t in torrents if t['action'] != 'remove']}
+
+
+def prune_block(**overrides):
+    cfg = {
+        'enabled': True, 'target_bytes': TIB, 'min_idle_days': 180, 'grace_days': 7,
+        'max_bytes_per_run': TIB, 'max_titles_per_run': 40,
+        'state_dir': '/var/lib/holonet-operator/prune',
+        'keep_journal': '/var/lib/holonet/janitor/state.json',
+    }
+    cfg.update(overrides)
+    return {
+        'enabled': True, 'target_library': '3', 'revision': 'e' * 40, 'subjects': ['1' * 64],
+        'libraries': {
+            'movies': {'library_id': '3', 'kind': 'movie', 'arr': 'radarr',
+                       'descriptor': '/etc/holonet-playlists/radarr.json',
+                       'root_folder_path': '/mnt/shared/media/movies', 'quality_profile_id': 11},
+            'tv': {'library_id': '1132', 'kind': 'series', 'arr': 'sonarr',
+                   'descriptor': '/etc/holonet-playlists/sonarr.json',
+                   'root_folder_path': '/mnt/shared/media/tv shows', 'quality_profile_id': 6},
+            'anime': {'library_id': '615', 'kind': 'series', 'arr': 'sonarr',
+                      'descriptor': '/etc/holonet-playlists/sonarr.json',
+                      'root_folder_path': '/mnt/shared/media/anime', 'quality_profile_id': 6},
+        },
+        'torrents': '/etc/holonet-playlists/qbit.json',
+        'allowed_categories': ['radarr-movies', 'tv-sonarr'],
+        'removal_thresholds': {'min_ratio': 1.0, 'min_seeding_days': 14},
+        'limits': {'lookup_max_rows': 25, 'releases_max_rows': 50, 'subtitles_default_chars': 20000,
+                   'subtitles_max_chars': 60000, 'remove_max_files': 500},
+        'prune': cfg,
+    }
+
+
+def seed_row(torrent_hash, size, seeded_days, tracker=SEEDPOOL):
+    return {'hash': torrent_hash, 'tracker': tracker, 'total_size': size, 'size': size, 'progress': 1,
+            'amount_left': 0, 'seeding_time': seeded_days * prune.DAY, 'state': 'uploading', 'ratio': 1.0}
+
+
+class LibraryPruneTests(unittest.TestCase):
+    def setUp(self):
+        self.world = PruneWorld()
+        self.backends = FakePruneBackends(self.world)
+        self.block = prune_block()
+        lib.validate_block(self.block)
+
+    def run_prune(self, mode='run', now=NOW, marks=None, keep_ids=None, block=None):
+        return prune.prune(block or self.block, self.backends, mode=mode, now=now,
+                           keep_ids=keep_ids or {'movies': [], 'tv': [], 'anime': []}, marks=marks or {})
+
+    def reasons(self, keep_ids=None):
+        facts = prune.collect_arr(self.block, self.backends.arr)
+        emby = prune.collect_emby(FakePruneEmby(self.world), prune.TitleIndex(facts['titles'], self.block),
+                                  now=NOW, window_days=180, keep_ids=keep_ids or {})
+        dates = prune.SeriesDates(self.backends.arr)
+        return {key: prune.eligibility(t, facts, emby, self.block['prune'], NOW, dates)[1]
+                for key, t in facts['titles'].items()}
+
+    def test_parse_time_and_iso(self):
+        self.assertEqual(prune.parse_time('2026-11-23T02:42:42.1880000Z'), prune.parse_time('2026-11-23T02:42:42Z'))
+        self.assertEqual(prune.parse_time('2026-11-23T03:42:42+01:00'), prune.parse_time('2026-11-23T02:42:42Z'))
+        for bad in (None, 5, '', 'yesterday', '2026-13-01T00:00:00Z', 'x' * 50):
+            self.assertIsNone(prune.parse_time(bad))
+        self.assertEqual(prune.iso(NOW), '2026-11-22T00:00:00Z')
+
+    def test_prune_policy_block_validation(self):
+        self.assertIn('prune', lib.validate_block(self.block))
+        for change in ({'target_bytes': GIB}, {'min_idle_days': 1}, {'grace_days': 0},
+                       {'max_bytes_per_run': 2 * TIB}, {'max_titles_per_run': 0},
+                       {'max_titles_per_run': 201}, {'enabled': 'yes'}, {'state_dir': 'relative'},
+                       {'keep_journal': '/var/../etc/shadow'}, {'extra': 1}):
+            with self.subTest(change=change), self.assertRaises(prune.Refused):
+                lib.validate_block(prune_block(**change))
+        block = prune_block()
+        del block['prune']['grace_days']
+        with self.assertRaises(prune.Refused):
+            lib.validate_block(block)
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            prune.prune_config({k: v for k, v in self.block.items() if k != 'prune'})
+        self.assertEqual(ctx.exception.reason, 'prune_disabled')
+
+    def test_new_read_requests_are_bounded(self):
+        self.assertIn('library-prune-status', lib.READ_OPERATIONS)
+        self.assertIn('library-watch-history', lib.READ_OPERATIONS)
+        self.assertEqual(lib.required_action('library-watch-history'), lib.READ_ACTION)
+        lib.request('library-prune-status', {})
+        lib.request('library-watch-history', {})
+        lib.request('library-watch-history', {'days': 365, 'limit': 200})
+        for op, value in (('library-prune-status', {'mode': 'run'}),
+                          ('library-watch-history', {'days': 0}),
+                          ('library-watch-history', {'days': 366}),
+                          ('library-watch-history', {'days': True}),
+                          ('library-watch-history', {'limit': 201}),
+                          ('library-watch-history', {'user': 'x'})):
+            with self.subTest(op=op, value=value), self.assertRaises(prune.Refused):
+                lib.request(op, value)
+
+    def test_eligibility_exclusions(self):
+        w = self.world
+        for arr_id in range(1, 10):
+            w.movie(arr_id, 100 * GIB)
+        w.movies[2]['qualityProfileId'] = 13                     # 3: Favorites - UHD + Original
+        w.favorites[VIEWER] = [emby_movie_id(2), str(80000 + 70)]  # 2 and series 70 via an episode
+        w.queue['radarr'] = [{'movieId': 5}]
+        w.movies[5]['added'] = prune.iso(NOW - 10 * prune.DAY)    # 6: recently added
+        w.movies[6]['movieFile']['dateAdded'] = prune.iso(NOW - 10 * prune.DAY)  # 7: new file
+        w.play(emby_movie_id(8), NOW - 5 * prune.DAY)              # 8: watched in the window
+        w.played[VIEWER] = [emby_movie_id(9)]                    # 9: played at an unknown time
+        w.play(None, NOW - 100 * prune.DAY, kind='VideoPlayback')  # unattributable: incomplete
+        w.show(70, 100 * GIB)
+        w.show(71, 100 * GIB)
+        w.show(72, 100 * GIB, file_added=NOW - 3 * prune.DAY)
+        w.show(80, 100 * GIB, library='anime')
+        w.queue['sonarr'] = []
+        reasons = self.reasons(keep_ids={'movies': [emby_movie_id(4)], 'tv': [], 'anime': []})
+        self.assertEqual(reasons, {
+            ('movies', 1): None, ('movies', 2): 'favorite', ('movies', 3): 'favorite_profile',
+            ('movies', 4): 'kept', ('movies', 5): 'downloading', ('movies', 6): 'recently_added',
+            ('movies', 7): 'recent_file', ('movies', 8): 'watched', ('movies', 9): 'history_incomplete',
+            ('tv', 70): 'favorite', ('tv', 71): None, ('tv', 72): 'recent_file', ('anime', 80): None,
+        })
+        # A complete window (log reaches past it, every start attributable) clears 9.
+        w.activity = [e for e in w.activity if e['Type'] != 'VideoPlayback']
+        self.assertIsNone(self.reasons()[('movies', 9)])
+        # A log that starts inside the window is incomplete again.
+        w.activity = [e for e in w.activity if e['Id'] != 1]
+        self.assertEqual(self.reasons()[('movies', 9)], 'history_incomplete')
+        # Series-level favourites, queue membership and the series profile also protect.
+        w.favorites[VIEWER] = [str(70071)]
+        w.queue['sonarr'] = [{'seriesId': 80}]
+        w.series[2]['qualityProfileId'] = 7
+        r = self.reasons()
+        self.assertEqual((r[('tv', 71)], r[('anime', 80)], r[('tv', 72)]),
+                         ('favorite', 'downloading', 'favorite_profile'))
+
+    def test_marks_in_activity_order_until_projection_meets_target(self):
+        w = self.world
+        w.movie(1, TIB, profile=13)                      # protected anchor keeps us over target
+        w.movie(2, 100 * GIB)
+        w.movie(3, 200 * GIB)
+        w.movie(4, 100 * GIB, added=OLD + 20 * prune.DAY)
+        w.movie(5, 50 * GIB, added=OLD + 30 * prune.DAY)
+        w.movie(6, 50 * GIB, added=OLD + 40 * prune.DAY)
+        summary, marks = self.run_prune(mode='plan')
+        # Needs 500 GiB: oldest activity first, ties larger first, stop at the target.
+        self.assertEqual([(m['arr_id'], m['size_bytes']) for m in summary['marked']],
+                         [(3, 200 * GIB), (2, 100 * GIB), (4, 100 * GIB), (5, 50 * GIB), (6, 50 * GIB)])
+        self.assertEqual(summary['projected_bytes'], TIB)
+        self.assertEqual(w.remove_calls, [])
+        self.assertEqual(len(marks), 5)
+        # Two more small titles than needed: the newest stays unmarked.
+        w.movie(7, 50 * GIB, added=OLD + 50 * prune.DAY)
+        w.movies[0]['sizeOnDisk'] = TIB - 50 * GIB
+        summary, _ = self.run_prune(mode='plan')
+        self.assertNotIn(7, [m['arr_id'] for m in summary['marked']])
+
+    def test_grace_period_then_removal(self):
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        summary, marks = self.run_prune()
+        mark = marks[('movies', 2)]
+        self.assertEqual(mark['marked_at'], prune.iso(NOW))
+        self.assertEqual(mark['remove_after'], prune.iso(NOW + 7 * prune.DAY))
+        self.assertEqual(w.remove_calls, [])
+        summary, marks = self.run_prune(now=NOW + 6 * prune.DAY, marks=marks)
+        self.assertEqual(w.remove_calls, [])
+        self.assertIn(('movies', 2), marks)
+        self.assertEqual(summary['marked'], [])
+        summary, marks = self.run_prune(now=NOW + 7 * prune.DAY, marks=marks)
+        self.assertEqual(w.removed, [('movies', 2)])
+        self.assertEqual([c['mode'] for c in w.remove_calls], ['preview', 'apply'])
+        self.assertEqual(w.remove_calls[0]['keep_emby_ids'], [])
+        self.assertEqual(w.remove_calls[0]['target'], 'title')
+        self.assertEqual(summary['removed'][0]['removed_bytes'], 300 * GIB)
+        self.assertEqual(summary['library_bytes_after'], TIB)
+        self.assertEqual(marks, {})
+
+    def test_apply_rechecks_eligibility_and_target(self):
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        w.movie(3, 300 * GIB)
+        w.movie(4, 300 * GIB)
+        _, marks = self.run_prune()
+        self.assertEqual(set(marks), {('movies', 2), ('movies', 3), ('movies', 4)})
+        later = NOW + 8 * prune.DAY
+        w.favorites[VIEWER] = [emby_movie_id(2)]
+        w.play(emby_movie_id(3), later - prune.DAY)
+        summary, marks = self.run_prune(now=later, marks=marks)
+        self.assertEqual({(u['arr_id'], u['reason']) for u in summary['unmarked']},
+                         {(2, 'favorite'), (3, 'watched')})
+        self.assertEqual(w.removed, [('movies', 4)])
+        self.assertNotIn(('movies', 4), marks)
+        self.assertNotIn(4, [m['arr_id'] for m in summary['marked']])
+        # Kept at apply: library-remove refuses keep_listed, which unmarks.
+        w.movie(5, 300 * GIB)
+        w.movie(6, 300 * GIB)
+        _, marks = self.run_prune(now=later, marks={})
+        w.remove_calls.clear()
+        w.remove_error = lib.LibraryRefusal('keep_listed', 'Title is protected by keep list')
+        summary, marks = self.run_prune(now=later + 8 * prune.DAY, marks=marks)
+        self.assertTrue(summary['unmarked'] and all(u['reason'] == 'kept' for u in summary['unmarked']))
+        self.assertEqual(marks, {})
+        # Under target at apply time: nothing is removed and marks are released.
+        w.remove_error = None
+        _, marks = self.run_prune(now=later, marks={})
+        self.assertTrue(marks)
+        for m in w.movies:
+            m['sizeOnDisk'] = GIB
+        w.remove_calls.clear()
+        summary, marks = self.run_prune(now=later + 8 * prune.DAY, marks=marks)
+        self.assertEqual(w.remove_calls, [])
+        self.assertEqual(marks, {})
+        self.assertTrue(all(u['reason'] == 'under_target' for u in summary['unmarked']))
+
+    def test_unmarks_gone_and_ineligible_on_every_run(self):
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        w.movie(3, 300 * GIB)
+        _, marks = self.run_prune()
+        w.movies = [m for m in w.movies if m['id'] != 2]
+        w.queue['radarr'] = [{'movieId': 3}]
+        summary, marks = self.run_prune(now=NOW + prune.DAY, marks=marks)
+        self.assertEqual({(u['arr_id'], u['reason']) for u in summary['unmarked']},
+                         {(2, 'gone'), (3, 'downloading')})
+        self.assertEqual(marks, {})
+
+    def test_per_run_caps(self):
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        for arr_id in range(2, 8):
+            w.movie(arr_id, 300 * GIB, added=OLD + arr_id * prune.DAY)
+        summary, marks = self.run_prune(block=prune_block(max_titles_per_run=2))
+        self.assertEqual([m['arr_id'] for m in summary['marked']], [2, 3])
+        summary, marks = self.run_prune(block=prune_block(max_bytes_per_run=700 * GIB))
+        self.assertEqual([m['arr_id'] for m in summary['marked']], [2, 3])
+        # A title larger than the byte cap is skipped, smaller ones still mark.
+        w.movie(9, 800 * GIB, added=OLD)
+        summary, _ = self.run_prune(block=prune_block(max_bytes_per_run=700 * GIB))
+        self.assertEqual([m['arr_id'] for m in summary['marked']], [2, 3])
+        # Removal obeys the title cap too.
+        _, marks = self.run_prune()
+        w.remove_calls.clear()
+        summary, marks = self.run_prune(now=NOW + 8 * prune.DAY, marks=marks,
+                                        block=prune_block(max_titles_per_run=1))
+        self.assertEqual(len(w.removed), 1)
+        self.assertEqual(len(summary['removed']), 1)
+
+    def test_fail_closed_on_any_read_error(self):
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        _, marks = self.run_prune()
+        for setup, reason in (
+            (lambda: w.arr_fail.add('radarr'), 'arr_unavailable'),
+            (lambda: w.arr_fail.add('sonarr'), 'arr_unavailable'),
+            (lambda: setattr(w, 'emby_fail', True), 'emby_unavailable'),
+            (lambda: setattr(w, 'history_fail', True), 'history_unavailable'),
+            (lambda: setattr(w, 'qbit_fail', True), 'qbit_unavailable'),
+        ):
+            w.arr_fail.clear()
+            w.emby_fail = w.history_fail = w.qbit_fail = False
+            setup()
+            with self.subTest(reason=reason), self.assertRaises(prune.PruneAbort) as ctx:
+                self.run_prune(now=NOW + 8 * prune.DAY, marks=marks)
+            self.assertEqual(ctx.exception.reason, reason)
+            self.assertEqual(w.remove_calls, [])
+        # Unresolvable SeriesId on a favourite refuses instead of dropping protection.
+        w.arr_fail.clear()
+        w.emby_fail = w.history_fail = w.qbit_fail = False
+        w.items['999'] = {'Id': '999', 'Type': 'Episode', 'SeriesId': '424242'}
+        w.favorites[VIEWER] = ['999']
+        with self.assertRaises(prune.PruneAbort) as ctx:
+            self.run_prune(now=NOW + 8 * prune.DAY, marks=marks)
+        self.assertEqual(ctx.exception.reason, 'emby_unavailable')
+        # A backend failure during apply stops further removals and marking.
+        w.favorites = {}
+        w.movie(3, 300 * GIB)
+        _, marks = self.run_prune(marks={})
+        w.remove_error = prune.Refused(lib.FAILURE)
+        summary, after = self.run_prune(now=NOW + 8 * prune.DAY, marks=marks)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('aborted', 'backend_error'))
+        self.assertEqual(len(w.remove_calls), 1)
+        self.assertEqual(summary['marked'], [])
+        self.assertEqual(set(after), set(marks))
+
+    def test_post_dispatch_uncertainty_stops_the_run(self):
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        w.movie(3, 300 * GIB, added=OLD + prune.DAY)
+        _, marks = self.run_prune()
+        w.post_dispatch_on = ('movies', 2)
+        summary, _ = self.run_prune(now=NOW + 8 * prune.DAY, marks=marks)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('partial', 'post_dispatch_uncertain'))
+        self.assertEqual(w.removed, [])
+        self.assertEqual([c['arr_id'] for c in w.remove_calls if c['mode'] == 'apply'], [2])
+        self.assertEqual(summary['marked'], [])
+
+    def test_torrent_gate_seedpool_policy(self):
+        h1, h2, big = 'a' * 40, 'b' * 40, 'c' * 40
+        rows = [seed_row(big, 25 * TIB, 30), seed_row(h1, TIB, 11), seed_row(h2, TIB, 5)]
+        self.assertEqual(prune.torrent_gate(rows, [h1]), (True, {}))
+        self.assertEqual(prune.torrent_gate(rows, [h2]), (False, {'minimum_seed_age_not_met': 1}))
+        # Retiring would break the 20 TiB active floor.
+        floor = [seed_row(big, 20 * TIB - GIB, 30), seed_row(h1, TIB, 11)]
+        self.assertEqual(prune.torrent_gate(floor, [h1]), (False, {'projected_below_floor': 1}))
+        other = [seed_row(big, 25 * TIB, 30), seed_row(h1, TIB, 11, OTHER_TRACKER), seed_row(h2, TIB, 5, OTHER_TRACKER)]
+        self.assertEqual(prune.torrent_gate(other, [h1]), (True, {}))
+        self.assertEqual(prune.torrent_gate(other, [h2]), (False, {'minimum_seed_age_not_met': 1}))
+        self.assertEqual(prune.torrent_gate(rows + [seed_row('d' * 40, TIB, 30, '')], ['d' * 40])[0], False)
+        self.assertEqual(prune.torrent_gate(rows, ['e' * 40]), (False, {'torrent_missing': 1}))
+        # Any unknown torrent in the snapshot blocks SeedPool retirement.
+        broken = rows + [{'hash': 'f' * 40, 'tracker': SEEDPOOL}]
+        self.assertFalse(prune.torrent_gate(broken, [h1])[0])
+
+    def test_removal_torrent_gating(self):
+        w = self.world
+        w.movie(2, 300 * GIB)
+        title = prune.collect_arr(self.block, self.backends.arr)['titles'][('movies', 2)]
+        h = 'a' * 40
+
+        def remove_one(keep_ids):
+            prepared = prune._prepare_removal(self.backends, title, keep_ids)
+            applied = prune._apply_removal(self.backends, prepared)
+            result, warning = prune._removal_result(self.backends, prepared, applied)
+            self.assertIsNone(warning)
+            return result
+
+        w.plan_torrents = [{'hash': h, 'action': 'remove', 'ownership_proof': 'hardlink'}]
+        w.torrents = [seed_row('c' * 40, 25 * TIB, 30), seed_row(h, 300 * GIB, 11)]
+        result = remove_one({'movies': ['123']})
+        self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
+                         [('preview', True), ('apply', True)])
+        self.assertEqual(w.remove_calls[0]['keep_emby_ids'], ['123'])
+        self.assertEqual((result['torrents_removed'], result['torrents_kept'], result['bytes_held_by_torrents']),
+                         (1, 0, 0))
+        # Seeded under 10 days: keep the torrent, remove only the library title.
+        w.remove_calls.clear()
+        w.torrents[1]['seeding_time'] = 3 * prune.DAY
+        result = remove_one({})
+        self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
+                         [('preview', True), ('preview', False), ('apply', False)])
+        self.assertEqual((result['torrents_removed'], result['torrents_kept'], result['bytes_held_by_torrents']),
+                         (0, 1, 300 * GIB))
+        self.assertEqual(result['torrent_gate'], {'minimum_seed_age_not_met': 1})
+        # Arr history is not proof enough here: no hardlink proof, the torrent keeps
+        # seeding whatever the SeedPool snapshot says.
+        w.remove_calls.clear()
+        w.torrents[1]['seeding_time'] = 30 * prune.DAY
+        w.plan_torrents = [{'hash': h, 'action': 'remove', 'ownership_proof': 'arr_history'}]
+        result = remove_one({})
+        self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
+                         [('preview', True), ('preview', False), ('apply', False)])
+        self.assertEqual((result['torrents_removed'], result['torrents_kept'], result['torrent_gate']),
+                         (0, 1, {'ownership_not_hardlink': 1}))
+        # One unproven torrent keeps every torrent of the title.
+        w.remove_calls.clear()
+        w.torrents.append(seed_row('b' * 40, GIB, 30))
+        w.plan_torrents = [{'hash': h, 'action': 'remove', 'ownership_proof': 'hardlink'},
+                           {'hash': 'b' * 40, 'action': 'remove', 'ownership_proof': 'arr_history'}]
+        result = remove_one({})
+        self.assertEqual(w.remove_calls[-1]['remove_torrents'], False)
+        self.assertEqual((result['torrents_removed'], result['torrents_kept']), (0, 2))
+        # Hardlink proof failed (library-remove keeps it): apply repeats the previewed flag.
+        w.remove_calls.clear()
+        w.plan_torrents = [{'hash': h, 'action': 'keep', 'ownership_proof': 'none'}]
+        w.torrents = [seed_row('c' * 40, 25 * TIB, 30), seed_row(h, 300 * GIB, 11)]
+        result = remove_one({})
+        self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
+                         [('preview', True), ('apply', True)])
+        self.assertEqual(result['bytes_held_by_torrents'], 300 * GIB)
+        # A malformed size in the qBittorrent snapshot cannot fail after the removal.
+        w.torrents[1]['size'] = 'large'
+        self.assertEqual(remove_one({})['bytes_held_by_torrents'], 0)
+
+    def _due_world(self):
+        """Movies 2 and 3 marked and due; the protected anchor keeps the library over target."""
+        self.world = PruneWorld()
+        self.backends = FakePruneBackends(self.world)
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        w.movie(3, 300 * GIB, added=OLD + prune.DAY)
+        _, marks = self.run_prune()
+        self.assertEqual(set(marks), {('movies', 2), ('movies', 3)})
+        return w, marks
+
+    def test_protection_rechecked_right_before_apply(self):
+        later = NOW + 8 * prune.DAY
+        changes = {
+            'favorite': lambda w: w.favorites.__setitem__(ADMIN, [emby_movie_id(2)]),
+            'watched': lambda w: w.resumable.__setitem__(VIEWER, [emby_movie_id(2)]),
+            'downloading': lambda w: w.queue.__setitem__('radarr', [{'movieId': 2}]),
+            'favorite_profile': lambda w: w.movies[1].__setitem__('qualityProfileId', 13),
+        }
+        changes['watched_log'] = lambda w: w.play(emby_movie_id(2), later + 60)
+        for reason, change in changes.items():
+            with self.subTest(reason=reason):
+                w, marks = self._due_world()
+                # The change lands after this run collected its facts, before the apply.
+                w.on_preview = lambda req, w=w, change=change: req['arr_id'] == 2 and change(w)
+                summary, marks = self.run_prune(now=later, marks=marks)
+                self.assertEqual(summary['outcome'], 'ok')
+                self.assertNotIn(('movies', 2), w.removed)
+                self.assertEqual([c['mode'] for c in w.remove_calls if c['arr_id'] == 2], ['preview'])
+                self.assertIn((2, reason.replace('_log', '')), {(u['arr_id'], u['reason']) for u in summary['unmarked']})
+                # The next due title is still removed, and the protected one is not re-marked.
+                self.assertEqual(w.removed, [('movies', 3)])
+                self.assertNotIn(('movies', 2), marks)
+                self.assertNotIn(2, [m['arr_id'] for m in summary['marked']])
+        # A re-check read failure stops the run before that apply.
+        w, marks = self._due_world()
+        w.on_preview = lambda req: setattr(w, 'emby_fail', True)
+        summary, after = self.run_prune(now=later, marks=marks)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('aborted', 'recheck_unavailable'))
+        self.assertEqual(w.removed, [])
+        self.assertEqual(set(after), set(marks))
+
+    def test_recheck_fails_closed_for_played_title_when_fresh_history_is_incomplete(self):
+        # Movie 2 was played long ago and history was complete at collection, so
+        # it is due. Before its apply the activity log loses coverage and a new
+        # resume state appears: the fresh history cannot prove the title idle.
+        later = NOW + 8 * prune.DAY
+        w, marks = self._due_world()
+        w.played[VIEWER] = [emby_movie_id(2)]
+
+        def change(req, w=w):
+            if req['arr_id'] == 2:
+                w.activity = []
+                w.resumable[VIEWER] = [emby_movie_id(2)]
+        w.on_preview = change
+        summary, marks = self.run_prune(now=later, marks=marks)
+        self.assertNotIn(('movies', 2), w.removed)
+        self.assertEqual([c['mode'] for c in w.remove_calls if c['arr_id'] == 2], ['preview'])
+        self.assertIn((2, 'history_incomplete'),
+                      {(u['arr_id'], u['reason']) for u in summary['unmarked']})
+
+    def test_byte_cap_uses_fresh_plan_size(self):
+        w = self.world
+        w.movie(1, 2 * TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        _, marks = self.run_prune()
+        self.assertEqual(marks[('movies', 2)]['size_bytes'], 300 * GIB)
+        # The title grew since the snapshot: the fresh plan deletes 3 TiB; the cap is 1 TiB.
+        w.plan_bytes[('movies', 2)] = 3 * TIB
+        later = NOW + 8 * prune.DAY
+        summary, marks = self.run_prune(now=later, marks=marks)
+        self.assertEqual([c['mode'] for c in w.remove_calls], ['preview'])
+        self.assertEqual(w.removed, [])
+        self.assertEqual([(s['arr_id'], s['reason'], s['size_bytes']) for s in summary['remove_skipped']],
+                         [(2, 'run_byte_cap', 3 * TIB)])
+        self.assertEqual(summary['removed_bytes'], 0)
+        self.assertIn(('movies', 2), marks)
+        # Under the cap, the receipt and the accounting carry the plan's bytes.
+        w.plan_bytes[('movies', 2)] = 200 * GIB
+        summary, marks = self.run_prune(now=later, marks=marks)
+        self.assertEqual(w.removed, [('movies', 2)])
+        self.assertEqual((summary['removed'][0]['size_bytes'], summary['removed'][0]['removed_bytes']),
+                         (200 * GIB, 200 * GIB))
+        self.assertEqual(summary['removed_bytes'], 200 * GIB)
+        self.assertEqual(summary['library_bytes_after'], summary['library_bytes_before'] - 200 * GIB)
+
+    def test_reads_finish_before_the_first_removal(self):
+        w, marks = self._due_world()
+        w.show(70, 300 * GIB, added=OLD + 2 * prune.DAY)
+        # Sonarr fails as soon as anything was removed: every file-date read the
+        # marking phase needs must already be done.
+        w.after_apply = lambda req: w.arr_fail.add('sonarr')
+        w.movies[0]['sizeOnDisk'] = TIB + 300 * GIB
+        summary, marks = self.run_prune(now=NOW + 8 * prune.DAY, marks=marks,
+                                        block=prune_block(max_titles_per_run=1))
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('ok', None))
+        self.assertEqual(w.removed, [('movies', 2)])
+        self.assertIn(70, [m['arr_id'] for m in summary['marked']])
+        self.assertIn(('tv', 70), marks)
+
+    def test_failure_after_a_removal_keeps_the_receipt(self):
+        # A read failure (re-check) and an unexpected exception (apply) after
+        # one removal: both end partial with the removal and surviving marks.
+        for kind in ('refused', 'unexpected'):
+            with self.subTest(kind=kind):
+                w, marks = self._due_world()
+                if kind == 'refused':
+                    w.after_apply = lambda req, w=w: setattr(w, 'emby_fail', True)
+                    expected = 'recheck_unavailable'
+                else:
+                    w.apply_errors[('movies', 3)] = RuntimeError('injected')
+                    expected = 'unexpected'
+                summary, after = self.run_prune(now=NOW + 8 * prune.DAY, marks=marks)
+                self.assertEqual((summary['outcome'], summary['abort_reason']), ('partial', expected))
+                self.assertEqual([r['arr_id'] for r in summary['removed']], [2])
+                self.assertEqual(summary['removed_bytes'], 300 * GIB)
+                self.assertEqual(set(after), {('movies', 3)})
+                self.assertEqual(summary['marked'], [])
+                skipped = [(s['arr_id'], s['reason']) for s in summary['remove_skipped']]
+                self.assertEqual(skipped, [] if kind == 'refused' else [(3, 'uncertain')])
+                self.assertEqual(json.loads(prune.event(summary))['removed_count'], 1)
+
+    def test_history_incomplete_for_unmapped_play_in_a_managed_library(self):
+        w = self.world
+        w.movie(1, 100 * GIB)
+        w.items['45555'] = {'Id': '45555', 'Type': 'Movie', 'ProviderIds': {'Tmdb': '999999'},
+                            'Path': '/mnt/shared/media/movies/Orphan (1999)/orphan.mkv'}
+        w.items['46666'] = {'Id': '46666', 'Type': 'Movie', 'ProviderIds': {},
+                            'Path': '/mnt/shared/media/home videos/clip.mkv'}
+
+        def coverage():
+            facts = prune.collect_arr(self.block, self.backends.arr)
+            return prune.collect_emby(FakePruneEmby(w), prune.TitleIndex(facts['titles'], self.block),
+                                      now=NOW, window_days=180, touched=False)['history']['coverage']
+
+        # Plays of deleted items or items outside the managed libraries do not matter.
+        w.play('31337', NOW - prune.DAY)
+        w.play('46666', NOW - prune.DAY)
+        self.assertTrue(coverage()['complete'])
+        # An existing item inside a managed library that maps to no title might be any
+        # title, so the window is incomplete and played titles stay protected.
+        w.play('45555', NOW - prune.DAY)
+        cov = coverage()
+        self.assertFalse(cov['complete'])
+        self.assertEqual(cov['unmapped_plays'], 3)
+
+    def test_keep_journal_snapshot(self):
+        home = Path(os.environ['HOME'])
+        tmp = Path(os.environ['TMPDIR'])
+        self.assertTrue(tmp == home / 'tmp' or home in tmp.parents)
+        tmp.mkdir(parents=True, exist_ok=True)
+        path = tmp / f'keeps-{os.getpid()}.json'
+        record = {'server': 'a' * 32, 'library': '3', 'target': '40002', 'active': True, 'revision': 1}
+        state = {'version': 1, 'previews': {}, 'janitor_keeps': {
+            '1': record, '2': dict(record, target='40003', active=False),
+            '3': dict(record, target='40004', server='f' * 32),
+            '4': dict(record, target='70071', library='1132'),
+            '5': dict(record, target='not-an-id'),
+        }}
+        try:
+            path.write_text(json.dumps(state))
+            os.chmod(path, 0o600)
+            self.assertEqual(prune.read_keep_journal(str(path), 'a' * 32),
+                             {'movies': ['40002'], 'tv': ['70071'], 'anime': []})
+            os.chmod(path, 0o640)
+            with self.assertRaises(prune.Refused):
+                prune.read_keep_journal(str(path), 'a' * 32)
+            os.chmod(path, 0o600)
+            for bad in ({'version': 2}, {'version': 1, 'janitor_keeps': []},
+                        {'version': 1, 'janitor_keeps': {'1': dict(record, active='yes')}}):
+                path.write_text(json.dumps(bad))
+                with self.subTest(bad=bad), self.assertRaises(prune.Refused):
+                    prune.read_keep_journal(str(path), 'a' * 32)
+            path.write_text('{"version": 1, "version": 1}')
+            with self.assertRaises(prune.Refused):
+                prune.read_keep_journal(str(path), 'a' * 32)
+            with self.assertRaises(prune.Refused):
+                prune.read_keep_journal(str(tmp / 'missing.json'), 'a' * 32)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_watch_history_operation(self):
+        w = self.world
+        w.movie(1, 100 * GIB)
+        w.movie(2, 100 * GIB)
+        w.show(70, 100 * GIB)
+        w.play(emby_movie_id(1), NOW - 2 * prune.DAY)
+        w.play(emby_movie_id(1), NOW - prune.DAY, user=ADMIN)
+        w.play(str(80070), NOW - 3 * prune.DAY)
+        w.play(emby_movie_id(2), NOW - 100 * prune.DAY)   # outside a 90-day window
+        w.play('31337', NOW - prune.DAY)                  # deleted item: unmapped
+        w.favorites[ADMIN] = [emby_movie_id(2)]
+        call = {'request': {}}
+        out = prune.op_watch_history(call, self.block, lambda b, d, s: FakePruneArr(w, b),
+                                     lambda: FakePruneEmby(w), now=NOW)
+        self.assertEqual(out['days'], 90)
+        self.assertEqual([(i['arr_id'], i['play_count'], i['users']) for i in out['items']],
+                         [(1, 2, ['Admin', 'Viewer']), (70, 1, ['Viewer'])])
+        self.assertEqual(out['items'][0]['tmdb_id'], 101)
+        self.assertEqual(out['items'][1]['tvdb_id'], 7070)
+        self.assertEqual(out['items'][0]['genres'], ['Drama'])
+        self.assertEqual(out['items'][0]['last_played'], prune.iso(NOW - prune.DAY))
+        self.assertEqual([(f['arr_id'], f['users']) for f in out['favorites']], [(2, ['Admin'])])
+        self.assertEqual(out['history']['unmapped_plays'], 1)
+        self.assertTrue(out['history']['complete'])
+        out = prune.op_watch_history({'request': {'days': 365, 'limit': 1}}, self.block,
+                                     lambda b, d, s: FakePruneArr(w, b), lambda: FakePruneEmby(w), now=NOW)
+        self.assertEqual((len(out['items']), out['items_total'], out['truncated']), (1, 3, True))
+        # The shared wire fixture carries exactly the worker's result shape.
+        fixture = json.loads(FIXTURE.read_text())['library_watch_history']['result']
+        self.assertEqual(set(out), set(fixture))
+        self.assertEqual(set(out['items'][0]), set(fixture['items'][0]))
+        self.assertEqual(set(out['favorites'][0]), set(fixture['favorites'][0]))
+        self.assertEqual(set(out['history']), set(fixture['history']))
+        # Watch history needs no profile, queue or per-title reads.
+        self.assertFalse([r for _, r in w.arr_calls if 'queue' in r or 'profile' in r or 'episodefile' in r])
+
+    def _state_dir(self, name):
+        if os.geteuid() != 0:
+            self.skipTest('root-only prune state runs in Chaldea/CI')
+        home = Path(os.environ['HOME'])
+        self.assertEqual(Path(os.environ['TMPDIR']), home / 'tmp')
+        for parent in [home, *home.parents]:
+            info = parent.lstat()
+            self.assertEqual(info.st_uid, 0)
+            self.assertEqual(info.st_mode & 0o022, 0)
+        base = home / 'tmp' / f'prune-{name}-{os.getpid()}'
+        if base.exists():
+            import shutil
+            shutil.rmtree(base)
+        base.mkdir(parents=True, mode=0o700)
+        os.chmod(base, 0o700)
+        self.addCleanup(lambda: __import__('shutil').rmtree(base, ignore_errors=True))
+        return base
+
+    def test_state_custody_atomic_writes_and_abort(self):
+        base = self._state_dir('custody')
+        block = prune_block(state_dir=str(base))
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        keep = {'movies': [], 'tv': [], 'anime': []}
+        summary = prune.run_locked(block, self.backends, mode='plan', now=NOW, keep_ids=keep)
+        self.assertEqual([m['arr_id'] for m in summary['would_mark']], [2])
+        self.assertEqual(sorted(p.name for p in base.iterdir()), [])
+        summary = prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+        self.assertEqual(summary['outcome'], 'ok')
+        self.assertEqual(sorted(p.name for p in base.iterdir()), ['.lock', 'last_run.json', 'marks.json'])
+        for name in ('marks.json', 'last_run.json'):
+            info = (base / name).lstat()
+            self.assertEqual((stat.S_IMODE(info.st_mode), info.st_uid, info.st_nlink), (0o600, 0, 1))
+        marks = json.loads((base / 'marks.json').read_text())
+        self.assertEqual([(m['library'], m['arr_id']) for m in marks['marks']], [('movies', 2)])
+        # Status reads the same state.
+        status = prune.op_prune_status({'request': {}}, block, lambda b, d, s: FakePruneArr(w, b))
+        self.assertEqual((status['library_bytes'], status['pending_count'], status['projected_bytes']),
+                         (TIB + 300 * GIB, 1, TIB))
+        self.assertEqual(status['pending'][0]['remove_after'], prune.iso(NOW + 7 * prune.DAY))
+        self.assertEqual(status['last_run']['marked'][0]['arr_id'], 2)
+        self.assertIn('protects', status['protection'])
+        fixture = json.loads(FIXTURE.read_text())['library_prune_status']['result']
+        self.assertEqual(set(status), set(fixture))
+        self.assertEqual(set(status['pending'][0]), set(fixture['pending'][0]))
+        self.assertEqual(status['protection'], fixture['protection'])
+        # A failed write leaves the previous file intact and no temporary file behind.
+        before = (base / 'marks.json').read_bytes()
+        with patch.object(lib.os, 'replace', side_effect=OSError('injected')):
+            with self.assertRaises(prune.Refused):
+                prune.run_locked(block, self.backends, mode='run', now=NOW + prune.DAY, keep_ids=keep)
+        self.assertEqual((base / 'marks.json').read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in base.iterdir()), ['.lock', 'last_run.json', 'marks.json'])
+        # A read failure aborts, records it and keeps the marks unchanged.
+        w.emby_fail = True
+        summary = prune.run_locked(block, self.backends, mode='run', now=NOW + 8 * prune.DAY, keep_ids=keep)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('aborted', 'emby_unavailable'))
+        self.assertEqual((base / 'marks.json').read_bytes(), before)
+        self.assertEqual(json.loads((base / 'last_run.json').read_text())['abort_reason'], 'emby_unavailable')
+        self.assertEqual(w.remove_calls, [])
+        # Corrupt marks refuse status and abort a run without removing anything.
+        w.emby_fail = False
+        (base / 'marks.json').write_text('{"version": 1, "marks": [{"library": "movies"}]}')
+        summary = prune.run_locked(block, self.backends, mode='run', now=NOW + 8 * prune.DAY, keep_ids=keep)
+        self.assertEqual(summary['abort_reason'], 'state_invalid')
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            prune.op_prune_status({'request': {}}, block, lambda b, d, s: FakePruneArr(w, b))
+        self.assertEqual(ctx.exception.reason, 'prune_state_invalid')
+        self.assertEqual(w.remove_calls, [])
+        # A concurrent run holds the lock: the second run is busy and changes nothing.
+        (base / 'marks.json').unlink()
+        dir_fd = os.open(str(base), os.O_RDONLY | os.O_DIRECTORY)
+        held = prune.StateLock(dir_fd)
+        try:
+            summary = prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+            self.assertEqual(summary['abort_reason'], 'busy')
+            self.assertFalse((base / 'marks.json').exists())
+        finally:
+            held.release()
+            os.close(dir_fd)
+        # Disabled: a run records only that it was disabled.
+        summary = prune.run_locked(prune_block(state_dir=str(base), enabled=False), self.backends,
+                                   mode='run', now=NOW, keep_ids=keep)
+        self.assertEqual(summary['outcome'], 'disabled')
+        self.assertFalse((base / 'marks.json').exists())
+        # Unsafe state directory permissions refuse.
+        os.chmod(base, 0o755)
+        with self.assertRaises(prune.Refused):
+            prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+
+    def test_partial_run_persists_receipt(self):
+        base = self._state_dir('partial')
+        block = prune_block(state_dir=str(base))
+        keep = {'movies': [], 'tv': [], 'anime': []}
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        w.movie(3, 300 * GIB, added=OLD + prune.DAY)
+        prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+        w.apply_errors[('movies', 3)] = ValueError('injected')
+        summary = prune.run_locked(block, self.backends, mode='run', now=NOW + 8 * prune.DAY, keep_ids=keep)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('partial', 'unexpected'))
+        last_run = json.loads((base / 'last_run.json').read_text())
+        self.assertEqual((last_run['outcome'], [r['arr_id'] for r in last_run['removed']]), ('partial', [2]))
+        self.assertEqual(last_run['removed_bytes'], 300 * GIB)
+        marks = json.loads((base / 'marks.json').read_text())['marks']
+        self.assertEqual([(m['library'], m['arr_id']) for m in marks], [('movies', 3)])
+        # A state write failure after removals still returns the receipt for the event.
+        w.apply_errors.clear()
+        with patch.object(lib.os, 'replace', side_effect=OSError('injected')):
+            summary = prune.run_locked(block, self.backends, mode='run', now=NOW + 9 * prune.DAY,
+                                       keep_ids=keep)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('partial', 'state_write_failed'))
+        self.assertEqual([r['arr_id'] for r in summary['removed']], [3])
+
+    def test_main_plan_end_to_end(self):
+        base = self._state_dir('main')
+        block = prune_block(state_dir=str(base))
+        keep = {'movies': [], 'tv': [], 'anime': []}
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+        before = (base / 'marks.json').read_bytes()
+        policy = {'library': block, 'recipients': {'c' * 32: '/var/lib/holonet-operator/synthetic/config.json'},
+                  'caller': {'server': 'a' * 32}}
+        out = io.StringIO()
+        with patch.object(sock, 'load_policy', return_value=policy), \
+             patch.object(sock, 'selected_config', return_value={}), \
+             patch.object(prune, 'read_keep_journal', return_value=keep), \
+             patch.object(prune, 'Backends', return_value=self.backends), \
+             patch.object(prune.time, 'time', return_value=NOW + 8 * prune.DAY), \
+             contextlib.redirect_stdout(out):
+            code = prune.main(['plan'])
+        lines = out.getvalue().strip().split('\n')
+        printed = json.loads('\n'.join(lines[:-1]))
+        line = json.loads(lines[-1])
+        self.assertEqual(code, 0)
+        self.assertEqual((printed['mode'], printed['outcome']), ('plan', 'ok'))
+        self.assertEqual([r['arr_id'] for r in printed['would_remove']], [2])
+        self.assertNotIn('removed', printed)
+        self.assertEqual((line['event'], line['mode'], line['outcome'], line['removed_count']),
+                         ('holonet_library_prune', 'plan', 'ok', 1))
+        # A plan touches no backend mutation and no state.
+        self.assertEqual(w.remove_calls, [])
+        self.assertEqual((base / 'marks.json').read_bytes(), before)
+
+    def test_wire_fixture_prune_frames_and_summary_shape(self):
+        fixture = json.loads(FIXTURE.read_text())
+        for key, op in (('library_prune_status_frame', 'library-prune-status'),
+                        ('library_watch_history_frame', 'library-watch-history')):
+            frame = fixture[key]
+            self.assertEqual(frame['operation'], op)
+            self.assertEqual(frame['caller']['actions'], ['library.read'])
+            lib.request(op, frame['request'])
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        summary, marks = self.run_prune()
+        last_run = fixture['library_prune_status']['result']['last_run']
+        self.assertEqual(set(summary), set(last_run))
+        self.assertEqual(set(summary['history']), set(last_run['history']))
+        self.assertEqual(set(summary['marked'][0]), set(last_run['marked'][0]))
+        self.assertEqual(set(marks[('movies', 2)]), set(fixture['library_prune_status']['result']['pending'][0]))
+        for reason in ('prune_disabled', 'prune_state_invalid'):
+            self.assertEqual(fixture['refusals'][reason]['error']['reason'], reason)
+
+    def test_event_line_has_counts_only(self):
+        w = self.world
+        w.movie(1, TIB, profile=13, title='Secret Title')
+        w.movie(2, 300 * GIB, title='Another Secret')
+        summary, _ = self.run_prune()
+        line = prune.event(summary)
+        decoded = json.loads(line)
+        self.assertEqual(decoded['event'], 'holonet_library_prune')
+        self.assertEqual((decoded['marked_count'], decoded['pending_count']), (1, 1))
+        self.assertNotIn('Secret', line)
+        self.assertNotIn('\n', line)
 
 
 if __name__ == '__main__':

@@ -2655,6 +2655,7 @@ class CoexistencePackaging(unittest.TestCase):
 
         # R1-6 / P1-1: Go config library.enabled must match worker library.enabled and add library actions.
         enabled_ep = copy.deepcopy(endpoint)
+        enabled_ep["torrents"]["descriptor"] = contract.canonical_torrent_descriptor(library=True)
         enabled_ep["library"]["enabled"] = True
         enabled_ep["library"]["libraries"]["movies"]["minimum_availability"] = "released"
         enabled_ep["config"]["library"] = {"enabled": True}
@@ -2773,6 +2774,86 @@ class CoexistencePackaging(unittest.TestCase):
             bad_recs["library"]["recommendations"] = mut
             with self.subTest(recs=label_case), self.assertRaises(AnsibleFilterError):
                 contract.endpoint_contract(bad_recs)
+
+        # N2-1: enabled library management needs the extended qBit descriptor;
+        # the Movies-only one would keep every tv-sonarr torrent forever.
+        movies_only = copy.deepcopy(enabled_ep)
+        movies_only["torrents"]["descriptor"] = contract.canonical_torrent_descriptor()
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(movies_only)
+        with self.assertRaises(AnsibleFilterError):
+            contract.playlist_operator_plan(movies_only)
+        # A configured but disabled library still admits either canonical descriptor.
+        self.assertEqual(contract.endpoint_contract(endpoint), endpoint)
+        self.assertEqual(contract.endpoint_contract(extended), extended)
+
+        # Optional library.prune block: defaults, bounds and fixed paths.
+        prune_ep = copy.deepcopy(enabled_ep)
+        prune_ep["library"]["prune"] = {}
+        self.assertEqual(contract.endpoint_contract(prune_ep), prune_ep)
+        prune_plan = contract.playlist_operator_plan(prune_ep)
+        self.assertEqual(prune_plan["policy"]["library"]["prune"], {
+            "enabled": False, "target_bytes": 21990232555520, "min_idle_days": 180, "grace_days": 7,
+            "max_bytes_per_run": 2199023255552, "max_titles_per_run": 40,
+            "state_dir": "/var/lib/holonet-operator/prune",
+            "keep_journal": "/var/lib/holonet/janitor/state.json",
+        })
+        prune_ep["library"]["prune"] = {"enabled": True, "target_bytes": 18 * 1024 ** 4, "max_titles_per_run": 10}
+        prune_plan = contract.playlist_operator_plan(prune_ep)
+        rendered = prune_plan["policy"]["library"]["prune"]
+        self.assertEqual((rendered["enabled"], rendered["target_bytes"], rendered["max_titles_per_run"]),
+                         (True, 18 * 1024 ** 4, 10))
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import emby_operator_socket as worker
+            worker.validate_policy(prune_plan["policy"])
+        finally:
+            sys.path.pop(0)
+        for label_case, mut in (
+            ("non_bool", {"enabled": "true"}),
+            ("tiny_target", {"target_bytes": 1024}),
+            ("short_idle", {"min_idle_days": 7}),
+            ("no_grace", {"grace_days": 0}),
+            ("cap_over_target", {"target_bytes": 2 * 1024 ** 4, "max_bytes_per_run": 3 * 1024 ** 4}),
+            ("too_many_titles", {"max_titles_per_run": 500}),
+            ("state_dir", {"state_dir": "/tmp/prune"}),
+            ("keep_journal", {"keep_journal": "/var/lib/holonet/recommendations/state.json"}),
+            ("unknown", {"dry_run": True}),
+        ):
+            bad_prune = copy.deepcopy(enabled_ep)
+            bad_prune["library"]["prune"] = mut
+            with self.subTest(prune=label_case), self.assertRaises(AnsibleFilterError):
+                contract.endpoint_contract(bad_prune)
+        # An enabled prune needs enabled library management.
+        off_lib = copy.deepcopy(endpoint)
+        off_lib["library"]["prune"] = {"enabled": True}
+        with self.assertRaises(AnsibleFilterError):
+            contract.endpoint_contract(off_lib)
+        # The weekly root unit: read-only keep journal snapshot, prune state only.
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+        templates = ROOT / "roles/web_mcp_endpoint/templates"
+        service = env.from_string((templates / "holonet-library-prune.service.j2").read_text()).render(
+            web_mcp_operator=prune_plan, web_mcp_custody_group_read=True)
+        lines = service.splitlines()
+        self.assertTrue(service.startswith(guard.OPERATOR_HEADER))
+        self.assertIn("ExecStart=/usr/bin/python3 -E -s -B " + prune_plan["release_directory"]
+                      + "/emby_operator_library_prune.py run", lines)
+        for setting in ("Type=oneshot", "User=root", "NoNewPrivileges=yes", "CapabilityBoundingSet=",
+                        "AmbientCapabilities=", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes",
+                        "SupplementaryGroups=988",
+                        "LoadCredential=holonet-janitor-state:/var/lib/holonet/janitor/state.json",
+                        "AssertPathExists=/var/lib/holonet/janitor/state.json"):
+            self.assertIn(setting, lines)
+        self.assertEqual([line for line in lines if line.startswith("ReadWritePaths=")],
+                         ["ReadWritePaths=/var/lib/holonet-operator/prune"])
+        self.assertNotIn("ReadOnlyPaths", service)
+        timer = env.from_string((templates / "holonet-library-prune.timer.j2").read_text()).render()
+        timer_lines = timer.splitlines()
+        for setting in ("OnCalendar=Sun *-*-* 04:30:00", "Persistent=true", "Unit=holonet-library-prune.service",
+                        "WantedBy=timers.target"):
+            self.assertIn(setting, timer_lines)
+        self.assertIn("emby_operator_library_prune.py", contract.OPERATOR_MODULES)
+        self.assertIn("seedpool_policy.py", contract.OPERATOR_MODULES)
 
 
 if __name__ == "__main__":
