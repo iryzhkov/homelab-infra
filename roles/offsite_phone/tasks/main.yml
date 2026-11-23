@@ -17,6 +17,11 @@
       - "!all"
       - "!min"
       - env
+  tags: offsite_ssh
+
+- name: Configure the dedicated phone sender identity
+  ansible.builtin.import_tasks: ssh.yml
+  tags: offsite_ssh
 
 - name: Ensure the controller's working directory exists
   ansible.builtin.file:

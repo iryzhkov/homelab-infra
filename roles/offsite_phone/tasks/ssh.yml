@@ -1,0 +1,34 @@
+---
+# A separate sender identity survives retirement of general fleet-login keys.
+# Enroll its public half on the phone through an existing trusted operator path.
+- name: Ensure the offsite sender SSH directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.ssh"
+    state: directory
+    mode: "0700"
+
+- name: Create the dedicated offsite phone sender key without replacing one
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -q
+      - -t
+      - ed25519
+      - -N
+      - ""
+      - -C
+      - homelab-offsite
+      - -f
+      - "{{ ansible_env.HOME }}/.ssh/id_ed25519_offsite"
+    creates: "{{ ansible_env.HOME }}/.ssh/id_ed25519_offsite"
+
+- name: Select the dedicated identity for phone deliveries
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.ssh/config"
+    create: true
+    mode: "0600"
+    marker: "# {mark} ANSIBLE MANAGED: offsite phone identity"
+    block: |
+      Host phone
+          IdentityFile {{ ansible_env.HOME }}/.ssh/id_ed25519_offsite
+          IdentitiesOnly yes
