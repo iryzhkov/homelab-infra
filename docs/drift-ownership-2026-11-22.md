@@ -39,6 +39,31 @@ Deploy the observer with playbooks/drift-check-observer.yml. It deliberately
 retains the manifests from actual deployments, rather than rebaselining drift.
 Normal drift_check role deployments install the same ownership registry.
 
+### public-api follow-up, 2026-11-23
+
+The registry already held public-api/observability-socket-proxy, but the
+observer playbook targeted only homelab and normandy, so public-api kept a
+checker without the ownership functions. The playbook now includes public-api.
+The proxy there is the same observability_collector deployment (exact path
+/opt/observability/docker-socket-proxy/docker-compose.yml, Ansible-managed
+header) and Alloy holds live Unix-socket connections to it.
+
+The traefik finding on public-api was a stale manifest checksum, not a host
+edit. The deployed Compose file is byte-identical to stacks/traefik at
+7d0d5c5; the manifest recorded the version before aaf2936, which added the
+in-use 8443 observability ingest port. Nothing is reverted.
+
+The fix is a full targeted converge of that one stack through its owner,
+`site.yml -l public-api -e only=traefik`. It runs the whole compose_stack role
+(environment file, mounted configuration, logging override, `docker compose
+up`) before the targeted manifest update, so it is safe only when every one of
+those application tasks reports ok. It does not invoke roles/traefik, so dynamic
+configuration and signer-route overlays are untouched. On 2026-11-23 the check
+run and then the real run from 7d0d5c5 (laptop controller) both reported
+`ok=22 changed=1`, the single change being "Preserve other stacks and update the
+deployed entry"; no application file was written and no container was recreated
+or restarted.
+
 ## Signer
 
 Feed entry 1000000000935 coincided with Shizune enrollment, contract approval
@@ -67,7 +92,7 @@ Use authentik-signer --help for command help.
 
 PR #211 belongs to the HoloNet session. This change does not edit its sources or
 reconverge its services. The Shizune budget session is settled.
-The feed's homelab report additionally embeds public-api findings: its edited
-Traefik Compose file is outside this two-host acceptance scope and is preserved.
-The registry includes the known public-api socket proxy for future deployment,
-but the observer rollout targets only homelab and normandy.
+The feed's homelab report additionally embeds public-api findings, which were
+outside this two-host acceptance scope on 2026-11-22. They are resolved in the
+public-api follow-up above: the observer rollout now includes public-api, and
+the traefik finding was a stale manifest checksum rather than an edited file.
