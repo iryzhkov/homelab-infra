@@ -2,10 +2,12 @@
 
 No production credentials, live network calls, or writes outside scratch HOME.
 """
+import contextlib
 import copy
 import hashlib
 import http.server
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -28,7 +30,7 @@ contract = importlib.util.module_from_spec(_contract_spec)
 _contract_spec.loader.exec_module(contract)
 
 FIXTURE = Path(__file__).resolve().parents[1] / 'docs/holonet-library-wire-v1.json'
-FIXTURE_SHA256 = '6515c066cc0fd40c9d0be517b775f137e320390e8e08ef23ae272e21d696604b'
+FIXTURE_SHA256 = '651bce5b5fcaefe367d9e23bf7b38034877aa4f7fba4c5d8650c76838af8528a'
 
 RADARR_KEY = '1' * 32
 SONARR_KEY = '2' * 32
@@ -971,6 +973,87 @@ class LibraryWorkerTests(unittest.TestCase):
         with self.assertRaises(lib.LibraryRefusal) as ctx:
             self._run(self.fixture['library_remove_preview_frame'])
         self.assertEqual(ctx.exception.reason, 'recycle_bin_unset')
+
+    def test_remove_digest_ignores_live_seeding_counters(self):
+        # A seeding torrent's ratio and seeding time advance between preview and
+        # apply; the plan stays the same plan, so apply must not refuse.
+        torrent = self.state.torrents[TORRENT_HASH_OK]
+        torrent['content_path'] = '/mnt/shared/downloads/complete/movies/Synthetic.Movie.2024'
+        preview = self._run(self.fixture['library_remove_preview_frame'])
+        apply_frame = copy.deepcopy(self.fixture['library_remove_apply_frame'])
+        apply_frame['request']['plan_sha256'] = preview['plan_sha256']
+        # The content path stays bound: a moved payload is a different plan.
+        torrent['content_path'] = '/mnt/shared/downloads/complete/movies/Other'
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(apply_frame)
+        self.assertEqual(ctx.exception.reason, 'plan_changed')
+        torrent['content_path'] = '/mnt/shared/downloads/complete/movies/Synthetic.Movie.2024'
+        # So does the decision the counters made: dropping under the threshold flips it.
+        torrent.update(ratio=0.1, seeding_time=60)
+        with self.assertRaises(lib.LibraryRefusal) as ctx:
+            self._run(apply_frame)
+        self.assertEqual(ctx.exception.reason, 'plan_changed')
+        self.assertEqual(self.state.deleted_movies, [])
+        torrent.update(ratio=1.5 + 0.25, seeding_time=15 * 86400 + 3600)
+        applied = self._run(apply_frame)
+        self.assertEqual(applied['plan_sha256'], preview['plan_sha256'])
+        self.assertEqual(applied['plan']['torrents'][0]['seeding_time_seconds'], 15 * 86400 + 3600)
+        self.assertEqual(applied['removed_torrent_hashes'], [TORRENT_HASH_OK])
+        # The same holds with remove_torrents false.
+        keep_preview = copy.deepcopy(self.fixture['library_remove_preview_frame'])
+        keep_preview['request']['remove_torrents'] = False
+        preview = self._run(keep_preview)
+        keep_apply = copy.deepcopy(apply_frame)
+        keep_apply['request'].update(remove_torrents=False, plan_sha256=preview['plan_sha256'],
+                                     operation_id='c' * 32)
+        torrent.update(ratio=2.5, seeding_time=16 * 86400)
+        applied = self._run(keep_apply)
+        self.assertEqual(applied['kept_torrent_hashes'], [TORRENT_HASH_OK])
+
+    def test_prune_retires_torrents_only_with_hardlink_proof(self):
+        # Prune drives the real library-remove. Arr history proves exclusive
+        # ownership of the fixture torrent, but the hardlink verifier never runs
+        # for it, so prune must keep it seeding.
+        test = self
+
+        class RealRemove:
+            def remove(self, request):
+                frame = copy.deepcopy(test.fixture['library_remove_preview_frame'])
+                frame['request'] = request
+                return test._run(frame)
+
+            def qbit_rows(self):
+                return [seed_row('c' * 40, 25 * TIB, 30),
+                        seed_row(TORRENT_HASH_OK, 4096, 30, OTHER_TRACKER)]
+
+        calls = []
+
+        def must_be_called(qbit, torrent, torrent_hash, **kwargs):
+            calls.append(torrent_hash)
+            kwargs['deleted_inodes_cache'][torrent_hash] = [('/synthetic', 1, (1, 1))]
+            return True, None
+
+        title = {'library': 'movies', 'arr_id': 18}
+        with patch.object(lib, '_verify_torrent_hardlinks', side_effect=must_be_called), \
+             patch.object(lib, '_hardlink_after_media_removal', return_value=True):
+            prepared = prune._prepare_removal(RealRemove(), title, {})
+            self.assertEqual(prepared['plan']['torrents'][0]['ownership_proof'], 'arr_history')
+            self.assertEqual((prepared['with_torrents'], prepared['torrent_gate']),
+                             (False, {'ownership_not_hardlink': 1}))
+            applied = prune._apply_removal(RealRemove(), prepared)
+            self.assertEqual(calls, [])
+            self.assertEqual(self.state.deleted_torrents, [])
+            self.assertEqual(applied['kept_torrent_hashes'], [TORRENT_HASH_OK])
+            self.assertEqual(len(self.state.deleted_movies), 1)
+            # Without Arr history the verifier runs; only its pass lets the torrent go.
+            self.state.radarr_history_by_dl = {}
+            self.state.sonarr_history_by_dl = {}
+            prepared = prune._prepare_removal(RealRemove(), title, {})
+            self.assertEqual(calls, [TORRENT_HASH_OK])
+            self.assertEqual(prepared['plan']['torrents'][0]['ownership_proof'], 'hardlink')
+            self.assertEqual((prepared['with_torrents'], prepared['torrent_gate']), (True, {}))
+            prune._apply_removal(RealRemove(), prepared)
+        self.assertEqual(self.state.deleted_torrents, [{'hashes': [TORRENT_HASH_OK], 'deleteFiles': ['true']}])
 
     def test_remove_seeding_threshold_and_season_pack_partially_kept(self):
         # Low ratio / low seeding time -> torrent kept.
@@ -2712,8 +2795,13 @@ class PruneWorld:
         self.remove_calls = []
         self.removed = []
         self.plan_torrents = []
+        self.plan_bytes = {}
         self.remove_error = None
+        self.apply_errors = {}
         self.post_dispatch_on = None
+        self.on_preview = None
+        self.after_apply = None
+        self.seed_clock = 0
 
     def movie(self, arr_id, size, *, added=OLD, file_added=OLD, profile=11, title=None):
         self.movies.append({
@@ -2762,6 +2850,12 @@ class FakePruneArr:
             return copy.deepcopy(self.world.series)
         if route == '/api/v3/qualityprofile':
             return copy.deepcopy(self.world.profiles[self.backend])
+        for prefix, rows in (('/api/v3/movie/', self.world.movies), ('/api/v3/series/', self.world.series)):
+            if route.startswith(prefix):
+                found = [r for r in rows if r['id'] == int(route[len(prefix):])]
+                if not found:
+                    raise prune.Refused(lib.FAILURE)
+                return copy.deepcopy(found[0])
         if route.startswith('/api/v3/queue?page=1&pageSize=200&'):
             recs = self.world.queue[self.backend]
             return {'page': 1, 'pageSize': 200, 'totalRecords': len(recs), 'records': recs}
@@ -2826,33 +2920,52 @@ class FakePruneBackends:
     def emby(self):
         return FakePruneEmby(self.world)
 
+    def _tick(self):
+        # Live seeding counters advance on every read, as on a seeding client.
+        self.world.seed_clock += 1
+        for row in self.world.torrents:
+            if type(row.get('seeding_time')) is int:
+                row['seeding_time'] += 60
+            row['ratio'] = round(row.get('ratio', 1.0) + 0.01, 4)
+
     def qbit_rows(self):
         if self.world.qbit_fail:
             raise prune.Refused(prune.QBIT_FAILURE)
+        self._tick()
         return copy.deepcopy(self.world.torrents)
-
-    @staticmethod
-    def digest(req):
-        return hashlib.sha256(json.dumps([req['library'], req['arr_id'], req['remove_torrents']]).encode()).hexdigest()
 
     def remove(self, req):
         self.world.remove_calls.append(copy.deepcopy(req))
         if self.world.remove_error is not None:
             raise self.world.remove_error
         key = (req['library'], req['arr_id'])
+        if req['mode'] == 'apply' and key in self.world.apply_errors:
+            raise self.world.apply_errors[key]
         movie = [m for m in self.world.movies if m['id'] == req['arr_id']]
         show = [s for s in self.world.series if s['id'] == req['arr_id']]
         size = movie[0]['sizeOnDisk'] if req['library'] == 'movies' else show[0]['statistics']['sizeOnDisk']
-        torrents = [dict(t, action=t['action'] if req['remove_torrents'] else 'keep')
+        size = self.world.plan_bytes.get(key, size)
+        self._tick()
+        clock = self.world.seed_clock
+        torrents = [dict(t, action=t['action'] if req['remove_torrents'] else 'keep',
+                         reason='meets_threshold' if req['remove_torrents'] else 'remove_torrents_false',
+                         ratio=1.0 + clock / 100, seeding_time_seconds=15 * prune.DAY + clock * 60)
                     for t in self.world.plan_torrents]
         plan = {'library': req['library'], 'arr_id': req['arr_id'], 'delete_title': True,
-                'torrents': torrents, 'total_bytes': size}
+                'remove_torrents': req['remove_torrents'], 'torrents': torrents, 'total_bytes': size}
+        # The production digest: it must not move with the advancing counters.
+        digest = lib.remove_plan_digest(plan)
         if req['mode'] == 'preview':
-            return {'mode': 'preview', 'plan': plan, 'plan_sha256': self.digest(req)}
-        assert req['plan_sha256'] == self.digest(req), 'apply differs from preview'
+            if self.world.on_preview is not None:
+                self.world.on_preview(req)
+            return {'mode': 'preview', 'plan': plan, 'plan_sha256': digest}
+        if req['plan_sha256'] != digest:
+            raise lib.LibraryRefusal('plan_changed', 'Plan changed since preview')
         if self.world.post_dispatch_on == key:
             raise lib.LibraryPostDispatchError('uncertain', 'Title delete dispatched', [])
         self.world.removed.append(key)
+        if self.world.after_apply is not None:
+            self.world.after_apply(req)
         return {'mode': 'apply', 'plan': plan,
                 'removed_torrent_hashes': [t['hash'] for t in torrents if t['action'] == 'remove'],
                 'kept_torrent_hashes': [t['hash'] for t in torrents if t['action'] != 'remove']}
@@ -2890,7 +3003,7 @@ def prune_block(**overrides):
 
 def seed_row(torrent_hash, size, seeded_days, tracker=SEEDPOOL):
     return {'hash': torrent_hash, 'tracker': tracker, 'total_size': size, 'size': size, 'progress': 1,
-            'amount_left': 0, 'seeding_time': seeded_days * prune.DAY, 'state': 'uploading'}
+            'amount_left': 0, 'seeding_time': seeded_days * prune.DAY, 'state': 'uploading', 'ratio': 1.0}
 
 
 class LibraryPruneTests(unittest.TestCase):
@@ -3177,9 +3290,17 @@ class LibraryPruneTests(unittest.TestCase):
         w.movie(2, 300 * GIB)
         title = prune.collect_arr(self.block, self.backends.arr)['titles'][('movies', 2)]
         h = 'a' * 40
-        w.plan_torrents = [{'hash': h, 'action': 'remove'}]
+
+        def remove_one(keep_ids):
+            prepared = prune._prepare_removal(self.backends, title, keep_ids)
+            applied = prune._apply_removal(self.backends, prepared)
+            result, warning = prune._removal_result(self.backends, prepared, applied)
+            self.assertIsNone(warning)
+            return result
+
+        w.plan_torrents = [{'hash': h, 'action': 'remove', 'ownership_proof': 'hardlink'}]
         w.torrents = [seed_row('c' * 40, 25 * TIB, 30), seed_row(h, 300 * GIB, 11)]
-        result = prune._remove_one(self.backends, title, {'movies': ['123']})
+        result = remove_one({'movies': ['123']})
         self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
                          [('preview', True), ('apply', True)])
         self.assertEqual(w.remove_calls[0]['keep_emby_ids'], ['123'])
@@ -3188,19 +3309,169 @@ class LibraryPruneTests(unittest.TestCase):
         # Seeded under 10 days: keep the torrent, remove only the library title.
         w.remove_calls.clear()
         w.torrents[1]['seeding_time'] = 3 * prune.DAY
-        result = prune._remove_one(self.backends, title, {})
+        result = remove_one({})
         self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
                          [('preview', True), ('preview', False), ('apply', False)])
         self.assertEqual((result['torrents_removed'], result['torrents_kept'], result['bytes_held_by_torrents']),
                          (0, 1, 300 * GIB))
         self.assertEqual(result['torrent_gate'], {'minimum_seed_age_not_met': 1})
+        # Arr history is not proof enough here: no hardlink proof, the torrent keeps
+        # seeding whatever the SeedPool snapshot says.
+        w.remove_calls.clear()
+        w.torrents[1]['seeding_time'] = 30 * prune.DAY
+        w.plan_torrents = [{'hash': h, 'action': 'remove', 'ownership_proof': 'arr_history'}]
+        result = remove_one({})
+        self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
+                         [('preview', True), ('preview', False), ('apply', False)])
+        self.assertEqual((result['torrents_removed'], result['torrents_kept'], result['torrent_gate']),
+                         (0, 1, {'ownership_not_hardlink': 1}))
+        # One unproven torrent keeps every torrent of the title.
+        w.remove_calls.clear()
+        w.torrents.append(seed_row('b' * 40, GIB, 30))
+        w.plan_torrents = [{'hash': h, 'action': 'remove', 'ownership_proof': 'hardlink'},
+                           {'hash': 'b' * 40, 'action': 'remove', 'ownership_proof': 'arr_history'}]
+        result = remove_one({})
+        self.assertEqual(w.remove_calls[-1]['remove_torrents'], False)
+        self.assertEqual((result['torrents_removed'], result['torrents_kept']), (0, 2))
         # Hardlink proof failed (library-remove keeps it): apply repeats the previewed flag.
         w.remove_calls.clear()
-        w.plan_torrents = [{'hash': h, 'action': 'keep'}]
-        result = prune._remove_one(self.backends, title, {})
+        w.plan_torrents = [{'hash': h, 'action': 'keep', 'ownership_proof': 'none'}]
+        w.torrents = [seed_row('c' * 40, 25 * TIB, 30), seed_row(h, 300 * GIB, 11)]
+        result = remove_one({})
         self.assertEqual([(c['mode'], c['remove_torrents']) for c in w.remove_calls],
                          [('preview', True), ('apply', True)])
         self.assertEqual(result['bytes_held_by_torrents'], 300 * GIB)
+        # A malformed size in the qBittorrent snapshot cannot fail after the removal.
+        w.torrents[1]['size'] = 'large'
+        self.assertEqual(remove_one({})['bytes_held_by_torrents'], 0)
+
+    def _due_world(self):
+        """Movies 2 and 3 marked and due; the protected anchor keeps the library over target."""
+        self.world = PruneWorld()
+        self.backends = FakePruneBackends(self.world)
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        w.movie(3, 300 * GIB, added=OLD + prune.DAY)
+        _, marks = self.run_prune()
+        self.assertEqual(set(marks), {('movies', 2), ('movies', 3)})
+        return w, marks
+
+    def test_protection_rechecked_right_before_apply(self):
+        later = NOW + 8 * prune.DAY
+        changes = {
+            'favorite': lambda w: w.favorites.__setitem__(ADMIN, [emby_movie_id(2)]),
+            'watched': lambda w: w.resumable.__setitem__(VIEWER, [emby_movie_id(2)]),
+            'downloading': lambda w: w.queue.__setitem__('radarr', [{'movieId': 2}]),
+            'favorite_profile': lambda w: w.movies[1].__setitem__('qualityProfileId', 13),
+        }
+        changes['watched_log'] = lambda w: w.play(emby_movie_id(2), later + 60)
+        for reason, change in changes.items():
+            with self.subTest(reason=reason):
+                w, marks = self._due_world()
+                # The change lands after this run collected its facts, before the apply.
+                w.on_preview = lambda req, w=w, change=change: req['arr_id'] == 2 and change(w)
+                summary, marks = self.run_prune(now=later, marks=marks)
+                self.assertEqual(summary['outcome'], 'ok')
+                self.assertNotIn(('movies', 2), w.removed)
+                self.assertEqual([c['mode'] for c in w.remove_calls if c['arr_id'] == 2], ['preview'])
+                self.assertIn((2, reason.replace('_log', '')), {(u['arr_id'], u['reason']) for u in summary['unmarked']})
+                # The next due title is still removed, and the protected one is not re-marked.
+                self.assertEqual(w.removed, [('movies', 3)])
+                self.assertNotIn(('movies', 2), marks)
+                self.assertNotIn(2, [m['arr_id'] for m in summary['marked']])
+        # A re-check read failure stops the run before that apply.
+        w, marks = self._due_world()
+        w.on_preview = lambda req: setattr(w, 'emby_fail', True)
+        summary, after = self.run_prune(now=later, marks=marks)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('aborted', 'recheck_unavailable'))
+        self.assertEqual(w.removed, [])
+        self.assertEqual(set(after), set(marks))
+
+    def test_byte_cap_uses_fresh_plan_size(self):
+        w = self.world
+        w.movie(1, 2 * TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        _, marks = self.run_prune()
+        self.assertEqual(marks[('movies', 2)]['size_bytes'], 300 * GIB)
+        # The title grew since the snapshot: the fresh plan deletes 3 TiB; the cap is 1 TiB.
+        w.plan_bytes[('movies', 2)] = 3 * TIB
+        later = NOW + 8 * prune.DAY
+        summary, marks = self.run_prune(now=later, marks=marks)
+        self.assertEqual([c['mode'] for c in w.remove_calls], ['preview'])
+        self.assertEqual(w.removed, [])
+        self.assertEqual([(s['arr_id'], s['reason'], s['size_bytes']) for s in summary['remove_skipped']],
+                         [(2, 'run_byte_cap', 3 * TIB)])
+        self.assertEqual(summary['removed_bytes'], 0)
+        self.assertIn(('movies', 2), marks)
+        # Under the cap, the receipt and the accounting carry the plan's bytes.
+        w.plan_bytes[('movies', 2)] = 200 * GIB
+        summary, marks = self.run_prune(now=later, marks=marks)
+        self.assertEqual(w.removed, [('movies', 2)])
+        self.assertEqual((summary['removed'][0]['size_bytes'], summary['removed'][0]['removed_bytes']),
+                         (200 * GIB, 200 * GIB))
+        self.assertEqual(summary['removed_bytes'], 200 * GIB)
+        self.assertEqual(summary['library_bytes_after'], summary['library_bytes_before'] - 200 * GIB)
+
+    def test_reads_finish_before_the_first_removal(self):
+        w, marks = self._due_world()
+        w.show(70, 300 * GIB, added=OLD + 2 * prune.DAY)
+        # Sonarr fails as soon as anything was removed: every file-date read the
+        # marking phase needs must already be done.
+        w.after_apply = lambda req: w.arr_fail.add('sonarr')
+        w.movies[0]['sizeOnDisk'] = TIB + 300 * GIB
+        summary, marks = self.run_prune(now=NOW + 8 * prune.DAY, marks=marks,
+                                        block=prune_block(max_titles_per_run=1))
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('ok', None))
+        self.assertEqual(w.removed, [('movies', 2)])
+        self.assertIn(70, [m['arr_id'] for m in summary['marked']])
+        self.assertIn(('tv', 70), marks)
+
+    def test_failure_after_a_removal_keeps_the_receipt(self):
+        # A read failure (re-check) and an unexpected exception (apply) after
+        # one removal: both end partial with the removal and surviving marks.
+        for kind in ('refused', 'unexpected'):
+            with self.subTest(kind=kind):
+                w, marks = self._due_world()
+                if kind == 'refused':
+                    w.after_apply = lambda req, w=w: setattr(w, 'emby_fail', True)
+                    expected = 'recheck_unavailable'
+                else:
+                    w.apply_errors[('movies', 3)] = RuntimeError('injected')
+                    expected = 'unexpected'
+                summary, after = self.run_prune(now=NOW + 8 * prune.DAY, marks=marks)
+                self.assertEqual((summary['outcome'], summary['abort_reason']), ('partial', expected))
+                self.assertEqual([r['arr_id'] for r in summary['removed']], [2])
+                self.assertEqual(summary['removed_bytes'], 300 * GIB)
+                self.assertEqual(set(after), {('movies', 3)})
+                self.assertEqual(summary['marked'], [])
+                skipped = [(s['arr_id'], s['reason']) for s in summary['remove_skipped']]
+                self.assertEqual(skipped, [] if kind == 'refused' else [(3, 'uncertain')])
+                self.assertEqual(json.loads(prune.event(summary))['removed_count'], 1)
+
+    def test_history_incomplete_for_unmapped_play_in_a_managed_library(self):
+        w = self.world
+        w.movie(1, 100 * GIB)
+        w.items['45555'] = {'Id': '45555', 'Type': 'Movie', 'ProviderIds': {'Tmdb': '999999'},
+                            'Path': '/mnt/shared/media/movies/Orphan (1999)/orphan.mkv'}
+        w.items['46666'] = {'Id': '46666', 'Type': 'Movie', 'ProviderIds': {},
+                            'Path': '/mnt/shared/media/home videos/clip.mkv'}
+
+        def coverage():
+            facts = prune.collect_arr(self.block, self.backends.arr)
+            return prune.collect_emby(FakePruneEmby(w), prune.TitleIndex(facts['titles'], self.block),
+                                      now=NOW, window_days=180, touched=False)['history']['coverage']
+
+        # Plays of deleted items or items outside the managed libraries do not matter.
+        w.play('31337', NOW - prune.DAY)
+        w.play('46666', NOW - prune.DAY)
+        self.assertTrue(coverage()['complete'])
+        # An existing item inside a managed library that maps to no title might be any
+        # title, so the window is incomplete and played titles stay protected.
+        w.play('45555', NOW - prune.DAY)
+        cov = coverage()
+        self.assertFalse(cov['complete'])
+        self.assertEqual(cov['unmapped_plays'], 3)
 
     def test_keep_journal_snapshot(self):
         home = Path(os.environ['HOME'])
@@ -3363,6 +3634,63 @@ class LibraryPruneTests(unittest.TestCase):
         os.chmod(base, 0o755)
         with self.assertRaises(prune.Refused):
             prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+
+    def test_partial_run_persists_receipt(self):
+        base = self._state_dir('partial')
+        block = prune_block(state_dir=str(base))
+        keep = {'movies': [], 'tv': [], 'anime': []}
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        w.movie(3, 300 * GIB, added=OLD + prune.DAY)
+        prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+        w.apply_errors[('movies', 3)] = ValueError('injected')
+        summary = prune.run_locked(block, self.backends, mode='run', now=NOW + 8 * prune.DAY, keep_ids=keep)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('partial', 'unexpected'))
+        last_run = json.loads((base / 'last_run.json').read_text())
+        self.assertEqual((last_run['outcome'], [r['arr_id'] for r in last_run['removed']]), ('partial', [2]))
+        self.assertEqual(last_run['removed_bytes'], 300 * GIB)
+        marks = json.loads((base / 'marks.json').read_text())['marks']
+        self.assertEqual([(m['library'], m['arr_id']) for m in marks], [('movies', 3)])
+        # A state write failure after removals still returns the receipt for the event.
+        w.apply_errors.clear()
+        with patch.object(lib.os, 'replace', side_effect=OSError('injected')):
+            summary = prune.run_locked(block, self.backends, mode='run', now=NOW + 9 * prune.DAY,
+                                       keep_ids=keep)
+        self.assertEqual((summary['outcome'], summary['abort_reason']), ('partial', 'state_write_failed'))
+        self.assertEqual([r['arr_id'] for r in summary['removed']], [3])
+
+    def test_main_plan_end_to_end(self):
+        base = self._state_dir('main')
+        block = prune_block(state_dir=str(base))
+        keep = {'movies': [], 'tv': [], 'anime': []}
+        w = self.world
+        w.movie(1, TIB, profile=13)
+        w.movie(2, 300 * GIB)
+        prune.run_locked(block, self.backends, mode='run', now=NOW, keep_ids=keep)
+        before = (base / 'marks.json').read_bytes()
+        policy = {'library': block, 'recipients': {'c' * 32: '/var/lib/holonet-operator/synthetic/config.json'},
+                  'caller': {'server': 'a' * 32}}
+        out = io.StringIO()
+        with patch.object(sock, 'load_policy', return_value=policy), \
+             patch.object(sock, 'selected_config', return_value={}), \
+             patch.object(prune, 'read_keep_journal', return_value=keep), \
+             patch.object(prune, 'Backends', return_value=self.backends), \
+             patch.object(prune.time, 'time', return_value=NOW + 8 * prune.DAY), \
+             contextlib.redirect_stdout(out):
+            code = prune.main(['plan'])
+        lines = out.getvalue().strip().split('\n')
+        printed = json.loads('\n'.join(lines[:-1]))
+        line = json.loads(lines[-1])
+        self.assertEqual(code, 0)
+        self.assertEqual((printed['mode'], printed['outcome']), ('plan', 'ok'))
+        self.assertEqual([r['arr_id'] for r in printed['would_remove']], [2])
+        self.assertNotIn('removed', printed)
+        self.assertEqual((line['event'], line['mode'], line['outcome'], line['removed_count']),
+                         ('holonet_library_prune', 'plan', 'ok', 1))
+        # A plan touches no backend mutation and no state.
+        self.assertEqual(w.remove_calls, [])
+        self.assertEqual((base / 'marks.json').read_bytes(), before)
 
     def test_wire_fixture_prune_frames_and_summary_shape(self):
         fixture = json.loads(FIXTURE.read_text())

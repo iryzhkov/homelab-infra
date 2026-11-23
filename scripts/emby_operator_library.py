@@ -182,6 +182,26 @@ def plan_digest(plan):
     return hashlib.sha256(canonical_json(plan)).hexdigest()
 
 
+REMOVE_TORRENT_DIGEST_FIELDS = ('hash', 'name', 'category', 'action', 'reason', 'ownership_proof')
+
+
+def remove_plan_digest(plan, content_paths=None):
+    """library-remove plan digest bound to the decision, not to live seeding counters.
+
+    ratio and seeding_time_seconds advance every second a torrent seeds, so the
+    plan reports them but the digest leaves them out; the action and reason they
+    decided stay bound, as do the files (id, path, size) and each torrent's
+    hash, ownership proof and qBittorrent content path.
+    """
+    paths = content_paths or {}
+    torrents = []
+    for t in plan['torrents']:
+        row = {k: t.get(k) for k in REMOVE_TORRENT_DIGEST_FIELDS}
+        row['content_path'] = paths.get(t.get('hash'), '')
+        torrents.append(row)
+    return plan_digest(dict(plan, torrents=torrents))
+
+
 def release_handle(library, arr_id, indexer_id, guid, title, size):
     material = [library, arr_id, indexer_id, guid, title, size]
     return hashlib.sha256(canonical_json(material)).hexdigest()
@@ -2040,7 +2060,7 @@ def _hardlink_after_media_removal(evidence):
 
 def _evaluate_torrents(
     qbit, hashes_ownership, *, remove_torrents, allowed_categories, min_ratio, min_seeding_days,
-    files=None, lib_name=None, root_folder_path=None, hardlink_evidence=None,
+    files=None, lib_name=None, root_folder_path=None, hardlink_evidence=None, content_paths=None,
 ):
     if not hashes_ownership:
         return []
@@ -2062,6 +2082,8 @@ def _evaluate_torrents(
         cat = str(t.get('category') or '')
         ratio = float(t.get('ratio') or 0.0)
         seeding_time = int(t.get('seeding_time') or 0)
+        if content_paths is not None:
+            content_paths[h] = str(t.get('content_path') or '')
         exclusive, keep_reason = hashes_ownership[h]
         proof = 'arr_history' if exclusive else 'none'
         if not remove_torrents:
@@ -2587,6 +2609,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
     qbit = None
     torrents = []
     hardlink_evidence = {}
+    content_paths = {}
     try:
         if hashes_ownership:
             qbit = qbit_factory(block['torrents'])
@@ -2602,6 +2625,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
                 lib_name=lib_name,
                 root_folder_path=lib['root_folder_path'],
                 hardlink_evidence=hardlink_evidence,
+                content_paths=content_paths,
             )
 
         plan = {
@@ -2617,7 +2641,7 @@ def op_remove(call, block, arr_factory, qbit_factory, emby_factory):
             'remove_torrents': q['remove_torrents'],
             'torrents': torrents,
         }
-        digest = plan_digest(plan)
+        digest = remove_plan_digest(plan, content_paths)
         if q['mode'] == 'preview':
             return {'mode': 'preview', 'plan': plan, 'plan_sha256': digest}
         if digest != q['plan_sha256']:

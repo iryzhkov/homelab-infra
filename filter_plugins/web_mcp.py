@@ -17,10 +17,11 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
-# CLI e25dc38 adds the read-only library_prune_status and
-# library_watch_history tools (homelab-cli PR 64) on top of c6e109c. Chaldea
-# Go 1.25.0 package jobs 4a0e26bd and e6214832 (byte-identical), tree
-# 65471dbd7150144411234d19ebebc9d6440588e7. The build embeds no VCS data, so a
+# CLI 462913e adds the read-only library_prune_status and
+# library_watch_history tools (homelab-cli PR 64) on top of c6e109c, with the
+# wire fixture carrying the stable library-remove plan digest. Chaldea
+# Go 1.25.0 package jobs 87c8d376 and ddb59b9a (byte-identical), tree
+# c0723a7067c77638c266d8b64a12f256d3e6b119. The build embeds no VCS data, so a
 # merge commit with the same tree yields these bytes.
 # CLI c6e109c adds library_import preview/apply and grouped queue entries
 # (homelab-cli PR 62) on top of a610ceb, which added the read-only
@@ -30,7 +31,7 @@ SERVICES = {
 # admits exact Emby 4.10.2.0 for catalog reads. Chaldea Go 1.25.0 package jobs
 # 31793515 and 9993fc4a (byte-identical), tree
 # 274c115056712fa0c3bd1921e1ed36bdd014b3ed.
-HOLONET_COEXISTENCE_SOURCE = "e25dc38d21b69c8a3fafe602a0e464177b8cc5b6"
+HOLONET_COEXISTENCE_SOURCE = "462913ea51dd80368456884021957e2b78cf54ca"
 HOLONET_COEXISTENCE_SHA256 = "8d3dea17d86df5b1da692d30df84eeda559a66075de1ab27b36cc1c61f9c9352"
 # The previously installed coexistence builds stay admissible for rollback.
 HOLONET_COEXISTENCE_ROLLBACK = {
@@ -116,8 +117,8 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "606a7580b5b254c2953f0db008c919eae533e305a2084679cf08c6991c8fc4b9",
-    "emby_operator_library_prune.py": "1c67187eef7a11522db0c440e423146f9ae6073363f82a5da384b1d3481c4b41",
+    "emby_operator_library.py": "3c40d4634fff4008b08549f35dd525845226975ba49c7418c5544456dfe2562a",
+    "emby_operator_library_prune.py": "3985c264f2d2472b36b6cbf8d6ed1a10236a9961b60702a5fcb5961567aa8d83",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
     "emby_operator_socket.py": "870079605e6fce1b2d9c4abd5b283b9be37a7dc3c7d2a621bf9b533bbe15005b",
     "emby_operator_torrents.py": "ba1c9729b4aa9016bfad7ef7c49c2884cfcf0d7f955fd86a6e210b7de6886d9a",

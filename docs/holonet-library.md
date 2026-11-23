@@ -89,6 +89,12 @@ and `mode: "apply"` with canonical `plan_sha256` verification):
   (`hardlink_extra_links`, `hardlink_linked_elsewhere`, `hardlink_no_match`,
   `hardlink_missing`, `hardlink_unreadable`, `hardlink_symlink`,
   `hardlink_outside_download_root`, `hardlink_path_unmapped`, etc.).
+  The plan digest binds the files (id, path, size) and, per torrent, the hash,
+  name, category, qBittorrent content path, action, reason and ownership proof.
+  It leaves out the live `ratio` and `seeding_time_seconds` counters, which a
+  seeding torrent advances between preview and apply; a change in the decision
+  they drive (for example dropping below the threshold) still changes the
+  digest and refuses `plan_changed`.
 - `library-import`: preview/apply Arr manual import (`GET /api/v3/manualimport?downloadId=<id>`,
   with `filterExistingFiles=false` on Sonarr; never `seriesId` or `folder` modes)
   followed by `POST /api/v3/command` (`ManualImport`, `importMode: "auto"`),
@@ -161,23 +167,38 @@ root) prints the same evaluation without writing state.
 
 Each removal is one `library-remove` preview/apply of the whole title with the
 current keep list, so the recycle bin requirement, keep refusal, file limit
-and hardlink ownership proof all apply unchanged. Torrents that library-remove
-would delete are additionally checked against the SeedPool policy
+and ownership proof all apply unchanged. The prune deletes a torrent only when
+its ownership proof is `hardlink`, meaning the hardlink verifier ran for it and
+passed; Arr history alone (`ownership_proof: "arr_history"`) is not enough, and
+if any torrent the preview would delete lacks the hardlink proof, all of the
+title's torrents keep seeding (`torrent_gate` reason `ownership_not_hardlink`).
+Hardlink-proven torrents are additionally checked against the SeedPool policy
 (`scripts/seedpool_policy.py`): SeedPool torrents need the whole-batch
 retirement plan to pass (seeded at least 10 days and the 20 TiB active floor
 still held afterwards); other trackers need the same 10-day minimum; unknown
-trackers or an unknown snapshot block. When that check fails, the title is
+trackers or an unknown snapshot block. When either check fails, the title is
 removed with `remove_torrents: false` and the torrent keeps seeding; the run
-summary records `bytes_held_by_torrents`. Removed library files go to the Arr
+summary records `bytes_held_by_torrents`.
+
+Immediately before each apply, the prune reads the title's protections again:
+every Emby user's favourites, played and resumable state, Emby activity-log
+playback starts since the run began, the Arr download queue and the title's
+quality profile. Any protection found then releases the mark instead of
+removing the title. `max_bytes_per_run` and the reported `removed_bytes` use
+the preview plan's current `total_bytes`, not the start-of-run `sizeOnDisk`. Removed library files go to the Arr
 recycle bin, which empties after 30 days ([media-recovery.md](media-recovery.md)),
 so disk space returns only after that and only where no torrent still links
 the data.
 
 Fail-closed reads: any Radarr, Sonarr, Emby, playback history, keep list or
 qBittorrent read error aborts the run before its first removal and leaves the
-marks unchanged. A backend error during apply stops further removals and
-marking; an uncertain post-dispatch result (`partial`/`uncertain` from
-library-remove) stops the run.
+marks unchanged. Every read the marking phase needs (including Sonarr episode
+file dates) also happens before the first removal. A backend or re-check error
+during apply stops further removals and marking; an uncertain post-dispatch
+result (`partial`/`uncertain` from library-remove) stops the run. Any failure
+after a removal, expected or not, ends the run as `partial`: `last_run.json`
+and the journal event keep every removed title and its bytes, and the
+remaining marks are saved.
 
 Playback source: Emby's activity log (`/System/ActivityLog/Entries`), read
 through the worker's existing admin session. Per-user `UserData` was checked on
@@ -193,7 +214,9 @@ user has any play state on it (played or resumable) and no attributable play
 falls in the window; anything played at an unknown time stays
 `history_incomplete`. Plays of items that no longer resolve (deleted or
 re-imported files) are counted as unmapped: a re-import also resets the newest
-file date, so that cannot unprotect a title.
+file date, so that cannot unprotect a title. A play of an Emby item that still
+exists inside a managed library root but maps to no Arr title also makes the
+window incomplete, because that play could belong to any title.
 
 Keep list: systemd passes a read-only snapshot of
 `/var/lib/holonet/janitor/state.json` to the unit with

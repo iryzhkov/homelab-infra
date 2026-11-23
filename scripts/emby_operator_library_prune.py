@@ -9,10 +9,13 @@ state or touching any backend. The socket worker serves the read-only
 library-prune-status and library-watch-history operations from this module.
 
 Every removal goes through the existing library-remove internals (Arr recycle
-bin, keep list, hardlink ownership proof). Torrents are removed only when that
-proof passes and the SeedPool retention policy allows retiring them. Any Arr,
-Emby, history, keep-list or qBittorrent read error aborts the run before the
-first removal. Playback history comes from Emby's activity log through the
+bin, keep list, ownership proof). A torrent is removed only when the hardlink
+verifier proved it (Arr history alone is not enough here) and the SeedPool
+retention policy allows retiring it. Right before each apply the title's Emby
+favourites, play state, Arr queue membership and quality profile are read
+again. Any Arr, Emby, history, keep-list or qBittorrent read error aborts the
+run before the first removal; a failure after it ends the run as partial with
+every removed title recorded. Playback history comes from Emby's activity log through the
 existing admin session; see docs/holonet-library.md for why that source was
 chosen and how incomplete history coverage is handled.
 """
@@ -71,6 +74,8 @@ HISTORY_FAILURE = 'Playback history unavailable'
 KEEP_FAILURE = 'Keep list unavailable'
 STATE_FAILURE = 'Prune state invalid'
 QBIT_FAILURE = 'Torrent snapshot unavailable'
+RECHECK_MARGIN = 600  # seconds of activity log re-read before the run started
+MAX_BYTES = 1 << 56
 HEX32 = re.compile(r'[0-9a-f]{32}')
 ISO_RE = re.compile(
     r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})?')
@@ -299,6 +304,7 @@ class TitleIndex:
     """Map Emby items to managed Arr titles by provider ID, then by path."""
     def __init__(self, titles, block):
         self.tmdb, self.tvdb, self.paths = {}, {}, {}
+        self.roots = [lib['root_folder_path'] for lib in block['libraries'].values()]
         movies_root = block['libraries']['movies']['root_folder_path'].rstrip('/')
         for key, t in titles.items():
             if t['kind'] == 'movie' and t['tmdb_id'] is not None:
@@ -326,6 +332,10 @@ class TitleIndex:
             if len(keys) == 1:
                 return next(iter(keys))
         return None
+
+    def managed_path(self, path):
+        """True when an Emby item path lies inside one of the managed library roots."""
+        return isinstance(path, str) and any(_in_root(path, root) for root in self.roots)
 
     def movie(self, item):
         return self._by_provider(item, 'Tmdb', self.tmdb) or self._by_path(item.get('Path'))
@@ -457,19 +467,26 @@ def collect_history(emby, resolver, users, *, now, window_start):
     for uid, ids in by_user.items():
         rows.update(_lookup(emby, [_user_route(emby, uid)], ids, 'ProviderIds,Path,SeriesId'))
     keys, _ = resolver.keys(list(rows.values()), required=False)
-    plays, unmapped = {}, 0
+    plays, unmapped, unmapped_managed = {}, 0, 0
     for item, uid, ts in events:
         key = keys.get(item)
         if key is None:
             # Deleted or re-imported items: a file change also resets the
             # newest-file date, so an unmapped play cannot unprotect a title.
             unmapped += 1
+            row = rows.get(item)
+            if row is not None and resolver.index.managed_path(row.get('Path')):
+                # The item still exists inside a managed library but names no
+                # title: its play cannot be attributed, so the window is not
+                # complete and played titles stay protected.
+                unmapped_managed += 1
             continue
         plays.setdefault(key, []).append((ts, names.get(uid, uid[:8])))
     complete = (retention_since is not None and retention_since <= window_start
-                and unattributable == 0)
+                and unattributable == 0 and unmapped_managed == 0)
     return {
         'plays': plays,
+        'unmapped_managed': unmapped_managed,
         'coverage': {
             'source': 'emby_activity_log',
             'window_start': iso(window_start),
@@ -696,46 +713,153 @@ def _public(title, emby_facts, extra=None):
     return row
 
 
-def _remove_one(backends, title, keep_ids):
-    """One title through library-remove: preview, gate torrents, apply. Returns a result row."""
+def _checked_plan(response, title):
+    """The whole-title plan from one library-remove preview, shape-checked."""
+    need(type(response) is dict and isinstance(response.get('plan_sha256'), str)
+         and type(response.get('plan')) is dict, FAILURE)
+    plan = response['plan']
+    need(plan.get('library') == title['library'] and plan.get('arr_id') == title['arr_id']
+         and plan.get('delete_title') is True and integer(plan.get('total_bytes'), 0, MAX_BYTES)
+         and type(plan.get('torrents')) is list
+         and all(type(t) is dict and isinstance(t.get('hash'), str) for t in plan['torrents']), FAILURE)
+    return plan
+
+
+def _prepare_removal(backends, title, keep_ids):
+    """Preview one whole-title removal and decide whether its torrents may go.
+
+    library-remove deletes a torrent with either ownership proof; prune asks
+    for more. Every torrent the preview would delete must carry the hardlink
+    proof (the verifier ran and passed), and the SeedPool retirement plan must
+    allow retiring them. Arr history alone never retires a seeding torrent
+    here: the title is previewed again and removed with remove_torrents false.
+    """
     base = {'library': title['library'], 'arr_id': title['arr_id'], 'target': 'title',
             'keep_emby_ids': list(keep_ids.get(title['library'], []))}
     preview = backends.remove(dict(base, mode='preview', remove_torrents=True))
-    plan = preview['plan']
-    need(plan.get('library') == title['library'] and plan.get('arr_id') == title['arr_id']
-         and plan.get('delete_title') is True, FAILURE)
-    wanted = [t['hash'] for t in plan['torrents'] if t['action'] == 'remove']
-    gate_reasons = {}
-    rows = []
-    # The plan digest binds remove_torrents, so apply repeats the previewed value.
-    with_torrents = True
+    plan = _checked_plan(preview, title)
+    wanted = [t for t in plan['torrents'] if t.get('action') == 'remove']
+    gate_reasons, rows, with_torrents = {}, [], True
     if wanted:
-        rows = backends.qbit_rows()
-        with_torrents, gate_reasons = torrent_gate(rows, wanted)
+        unproven = sum(1 for t in wanted if t.get('ownership_proof') != 'hardlink')
+        if unproven:
+            with_torrents, gate_reasons = False, {'ownership_not_hardlink': unproven}
+        else:
+            rows = backends.qbit_rows()
+            with_torrents, gate_reasons = torrent_gate(rows, [t['hash'] for t in wanted])
         if not with_torrents:
+            # The plan digest binds remove_torrents, so apply uses this preview.
             preview = backends.remove(dict(base, mode='preview', remove_torrents=False))
-    applied = backends.remove(dict(base, mode='apply', remove_torrents=with_torrents,
-                                   operation_id=secrets.token_hex(16),
-                                   plan_sha256=preview['plan_sha256']))
-    kept = set(applied.get('kept_torrent_hashes') or [])
-    if kept and not rows:
-        rows = backends.qbit_rows()
-    held = sum(int(r.get('size') or 0) for r in rows
-               if type(r) is dict and str(r.get('hash', '')).lower() in kept)
+            plan = _checked_plan(preview, title)
+    return {'base': base, 'plan': plan, 'plan_sha256': preview['plan_sha256'],
+            'with_torrents': with_torrents, 'rows': rows, 'torrent_gate': gate_reasons}
+
+
+def _apply_removal(backends, prepared):
+    """Dispatch the previewed removal; library-remove refuses if the plan changed."""
+    return backends.remove(dict(prepared['base'], mode='apply', remove_torrents=prepared['with_torrents'],
+                                operation_id=secrets.token_hex(16), plan_sha256=prepared['plan_sha256']))
+
+
+def _byte_count(value):
+    return value if type(value) is int and 0 <= value < MAX_BYTES else 0
+
+
+def _removal_result(backends, prepared, applied):
+    """(result row, warning or None) for a dispatched removal.
+
+    Never raises: the title is already gone, so an odd response or a failed
+    torrent re-read only costs accuracy in the counts, never the receipt.
+    """
+    warning = None
+    removed_bytes = prepared['plan']['total_bytes']
+    removed_hashes, kept = [], set()
+    try:
+        plan = applied.get('plan')
+        if type(plan) is dict and integer(plan.get('total_bytes'), 0, MAX_BYTES):
+            removed_bytes = plan['total_bytes']
+        removed_hashes = [h for h in applied.get('removed_torrent_hashes') or [] if isinstance(h, str)]
+        kept = {h.lower() for h in applied.get('kept_torrent_hashes') or [] if isinstance(h, str)}
+    except Exception:
+        warning = 'removal response unreadable; torrent counts are unknown'
+    held = 0
+    if kept:
+        try:
+            rows = prepared['rows'] or backends.qbit_rows()
+            held = sum(_byte_count(r.get('size')) for r in rows
+                       if type(r) is dict and str(r.get('hash', '')).lower() in kept)
+        except Exception:
+            held = 0
+            warning = 'torrent sizes unavailable after removal; bytes_held_by_torrents undercounts'
     return {
-        'removed_bytes': applied['plan']['total_bytes'],
-        'torrents_removed': len(applied.get('removed_torrent_hashes') or []),
+        'removed_bytes': removed_bytes,
+        'torrents_removed': len(removed_hashes),
         'torrents_kept': len(kept),
         'bytes_held_by_torrents': held,
-        'torrent_gate': gate_reasons,
-    }
+        'torrent_gate': prepared['torrent_gate'],
+    }, warning
 
+
+def recheck_protection(backends, block, title, facts, emby_facts, *, now, series_cache):
+    """Fresh protections for one title, read immediately before its removal apply.
+
+    Eligibility used start-of-run snapshots. A favourite by any user, a new
+    play or resume state, a playback start since the run began, a queued
+    download or a move to the protected quality profile since then must still
+    save the title. Returns the protecting reason or None; read errors raise
+    Refused. The keep list is checked again by library-remove itself.
+    """
+    key = (title['library'], title['arr_id'])
+    api = backends.arr(block['libraries'][title['library']]['arr'])
+    try:
+        if title['kind'] == 'movie':
+            raw = api.get(f"/api/v3/movie/{title['arr_id']}")
+            flag, field = 'includeUnknownMovieItems=false', 'movieId'
+        else:
+            raw = api.get(f"/api/v3/series/{title['arr_id']}")
+            flag, field = 'includeUnknownSeriesItems=false', 'seriesId'
+        need(type(raw) is dict and raw.get('id') == title['arr_id'], FAILURE)
+        profiles = api.get('/api/v3/qualityprofile')
+        need(type(profiles) is list and all(type(p) is dict for p in profiles), FAILURE)
+        protected = {p['id'] for p in profiles
+                     if type(p.get('id')) is int and p.get('name') == PROTECTED_PROFILE}
+        if raw.get('qualityProfileId') in protected:
+            return 'favorite_profile'
+        if title['arr_id'] in _arr_queue(api, flag, field):
+            return 'downloading'
+    finally:
+        api.close()
+    emby = backends.emby()
+    try:
+        users = emby_users(emby)
+        routes = [_user_route(emby, emby.actor_id)] + [_user_route(emby, u['id']) for u in users
+                                                        if u['id'] != emby.actor_id]
+        resolver = Resolver(emby, TitleIndex(facts['titles'], block), routes)
+        resolver.series = series_cache
+        favorites, played = collect_user_facts(emby, resolver, users)
+        if key in favorites:
+            return 'favorite'
+        recent = collect_history(emby, resolver, users, now=max(now, int(time.time())),
+                                 window_start=now - RECHECK_MARGIN)
+    finally:
+        emby.close()
+    if key in recent['plays'] or (key in played and key not in emby_facts['touched']):
+        return 'watched'
+    if recent['coverage']['unattributable_in_window'] or recent['unmapped_managed']:
+        # A playback start since the run began that names no title could be this one.
+        return 'history_incomplete'
+    if key in played and not emby_facts['history']['coverage']['complete']:
+        return 'history_incomplete'
+    return None
 
 def prune(block, backends, *, mode, now, keep_ids, marks):
     """Evaluate and, in run mode, apply one prune pass. Returns (summary, marks).
 
-    Raises PruneAbort when any read fails before removals begin. In run mode
-    the caller holds the state lock and persists marks/summary from the result.
+    Raises PruneAbort when a read fails before the first removal. Every read
+    the marking phase needs also happens before the first removal. After it,
+    no failure escapes: the run ends as partial with every removed title in
+    the summary and the surviving marks returned. In run mode the caller holds
+    the state lock and persists marks/summary from the result.
     """
     cfg = prune_config(block)
     need(mode in ('plan', 'run'), 'Invalid prune mode')
@@ -798,102 +922,160 @@ def prune(block, backends, *, mode, now, keep_ids, marks):
             mark.update(size_bytes=title['size'], title=title['title'],
                         last_activity=iso(last_activity(title, emby_facts)))
 
-    # Apply: due marks, oldest activity first, while the library is over target.
-    removed_titles = removed_bytes = 0
-    settled = set()  # removed or refused as kept here: never re-marked in this run
-    due = sorted((titles[k] for k, m in marks.items() if parse_time(m['remove_after']) <= now), key=order)
-    for title in due:
+    # Evaluate marking candidates now, before anything is removed, so no lazy
+    # Sonarr read can fail after a removal. The marking walk below follows the
+    # same order and skip rules; it skips exactly the keys marked here (removed
+    # or refused marks were all marked), and stops by the time new marks cover
+    # size - target, since removals only lower the size. So it never reaches a
+    # title past this simulation.
+    verdicts = {}
+    shortfall = size - target
+    sim_marked = sim_bytes = 0
+    for title in sorted(titles.values(), key=order):
         key = (title['library'], title['arr_id'])
-        if size <= target:
+        if shortfall <= 0 or sim_marked >= cfg['max_titles_per_run'] or sim_bytes >= shortfall:
             break
-        if removed_titles >= cfg['max_titles_per_run']:
-            break
-        if removed_bytes + title['size'] > cfg['max_bytes_per_run']:
-            summary['remove_skipped'].append(_public(title, emby_facts, {'reason': 'run_byte_cap'}))
+        if key in marks or sim_bytes + title['size'] > cfg['max_bytes_per_run']:
             continue
-        if mode == 'plan':
-            result = {'removed_bytes': title['size'], 'planned': True}
-        else:
-            try:
-                result = _remove_one(backends, title, keep_ids)
-            except LibraryRefusal as error:
-                if error.reason == 'keep_listed':
-                    settled.add(key)
-                    summary['unmarked'].append(dict(marks.pop(key), reason='kept'))
-                else:
-                    summary['remove_skipped'].append(_public(title, emby_facts, {'reason': error.reason}))
-                continue
-            except LibraryPostDispatchError as error:
-                summary.update(outcome='partial', abort_reason='post_dispatch_' + error.code)
-                summary['remove_skipped'].append(_public(title, emby_facts, {'reason': error.code}))
-                break
-            except Refused:
-                summary.update(outcome='partial' if removed_titles else 'aborted',
-                               abort_reason='backend_error')
-                break
-        summary['removed'].append(_public(title, emby_facts, result))
-        settled.add(key)
-        marks.pop(key, None)
-        removed_titles += 1
-        removed_bytes += title['size']
-        size -= title['size']
-        summary['bytes_held_by_torrents'] += result.get('bytes_held_by_torrents', 0)
-    summary['removed_bytes'] = removed_bytes
+        verdicts[key], _ = check(title)
+        if verdicts[key]:
+            sim_marked += 1
+            sim_bytes += title['size']
+    if dates.fetched >= dates.limit:
+        summary['warnings'].append('series file-date lookups reached the per-run limit')
 
-    # Mark: only after a clean apply phase, until the projection meets the target.
-    if summary['outcome'] == 'ok':
-        if size <= target:
-            for key in sorted(marks):
-                summary['unmarked'].append(dict(marks.pop(key), reason='under_target'))
-        projected = size - sum(m['size_bytes'] for m in marks.values())
-        marked = marked_bytes = 0
-        if projected > target:
-            for title in sorted(titles.values(), key=order):
-                key = (title['library'], title['arr_id'])
-                if projected <= target or marked >= cfg['max_titles_per_run'] or len(marks) >= MAX_MARKS:
+    removed_titles = removed_bytes = 0
+    settled = set()  # removed, refused as kept or protected here: never re-marked in this run
+    series_cache = {}
+    in_flight = None
+
+    def stop(reason):
+        summary.update(outcome='partial' if removed_titles else 'aborted', abort_reason=reason)
+
+    try:
+        # Apply: due marks, oldest activity first, while the library is over target.
+        due = sorted((titles[k] for k, m in marks.items() if parse_time(m['remove_after']) <= now), key=order)
+        for title in due:
+            key = (title['library'], title['arr_id'])
+            in_flight = None
+            if size <= target:
+                break
+            if removed_titles >= cfg['max_titles_per_run']:
+                break
+            if mode == 'plan':
+                if removed_bytes + title['size'] > cfg['max_bytes_per_run']:
+                    summary['remove_skipped'].append(_public(title, emby_facts, {'reason': 'run_byte_cap'}))
+                    continue
+                result = {'removed_bytes': title['size'], 'planned': True}
+            else:
+                try:
+                    prepared = _prepare_removal(backends, title, keep_ids)
+                    plan_bytes = prepared['plan']['total_bytes']
+                    # The cap counts what this removal deletes now, not the snapshot size.
+                    if removed_bytes + plan_bytes > cfg['max_bytes_per_run']:
+                        summary['remove_skipped'].append(_public(title, emby_facts, {
+                            'size_bytes': plan_bytes, 'reason': 'run_byte_cap'}))
+                        continue
+                    try:
+                        protection = recheck_protection(backends, block, title, facts, emby_facts,
+                                                        now=now, series_cache=series_cache)
+                    except Refused:
+                        stop('recheck_unavailable')
+                        break
+                    if protection is not None:
+                        settled.add(key)
+                        summary['unmarked'].append(dict(marks.pop(key), reason=protection))
+                        continue
+                    in_flight = title
+                    applied = _apply_removal(backends, prepared)
+                except LibraryRefusal as error:
+                    in_flight = None
+                    if error.reason == 'keep_listed':
+                        settled.add(key)
+                        summary['unmarked'].append(dict(marks.pop(key), reason='kept'))
+                    else:
+                        summary['remove_skipped'].append(_public(title, emby_facts, {'reason': error.reason}))
+                    continue
+                except LibraryPostDispatchError as error:
+                    in_flight = None
+                    summary.update(outcome='partial', abort_reason='post_dispatch_' + error.code)
+                    summary['remove_skipped'].append(_public(title, emby_facts, {'reason': error.code}))
                     break
-                if (key in marks or key in settled
-                        or marked_bytes + title['size'] > cfg['max_bytes_per_run']):
-                    continue
-                ok, _ = check(title)
-                if not ok:
-                    continue
-                row = _public(title, emby_facts, {
-                    'marked_at': iso(now), 'remove_after': iso(now + cfg['grace_days'] * DAY)})
-                marks[key] = {k: row[k] for k in (
-                    'library', 'arr_id', 'kind', 'title', 'year', 'size_bytes', 'last_activity',
-                    'marked_at', 'remove_after')}
-                summary['marked'].append(row)
-                marked += 1
-                marked_bytes += title['size']
-                projected -= title['size']
-            if dates.fetched >= dates.limit:
-                summary['warnings'].append('series file-date lookups reached the per-run limit')
-        summary['projected_bytes'] = projected
-    else:
-        summary['projected_bytes'] = size - sum(m['size_bytes'] for m in marks.values())
+                except Refused:
+                    in_flight = None
+                    stop('backend_error')
+                    break
+                result, warning = _removal_result(backends, prepared, applied)
+                if warning is not None:
+                    summary['warnings'].append(warning)
+            summary['removed'].append(_public(title, emby_facts, dict(result, size_bytes=result['removed_bytes'])))
+            in_flight = None
+            settled.add(key)
+            marks.pop(key, None)
+            removed_titles += 1
+            removed_bytes += result['removed_bytes']
+            size -= result['removed_bytes']
+            summary['bytes_held_by_torrents'] += result.get('bytes_held_by_torrents', 0)
+
+        # Mark: only after a clean apply phase, until the projection meets the target.
+        if summary['outcome'] == 'ok':
+            if size <= target:
+                for key in sorted(marks):
+                    summary['unmarked'].append(dict(marks.pop(key), reason='under_target'))
+            projected = size - sum(m['size_bytes'] for m in marks.values())
+            marked = marked_bytes = 0
+            if projected > target:
+                for title in sorted(titles.values(), key=order):
+                    key = (title['library'], title['arr_id'])
+                    if projected <= target or marked >= cfg['max_titles_per_run'] or len(marks) >= MAX_MARKS:
+                        break
+                    if (key in marks or key in settled
+                            or marked_bytes + title['size'] > cfg['max_bytes_per_run']):
+                        continue
+                    if not verdicts.get(key, False):
+                        continue
+                    row = _public(title, emby_facts, {
+                        'marked_at': iso(now), 'remove_after': iso(now + cfg['grace_days'] * DAY)})
+                    marks[key] = {k: row[k] for k in (
+                        'library', 'arr_id', 'kind', 'title', 'year', 'size_bytes', 'last_activity',
+                        'marked_at', 'remove_after')}
+                    summary['marked'].append(row)
+                    marked += 1
+                    marked_bytes += title['size']
+                    projected -= title['size']
+    except Exception:
+        # Anything unexpected after collection (a malformed backend answer, a
+        # bug): keep the receipt. A removal in flight may have been dispatched.
+        if in_flight is not None:
+            summary['remove_skipped'].append(_public(in_flight, emby_facts, {'reason': 'uncertain'}))
+            summary.update(outcome='partial', abort_reason='unexpected')
+        else:
+            stop('unexpected')
+    summary['removed_bytes'] = removed_bytes
+    summary['projected_bytes'] = size - sum(m['size_bytes'] for m in marks.values())
     summary['library_bytes_after'] = size
     summary['pending_count'] = len(marks)
     summary['finished_at'] = iso(time.time())
-    for key in ('removed', 'remove_skipped', 'marked', 'unmarked'):
+    # removed stays whole (at most max_titles_per_run rows): it is the receipt.
+    for key in ('remove_skipped', 'marked', 'unmarked'):
         summary[key] = summary[key][:MAX_SUMMARY_ROWS]
     summary['warnings'] = summary['warnings'][:MAX_WARNINGS]
     return summary, marks
 
-
 def event(summary):
-    """One structured line for journald/Loki, counts only."""
+    """One structured line for journald/Loki, counts only (run or plan summary)."""
+    removed = summary['removed'] if 'removed' in summary else summary.get('would_remove', [])
+    marked = summary['marked'] if 'marked' in summary else summary.get('would_mark', [])
     return json.dumps({
         'event': 'holonet_library_prune', 'mode': summary['mode'], 'outcome': summary['outcome'],
         'abort_reason': summary['abort_reason'], 'target_bytes': summary['target_bytes'],
         'library_bytes': summary['library_bytes_after'], 'projected_bytes': summary['projected_bytes'],
-        'removed_count': len(summary['removed']), 'removed_bytes': summary['removed_bytes'],
+        'removed_count': len(removed), 'removed_bytes': summary['removed_bytes'],
         'bytes_held_by_torrents': summary['bytes_held_by_torrents'],
-        'marked_count': len(summary['marked']), 'unmarked_count': len(summary['unmarked']),
+        'marked_count': len(marked), 'unmarked_count': len(summary['unmarked']),
         'skipped_count': len(summary['remove_skipped']), 'pending_count': summary['pending_count'],
         'history_complete': (summary['history'] or {}).get('complete'),
     }, sort_keys=True, separators=(',', ':'))
-
 
 def aborted_summary(mode, now, target, reason):
     return {
@@ -905,11 +1087,29 @@ def aborted_summary(mode, now, target, reason):
     }
 
 
+def _persist_run(dir_fd, marks, summary):
+    """Write marks, then the last-run record.
+
+    Once titles were removed, a failed write does not drop the receipt: the
+    run becomes partial (state_write_failed) and the summary is still returned
+    for the journal event. Without removals the failure raises as before.
+    """
+    for write in (lambda: save_marks(dir_fd, marks),
+                  lambda: _write_state_json(dir_fd, LAST_RUN_FILE, summary, label='Prune')):
+        try:
+            write()
+        except Refused:
+            if not summary['removed']:
+                raise
+            summary.update(outcome='partial', abort_reason='state_write_failed')
+
+
 def run_locked(block, backends, *, mode, now, keep_ids):
     """State custody around prune(): lock, then atomic marks and last-run writes.
 
-    A plan never writes. A run that aborts keeps its marks unchanged and
-    records the abort as the last run.
+    A plan never writes. A run that aborts before its first removal keeps its
+    marks unchanged and records the abort as the last run; prune() itself
+    turns any later failure into a partial summary that is persisted here.
     """
     cfg = prune_config(block)
     dir_fd = _open_state_dir(cfg['state_dir'], label='Prune')
@@ -932,14 +1132,16 @@ def run_locked(block, backends, *, mode, now, keep_ids):
             except Refused:
                 raise PruneAbort('state_invalid') from None
             summary, marks = prune(block, backends, mode=mode, now=now, keep_ids=keep_ids, marks=marks)
-        except PruneAbort as error:
-            summary = aborted_summary(mode, now, cfg['target_bytes'], error.reason)
+        except Exception as error:
+            # PruneAbort, or anything raised before prune() reached its first
+            # removal: the marks stay as they were.
+            reason = error.reason if isinstance(error, PruneAbort) else 'unexpected'
+            summary = aborted_summary(mode, now, cfg['target_bytes'], reason)
             if mode == 'run':
                 _write_state_json(dir_fd, LAST_RUN_FILE, summary, label='Prune')
             return summary
         if mode == 'run':
-            save_marks(dir_fd, marks)
-            _write_state_json(dir_fd, LAST_RUN_FILE, summary, label='Prune')
+            _persist_run(dir_fd, marks, summary)
         else:
             summary['would_mark'] = summary.pop('marked')
             summary['would_remove'] = summary.pop('removed')
@@ -948,7 +1150,6 @@ def run_locked(block, backends, *, mode, now, keep_ids):
         if lock is not None:
             lock.release()
         os.close(dir_fd)
-
 
 # --- Read-only socket operations ---------------------------------------------
 
