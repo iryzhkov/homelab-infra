@@ -16,9 +16,9 @@ advertisements only from the listed peer. Its check passes only while Traefik's 
 and the websecure entrypoint serves the catch-all. public-api is preferred (priority 150).
 Every router asks for the `ryzhkov.dev` + `*.ryzhkov.dev` wildcard (`traefik_wildcard_only`),
 so each edge holds one certificate, issued over DNS-01 with the Cloudflare token in
-`secrets/public-api-traefik.sops.yaml`. The exceptions ask for a certificate of their own: the
-web-MCP endpoints, and `car.ryzhkov.dev`, whose certificate is exported to the car so that it
-never holds the wildcard key (`docs/car-tls.md`).
+`secrets/public-api-traefik.sops.yaml`. The car has a certificate for exactly `car.ryzhkov.dev`,
+so that it never holds the wildcard key; Traefik cannot issue that one (the wildcard already
+covers the name), so public-api issues it with lego and homelab pulls it (`docs/car-tls.md`).
 
 How it was built and cut over: `docs/transition/phase4/`.
 

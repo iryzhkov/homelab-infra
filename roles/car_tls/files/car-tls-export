@@ -1,24 +1,25 @@
 #!/bin/sh
-# Export the car's dedicated certificate from Traefik's ACME store.
+# Export the car's dedicated certificate from lego's store.
 #
-#   car-tls-export ACME_JSON RESOLVER DOMAIN DEST_DIR OWNER
+#   car-tls-export CERT KEY DOMAIN DEST_DIR OWNER
 #
-# Runs as root, because Traefik writes acme.json as root with mode 0600. Writes
-# fullchain.pem, privkey.pem and bundle.pem (the two concatenated, which is
-# what homelab pulls) into DEST_DIR, each owned by OWNER with mode 0600, and
-# only when the certificate changed. Every file is written next to its final
-# name and renamed into place, so a reader never sees half a file.
+# CERT is lego's bundle (leaf first, then the issuer) and KEY its private key,
+# both root's. Writes fullchain.pem, privkey.pem and bundle.pem (the two
+# concatenated, which is what homelab pulls) into DEST_DIR, each owned by
+# OWNER with mode 0600, and only when the certificate changed. Every file is
+# written next to its final name and renamed into place, so a reader never
+# sees half a file.
 #
-# Refuses a certificate that names anything but DOMAIN, so the wildcard can
-# never leave through this path. Never prints key material.
+# Refuses a certificate that names anything but DOMAIN, so nothing broader can
+# leave through this path. Never prints key material.
 set -eu
 
 if [ "$#" -ne 5 ]; then
-    echo "usage: car-tls-export ACME_JSON RESOLVER DOMAIN DEST_DIR OWNER" >&2
+    echo "usage: car-tls-export CERT KEY DOMAIN DEST_DIR OWNER" >&2
     exit 2
 fi
-acme=$1
-resolver=$2
+cert=$1
+key=$2
 domain=$3
 dest=$4
 owner=$5
@@ -28,16 +29,8 @@ install -d -m 0700 -o "$owner" -g "$owner" "$dest"
 work=$(mktemp -d "$dest/.export.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-# The entry whose main name is DOMAIN and which has no other names.
-select='first(.[$r].Certificates[]? | select(.domain.main == $d and ((.domain.sans // []) | length) == 0))'
-if ! jq -e --arg r "$resolver" --arg d "$domain" "$select" "$acme" >/dev/null; then
-    echo "no certificate for exactly $domain under resolver $resolver in $acme" >&2
-    exit 1
-fi
-jq -er --arg r "$resolver" --arg d "$domain" "$select | .certificate" "$acme" |
-    base64 -d >"$work/fullchain.pem"
-jq -er --arg r "$resolver" --arg d "$domain" "$select | .key" "$acme" |
-    base64 -d >"$work/privkey.pem"
+cp "$cert" "$work/fullchain.pem"
+cp "$key" "$work/privkey.pem"
 
 # The leaf must name DOMAIN and nothing else, must not have expired, and must
 # belong to the key next to it.
