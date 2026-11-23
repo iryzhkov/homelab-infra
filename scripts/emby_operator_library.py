@@ -473,6 +473,10 @@ class LibraryArrClient(ImporterInventoryAdapter):
     def _response_limit(self, route):
         if route.startswith('/api/v3/release'):
             return 4 * 1024 * 1024
+        if route in ('/api/v3/movie', '/api/v3/series'):
+            # Whole-library lists: Radarr's 682 movies were 4.4 MiB on 2026-11-22.
+            # 8 MiB is the shared importer_response_bytes ceiling.
+            return 8 * 1024 * 1024
         if route.startswith(('/api/v3/movie', '/api/v3/series', '/api/v3/episode',
                              '/api/v3/history', '/api/v3/importlist', '/api/v3/manualimport')):
             return 4 * 1024 * 1024
@@ -3759,8 +3763,15 @@ def op_recommendations(call, block, arr_factory, *, mdblist_factory=None, reques
 
     radarr_rec_items = []
     if source_filter in ('radarr', 'all'):
-        raw_recs = radarr.get('/api/v3/importlist/movie?includeRecommendations=true&includeTrending=false&includePopular=false')
-        need(type(raw_recs) is list, FAILURE)
+        # Radarr builds these from its upstream metadata service, which fails
+        # transiently (HTTP 500 from Radarr when api.radarr.video returns 520).
+        # Keep the mdblist results and say the Radarr source was skipped.
+        try:
+            raw_recs = radarr.get('/api/v3/importlist/movie?includeRecommendations=true&includeTrending=false&includePopular=false')
+            need(type(raw_recs) is list, FAILURE)
+        except Refused:
+            raw_recs = []
+            warnings.append('Radarr recommendations are unavailable right now; showing mdblist results only')
         for raw_rec in raw_recs:
             norm = _normalize_radarr_rec(raw_rec)
             if norm is not None:
