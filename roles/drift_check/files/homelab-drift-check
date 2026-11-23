@@ -25,7 +25,7 @@ Exit status: 0 clean, 1 drift found, 2 the check itself could not run.
 
 import datetime
 import hashlib
-import fnmatch
+from pathlib import PurePosixPath
 import json
 import os
 import subprocess
@@ -64,7 +64,8 @@ def standalone_projects(projects, owners):
     """Recognise exact names only at the owning manager's Compose path."""
     return {name for name, spec in owners.items()
             if spec["owner"] and name in projects
-            and fnmatch.fnmatchcase(projects[name].get("ConfigFiles", ""), spec["config"])}
+            and "," not in projects[name].get("ConfigFiles", "")
+            and PurePosixPath(projects[name].get("ConfigFiles", "")).match(spec["config"])}
 
 
 def env_keys(path):

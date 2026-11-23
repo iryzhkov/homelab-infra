@@ -152,8 +152,11 @@ class AuthentikDriftTest(unittest.TestCase):
                     "unknown": {"ConfigFiles": "/opt/releases/v1/compose.yml"}}
         owners = {"ov-http": {"owner": "release role", "config": "/opt/releases/*/compose.yml"}}
         self.assertEqual(checker.standalone_projects(projects, owners), {"ov-http"})
-        projects["ov-http"]["ConfigFiles"] = "/elsewhere/compose.yml"
-        self.assertEqual(checker.standalone_projects(projects, owners), set())
+        for config in ("/elsewhere/compose.yml",
+                       "/opt/releases/v1/compose.yml,/etc/unowned/compose.yml",
+                       "/opt/releases/nested/v1/compose.yml"):
+            projects["ov-http"]["ConfigFiles"] = config
+            self.assertEqual(checker.standalone_projects(projects, owners), set())
 
     def test_unreachable_api_is_broken_not_clean(self):
         def get(path):

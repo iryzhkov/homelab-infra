@@ -4,11 +4,7 @@
   hosts: edge_proxy
   gather_facts: false
   tasks:
-    - name: Require explicit route activation
-      ansible.builtin.assert:
-        that: authentik_signer_routes_enabled | bool
-    - name: Render exact cohort routes from the owning template
-      ansible.builtin.template:
-        src: ../roles/traefik/templates/authentik-jwks.yml.j2
-        dest: "{{ traefik_dynamic_dir }}/authentik-jwks.yml"
-        mode: "0644"
+    - name: Load Traefik defaults and only the cohort overlay tasks
+      ansible.builtin.import_role:
+        name: traefik
+        tasks_from: signer-routes
