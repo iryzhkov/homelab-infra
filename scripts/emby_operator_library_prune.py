@@ -848,7 +848,11 @@ def recheck_protection(backends, block, title, facts, emby_facts, *, now, series
     if recent['coverage']['unattributable_in_window'] or recent['unmapped_managed']:
         # A playback start since the run began that names no title could be this one.
         return 'history_incomplete'
-    if key in played and not emby_facts['history']['coverage']['complete']:
+    if key in played and not (emby_facts['history']['coverage']['complete']
+                              and recent['coverage']['complete']):
+        # A played or resumable title is removable only while both the
+        # start-of-run history and the fresh recheck history are complete;
+        # otherwise a new play or resume state could be invisible.
         return 'history_incomplete'
     return None
 

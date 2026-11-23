@@ -3388,6 +3388,25 @@ class LibraryPruneTests(unittest.TestCase):
         self.assertEqual(w.removed, [])
         self.assertEqual(set(after), set(marks))
 
+    def test_recheck_fails_closed_for_played_title_when_fresh_history_is_incomplete(self):
+        # Movie 2 was played long ago and history was complete at collection, so
+        # it is due. Before its apply the activity log loses coverage and a new
+        # resume state appears: the fresh history cannot prove the title idle.
+        later = NOW + 8 * prune.DAY
+        w, marks = self._due_world()
+        w.played[VIEWER] = [emby_movie_id(2)]
+
+        def change(req, w=w):
+            if req['arr_id'] == 2:
+                w.activity = []
+                w.resumable[VIEWER] = [emby_movie_id(2)]
+        w.on_preview = change
+        summary, marks = self.run_prune(now=later, marks=marks)
+        self.assertNotIn(('movies', 2), w.removed)
+        self.assertEqual([c['mode'] for c in w.remove_calls if c['arr_id'] == 2], ['preview'])
+        self.assertIn((2, 'history_incomplete'),
+                      {(u['arr_id'], u['reason']) for u in summary['unmarked']})
+
     def test_byte_cap_uses_fresh_plan_size(self):
         w = self.world
         w.movie(1, 2 * TIB, profile=13)
