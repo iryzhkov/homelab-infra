@@ -1,0 +1,16 @@
+---
+# The car's dedicated certificate: car.ryzhkov.dev only, never the wildcard.
+# Traefik issues it (roles/traefik/templates/car.yml.j2), the source edge
+# exports it from acme.json, and homelab pulls it for pirene. docs/car-tls.md.
+#
+#   ansible-playbook playbooks/car-tls.yml --check --diff
+#
+# The edge must accept homelab's pull key first: playbooks/ssh.yml -l public-api.
+
+- name: Export and deliver the car certificate
+  # car_tls_source and car_tls_consumer in group_vars/all.yml; the role skips
+  # any host that is neither.
+  hosts: public-api:homelab
+  gather_facts: false
+  roles:
+    - car_tls

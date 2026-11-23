@@ -1,0 +1,15 @@
+[Unit]
+Description=Pull the {{ car_tls_domain }} certificate from {{ car_tls_source }}
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={{ car_tls_pull_user }}
+Group={{ car_tls_pull_user }}
+ExecStart=/usr/local/sbin/car-tls-pull {{ hostvars[car_tls_source].ssh_user }}@{{ hostvars[car_tls_source].ansible_host }} {{ car_tls_domain }} {{ car_tls_pull_state_dir }} {{ car_tls_pull_dir }}
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ car_tls_pull_dir }}

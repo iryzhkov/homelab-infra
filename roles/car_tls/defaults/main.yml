@@ -1,0 +1,17 @@
+---
+# The car's dedicated certificate: exported on the edge named by
+# car_tls_source (tasks/export.yml) and pulled onto homelab for pirene
+# (tasks/pull.yml). See docs/car-tls.md. car_tls_domain, car_tls_source and
+# car_tls_source_host_key are in group_vars/all.yml, because the Traefik route
+# and the fleet SSH key use them too.
+
+# On the source edge. acme.json is Traefik's own store; the export directory is
+# owned by the edge's login user, which is who the forced command runs as.
+car_tls_acme_json: "{{ stack_root }}/traefik/certs/acme.json"
+car_tls_export_dir: "{{ stack_root }}/traefik/export/car"
+
+# On the consumer. pirene reads the certificate; the pull runs as pirene, so
+# the files are pirene's without any chown.
+car_tls_pull_user: pirene
+car_tls_pull_dir: /etc/pirene/car-tls
+car_tls_pull_state_dir: /var/lib/car-tls-pull

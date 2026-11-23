@@ -65,12 +65,29 @@ gatus_public_from_lan:
 #                 Nebula address); it is rendered for the routers' tls block.
 #   cartest.yml   the Bellerophon test car on gaming-pc, adopted from
 #                 public-api on 2026-10-02
+#   car.yml       the car itself, LAN-only, and the one router with a
+#                 certificate of its own instead of the wildcard
 traefik_rendered_files:
   - admin.yml
   - whisper.yml
   - t3.yml
   - cartest.yml
   - akasha.yml
+  - car.yml
+
+# The car's dedicated certificate (docs/car-tls.md): issued for exactly this
+# name by Traefik on each edge, exported from car_tls_source only, and pulled
+# by car_tls_consumer into /etc/pirene/car-tls, so the car never holds the
+# wildcard key. The host key pins car_tls_source for the pull; it was read from
+# /etc/ssh/ssh_host_ed25519_key.pub on public-api on 2026-11-22.
+car_tls_domain: car.ryzhkov.dev
+car_tls_source: public-api
+car_tls_consumer: homelab
+car_tls_source_host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC/YI4sP5D1C2vY8RlzffPXD9sEbrCLFWg1acAvsqXIO"
+# Until a car exists, car.ryzhkov.dev reaches the cartest simulator on
+# gaming-pc over the mesh (its ufw admits 18800 from 10.42.0.0/24). This moves
+# to the car.
+car_route_backend: http://10.42.0.6:18800
 #   catchall.yml  the wildcard-certificate 404 for unclaimed hostnames
 traefik_static_files:
   - catchall.yml

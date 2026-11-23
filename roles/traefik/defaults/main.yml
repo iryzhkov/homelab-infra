@@ -1,7 +1,8 @@
 ---
 # Every router asks for the wildcard certificate rather than one for its own
 # host name; see templates/router-tls.j2. On for every edge since the phase 4
-# cutover (2026-10-02).
+# cutover (2026-10-02). The exceptions, which leave router-tls.j2 out, are
+# listed there: the web-MCP endpoints and car.yml (docs/car-tls.md).
 authentik_signer_routes_enabled: false
 authentik_signer_akasha_enrolled: false
 traefik_wildcard_only: true

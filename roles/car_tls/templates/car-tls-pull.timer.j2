@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily pull of the {{ car_tls_domain }} certificate, and at boot
+
+[Timer]
+# After the edge's daily export has had its chance to run.
+OnCalendar=*-*-* 03:30
+OnBootSec=5min
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

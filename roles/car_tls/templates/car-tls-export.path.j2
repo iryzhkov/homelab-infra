@@ -1,0 +1,9 @@
+[Unit]
+Description=Export the {{ car_tls_domain }} certificate when Traefik's ACME store changes
+
+[Path]
+PathChanged={{ car_tls_acme_json }}
+Unit=car-tls-export.service
+
+[Install]
+WantedBy=paths.target

@@ -6,6 +6,13 @@
   empty acme.json issues one certificate rather than one per router, and the
   store stops renewing single-name ones that nothing asks for. Without it the
   block renders exactly as the hand-written files had it.
+
+  Two kinds of router deliberately do not include this file and ask for a
+  certificate of their own: the web-MCP endpoints (roles/web_mcp_route) and
+  car.yml, whose certificate is exported to the car so that the car never
+  holds the wildcard key (docs/car-tls.md). Nothing enforces the wildcard
+  beyond this include, so a new exception is a new template that leaves it
+  out, written down where it is made.
 #}
       tls:
         certResolver: "{{ traefik_cert_resolver }}"

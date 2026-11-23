@@ -1,0 +1,54 @@
+---
+# A root service, because Traefik writes acme.json as root with mode 0600. It
+# runs when acme.json changes (an issuance or a renewal) and once a day, and
+# writes only when the certificate changed.
+
+- name: Install the exporter
+  become: true
+  ansible.builtin.copy:
+    src: car-tls-export
+    dest: /usr/local/sbin/car-tls-export
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure the export directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ car_tls_export_dir }}"
+    state: directory
+    owner: "{{ ssh_user }}"
+    group: "{{ ssh_user }}"
+    mode: "0700"
+
+- name: Install the exporter's units
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - car-tls-export.service
+    - car-tls-export.path
+    - car-tls-export.timer
+  register: car_tls_export_units
+
+- name: Reload systemd when a unit changed
+  become: true
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: car_tls_export_units is changed
+
+# In check mode the unit files were never written.
+- name: Enable the exporter's triggers
+  become: true
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - car-tls-export.path
+    - car-tls-export.timer
+  when: not ansible_check_mode
