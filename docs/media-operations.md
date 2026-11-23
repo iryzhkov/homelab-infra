@@ -15,6 +15,8 @@ sudo /usr/local/lib/media-observability/seedpool-policy-check.py
 sudo /usr/local/lib/media-observability/seedpool-policy-check.py --retire-file /root/retirement-hashes.json
 ```
 
+The weekly HoloNet library prune uses the same policy module before it deletes any torrent; when the policy blocks, it removes only the library title and leaves the torrent seeding ([holonet-library.md](holonet-library.md#library-prune)).
+
 The optional private JSON file is an array of torrent hashes. The second command exits 2 when blocked, 1 on collection/configuration failure and 0 when the proposed batch passes. It only evaluates policy; it has no torrent stop or delete implementation and is not an enforcement hook inside qBittorrent or Janitorr. Any future deletion automation must call the guard immediately before acting and handle concurrent changes safely.
 
 ## Scope

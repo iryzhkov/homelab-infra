@@ -423,6 +423,183 @@
       "warnings": []
     }
   },
+  "library_prune_status_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "library-prune-status",
+    "request": {}
+  },
+  "library_prune_status": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "enabled": true,
+      "target_bytes": 21990232555520,
+      "library_bytes": 23089744183296,
+      "by_library": {
+        "movies": 12000000000000,
+        "tv": 8000000000000,
+        "anime": 3089744183296
+      },
+      "over_target_bytes": 1099511627776,
+      "projected_bytes": 21990232555520,
+      "rules": {
+        "min_idle_days": 180,
+        "grace_days": 7,
+        "max_bytes_per_run": 2199023255552,
+        "max_titles_per_run": 40
+      },
+      "pending": [
+        {
+          "library": "movies",
+          "arr_id": 18,
+          "kind": "movie",
+          "title": "Synthetic Movie",
+          "year": 2024,
+          "size_bytes": 1099511627776,
+          "last_activity": "2025-01-02T03:04:05Z",
+          "marked_at": "2026-11-22T04:30:00Z",
+          "remove_after": "2026-11-29T04:30:00Z"
+        }
+      ],
+      "pending_count": 1,
+      "pending_bytes": 1099511627776,
+      "last_run": {
+        "mode": "run",
+        "outcome": "ok",
+        "abort_reason": null,
+        "started_at": "2026-11-22T04:30:00Z",
+        "finished_at": "2026-11-22T04:31:10Z",
+        "target_bytes": 21990232555520,
+        "library_bytes_before": 23089744183296,
+        "library_bytes_after": 23089744183296,
+        "projected_bytes": 21990232555520,
+        "history": {
+          "source": "emby_activity_log",
+          "window_start": "2026-05-26T04:30:00Z",
+          "complete": false,
+          "retention_since": "2024-08-07T15:55:45Z",
+          "attributable_since": "2026-08-29T03:52:25Z",
+          "unattributable_in_window": 12,
+          "unmapped_plays": 0
+        },
+        "removed": [],
+        "remove_skipped": [],
+        "marked": [
+          {
+            "library": "movies",
+            "arr_id": 18,
+            "kind": "movie",
+            "title": "Synthetic Movie",
+            "year": 2024,
+            "size_bytes": 1099511627776,
+            "last_activity": "2025-01-02T03:04:05Z",
+            "marked_at": "2026-11-22T04:30:00Z",
+            "remove_after": "2026-11-29T04:30:00Z"
+          }
+        ],
+        "unmarked": [],
+        "pending_count": 1,
+        "removed_bytes": 0,
+        "bytes_held_by_torrents": 0,
+        "warnings": []
+      },
+      "protection": "Favouriting a title in Emby (any user) protects it from automatic pruning."
+    }
+  },
+  "library_watch_history_frame": {
+    "version": 1,
+    "caller": {
+      "issuer": "https://issuer.invalid/application/o/synthetic/",
+      "subject": "synthetic-writer-subject",
+      "namespace": "managed-library",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "target_library": "3",
+      "actions": [
+        "library.read"
+      ],
+      "expires_at": 2000000300,
+      "policy_revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "recipient": "cccccccccccccccccccccccccccccccc",
+    "deadline_unix_ms": 2000000060000,
+    "operation": "library-watch-history",
+    "request": {
+      "days": 90,
+      "limit": 50
+    }
+  },
+  "library_watch_history": {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "days": 90,
+      "since": "2026-08-24T00:00:00Z",
+      "items": [
+        {
+          "library": "anime",
+          "arr_id": 26,
+          "kind": "series",
+          "title": "Synthetic Anime",
+          "year": 2022,
+          "tmdb_id": null,
+          "tvdb_id": 384541,
+          "genres": [
+            "Animation",
+            "Comedy"
+          ],
+          "play_count": 3,
+          "user_count": 1,
+          "users": [
+            "Viewer"
+          ],
+          "last_played": "2026-11-21T20:15:00Z"
+        }
+      ],
+      "items_total": 1,
+      "truncated": false,
+      "favorites": [
+        {
+          "library": "movies",
+          "arr_id": 18,
+          "kind": "movie",
+          "title": "Synthetic Movie",
+          "year": 2024,
+          "tmdb_id": 603,
+          "tvdb_id": null,
+          "genres": [
+            "Science Fiction"
+          ],
+          "users": [
+            "Admin"
+          ]
+        }
+      ],
+      "favorites_total": 1,
+      "history": {
+        "source": "emby_activity_log",
+        "complete": true,
+        "retention_since": "2024-08-07T15:55:45Z",
+        "attributable_since": "2026-08-29T03:52:25Z",
+        "unattributable_in_window": 0,
+        "unmapped_plays": 0
+      },
+      "user_count": 2
+    }
+  },
   "library_add_preview_frame": {
     "version": 1,
     "caller": {
@@ -1133,6 +1310,24 @@
         "code": "refused",
         "reason": "no_import_candidates",
         "message": "No manual import candidates found for download_id"
+      }
+    },
+    "prune_disabled": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "prune_disabled",
+        "message": "Library prune not configured by policy"
+      }
+    },
+    "prune_state_invalid": {
+      "version": 1,
+      "ok": false,
+      "error": {
+        "code": "refused",
+        "reason": "prune_state_invalid",
+        "message": "Prune state is unreadable or invalid"
       }
     },
     "partial": {

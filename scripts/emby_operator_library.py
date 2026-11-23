@@ -52,6 +52,8 @@ READ_OPERATIONS = (
     'library-queue',
     'library-subtitles',
     'library-recommendations',
+    'library-prune-status',
+    'library-watch-history',
 )
 MANAGE_OPERATIONS = (
     'library-add',
@@ -68,6 +70,8 @@ SECONDS = {
     'library-queue': 20,
     'library-subtitles': 120,
     'library-recommendations': 60,
+    'library-prune-status': 60,
+    'library-watch-history': 90,
     'library-add': 60,
     'library-grab': 60,
     'library-remove': 120,
@@ -192,7 +196,7 @@ def validate_block(value):
         'enabled', 'target_library', 'revision', 'subjects', 'libraries',
         'torrents', 'allowed_categories', 'removal_thresholds', 'limits',
     }
-    need(type(value) is dict and req_block_keys <= set(value) <= (req_block_keys | {'recommendations'}),
+    need(type(value) is dict and req_block_keys <= set(value) <= (req_block_keys | {'recommendations', 'prune'}),
          'Invalid library policy')
     need(type(value['enabled']) is bool, 'Invalid library policy')
     need(catalog_id(value['target_library']) and isinstance(value['revision'], str)
@@ -258,6 +262,31 @@ def validate_block(value):
         need(integer(recs['daily_ceiling'], 1, 100)
              and integer(recs['cache_ttl_seconds'], 21600, 86400)
              and integer(recs['min_refresh_age_seconds'], 3600, 21600), 'Invalid library policy')
+    if 'prune' in value:
+        validate_prune_block(value['prune'])
+    return copy.deepcopy(value)
+
+
+PRUNE_MAX_TITLES = 200
+
+
+def validate_prune_block(value):
+    """The optional library.prune block: weekly removal of old unwatched titles."""
+    need(type(value) is dict and set(value) == {
+        'enabled', 'target_bytes', 'min_idle_days', 'grace_days', 'max_bytes_per_run',
+        'max_titles_per_run', 'state_dir', 'keep_journal',
+    }, 'Invalid library policy')
+    need(type(value['enabled']) is bool
+         and integer(value['target_bytes'], 1 << 40, 1 << 50)
+         and integer(value['min_idle_days'], 30, 3650)
+         and integer(value['grace_days'], 1, 90)
+         and integer(value['max_bytes_per_run'], 1 << 30, value['target_bytes'])
+         and integer(value['max_titles_per_run'], 1, PRUNE_MAX_TITLES), 'Invalid library policy')
+    for key in ('state_dir', 'keep_journal'):
+        p = value[key]
+        need(isinstance(p, str) and p.startswith('/') and str(PurePosixPath(p)) == p
+             and '..' not in PurePosixPath(p).parts and len(PurePosixPath(p).parts) > 2,
+             'Invalid library policy')
     return copy.deepcopy(value)
 
 
@@ -337,6 +366,14 @@ def request(operation, value):
             need(integer(value['min_score'], 0, 100), 'Invalid library request')
         if 'refresh' in value:
             need(type(value['refresh']) is bool, 'Invalid library request')
+    elif operation == 'library-prune-status':
+        need(not fields, 'Invalid library request')
+    elif operation == 'library-watch-history':
+        need(fields <= {'days', 'limit'}, 'Invalid library request')
+        if 'days' in value:
+            need(integer(value['days'], 1, 365), 'Invalid library request')
+        if 'limit' in value:
+            need(integer(value['limit'], 1, 200), 'Invalid library request')
     elif operation == 'library-add':
         mode = value.get('mode')
         need(mode in ('preview', 'apply'), 'Invalid library request')
@@ -584,6 +621,11 @@ class LibraryTorrentClient(TorrentAdapter):
     def call_limit(self):
         return 64
 
+    def response_limit(self, route):
+        # The whole-client list feeds the SeedPool floor check: 1416 torrents
+        # were 2.9 MB on 2026-11-22; 8 MiB is the shared importer ceiling.
+        return 8 * 1024 * 1024 if route == '/api/v2/torrents/info' else None
+
     def allowed_exchanges(self):
         return {
             ('POST', '/api/v2/auth/login'),
@@ -640,6 +682,16 @@ class LibraryTorrentClient(TorrentAdapter):
         need(type(rows) is list, FAILURE)
         return rows
 
+    def info_all(self):
+        """Every torrent in the client, for the SeedPool retention snapshot."""
+        route = '/api/v2/torrents/info'
+        self._extra_routes.add(('GET', route))
+        status, _, raw = self.exchange('GET', route)
+        need(status == 200, FAILURE)
+        rows = json_body(raw)
+        need(type(rows) is list and all(type(r) is dict for r in rows), FAILURE)
+        return rows
+
     def files_by_hash(self, torrent_hash):
         need(isinstance(torrent_hash, str) and HEX40.fullmatch(torrent_hash), FAILURE)
         route = '/api/v2/torrents/files?hash=' + torrent_hash
@@ -659,7 +711,18 @@ class LibraryTorrentClient(TorrentAdapter):
 
 
 class LibraryEmbyClient(OperatorAdapter):
-    """OperatorAdapter extension for read-only subtitle stream extraction."""
+    """OperatorAdapter extension for read-only subtitle and prune fact reads."""
+
+    PRUNE_READ_ROUTE = re.compile(r'/Users/[0-9a-f]{32}/Items|/System/ActivityLog/Entries')
+
+    @property
+    def actor_id(self):
+        return self._config['actor']
+
+    def allow_read(self, path):
+        """Admit one fixed-shape GET: a user's Items listing or the activity log."""
+        need(isinstance(path, str) and self.PRUNE_READ_ROUTE.fullmatch(path) is not None, FAILURE)
+        self._routes.add(('GET', path))
 
     def subtitle_srt(self, item_id, media_source_id, stream_index):
         need(catalog_id(item_id) and clean_text(media_source_id, 128)
@@ -3073,28 +3136,28 @@ def read_mdblist_key(path):
             os.close(fd)
 
 
-def _open_state_dir(path):
+def _open_state_dir(path, label='Recommendations'):
     """Open a root-owned 0700 state directory via directory FDs with O_NOFOLLOW."""
     fd = None
     try:
         p = PurePosixPath(path)
         need(p.is_absolute() and str(p) == path and '..' not in p.parts and len(p.parts) > 2,
-             'Invalid recommendations state path')
+             f'Invalid {label.lower()} state path')
         fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         for part in p.parts[1:]:
             nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = nxt
             s = os.fstat(fd)
-            need(s.st_uid == 0 and not (s.st_mode & 0o022), 'Unsafe recommendations state ancestor')
-        need(stat.S_IMODE(os.fstat(fd).st_mode) == 0o700, 'Recommendations state directory must be 0700')
+            need(s.st_uid == 0 and not (s.st_mode & 0o022), f'Unsafe {label.lower()} state ancestor')
+        need(stat.S_IMODE(os.fstat(fd).st_mode) == 0o700, f'{label} state directory must be 0700')
         out = fd
         fd = None
         return out
     except Refused:
         raise
     except (OSError, ValueError, TypeError):
-        raise Refused('Recommendations state directory unavailable') from None
+        raise Refused(f'{label} state directory unavailable') from None
     finally:
         if fd is not None:
             os.close(fd)
@@ -3126,11 +3189,12 @@ def _read_state_json(dir_fd, filename, limit):
         os.close(leaf)
 
 
-def _write_state_json(dir_fd, filename, payload):
+def _write_state_json(dir_fd, filename, payload, label='Recommendations'):
     """Atomically write a root-owned 0600 JSON state file into dir_fd."""
     raw = json.dumps(payload, separators=(',', ':'), allow_nan=False, ensure_ascii=True).encode('utf-8')
     tmp_name = f'.{filename}.tmp.{os.getpid()}.{secrets.token_hex(6)}'
     tmp_fd = None
+    staged = False
     try:
         tmp_fd = os.open(
             tmp_name,
@@ -3138,28 +3202,32 @@ def _write_state_json(dir_fd, filename, payload):
             0o600,
             dir_fd=dir_fd,
         )
+        staged = True
         os.fchmod(tmp_fd, 0o600)
         view = memoryview(raw)
         written = 0
         while written < len(raw):
             n = os.write(tmp_fd, view[written:])
-            need(n > 0, 'Recommendations state write failed')
+            need(n > 0, f'{label} state write failed')
             written += n
         os.fsync(tmp_fd)
         os.close(tmp_fd)
         tmp_fd = None
         os.replace(tmp_name, filename, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        staged = False
         os.fsync(dir_fd)
     except Refused:
         raise
     except OSError:
-        raise Refused('Recommendations state write failed') from None
+        raise Refused(f'{label} state write failed') from None
     finally:
         if tmp_fd is not None:
             try:
                 os.close(tmp_fd)
             except OSError:
                 pass
+        if staged:
+            # Never leave a half-published temporary beside the previous file.
             try:
                 os.unlink(tmp_name, dir_fd=dir_fd)
             except OSError:
@@ -3919,6 +3987,12 @@ def execute(policy, call, guard, config):
             return op_subtitles(call, block, arr_factory, emby_factory)
         if op == 'library-recommendations':
             return op_recommendations(call, block, arr_factory, mdblist_factory=mdblist_factory, request_guard=guard)
+        if op in ('library-prune-status', 'library-watch-history'):
+            # Imported here: the prune module itself builds on this one.
+            import emby_operator_library_prune as prune
+            if op == 'library-prune-status':
+                return prune.op_prune_status(call, block, arr_factory)
+            return prune.op_watch_history(call, block, arr_factory, emby_factory)
         if op == 'library-add':
             return op_add(call, block, arr_factory)
         if op == 'library-grab':

@@ -9,7 +9,7 @@ Normative contract: `tooling/contracts/holonet-library-v1-2026-11-22.md`
 
 ## What it does
 
-`scripts/emby_operator_library.py` adds ten worker operations dispatched over
+`scripts/emby_operator_library.py` adds twelve worker operations dispatched over
 the existing root operator socket (`scripts/emby_operator_socket.py`):
 
 Read operations (require `library.read`):
@@ -50,6 +50,17 @@ Read operations (require `library.read`):
   `recommendations_disabled` when policy omits `library.recommendations`, and
   `quota_exhausted` when the daily mdblist ceiling or HTTP 429 is reached with
   no cache available.
+- `library-prune-status` (HoloNet tool `library_prune_status`): library size
+  against the prune target (per library), pending marks with title, size, last
+  activity and `remove_after`, the projected size once they are removed, and the
+  last run summary. Refuses `prune_disabled` without `library.prune` and
+  `prune_state_invalid` when the state files fail validation. Budget 60 s.
+- `library-watch-history` (HoloNet tool `library_watch_history`): titles played
+  in the last `days` (default 90, 1–365) across all Emby users, with play count,
+  user names, last played time, library, Arr ID, TMDb/TVDb IDs and Arr genres,
+  plus every current Emby favourite (any user) mapped to its Arr title. Bounded
+  by `limit` (default 100, max 200) and 200 favourites; `history` reports the
+  coverage of the playback source. Budget 90 s.
 
 Manage operations (require `library.manage`, each supporting `mode: "preview"`
 and `mode: "apply"` with canonical `plan_sha256` verification):
@@ -112,6 +123,93 @@ directory-FD `O_NOFOLLOW` custody, is never logged, and is sent only as the
 response cap). Outbound HTTPS is already permitted by the worker unit
 (`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, no `IPAddressDeny`).
 
+## Library prune
+
+`scripts/emby_operator_library_prune.py` keeps the managed library at or below
+`library.prune.target_bytes` (default 20 TiB) by removing old, unwatched,
+non-favourite titles. The root unit `holonet-library-prune.service` runs it
+weekly from `holonet-library-prune.timer` (Sunday 04:30 with up to 15 minutes of
+random delay, `Persistent=true`). It is never reachable from the MCP service;
+the two HoloNet tools above only read its state.
+
+Library size is the sum of Radarr movie and Sonarr series `sizeOnDisk` inside
+the configured `movies`, `tv` and `anime` root folders. Candidates are whole
+movies and whole series. A title is eligible only when all of these hold:
+
+- no Emby user has it as a favourite (movie, series, or any season or episode
+  of the series); the tool descriptions tell agents that favouriting protects;
+- its Arr quality profile is not `Favorites - UHD + Original`;
+- no active HoloNet keep resolves to any of its Emby items (the same keep list
+  `library-remove` honours, read from the Go janitor journal);
+- it is not in the Radarr or Sonarr download queue;
+- the Arr added date and the newest file `dateAdded` are both older than
+  `min_idle_days` (180);
+- nobody played it within `min_idle_days`.
+
+Candidates are ordered by last activity (the later of the Arr added date and
+the last play), oldest first, then larger first. Each run first applies, then
+marks. Apply re-checks every pending mark against the facts read by this run
+and removes the marks whose `remove_after` has passed (marked at least
+`grace_days`, default 7, earlier) while the library is still over the target,
+within `max_titles_per_run` (40) and `max_bytes_per_run` (2 TiB). Mark then adds
+candidates until the projected size (current size minus pending marks) is at
+or below the target, within the same caps; a title larger than the remaining
+byte budget is skipped. Marks that became ineligible (watched, favourited,
+kept, queued, gone) are released, and all marks are released once the library
+is under the target. `plan` mode (`emby_operator_library_prune.py plan`, as
+root) prints the same evaluation without writing state.
+
+Each removal is one `library-remove` preview/apply of the whole title with the
+current keep list, so the recycle bin requirement, keep refusal, file limit
+and hardlink ownership proof all apply unchanged. Torrents that library-remove
+would delete are additionally checked against the SeedPool policy
+(`scripts/seedpool_policy.py`): SeedPool torrents need the whole-batch
+retirement plan to pass (seeded at least 10 days and the 20 TiB active floor
+still held afterwards); other trackers need the same 10-day minimum; unknown
+trackers or an unknown snapshot block. When that check fails, the title is
+removed with `remove_torrents: false` and the torrent keeps seeding; the run
+summary records `bytes_held_by_torrents`. Removed library files go to the Arr
+recycle bin, which empties after 30 days ([media-recovery.md](media-recovery.md)),
+so disk space returns only after that and only where no torrent still links
+the data.
+
+Fail-closed reads: any Radarr, Sonarr, Emby, playback history, keep list or
+qBittorrent read error aborts the run before its first removal and leaves the
+marks unchanged. A backend error during apply stops further removals and
+marking; an uncertain post-dispatch result (`partial`/`uncertain` from
+library-remove) stops the run.
+
+Playback source: Emby's activity log (`/System/ActivityLog/Entries`), read
+through the worker's existing admin session. Per-user `UserData` was checked on
+live homelab on 2026-11-22 and carries no `LastPlayedDate` (and `PlayCount` 0)
+even for played items, so it cannot date a play. Jellystat history starts on
+2026-07-16, shorter than the 180-day window, and would need a new credential.
+The activity log names item and user for every `playback.start` since
+2026-08-29; older entries (`VideoPlayback`) carry no item. The prune therefore
+treats the window as complete only when the log reaches back past the window
+start and every playback start inside it is attributable. Until then (about
+February 2027 with the default window), a title is eligible only if no Emby
+user has any play state on it (played or resumable) and no attributable play
+falls in the window; anything played at an unknown time stays
+`history_incomplete`. Plays of items that no longer resolve (deleted or
+re-imported files) are counted as unmapped: a re-import also resets the newest
+file date, so that cannot unprotect a title.
+
+Keep list: systemd passes a read-only snapshot of
+`/var/lib/holonet/janitor/state.json` to the unit with
+`LoadCredential=holonet-janitor-state:...`; the unit has no capabilities, and a
+missing journal fails the start. Active keeps for this server and the movies,
+tv and anime Emby libraries are used; a malformed journal aborts the run.
+
+State (`/var/lib/holonet-operator/prune`, 0700 `root:root`, the only writable
+path of the unit): `marks.json` (pending marks with `marked_at` and
+`remove_after`), `last_run.json` (last run summary) and `.lock` (non-blocking
+exclusive run lock; a second run reports `busy`). Files are 0600 and replaced
+atomically (temporary file, `fsync`, `rename`, directory `fsync`). Each run
+writes one JSON line `{"event":"holonet_library_prune",...}` with counts only
+(no titles) to the journal for Loki, next to the media observability
+`media_collection` events.
+
 ## Policy inputs
 
 `filter_plugins/web_mcp.py` validates both the Go service `config` and the
@@ -166,6 +264,18 @@ ceiling into `/etc/holonet-playlists/policy.json`:
       bypasses the cache only once `age_seconds >= min_refresh_age_seconds`).
     - `state_dir`: fixed `/var/lib/holonet-operator/recommendations` (0700
       `root:root`).
+  - `prune` (optional; omitted disables the prune and its status tool):
+    `enabled` (default `false`; the timer runs only when `true` and library
+    management is enabled), `target_bytes` (default `21990232555520`, 20 TiB;
+    1 TiB–1 PiB), `min_idle_days` (180; 30–3650), `grace_days` (7; 1–90),
+    `max_bytes_per_run` (`2199023255552`, 2 TiB; at most `target_bytes`),
+    `max_titles_per_run` (40; 1–200). `state_dir`
+    (`/var/lib/holonet-operator/prune`) and `keep_journal`
+    (`/var/lib/holonet/janitor/state.json`) are fixed. Enabling the prune
+    requires the Go janitor config, whose journal holds the keep list.
+  - `torrents`: when `library.enabled` is `true`, the qBittorrent descriptor
+    must be `canonical_torrent_descriptor(library=True)` (`radarr-movies` and
+    `tv-sonarr`, both payload roots); the Movies-only descriptor is refused.
   - `subjects`: rendered into `/etc/holonet-playlists/policy.json` from Go
     `config.purpose_grants.library.subjects` (single source of truth; if also
     supplied on the worker `library` input, any mismatch is refused). The worker
@@ -222,6 +332,12 @@ ceiling into `/etc/holonet-playlists/policy.json`:
      `/etc/holonet-playlists/policy.json`.
   4. **Fleet flag**: enable `webmcp_interactive_holonet_library_enabled` on
      `laptop` and `omarchy-pc` in `chaldea-fleet-config`.
+- Prune: apply `playbooks/media-recovery.yml` first so both recycle bins expire
+  after 30 days. Deploy with `library.prune.enabled: false`, then run
+  `sudo python3 -E -s -B /opt/holonet-playlists/releases/<release>/emby_operator_library_prune.py plan`
+  on homelab and review it. Set `enabled: true` and redeploy to start the timer.
+  To stop it, set `enabled: false` (or remove `prune`) and redeploy: the timer
+  is stopped and disabled, and marks and the last run summary stay in place.
 - Rollback: flip Go `config.library.enabled` and worker `library.enabled` to
   `false` together (removing `library.read` and `library.manage` from
   `config.policy.Actions`) and redeploy the endpoint to re-render

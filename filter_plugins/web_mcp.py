@@ -17,6 +17,11 @@ SERVICES = {
 # The historical builds keep the accepted command/config/catalog-only boundary.
 # The original remains admissible for rollback; this is not an arbitrary source
 # selector. Artifact bytes still require the operator's exact reviewed SHA256.
+# CLI e25dc38 adds the read-only library_prune_status and
+# library_watch_history tools (homelab-cli PR 64) on top of c6e109c. Chaldea
+# Go 1.25.0 package jobs 4a0e26bd and e6214832 (byte-identical), tree
+# 65471dbd7150144411234d19ebebc9d6440588e7. The build embeds no VCS data, so a
+# merge commit with the same tree yields these bytes.
 # CLI c6e109c adds library_import preview/apply and grouped queue entries
 # (homelab-cli PR 62) on top of a610ceb, which added the read-only
 # library_recommendations tool (PR 61) on top of ee4c336, which added the
@@ -25,10 +30,12 @@ SERVICES = {
 # admits exact Emby 4.10.2.0 for catalog reads. Chaldea Go 1.25.0 package jobs
 # 31793515 and 9993fc4a (byte-identical), tree
 # 274c115056712fa0c3bd1921e1ed36bdd014b3ed.
-HOLONET_COEXISTENCE_SOURCE = "c6e109c9a5485f8f6ced26fb34e004d74ec690d6"
-HOLONET_COEXISTENCE_SHA256 = "b2d46659166d686b7d3e32301653875586314ce2799a81bc3467d7486e219ba7"
+HOLONET_COEXISTENCE_SOURCE = "e25dc38d21b69c8a3fafe602a0e464177b8cc5b6"
+HOLONET_COEXISTENCE_SHA256 = "8d3dea17d86df5b1da692d30df84eeda559a66075de1ab27b36cc1c61f9c9352"
 # The previously installed coexistence builds stay admissible for rollback.
 HOLONET_COEXISTENCE_ROLLBACK = {
+    "c6e109c9a5485f8f6ced26fb34e004d74ec690d6":
+        "b2d46659166d686b7d3e32301653875586314ce2799a81bc3467d7486e219ba7",
     "a610ceba8dfcf8b1888b245318a842d994a6b57c":
         "078c563aed8e7073cba0382fa923e3f94259ffe436634a3101700657a71e4303",
     "ee4c3360edbd52cead7ac62d95629d3bb04a6ef8":
@@ -109,12 +116,15 @@ OPERATOR_MODULES = {
     "emby_operator_acquire_torrents.py": "b74b311beda565dd2c81173af7a8796a827a7bc236860d5719bebeababf41992",
     "emby_operator_adapter.py": "82a9f3a1faffaecfa73c87f4e532840dee6f07f4296370080e96cc955e0b55b9",
     "emby_operator_entry.py": "af1407816aea16803d378d6bade968df26a6dcff4de4a9bee8a41cd34a664bb9",
-    "emby_operator_library.py": "dc90dec39de7998ec3df692f0f705f55d4a2e18c75f2883862028da482413ab2",
+    "emby_operator_library.py": "606a7580b5b254c2953f0db008c919eae533e305a2084679cf08c6991c8fc4b9",
+    "emby_operator_library_prune.py": "1c67187eef7a11522db0c440e423146f9ae6073363f82a5da384b1d3481c4b41",
     "emby_operator_recommendations.py": "4396aea53b6ad5f2c60cfc8147ca808914ac385bb72290941c26add7238a453d",
     "emby_operator_socket.py": "870079605e6fce1b2d9c4abd5b283b9be37a7dc3c7d2a621bf9b533bbe15005b",
-    "emby_operator_torrents.py": "e3b5b4d125c7e51c48039c5e9153400ddcf247b00054133a31d36173acee6ec2",
+    "emby_operator_torrents.py": "ba1c9729b4aa9016bfad7ef7c49c2884cfcf0d7f955fd86a6e210b7de6886d9a",
     "emby_operator_custody.py": "09bbaf1a9a59ca2a2df533d5fdae669cfda4170cd0d3ecb7250cdcde34c3b79c",
     "emby_operator_seed_join.py": "deb669172df79565cd17a8774c827604432936eb2404e86a49e59b8e68eb21d2",
+    # The shared SeedPool retention policy, the same bytes media observability installs.
+    "seedpool_policy.py": "ef14d5abcf4055d2b50fb4ebf8f25fa4b7d66cd2bd85180b6868fc302a1a12de",
 }
 OPERATOR_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 OPERATOR_RELEASES = "/opt/holonet-playlists/releases"
@@ -737,13 +747,19 @@ def torrent_install_plan(value):
     holonet_janitor(config)
     data = value["torrents"]
     keys(data, ("descriptor",))
-    expected = canonical_torrent_descriptor()
-    allowed_descriptors = [expected]
-    if "library" in value:
-        extended = canonical_torrent_descriptor(library=True)
-        allowed_descriptors.append(extended)
+    # Enabled library management removes tv-sonarr torrents too, so it needs the
+    # extended descriptor; the Movies-only one would silently keep every series
+    # torrent seeding. Without enabled library management only Movies is valid.
+    library = value.get("library")
+    library_enabled = isinstance(library, dict) and library.get("enabled") is True
+    if library_enabled:
+        allowed_descriptors = [canonical_torrent_descriptor(library=True)]
+    elif "library" in value:
+        allowed_descriptors = [canonical_torrent_descriptor(), canonical_torrent_descriptor(library=True)]
+    else:
+        allowed_descriptors = [canonical_torrent_descriptor()]
     require(data["descriptor"] in allowed_descriptors,
-            "torrent descriptor must match the canonical Movies source")
+            "torrent descriptor must match the canonical source for the enabled features")
     integer(data["descriptor"].get("version"), 1, 1)
     return {"path": TORRENT_DESCRIPTOR, "descriptor": dict(data["descriptor"]),
             "policy": {"target_library": OPERATOR_LIBRARY,
@@ -758,6 +774,37 @@ LIBRARY_SPECS = {
 RECOMMENDATIONS_DEFAULT_KEY_FILE = "/etc/holonet/mdblist.key"
 RECOMMENDATIONS_STATE_DIR = "/var/lib/holonet-operator/recommendations"
 RECOMMENDATIONS_KINDS = ("movie", "series", "anime")
+# Weekly removal of old unwatched titles (docs/holonet-library.md). The state
+# directory and the Go janitor journal that holds the keep list are fixed.
+PRUNE_STATE_DIR = "/var/lib/holonet-operator/prune"
+PRUNE_KEEP_JOURNAL = "/var/lib/holonet/janitor/state.json"
+PRUNE_DEFAULTS = {
+    "enabled": False,
+    "target_bytes": 20 * 1024 ** 4,
+    "min_idle_days": 180,
+    "grace_days": 7,
+    "max_bytes_per_run": 2 * 1024 ** 4,
+    "max_titles_per_run": 40,
+}
+
+
+def library_prune_plan(data, config):
+    """Optional library.prune block with defaults; worker bounds are mirrored exactly."""
+    keys(data, (), tuple(PRUNE_DEFAULTS) + ("state_dir", "keep_journal"))
+    rendered = {key: data.get(key, default) for key, default in PRUNE_DEFAULTS.items()}
+    require(type(rendered["enabled"]) is bool, "library prune enabled must be a boolean")
+    integer(rendered["target_bytes"], 1 << 40, 1 << 50)
+    integer(rendered["min_idle_days"], 30, 3650)
+    integer(rendered["grace_days"], 1, 90)
+    integer(rendered["max_bytes_per_run"], 1 << 30, rendered["target_bytes"])
+    integer(rendered["max_titles_per_run"], 1, 200)
+    require(data.get("state_dir", PRUNE_STATE_DIR) == PRUNE_STATE_DIR,
+            "library prune state_dir must match the fixed root operator path")
+    require(data.get("keep_journal", PRUNE_KEEP_JOURNAL) == PRUNE_KEEP_JOURNAL,
+            "library prune keep_journal must be the fixed janitor journal")
+    require(not rendered["enabled"] or isinstance(config.get("janitor"), dict),
+            "library prune needs the janitor journal that holds the keep list")
+    return {**rendered, "state_dir": PRUNE_STATE_DIR, "keep_journal": PRUNE_KEEP_JOURNAL}
 
 
 def library_install_plan(value):
@@ -773,7 +820,7 @@ def library_install_plan(value):
     require(operator is not None, "library management requires playlist_operator")
     data = value["library"]
     keys(data, ("libraries", "allowed_categories"),
-         ("enabled", "removal_thresholds", "limits", "torrents", "subjects", "recommendations"))
+         ("enabled", "removal_thresholds", "limits", "torrents", "subjects", "recommendations", "prune"))
     enabled = data.get("enabled", False)
     require(type(enabled) is bool, "library enabled must be a boolean")
     require(go_enabled == enabled, "Go config library.enabled must match worker library.enabled")
@@ -895,6 +942,9 @@ def library_install_plan(value):
             "cache_ttl_seconds": cache_ttl,
             "min_refresh_age_seconds": min_refresh_age,
         }
+    rendered_prune = library_prune_plan(data["prune"], config) if "prune" in data else None
+    require(rendered_prune is None or enabled or not rendered_prune["enabled"],
+            "library prune requires enabled library management")
     return {
         "policy": {
             "enabled": enabled,
@@ -910,6 +960,7 @@ def library_install_plan(value):
             },
             "limits": dict(limits),
             **({"recommendations": rendered_recs} if rendered_recs is not None else {}),
+            **({"prune": rendered_prune} if rendered_prune is not None else {}),
         },
     }
 
