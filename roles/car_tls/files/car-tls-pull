@@ -1,0 +1,72 @@
+#!/bin/sh
+# Pull the car's certificate from the edge that exports it.
+#
+#   car-tls-pull SOURCE DOMAIN STATE_DIR DEST_DIR
+#
+# SOURCE is user@address of the edge. The key in STATE_DIR can only make the
+# edge print its exported bundle (a forced command), and STATE_DIR/known_hosts
+# pins the edge's host key. Splits the bundle into DEST_DIR/fullchain.pem and
+# DEST_DIR/privkey.pem, mode 0600, renamed into place, and only when the
+# certificate changed. Runs as the user that owns DEST_DIR. Never prints key
+# material.
+set -eu
+
+if [ "$#" -ne 4 ]; then
+    echo "usage: car-tls-pull SOURCE DOMAIN STATE_DIR DEST_DIR" >&2
+    exit 2
+fi
+source=$1
+domain=$2
+state=$3
+dest=$4
+
+umask 077
+work=$(mktemp -d "$dest/.pull.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+ssh -F /dev/null -T \
+    -i "$state/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes \
+    -o UserKnownHostsFile="$state/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+    "$source" >"$work/bundle.pem"
+
+awk -v cert="$work/fullchain.pem" -v key="$work/privkey.pem" '
+    /^-----BEGIN CERTIFICATE-----$/ { out = cert }
+    /^-----BEGIN .*PRIVATE KEY-----$/ { out = key }
+    out != "" { print > out }
+    /^-----END / { out = "" }
+' "$work/bundle.pem"
+if [ ! -s "$work/fullchain.pem" ] || [ ! -s "$work/privkey.pem" ]; then
+    echo "refusing: the bundle from $source has no certificate or no key" >&2
+    exit 1
+fi
+
+sans=$(openssl x509 -in "$work/fullchain.pem" -noout -ext subjectAltName |
+    sed -n 's/^ *//; 2,$p')
+if [ "$sans" != "DNS:$domain" ]; then
+    echo "refusing: certificate names '$sans', not exactly DNS:$domain" >&2
+    exit 1
+fi
+openssl x509 -in "$work/fullchain.pem" -noout -checkend 0 >/dev/null ||
+    { echo "refusing: certificate for $domain has expired" >&2; exit 1; }
+cert_pub=$(openssl x509 -in "$work/fullchain.pem" -noout -pubkey |
+    openssl pkey -pubin -outform DER | sha256sum)
+key_pub=$(openssl pkey -in "$work/privkey.pem" -pubout -outform DER | sha256sum)
+if [ "$cert_pub" != "$key_pub" ]; then
+    echo "refusing: certificate and key for $domain do not match" >&2
+    exit 1
+fi
+
+if [ -f "$dest/fullchain.pem" ] && [ -f "$dest/privkey.pem" ] &&
+    cmp -s "$work/fullchain.pem" "$dest/fullchain.pem" &&
+    cmp -s "$work/privkey.pem" "$dest/privkey.pem"; then
+    echo "$domain unchanged"
+    exit 0
+fi
+
+# The key first, so that a reader that sees the new certificate also finds
+# the key that belongs to it.
+chmod 0600 "$work/privkey.pem" "$work/fullchain.pem"
+mv -f "$work/privkey.pem" "$dest/privkey.pem"
+mv -f "$work/fullchain.pem" "$dest/fullchain.pem"
+echo "$domain installed, $(openssl x509 -in "$dest/fullchain.pem" -noout -enddate)"

@@ -1,0 +1,27 @@
+# The car's own hostname, car.ryzhkov.dev.
+#
+# LAN-only, like Akasha and the web-MCP endpoints: the negated Cf-Ray match
+# keeps the Cloudflare Tunnel connectors (themselves LAN peers) out, and the
+# hostname has no public DNS record.
+{#
+  The edge serves this route with the wildcard like every other router. The
+  car's own certificate, for exactly car.ryzhkov.dev, is not Traefik's: Traefik
+  never requests a certificate for a name a certificate in its store already
+  covers, and the wildcard covers this one. roles/car_tls issues it on
+  public-api and delivers it to homelab; see docs/car-tls.md.
+#}
+
+http:
+  routers:
+    car-router:
+      entryPoints:
+        - websecure
+      rule: "Host(`{{ car_tls_domain }}`) && !HeaderRegexp(`Cf-Ray`, `.*`)"
+      service: car-service
+{% include 'router-tls.j2' %}
+
+  services:
+    car-service:
+      loadBalancer:
+        servers:
+          - url: "{{ car_route_backend }}"

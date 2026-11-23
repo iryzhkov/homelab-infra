@@ -9,6 +9,8 @@
 # nothing else.
 fleet_ssh_authorized:
   - drift-check
+  # homelab pulls the car certificate exported here (docs/car-tls.md).
+  - car-tls-pull
 
 # The drift check runs here as well. This host needed lingering enabled and
 # homelab-cli installed first, on 2026-09-06.

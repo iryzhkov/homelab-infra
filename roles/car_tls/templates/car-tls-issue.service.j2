@@ -1,0 +1,13 @@
+[Unit]
+Description=Issue or renew the {{ car_tls_domain }} certificate and export it
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# lego's run gets the certificate when there is none and renews it when a third
+# of its lifetime is left; otherwise it changes nothing. DNS-01 through
+# Cloudflare with Traefik's token, checked against the same public resolvers
+# Traefik uses, since AdGuard rewrites *.ryzhkov.dev on the LAN.
+ExecStart=/usr/bin/docker run --rm --env-file {{ car_tls_dns_env_file }} -v {{ car_tls_issue_dir }}:/data {{ car_tls_lego_image }} run --accept-tos --path /data --dns cloudflare --dns.resolvers 1.1.1.1:53,8.8.8.8:53 --domains {{ car_tls_domain }} --key-type EC256 --log.format text
+ExecStart=/usr/local/sbin/car-tls-export {{ car_tls_issue_dir }}/certificates/{{ car_tls_domain }}.crt {{ car_tls_issue_dir }}/certificates/{{ car_tls_domain }}.key {{ car_tls_domain }} {{ car_tls_export_dir }} {{ ssh_user }}

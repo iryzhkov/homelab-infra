@@ -1,0 +1,79 @@
+---
+# A dedicated key, owned by pirene and used for nothing else, that the source
+# edge accepts only with a forced command printing the exported bundle
+# (fleet_ssh_keys car-tls-pull). The edge's host key is pinned in a
+# known_hosts file of this unit's own.
+
+- name: Ensure the pull state directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ car_tls_pull_state_dir }}"
+    state: directory
+    owner: "{{ car_tls_pull_user }}"
+    group: "{{ car_tls_pull_user }}"
+    mode: "0700"
+
+# Generated once and kept: the public half is in group_vars/all.yml, so a new
+# key means a new inventory entry and a run of playbooks/ssh.yml on the edge.
+- name: Generate the pull key
+  become: true
+  become_user: "{{ car_tls_pull_user }}"
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -q -t ed25519 -N "" -C "car-tls-pull@{{ inventory_hostname }}"
+      -f {{ car_tls_pull_state_dir }}/id_ed25519
+    creates: "{{ car_tls_pull_state_dir }}/id_ed25519"
+
+- name: Pin the source edge's host key
+  become: true
+  ansible.builtin.copy:
+    content: "{{ hostvars[car_tls_source].ansible_host }} {{ car_tls_source_host_key }}\n"
+    dest: "{{ car_tls_pull_state_dir }}/known_hosts"
+    owner: "{{ car_tls_pull_user }}"
+    group: "{{ car_tls_pull_user }}"
+    mode: "0600"
+
+- name: Ensure the certificate directory exists
+  become: true
+  ansible.builtin.file:
+    path: "{{ car_tls_pull_dir }}"
+    state: directory
+    owner: "{{ car_tls_pull_user }}"
+    group: "{{ car_tls_pull_user }}"
+    mode: "0700"
+
+- name: Install the pull script
+  become: true
+  ansible.builtin.copy:
+    src: car-tls-pull
+    dest: /usr/local/sbin/car-tls-pull
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the pull units
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - car-tls-pull.service
+    - car-tls-pull.timer
+  register: car_tls_pull_units
+
+- name: Reload systemd when a unit changed
+  become: true
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: car_tls_pull_units is changed
+
+- name: Enable the pull timer
+  become: true
+  ansible.builtin.systemd_service:
+    name: car-tls-pull.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode

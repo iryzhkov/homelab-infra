@@ -65,12 +65,28 @@ gatus_public_from_lan:
 #                 Nebula address); it is rendered for the routers' tls block.
 #   cartest.yml   the Bellerophon test car on gaming-pc, adopted from
 #                 public-api on 2026-10-02
+#   car.yml       the car itself, LAN-only
 traefik_rendered_files:
   - admin.yml
   - whisper.yml
   - t3.yml
   - cartest.yml
   - akasha.yml
+  - car.yml
+
+# The car's dedicated certificate (docs/car-tls.md): issued for exactly this
+# name on car_tls_source with lego and Traefik's Cloudflare token, and pulled
+# by car_tls_consumer into /etc/pirene/car-tls, so the car never holds the
+# wildcard key. The host key pins car_tls_source for the pull; it was read from
+# /etc/ssh/ssh_host_ed25519_key.pub on public-api on 2026-11-22.
+car_tls_domain: car.ryzhkov.dev
+car_tls_source: public-api
+car_tls_consumer: homelab
+car_tls_source_host_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC/YI4sP5D1C2vY8RlzffPXD9sEbrCLFWg1acAvsqXIO"
+# Until a car exists, car.ryzhkov.dev reaches the cartest simulator on
+# gaming-pc over the mesh (its ufw admits 18800 from 10.42.0.0/24). This moves
+# to the car.
+car_route_backend: http://10.42.0.6:18800
 #   catchall.yml  the wildcard-certificate 404 for unclaimed hostnames
 traefik_static_files:
   - catchall.yml
@@ -145,6 +161,14 @@ fleet_ssh_keys:
     comment: "normandy (t3-steward coordinator)"
     key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKm/OEz7CglgwvsF+vH0KgzkNzLsGuT5Tw9Qd7B3L+yc"
     from: "192.168.70.234"
+  # homelab's pull of the car certificate (docs/car-tls.md): generated on
+  # homelab on 2026-11-22 by roles/car_tls as /var/lib/car-tls-pull/id_ed25519,
+  # owned by pirene, and able only to print the exported bundle.
+  car-tls-pull:
+    comment: "homelab car certificate pull (forced command)"
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDYwRkfILTMrN/MlCz9cki7qdlyueRDAlCdbP5HHHn8H"
+    from: "192.168.70.223,10.42.0.2"
+    command: "cat /home/igor/apps/traefik/export/car/bundle.pem"
 
 # Forgejo, reached over SSH by the forgejo_clients group. The port is the one
 # stacks/forgejo publishes; the host key was read from the running container

@@ -1,0 +1,9 @@
+---
+# Dispatch on the host's part in the car certificate's journey.
+- name: Export the certificate on the source edge
+  ansible.builtin.include_tasks: export.yml
+  when: inventory_hostname == car_tls_source
+
+- name: Pull the certificate on the consumer
+  ansible.builtin.include_tasks: pull.yml
+  when: inventory_hostname == car_tls_consumer

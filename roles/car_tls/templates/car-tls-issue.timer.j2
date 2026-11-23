@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily renewal check and export of the {{ car_tls_domain }} certificate
+
+[Timer]
+OnCalendar=*-*-* 02:30
+OnBootSec=5min
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
