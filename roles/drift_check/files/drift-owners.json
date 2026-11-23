@@ -1,0 +1,76 @@
+{
+  "authentik": {
+    "chaldea-akasha": {
+      "provider": 114,
+      "owner": "playbooks/authentik-agent-hosts.yml"
+    },
+    "chaldea-holonet": {
+      "provider": 57,
+      "owner": "playbooks/authentik-holonet-catalog.yml"
+    },
+    "chaldea-host-rotation": {
+      "provider": 113,
+      "owner": "playbooks/authentik-agent-hosts.yml"
+    },
+    "chaldea-jocasta": {
+      "provider": 102,
+      "owner": "playbooks/authentik-jocasta-tooling.yml"
+    },
+    "ha-http-a63e197f": {
+      "provider": 48,
+      "owner": "playbooks/authentik-agent-hosts.yml"
+    },
+    "homelab-cohort-signer-staging": {
+      "provider": 115,
+      "owner": "roles/authentik_signer/files/authentik-signer.py bootstrap"
+    },
+    "homelab-observer": {
+      "provider": 45,
+      "owner": "playbooks/authentik-agent-hosts.yml"
+    },
+    "jocasta-laptop-interactive": {
+      "provider": 105,
+      "owner": "playbooks/authentik-jocasta-operator.yml"
+    },
+    "jocasta-managed-interactive": {
+      "provider": 106,
+      "owner": "playbooks/authentik-webmcp-interactive.yml"
+    },
+    "ov-http-a63e197f": {
+      "provider": 42,
+      "owner": "playbooks/authentik-ov-http-identities.yml"
+    },
+    "shizune-mcp": {
+      "provider": 112,
+      "owner": "playbooks/authentik-agent-hosts.yml"
+    }
+  },
+  "compose": {
+    "homelab": {
+      "observability-socket-proxy": {
+        "owner": "roles/observability_collector/tasks/docker-proxy.yml",
+        "config": "/opt/observability/docker-socket-proxy/docker-compose.yml"
+      },
+      "ov-http": {
+        "owner": "roles/ov_http_compose/tasks/main.yml",
+        "config": "/opt/web-mcp/ov-http/releases/*/compose.yml"
+      }
+    },
+    "normandy": {
+      "observability-socket-proxy": {
+        "owner": "roles/observability_collector/tasks/docker-proxy.yml",
+        "config": "/opt/observability/docker-socket-proxy/docker-compose.yml"
+      },
+      "openviking-embeddings": {
+        "owner": "inventory/group_vars/swarm/openviking-inference.yml",
+        "config": "/mnt/data/swarm/openviking-embeddings/compose.yml"
+      }
+    },
+    "public-api": {
+      "observability-socket-proxy": {
+        "owner": "roles/observability_collector/tasks/docker-proxy.yml",
+        "config": "/opt/observability/docker-socket-proxy/docker-compose.yml"
+      }
+    }
+  }
+}

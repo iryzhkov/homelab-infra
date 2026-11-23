@@ -125,6 +125,36 @@ class AuthentikDriftTest(unittest.TestCase):
             "Authentik wiki: application not managed by the repository",
         ])
 
+    def test_standalone_provider_requires_reviewed_exact_identity(self):
+        state = copy.deepcopy(CLEAN)
+        state["providers"].append("machine")
+        get_base = fake(state)
+        def get(path):
+            result = get_base(path)
+            if path.startswith("/providers/oauth2/"):
+                for row in result["results"]:
+                    if row["assigned_application_slug"] == "machine":
+                        row["pk"] = 42
+            return result
+        owners = {"machine": {"provider": 42, "owner": "enrollment"}}
+        self.assertEqual(checker.authentik_findings(MANIFEST, get, owners), ([], False))
+        owners["machine"]["provider"] = 43
+        self.assertIn("Authentik machine: application not managed by the repository",
+                      checker.authentik_findings(MANIFEST, get, owners)[0])
+        # An ownership entry cannot suppress household access drift.
+        owners["ai"] = {"provider": 1, "owner": "other"}
+        state["apps"]["ai"]["bindings"] = []
+        self.assertIn("Authentik ai: binding to user igor is missing",
+                      checker.authentik_findings(MANIFEST, get, owners)[0])
+
+    def test_standalone_compose_requires_name_and_owner_path(self):
+        projects = {"ov-http": {"ConfigFiles": "/opt/releases/v1/compose.yml"},
+                    "unknown": {"ConfigFiles": "/opt/releases/v1/compose.yml"}}
+        owners = {"ov-http": {"owner": "release role", "config": "/opt/releases/*/compose.yml"}}
+        self.assertEqual(checker.standalone_projects(projects, owners), {"ov-http"})
+        projects["ov-http"]["ConfigFiles"] = "/elsewhere/compose.yml"
+        self.assertEqual(checker.standalone_projects(projects, owners), set())
+
     def test_unreachable_api_is_broken_not_clean(self):
         def get(path):
             raise urllib.error.URLError("connection refused")

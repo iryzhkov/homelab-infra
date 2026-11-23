@@ -1,0 +1,18 @@
+---
+# Update observers only; retain manifests from the actual stack/SSO deployments.
+- name: Install drift observation and reviewed standalone ownership
+  hosts: homelab:normandy
+  gather_facts: true
+  tasks:
+    - name: Install observer files without redeploying applications or credentials
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ ansible_env.HOME }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - src: ../roles/drift_check/files/homelab-drift-check
+          dest: .local/bin/homelab-drift-check
+          mode: "0755"
+        - src: ../roles/drift_check/files/drift-owners.json
+          dest: .local/share/homelab-infra/drift-owners.json
+          mode: "0644"
