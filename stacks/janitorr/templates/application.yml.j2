@@ -1,0 +1,62 @@
+# {{ ansible_managed }}
+# Deletion remains disabled globally. Do not turn this into a deletion policy.
+logging:
+  level:
+    com.github.schaka: DEBUG
+
+file-system:
+  access: false
+  validate-seeding: false
+
+application:
+  dry-run: true
+  run-once: false
+  whole-tv-show: true
+  whole-show-seeding-check: false
+  leaving-soon: 14d
+  exclusion-tags: [janitorr_keep]
+  media-deletion:
+    enabled: true
+    movie-expiration: {100: 180d}
+    season-expiration: {100: 180d}
+  tag-based-deletion:
+    enabled: false
+  episode-deletion:
+    enabled: false
+
+clients:
+  default:
+    level: NONE
+  sonarr:
+    enabled: true
+    url: {{ janitorr_sonarr_url | to_json }}
+    api-key: {{ janitorr_discovered_keys.sonarr | to_json }}
+    determine-age-by: MOST_RECENT
+    delete-empty-shows: false
+    import-exclusions: false
+  radarr:
+    enabled: true
+    url: {{ janitorr_radarr_url | to_json }}
+    api-key: {{ janitorr_discovered_keys.radarr | to_json }}
+    determine-age-by: MOST_RECENT
+    only-delete-files: false
+    import-exclusions: false
+  emby:
+    enabled: true
+    url: {{ janitorr_emby_url | to_json }}
+    api-key: {{ janitorr_discovered_keys.emby | to_json }}
+    delete: false
+    exclude-favorited: true
+    leaving-soon-type: NONE
+  jellyfin:
+    enabled: false
+  jellyseerr:
+    enabled: false
+  bazarr:
+    enabled: false
+  jellystat:
+    enabled: false
+  streamystats:
+    enabled: false
+  janitorr-stats:
+    enabled: false
