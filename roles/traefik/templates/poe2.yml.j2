@@ -1,0 +1,33 @@
+# The Path of Exile 2 campaign companion on gaming-pc (poe2-agent, user service
+# poe2-companion, port 8099), so the iPad and phones on the LAN open it over
+# HTTPS at a stable name instead of http://192.168.90.212:8099.
+#
+# LAN-only. The companion has no authentication and accepts corrections over
+# POST, so it must never be reachable through the Cloudflare Tunnel: there is no
+# public DNS record, and the negated Cf-Ray match keeps the tunnel connectors
+# (which are LAN peers) from reaching it anyway. AdGuard's *.ryzhkov.dev wildcard
+# resolves the name on the LAN.
+#
+# The page holds a Server-Sent Events stream open on /api/stream; Traefik passes
+# it through without buffering. No health check: the companion only runs while
+# gaming-pc is on, and with one server a failed check changes nothing but the
+# error page.
+#
+# Reachability: gaming-pc's ufw admits 8099 from 192.168.20.33 and
+# 192.168.20.4, and the UniFi port group traefik-gaming-pc-ports includes 8099
+# (added 2026-11-25).
+
+http:
+  routers:
+    poe2-router:
+      entryPoints:
+        - websecure
+      rule: 'Host(`poe2.ryzhkov.dev`) && !HeaderRegexp(`Cf-Ray`, `.*`)'
+      service: poe2-service
+{% include 'router-tls.j2' %}
+
+  services:
+    poe2-service:
+      loadBalancer:
+        servers:
+          - url: "http://{{ hostvars['gaming-pc'].ansible_host }}:8099"
