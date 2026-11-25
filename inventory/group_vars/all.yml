@@ -66,6 +66,7 @@ gatus_public_from_lan:
 #   cartest.yml   the Bellerophon test car on gaming-pc, adopted from
 #                 public-api on 2026-10-02
 #   car.yml       the car itself, LAN-only
+#   poe2.yml      the Path of Exile 2 campaign companion on gaming-pc, LAN-only
 traefik_rendered_files:
   - admin.yml
   - whisper.yml
@@ -73,6 +74,7 @@ traefik_rendered_files:
   - cartest.yml
   - akasha.yml
   - car.yml
+  - poe2.yml
 
 # The car's dedicated certificate (docs/car-tls.md): issued for exactly this
 # name on car_tls_source with lego and Traefik's Cloudflare token, and pulled
