@@ -119,18 +119,20 @@ This optional image object admits exactly one measured full-resource HTTP releas
 
 ```yaml
 kind: local-config
-reference: sha256:901fc2999a7bc04f37c6e81a54607ea64ea034ed661279848ed56f0b7afb1c36
-source_revision: f6a07b81ae4b259268cd5e7a9f05f7b159bfb5b3
+reference: sha256:bcf714abb188006197cbc685318c9751ea3a45b57b9d9cd87872150d712df56a
+source_revision: b18950615632414ff9700b08d499bc06e69a60c2
 contract_revision: 1c80c90e02a50a168c7f7ef02fd7c9aebaeb8319
-provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/44892406304
+provenance: https://github.com/iryzhkov/ov-mcp/actions/runs/45917184462
 ```
 
 All five fields must match together. The contract revision remains the existing
-full-resource envelope pin. Publication source f6a07b81ae4b259268cd5e7a9f05f7b159bfb5b3
-(ov-mcp PR 20) identifies reviewed tree 3579cbe919963b0722cb89dd7faba241221789e2.
-It adds one change to the current-note release: URI tool arguments may end in
-one trailing slash, which the tool boundary strips before authorization. Every
-other non-canonical URI form is still refused.
+full-resource envelope pin. Publication source b18950615632414ff9700b08d499bc06e69a60c2
+(ov-mcp PR 21) identifies reviewed tree 2e7da1ba5f31cd625360b311a0cde8706835cdc0.
+It adds one change to the trailing-slash release: memory_grep over one authorized
+directory is a resumable scan of native typed tree pages with an `offset`
+argument and `scan_complete`/`next_offset`/`depth_limited` results, so a budget
+stop is distinguishable from "no matches". Grants, URI policy and budgets are
+unchanged.
 The closed object and image label use the publication revision. The distribution
 source allowlist, roles, templates, namespace ceiling and grants stay unchanged.
 
@@ -173,13 +175,13 @@ cause nor runtime, native or pilot acceptance, schedule changes or hold clearanc
 
 The reference is the Docker config ID, committing to the complete immutable
 config and ordered RootFS diff IDs, not a registry distribution manifest.
-The retained linux/amd64 Docker save is 176912896 bytes, SHA256
-96cb7f606d63260be539a392ef5cd51da4ef53313060c317f20bcf37614c2032.
+The retained linux/amd64 Docker save is 176920064 bytes, SHA256
+8b208553f3d1ff3481353d13e82970cc92f9a3fe987010bbea7bd7d1aa1b6495.
 For this release the operator checked that the save checksum matched the
 runner record after download and again on the target before `docker load`,
 that the runner's source tree equals the reviewed commit's Git tree, that the
-runner's `ov_http/app.py` and `ov_http/auth.py` digests equal the reviewed
-source, and that the loaded image reports this config ID, the source revision
+runner's `ov_http/app.py`, `ov_http/auth.py` and `ov_http/reader.py` digests
+equal the reviewed source, and that the loaded image reports this config ID, the source revision
 label and User 8098:8098. The fuller independent layer-by-layer custody
 recorded for the lifetime-admission release
 (/home/igor/.cache/exact-directory-repair/lifetime-http-artifact-01/receipt.json)
