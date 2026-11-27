@@ -730,8 +730,9 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(pins["chaldea_publisher_host_sha256"],
                          "ebaf896b2b4552002f00ad9b83855ff2364abe02f57ec667d7c9fcafb308c357")
         self.assertEqual(pins["chaldea_publisher_preserve_versions"], [shared])
-        trust_include = yaml.safe_load(
-            (ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())[0]
+        trust_include = next(task for task in yaml.safe_load(
+            (ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())
+            if task.get("name") == "Install the pinned host runtime artifact")
         config = self.root / "config.json"
 
         def artifact(version, sha, preserved):

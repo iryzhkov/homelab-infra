@@ -201,8 +201,10 @@ pin through Normandy's `chaldea_host_artifact_preserve_versions` in its
 
 To roll the shared pin forward on Normandy, merge the matching pins in both
 repositories, then run the comparison and the consumer trust play from a clean
-merged checkout. Avoid the 16:00 and 22:00 renewal windows, and confirm that
-`systemctl is-active chaldea-publisher.service` is not active first.
+merged checkout. The renewal timer fires at 00:00, 06:00, 12:00 and 18:00 UTC
+(16:00, 22:00, 04:00 and 10:00 Pacific standard time). Read the next trigger
+with `systemctl list-timers chaldea-publisher.timer`, keep clear of it, and
+confirm that `systemctl is-active chaldea-publisher.service` is not active first.
 
 ```sh
 python3 "$INFRA/scripts/check-trust-pins.py" "$FLEET" "$INFRA"

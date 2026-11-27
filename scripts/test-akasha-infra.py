@@ -621,7 +621,8 @@ class SnapshotTest(unittest.TestCase):
             artifact_tasks = yaml.safe_load((ROOT / "roles/chaldea_host_artifact/tasks/main.yml").read_text())
             gc_start = next(i for i, task in enumerate(artifact_tasks)
                             if task.get("name") == "Find installed host releases without following links")
-            trust_include = trust_tasks[0]
+            trust_include = next(task for task in trust_tasks
+                                 if task.get("name") == "Install the pinned host runtime artifact")
             units = ("chaldea-access-trust.service", "chaldea-access-trust.timer",
                      "chaldea-clock-health.service", "chaldea-clock-health.timer")
             # Render the same templates with shared-only values as the comparison.
