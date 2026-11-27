@@ -8,5 +8,12 @@
   vars_files: [../vars/chaldea-runtime.yml]
   roles:
     - chaldea_node
-    - chaldea_host_artifact
+    # The publisher runs its own pinned release, not the shared consumer pin.
+    # The shared release (installed by the consumer trust play and fleet-config)
+    # lives in the same root and is preserved from this call's release GC.
+    - role: chaldea_host_artifact
+      vars:
+        chaldea_host_version: "{{ chaldea_publisher_host_version }}"
+        chaldea_host_sha256: "{{ chaldea_publisher_host_sha256 }}"
+        chaldea_host_artifact_preserve_versions: "{{ chaldea_publisher_preserve_versions }}"
     - chaldea_publisher

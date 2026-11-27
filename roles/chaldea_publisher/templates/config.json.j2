@@ -6,7 +6,7 @@
   'heartbeat_token_file': chaldea_publisher_config_root + '/heartbeat-token',
   'heartbeat_url': 'http://' + hostvars['homelab'].ansible_host + ':3002/api/v1/endpoints/chaldea_trust-publisher/external',
   'node': '/opt/chaldea/node/bin/node',
-  'runtime': '/opt/chaldea-host/releases/' + chaldea_host_version + '/host/access-maintenance.mjs',
+  'runtime': '/opt/chaldea-host/releases/' + chaldea_publisher_host_version + '/host/access-maintenance.mjs',
   'kid': chaldea_deployment_anchor_kid,
   'anchors': chaldea_access_trust_anchors,
   'spki_sha256': chaldea_deployment_anchor_spki_sha256,

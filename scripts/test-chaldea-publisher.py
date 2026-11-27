@@ -720,6 +720,75 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertFalse((self.root / "publisher").exists())
 
+    def test_normandy_plays_keep_publisher_runtime_apart_from_shared_pin(self):
+        pins = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
+        shared, publisher = pins["chaldea_host_version"], pins["chaldea_publisher_host_version"]
+        self.assertEqual(shared, "host-v0.2.24")
+        self.assertEqual(pins["chaldea_host_sha256"],
+                         "8a94042352c31905694f25800dfb7240b80e914ba0e7653e74e60bf650766ca5")
+        self.assertEqual(publisher, "host-v0.2.2")
+        self.assertEqual(pins["chaldea_publisher_host_sha256"],
+                         "ebaf896b2b4552002f00ad9b83855ff2364abe02f57ec667d7c9fcafb308c357")
+        self.assertEqual(pins["chaldea_publisher_preserve_versions"], [shared])
+        trust_include = next(task for task in yaml.safe_load(
+            (ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())
+            if task.get("name") == "Install the pinned host runtime artifact")
+        config = self.root / "config.json"
+
+        def artifact(version, sha, preserved):
+            return [{"ansible.builtin.assert": {"quiet": True, "that": [
+                        "chaldea_host_version == '" + version + "'",
+                        "chaldea_host_sha256 == '" + sha + "'",
+                        "chaldea_host_artifact_preserve_versions == ['" + preserved + "']"]}},
+                    {"ansible.builtin.set_fact": {"fixture_artifact_calls":
+                        "{{ fixture_artifact_calls | default([]) + [chaldea_host_version] }}"}}]
+
+        # The consumer play installs the shared release twice: its runtime role and
+        # the trust role's public include, which provides the fetcher source.
+        cases = {
+            "chaldea-signer.yml": ("omarchy-normandy", [publisher], {
+                "chaldea_node": [],
+                "chaldea_host_artifact": artifact(publisher, pins["chaldea_publisher_host_sha256"], shared),
+                "chaldea_publisher": [{"ansible.builtin.template": {
+                    "src": str(ROOT / "roles/chaldea_publisher/templates/config.json.j2"),
+                    "dest": str(config), "mode": "0600"}}]}),
+            "akasha-normandy-consumer-trust.yml": ("normandy", [shared, shared], {
+                "chaldea_node": [],
+                "chaldea_host_artifact": artifact(shared, pins["chaldea_host_sha256"], publisher),
+                "chaldea_access_trust": [trust_include]}),
+        }
+        for playbook, (host, calls, roles) in cases.items():
+            work = self.root / playbook
+            for role, tasks in roles.items():
+                (work / "roles" / role / "tasks").mkdir(parents=True)
+                if role == "chaldea_publisher":
+                    shutil.copytree(ROOT / "roles/chaldea_publisher/defaults",
+                                    work / "roles" / role / "defaults")
+                (work / "roles" / role / "tasks/main.yml").write_text(
+                    yaml.safe_dump(tasks or [{"ansible.builtin.meta": "noop"}]))
+            play = yaml.safe_load((ROOT / "playbooks" / playbook).read_text())[0]
+            # Keep the real roles list, role variables and vars files; drop host gates.
+            play.update(hosts=host, become=False, pre_tasks=[], vars_files=[
+                str((ROOT / "playbooks" / path).resolve()) for path in play["vars_files"]])
+            play["post_tasks"] = [{"ansible.builtin.assert": {"quiet": True, "that": [
+                "chaldea_host_version == '" + shared + "'",
+                "fixture_artifact_calls == " + json.dumps(calls)]}}]
+            (work / "play.yml").write_text(yaml.safe_dump([play]))
+            (work / "inventory.yml").write_text(yaml.safe_dump({"all": {"hosts": {
+                host: {"ansible_connection": "local", "ansible_python_interpreter": sys.executable},
+                "homelab": {"ansible_host": "192.0.2.1"}}}}))
+            proc = subprocess.run(
+                ["ansible-playbook", "-i", str(work / "inventory.yml"), "--limit", host,
+                 str(work / "play.yml")],
+                capture_output=True, text=True, env={
+                    **os.environ, "ANSIBLE_ROLES_PATH": str(work / "roles"),
+                    "ANSIBLE_LOCAL_TEMP": str(work / "local"),
+                    "ANSIBLE_REMOTE_TEMP": str(work / "remote")})
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("failed=0", proc.stdout)
+        self.assertEqual(json.loads(config.read_text())["runtime"],
+                         "/opt/chaldea-host/releases/" + publisher + "/host/access-maintenance.mjs")
+
 
 if __name__ == "__main__":
     unittest.main()

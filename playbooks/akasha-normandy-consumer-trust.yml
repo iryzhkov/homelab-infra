@@ -8,6 +8,9 @@
   vars:
     akasha_normandy_consumer_trust_enabled: false
     chaldea_access_trust_enabled: true
+    # The publisher's independently pinned release shares this release root.
+    # Keep it through the shared runtime's GC (fleet-config preserves it too).
+    chaldea_host_artifact_preserve_versions: ["{{ chaldea_publisher_host_version }}"]
   pre_tasks:
     - name: Leave disabled Normandy consumer enrollment inert
       ansible.builtin.meta: end_play

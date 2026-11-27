@@ -180,14 +180,49 @@ ansible homelab -m ansible.builtin.uri -a 'url=http://192.168.70.223:3002/api/v1
    If the heartbeat errors, leave publication intact and diagnose the LAN
    route, token provisioning and Gatus configuration from their journals.
 
+## Runtime pins on Normandy
+
+Normandy carries two Chaldea host releases in `/opt/chaldea-host/releases`.
+
+- `chaldea_publisher_host_version` (host-v0.2.2) is the publisher runtime.
+  `playbooks/chaldea-signer.yml` installs it, and `/etc/chaldea-publisher/config.json`
+  points at its `access-maintenance.mjs`. Moving it is a separate publisher change
+  with its own review, because the publisher signs with whatever runtime it names.
+- `chaldea_host_version` is the shared consumer pin. It must equal fleet-config's
+  pin, which `scripts/check-trust-pins.py` enforces. The consumer trust play
+  `playbooks/akasha-normandy-consumer-trust.yml` installs it, and the trust role
+  copies its `chaldea-access-trust-fetch` to `/usr/local/libexec`.
+
+Each play's release GC preserves the other pin: the signer play preserves
+`chaldea_publisher_preserve_versions` (the shared pin), and the consumer trust
+play preserves the publisher pin. fleet-config's own GC preserves the publisher
+pin through Normandy's `chaldea_host_artifact_preserve_versions` in its
+`inventory/hosts.yml`; keep that list equal to `chaldea_publisher_host_version`.
+
+To roll the shared pin forward on Normandy, merge the matching pins in both
+repositories, then run the comparison and the consumer trust play from a clean
+merged checkout. The renewal timer fires at 00:00, 06:00, 12:00 and 18:00 UTC
+(16:00, 22:00, 04:00 and 10:00 Pacific standard time). Read the next trigger
+with `systemctl list-timers chaldea-publisher.timer`, keep clear of it, and
+confirm that `systemctl is-active chaldea-publisher.service` is not active first.
+
+```sh
+python3 "$INFRA/scripts/check-trust-pins.py" "$FLEET" "$INFRA"
+ansible-playbook playbooks/akasha-normandy-consumer-trust.yml --limit normandy --tags runtime,trust -e akasha_normandy_consumer_trust_enabled=true --check --diff
+ansible-playbook playbooks/akasha-normandy-consumer-trust.yml --limit normandy --tags runtime,trust -e akasha_normandy_consumer_trust_enabled=true
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy --check --diff
+ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy
+```
+
 ## Ordered orchestrator commands
 
 Run from the existing protected Ansible environment on the controller. Normandy
 must already have Python3, git, OpenSSH, openssl, acl, systemd/busctl and timesyncd.
 Verify its SSH host identity independently first. The signer alias scopes this play.
 Freeze reviewed merged INFRA_COMMIT and FLEET_COMMIT, with successful CI.
-The matching runtime pin is published host-v0.2.1 from main fcf3651, with the
-release asset's exact SHA-256 in both inventories.
+The publisher runtime is `chaldea_publisher_host_version` in infra
+vars/chaldea-runtime.yml (see "Runtime pins on Normandy"); the shared consumer
+pin must carry the same version and SHA-256 in both inventories.
 
 1. Stage the runtime, locked UID, directories, program and inactive timers.
    The first apply accepts public placeholders because it cannot start renewal.
@@ -210,7 +245,7 @@ ansible-playbook playbooks/chaldea-signer.yml --limit omarchy-normandy
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'id chaldea-publisher'
 ansible omarchy-normandy -b -m ansible.builtin.command -a 'passwd -S chaldea-publisher'
 ansible omarchy-normandy -m ansible.builtin.command -a 'systemctl is-active systemd-timesyncd'
-CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
+CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_publisher_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
 CHALDEA_ACCESS_NODE=/opt/chaldea/node/bin/node
 CHALDEA_ACCESS_RUNTIME=/opt/chaldea-host/releases/$CHALDEA_HOST_VERSION/host/access-maintenance.mjs
 ansible omarchy-normandy -m ansible.builtin.command -a "$CHALDEA_ACCESS_NODE --version"
@@ -283,7 +318,7 @@ and resolve the policy explicitly; do not bypass the guard or use an operator ke
    envelope is unauthenticated under the new pin; only this first enrollment may start at 1.
 
 ```sh
-CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
+CHALDEA_HOST_VERSION=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))["chaldea_publisher_host_version"])' "$INFRA/vars/chaldea-runtime.yml")
 CHALDEA_ACCESS_NODE=/opt/chaldea/node/bin/node
 CHALDEA_ACCESS_RUNTIME=/opt/chaldea-host/releases/$CHALDEA_HOST_VERSION/host/access-maintenance.mjs
 ansible omarchy-normandy -b --become-user chaldea-publisher -m ansible.builtin.command -a "$CHALDEA_ACCESS_NODE $CHALDEA_ACCESS_RUNTIME initialize-state --state-file /var/lib/chaldea-publisher/state/publisher.sqlite"
