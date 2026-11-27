@@ -227,11 +227,14 @@ class Publisher:
                 self.check_clock(self.state / "clock-wait.json")
                 return
             except (subprocess.CalledProcessError, RuntimeError):
-                if self.monotonic() - start + CLOCK_RETRY_SECONDS > CLOCK_WAIT_SECONDS:
+                remaining = CLOCK_WAIT_SECONDS - (self.monotonic() - start)
+                if remaining <= 0:
                     raise
+            # Shorten the last pause so one sample always lands at the deadline.
+            delay = min(CLOCK_RETRY_SECONDS, remaining)
             print("chaldea-publisher: clock-health unhealthy attempt=" + str(attempt)
-                  + " retry_in=" + str(CLOCK_RETRY_SECONDS) + "s", file=sys.stderr, flush=True)
-            self.pause(CLOCK_RETRY_SECONDS)
+                  + " retry_in=" + str(math.ceil(delay)) + "s", file=sys.stderr, flush=True)
+            self.pause(delay)
 
     def monotonic(self):
         return time.monotonic()
