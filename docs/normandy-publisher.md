@@ -44,6 +44,19 @@ local published.jws. Never reset either SQLite file after a failure. A push
 transport timeout is ambiguous, so inspect fetched main before diagnosing it as
 unpublished; the next run advances above either high water.
 
+The clock check waits out a spike-flagged timesyncd sample. timesyncd marks a
+sample as a spike when its offset jumps relative to recent samples, and the
+runtime rejects it even when the offset is a few milliseconds; the flag stays
+until the next poll, at most 2048 seconds later. The publisher therefore repeats
+`clock-health` up to 19 times, 120 seconds apart (36 minutes), and signs only
+after an accepted sample. Each unhealthy attempt logs
+`clock-health unhealthy attempt=N/19`; only the final failure sends
+`success=false`. The renewal and age services allow 45 minutes, because the age
+check can wait on the publisher lock during that window. A newer host runtime
+would not remove the wait: host-v0.2.12 and later reuse a cached accepted sample
+only while it is under one hour old, and the 6-hourly publisher never holds one
+that fresh.
+
 The notification route is homelab's internal Gatus, which sends Discord alerts.
 After successful publication the renewal service POSTs `success=true` to
 `http://192.168.70.223:3002/api/v1/endpoints/chaldea_trust-publisher/external`.

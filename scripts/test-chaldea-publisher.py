@@ -473,11 +473,56 @@ class PublisherTests(unittest.TestCase):
         saved = self.root / "state/published.jws"
         saved.write_text("previous")
         self.unhealthy = True
-        with self.assertRaisesRegex(RuntimeError, "clock"):
+        with mock.patch.object(self.publisher, "pause") as sleep, \
+                self.assertRaisesRegex(RuntimeError, "clock"):
             self.publisher.publish(self.base)
         self.assertEqual(saved.read_text(), "previous")
         self.assertNotIn("sign-bundle", self.calls)
         self.assertNotIn("push", self.calls)
+        # The wait is bounded and outlasts timesyncd's longest poll interval.
+        self.assertEqual(self.calls.count("clock-health"), p.CLOCK_ATTEMPTS)
+        self.assertEqual(sleep.call_count, p.CLOCK_ATTEMPTS - 1)
+        self.assertGreater((p.CLOCK_ATTEMPTS - 1) * p.CLOCK_RETRY_SECONDS, 2048)
+
+    def test_spike_flagged_clock_waits_for_the_next_accepted_sample(self):
+        original = self.publisher.maintenance
+        spikes = [True, True]
+        def maintenance(command, *args):
+            if command == "clock-health" and spikes:
+                spikes.pop()
+                self.calls.append(command)
+                # The runtime writes the unhealthy result and exits 1.
+                raise subprocess.CalledProcessError(1, [command], stderr=b"")
+            return original(command, *args)
+        self.publisher.maintenance = maintenance
+        with mock.patch.object(self.publisher, "pause") as sleep, mock.patch.object(sys, "stderr") as journal:
+            self.publisher.publish(self.base)
+        self.assertEqual(self.calls, ["timesyncd", "clock-health", "clock-health", "clock-health",
+                                      "sign-bundle", "install-bundle", "push"])
+        self.assertEqual([call.args for call in sleep.call_args_list],
+                         [(p.CLOCK_RETRY_SECONDS,), (p.CLOCK_RETRY_SECONDS,)])
+        logs = "".join(call.args[0] for call in journal.write.call_args_list)
+        self.assertIn("clock-health unhealthy attempt=2/" + str(p.CLOCK_ATTEMPTS), logs)
+
+    def test_other_clock_errors_fail_without_waiting(self):
+        def maintenance(command, *args):
+            raise subprocess.TimeoutExpired([command], 90)
+        self.publisher.maintenance = maintenance
+        with mock.patch.object(self.publisher, "pause") as sleep, self.assertRaises(subprocess.TimeoutExpired):
+            self.publisher.publish(self.base)
+        sleep.assert_not_called()
+
+    def test_unit_timeouts_cover_the_clock_wait(self):
+        # The whole clock wait plus five minutes for fetch, signing and push.
+        wait = (p.CLOCK_ATTEMPTS - 1) * p.CLOCK_RETRY_SECONDS + 300
+        templates = ROOT / "roles/chaldea_publisher/templates"
+        for name in ("chaldea-publisher.service.j2", "chaldea-publisher-age.service.j2"):
+            lines = [line for line in (templates / name).read_text().splitlines()
+                     if line.startswith("TimeoutStartSec=")]
+            self.assertEqual(lines, ["TimeoutStartSec=45min"], name)
+            self.assertGreater(45 * 60, wait, name)
+        self.assertIn("chaldea-publisher.service.j2",
+                      (templates / "chaldea-publisher-emergency.service.j2").read_text())
 
     def test_failed_push_keeps_previous_bundle(self):
         saved = self.root / "state/published.jws"
