@@ -11,7 +11,9 @@ UMask=0077
 Environment=HOME={{ chaldea_publisher_root }}
 Environment=TMPDIR={{ chaldea_publisher_root }}/state
 ExecStart={{ chaldea_publisher_program }} --config {{ chaldea_publisher_config_root }}/config.json --check-age
-TimeoutStartSec=5min
+# The age check shares the publisher lock and may queue behind a whole renewal
+# (up to 75 minutes) before its own fetch, so it gets that plus 45 minutes.
+TimeoutStartSec=120min
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict

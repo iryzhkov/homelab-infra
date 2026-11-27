@@ -21,6 +21,12 @@ FLEET_REMOTE = "ssh://git@github.com/iryzhkov/chaldea-fleet-config.git"
 BUNDLE = "bundle.jws"
 GRANTS = "access-trust/issuer-grants.json"
 MAX_SEQUENCE = 9007199254740991
+# timesyncd keeps a spike-flagged sample current until its next poll, at most
+# 2048 seconds later. Checks 120 seconds apart for up to 2160 seconds let a
+# renewal wait for the next accepted sample instead of failing on one spike.
+# The service timeouts in the role and the re-issue helper allow this wait.
+CLOCK_WAIT_SECONDS = 2160
+CLOCK_RETRY_SECONDS = 120
 REMOTE_VERIFY = "import {createPublicKey, verify} from \"node:crypto\";\nlet input=\"\"; for await (const part of process.stdin) input+=part;\nconst {envelope,anchor}=JSON.parse(input);\nconst parts=envelope.trim().split(\".\");\nif(parts.length!==3) process.exit(1);\nconst header=JSON.parse(Buffer.from(parts[0],\"base64url\"));\nif(header.alg!==\"EdDSA\" || header.typ!==\"chaldea-trust+jws\" || header.kid!==anchor.kid) process.exit(1);\nconst raw=Buffer.from(anchor.public_key.x,\"base64url\");\nif(raw.length!==32) process.exit(1);\nconst key=createPublicKey({key:Buffer.concat([Buffer.from(\"302a300506032b6570032100\",\"hex\"),raw]),format:\"der\",type:\"spki\"});\nif(!verify(null,Buffer.from(parts[0]+\".\"+parts[1]),key,Buffer.from(parts[2],\"base64url\"))) process.exit(1);\nprocess.stdout.write(Buffer.from(parts[1],\"base64url\"));\n"
 
 
@@ -200,6 +206,42 @@ class Publisher:
         require(changed == BUNDLE.encode() + b"\0", "refusing commit touching another path")
         self.read_blob(commit, BUNDLE)
 
+    def check_clock(self, health):
+        # Force timesyncd for every sample. The runtime must not silently fall back to chrony here.
+        require(self.run(["/usr/bin/systemctl", "show", "systemd-timesyncd.service",
+                          "--property=ActiveState", "--value"]).strip() == b"active",
+                "timesyncd is not active")
+        self.maintenance("clock-health", "--output", health)
+        clock_ok(health, int(time.time()))
+
+    def await_clock(self):
+        # Runs before trust main and grants are fetched, so a long wait never signs
+        # stale inputs. publish() still takes its own single sample right before
+        # signing. Only the final failure reaches the caller's failure handler.
+        self.stage = "clock-wait"
+        start = self.monotonic()
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                self.check_clock(self.state / "clock-wait.json")
+                return
+            except (subprocess.CalledProcessError, RuntimeError):
+                remaining = CLOCK_WAIT_SECONDS - (self.monotonic() - start)
+                if remaining <= 0:
+                    raise
+            # Shorten the last pause so one sample always lands at the deadline.
+            delay = min(CLOCK_RETRY_SECONDS, remaining)
+            print("chaldea-publisher: clock-health unhealthy attempt=" + str(attempt)
+                  + " retry_in=" + str(math.ceil(delay)) + "s", file=sys.stderr, flush=True)
+            self.pause(delay)
+
+    def monotonic(self):
+        return time.monotonic()
+
+    def pause(self, seconds):
+        time.sleep(seconds)
+
     def publish(self, base, emergency_empty=False):
         remote = self.remote_bundle(base)
         previous = sequence(remote["sequence"]) if remote else 0
@@ -209,14 +251,9 @@ class Publisher:
         require(isinstance(json.loads(grants), list) and (json.loads(grants) or emergency_empty),
                 "empty grants require explicit operator revocation, not automatic renewal")
         (self.state / "grants.json").write_bytes(grants)
-        # Force timesyncd. The runtime must not silently fall back to chrony here.
-        require(self.run(["/usr/bin/systemctl", "show", "systemd-timesyncd.service",
-                          "--property=ActiveState", "--value"]).strip() == b"active",
-                "timesyncd is not active")
         self.stage = "clock-health"
         health = self.state / "clock-health.json"
-        self.maintenance("clock-health", "--output", health)
-        clock_ok(health, int(time.time()))
+        self.check_clock(health)
         candidate = self.state / "candidate.jws"
         common = ["--clock-health-file", health]
         self.stage = "sign-bundle"
@@ -317,6 +354,8 @@ def main():
             if args.test_alert:
                 publisher.notify("Trust publisher deployment alert route check", "info")
                 return 0
+            if not args.check_age:
+                publisher.await_clock()
             base = publisher.fetch()
             if args.check_age:
                 publisher.age_alert(base)

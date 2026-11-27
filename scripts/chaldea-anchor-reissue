@@ -67,6 +67,10 @@ def generate(root, kid, current_kid):
                 "chaldea_deployment_anchor_spki_sha256": hashlib.sha256(der).hexdigest()}
 
 
+# The publisher units' TimeoutStartSec=75min plus one minute.
+RESUME_TIMEOUT_SECONDS = 76 * 60
+
+
 def resume(config, kid, floor, emergency):
     require(os.geteuid() == 0, "run resume as the operator with sudo")
     require(re.fullmatch(KID, kid) and config["kid"] == kid, "deployed pin does not match requested kid")
@@ -77,7 +81,9 @@ def resume(config, kid, floor, emergency):
     command = ["/usr/bin/systemctl", "restart", unit]
     # Unit/bootstrap still authenticate the private key against the deployed public pin.
     # No timer is enabled here; verify every consumer before resuming unattended work.
-    subprocess.run(command, check=True, timeout=360)
+    # systemctl waits for the oneshot unit, whose start timeout covers the
+    # publisher's clock wait. Outlast it so the result reported here is final.
+    subprocess.run(command, check=True, timeout=RESUME_TIMEOUT_SECONDS)
 
 
 def main():

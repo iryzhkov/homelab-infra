@@ -44,6 +44,30 @@ local published.jws. Never reset either SQLite file after a failure. A push
 transport timeout is ambiguous, so inspect fetched main before diagnosing it as
 unpublished; the next run advances above either high water.
 
+The clock check waits out a spike-flagged timesyncd sample. timesyncd marks a
+sample as a spike when its offset jumps relative to recent samples, and the
+runtime rejects it even when the offset is a few milliseconds; the flag stays
+until the next poll, at most 2048 seconds later. Before fetching trust main or
+grants, the publisher therefore samples the clock every 120 seconds for up to
+2160 seconds (19 samples), checking that timesyncd is active before each
+sample so the runtime cannot fall back to chrony. After an accepted sample it
+fetches its inputs and takes one more single sample right before signing, so a
+long wait never signs stale grants. Each unhealthy attempt logs
+`clock-health unhealthy attempt=N retry_in=120s`; only the final failure sends
+`success=false`. The last pause is shortened so one sample always lands at
+the deadline. The renewal and emergency services allow 75 minutes, the age
+check allows 120 minutes because it can queue on the publisher lock behind a
+whole renewal, and `chaldea-anchor-reissue resume` waits 76 minutes for its
+synchronous restart. A persistent clock failure, such as timesyncd stopped, is
+therefore reported after the full wait rather than at once; the 18-hour outage
+tolerance absorbs that. The timesyncd check and the runtime's own provider
+choice are separate queries, so timesyncd stopping between them could still let
+host-v0.2.2 sample chrony; closing that needs a timesyncd-only runtime mode.
+A newer host runtime would not remove the wait: host-v0.2.12 and later reuse a
+cached accepted sample only while its NTP timestamp is under about one hour old,
+and the cache a 6-hourly run leaves behind is about six hours old unless a
+recent manual run refreshed it.
+
 The notification route is homelab's internal Gatus, which sends Discord alerts.
 After successful publication the renewal service POSTs `success=true` to
 `http://192.168.70.223:3002/api/v1/endpoints/chaldea_trust-publisher/external`.
