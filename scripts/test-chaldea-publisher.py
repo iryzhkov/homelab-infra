@@ -66,13 +66,14 @@ class PublisherTests(unittest.TestCase):
         self.publisher.authenticate_remote = lambda raw: p.payload(raw.decode())
         self.calls = []
         self.unhealthy = False
+        self.timesyncd_states = []
         self.fail_push = False
         original = self.publisher.run
 
         def run(args, data=None, env=None):
             if args[0] == "/usr/bin/systemctl":
                 self.calls.append("timesyncd")
-                return b"active\n"
+                return self.timesyncd_states.pop(0) if self.timesyncd_states else b"active\n"
             if args[0] == "/synthetic/node":
                 command = args[2]
                 self.calls.append(command)
@@ -479,12 +480,28 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(saved.read_text(), "previous")
         self.assertNotIn("sign-bundle", self.calls)
         self.assertNotIn("push", self.calls)
-        # The wait is bounded and outlasts timesyncd's longest poll interval.
-        self.assertEqual(self.calls.count("clock-health"), p.CLOCK_ATTEMPTS)
-        self.assertEqual(sleep.call_count, p.CLOCK_ATTEMPTS - 1)
-        self.assertGreater((p.CLOCK_ATTEMPTS - 1) * p.CLOCK_RETRY_SECONDS, 2048)
+        # The sample right before signing is single-shot; the wait happens earlier.
+        self.assertEqual(self.calls, ["timesyncd", "clock-health"])
+        sleep.assert_not_called()
 
-    def test_spike_flagged_clock_waits_for_the_next_accepted_sample(self):
+    def fake_clock(self):
+        now = [0.0]
+        def pause(seconds):
+            now[0] += seconds
+        return now, mock.patch.multiple(self.publisher, pause=mock.Mock(side_effect=pause),
+                                        monotonic=mock.Mock(side_effect=lambda: now[0]))
+
+    def test_clock_wait_is_bounded_and_outlasts_the_longest_poll(self):
+        self.unhealthy = True
+        now, clock = self.fake_clock()
+        with clock, mock.patch.object(sys, "stderr"), self.assertRaisesRegex(RuntimeError, "clock"):
+            self.publisher.await_clock()
+        self.assertEqual(self.calls.count("clock-health"), 19)
+        self.assertEqual(self.calls.count("timesyncd"), 19)
+        self.assertGreaterEqual(now[0], 2048)
+        self.assertLessEqual(now[0], p.CLOCK_WAIT_SECONDS)
+
+    def test_spike_flagged_clock_waits_before_fetching_inputs(self):
         original = self.publisher.maintenance
         spikes = [True, True]
         def maintenance(command, *args):
@@ -495,34 +512,53 @@ class PublisherTests(unittest.TestCase):
                 raise subprocess.CalledProcessError(1, [command], stderr=b"")
             return original(command, *args)
         self.publisher.maintenance = maintenance
-        with mock.patch.object(self.publisher, "pause") as sleep, mock.patch.object(sys, "stderr") as journal:
+        fetch, fetch_grants = self.publisher.fetch, self.publisher.fetch_grants
+        self.publisher.fetch = lambda: (self.calls.append("fetch"), fetch())[1]
+        self.publisher.fetch_grants = lambda: (self.calls.append("grants"), fetch_grants())[1]
+        now, clock = self.fake_clock()
+        with clock:
+            result, logs = self.run_main()
+        self.assertEqual(result, 0, logs)
+        self.assertEqual(self.calls, ["timesyncd", "clock-health"] * 3 + [
+            "fetch", "grants", "timesyncd", "clock-health", "sign-bundle", "install-bundle", "push"])
+        self.assertEqual(now[0], 2 * p.CLOCK_RETRY_SECONDS)
+        self.assertIn("clock-health unhealthy attempt=2 retry_in=120s", logs)
+        self.assertNotIn("heartbeat=sent success=false", logs)
+
+    def test_timesyncd_is_required_for_every_sample(self):
+        self.timesyncd_states = [b"inactive\n"]
+        now, clock = self.fake_clock()
+        with clock, mock.patch.object(sys, "stderr"):
+            self.publisher.await_clock()
+        # The inactive check never ran the runtime, which could have used chrony.
+        self.assertEqual(self.calls, ["timesyncd", "timesyncd", "clock-health"])
+        self.timesyncd_states = [b"inactive\n"]
+        self.calls.clear()
+        with self.assertRaisesRegex(RuntimeError, "timesyncd"):
             self.publisher.publish(self.base)
-        self.assertEqual(self.calls, ["timesyncd", "clock-health", "clock-health", "clock-health",
-                                      "sign-bundle", "install-bundle", "push"])
-        self.assertEqual([call.args for call in sleep.call_args_list],
-                         [(p.CLOCK_RETRY_SECONDS,), (p.CLOCK_RETRY_SECONDS,)])
-        logs = "".join(call.args[0] for call in journal.write.call_args_list)
-        self.assertIn("clock-health unhealthy attempt=2/" + str(p.CLOCK_ATTEMPTS), logs)
+        self.assertEqual(self.calls, ["timesyncd"])
 
     def test_other_clock_errors_fail_without_waiting(self):
         def maintenance(command, *args):
             raise subprocess.TimeoutExpired([command], 90)
         self.publisher.maintenance = maintenance
         with mock.patch.object(self.publisher, "pause") as sleep, self.assertRaises(subprocess.TimeoutExpired):
-            self.publisher.publish(self.base)
+            self.publisher.await_clock()
         sleep.assert_not_called()
 
-    def test_unit_timeouts_cover_the_clock_wait(self):
-        # The whole clock wait plus five minutes for fetch, signing and push.
-        wait = (p.CLOCK_ATTEMPTS - 1) * p.CLOCK_RETRY_SECONDS + 300
+    def test_unit_and_resume_timeouts_cover_the_clock_wait(self):
+        # The clock wait, its last attempt and up to 30 minutes for fetch, signing and push.
+        budget = p.CLOCK_WAIT_SECONDS + 3 * 90 + 30 * 60
         templates = ROOT / "roles/chaldea_publisher/templates"
         for name in ("chaldea-publisher.service.j2", "chaldea-publisher-age.service.j2"):
             lines = [line for line in (templates / name).read_text().splitlines()
                      if line.startswith("TimeoutStartSec=")]
-            self.assertEqual(lines, ["TimeoutStartSec=45min"], name)
-            self.assertGreater(45 * 60, wait, name)
+            self.assertEqual(lines, ["TimeoutStartSec=75min"], name)
+        self.assertGreater(75 * 60, budget)
         self.assertIn("chaldea-publisher.service.j2",
                       (templates / "chaldea-publisher-emergency.service.j2").read_text())
+        self.assertIn("RESUME_TIMEOUT_SECONDS = 76 * 60\n",
+                      (ROOT / "scripts/chaldea-anchor-reissue").read_text())
 
     def test_failed_push_keeps_previous_bundle(self):
         saved = self.root / "state/published.jws"

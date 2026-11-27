@@ -12,7 +12,7 @@ Environment=HOME={{ chaldea_publisher_root }}
 Environment=TMPDIR={{ chaldea_publisher_root }}/state
 ExecStart={{ chaldea_publisher_program }} --config {{ chaldea_publisher_config_root }}/config.json{{ ' --emergency-empty' if _chaldea_publisher_emergency | default(false) else '' }}
 # Covers the publisher's bounded wait for an accepted timesyncd sample.
-TimeoutStartSec=45min
+TimeoutStartSec=75min
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict

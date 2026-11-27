@@ -47,15 +47,20 @@ unpublished; the next run advances above either high water.
 The clock check waits out a spike-flagged timesyncd sample. timesyncd marks a
 sample as a spike when its offset jumps relative to recent samples, and the
 runtime rejects it even when the offset is a few milliseconds; the flag stays
-until the next poll, at most 2048 seconds later. The publisher therefore repeats
-`clock-health` up to 19 times, 120 seconds apart (36 minutes), and signs only
-after an accepted sample. Each unhealthy attempt logs
-`clock-health unhealthy attempt=N/19`; only the final failure sends
-`success=false`. The renewal and age services allow 45 minutes, because the age
-check can wait on the publisher lock during that window. A newer host runtime
-would not remove the wait: host-v0.2.12 and later reuse a cached accepted sample
-only while it is under one hour old, and the 6-hourly publisher never holds one
-that fresh.
+until the next poll, at most 2048 seconds later. Before fetching trust main or
+grants, the publisher therefore samples the clock every 120 seconds for up to
+2160 seconds (19 samples), checking that timesyncd is active before each
+sample so the runtime cannot fall back to chrony. After an accepted sample it
+fetches its inputs and takes one more single sample right before signing, so a
+long wait never signs stale grants. Each unhealthy attempt logs
+`clock-health unhealthy attempt=N retry_in=120s`; only the final failure sends
+`success=false`. The renewal, emergency and age services allow 75 minutes,
+because the age check can wait on the publisher lock during that window, and
+`chaldea-anchor-reissue resume` waits 76 minutes for its synchronous restart.
+A newer host runtime would not remove the wait: host-v0.2.12 and later reuse a
+cached accepted sample only while its NTP timestamp is under about one hour old,
+and the cache a 6-hourly run leaves behind is about six hours old unless a
+recent manual run refreshed it.
 
 The notification route is homelab's internal Gatus, which sends Discord alerts.
 After successful publication the renewal service POSTs `success=true` to

@@ -12,7 +12,7 @@ Environment=HOME={{ chaldea_publisher_root }}
 Environment=TMPDIR={{ chaldea_publisher_root }}/state
 ExecStart={{ chaldea_publisher_program }} --config {{ chaldea_publisher_config_root }}/config.json --check-age
 # The age check shares the publisher lock and may wait out a renewal's clock wait.
-TimeoutStartSec=45min
+TimeoutStartSec=75min
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
