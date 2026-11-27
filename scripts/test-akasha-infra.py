@@ -560,12 +560,17 @@ class SnapshotTest(unittest.TestCase):
     def test_homelab_runtime_pin_is_role_local_and_keeps_trust_on_shared_release(self):
         shared = yaml.safe_load((ROOT / "vars/chaldea-runtime.yml").read_text())
         pin = yaml.safe_load((ROOT / "vars/akasha-runtime.yml").read_text())
-        self.assertEqual(shared["chaldea_host_version"], "host-v0.2.2")
+        selected = shared["chaldea_host_version"]
+        self.assertEqual(selected, "host-v0.2.24")
         self.assertEqual(pin["akasha_host_version"], "host-v0.2.22")
         self.assertEqual(pin["akasha_host_sha256"],
                          "2495a653d6047ae5e04a76b42cb6984de987dbea6cbbfeef55bc03dd3ad866a9")
-        old_versions = [f"host-v0.2.{n}" for n in (2, 3, 4, 6, 7, 8, 9, 10, 14)]
-        versions = old_versions + ["host-v0.2.15"]
+        preserved = [f"host-v0.2.{n}" for n in (3, 4, 6, 7, 8, 9, 10, 14)]
+        self.assertEqual(pin["akasha_trust_preserve_versions"], preserved)
+        # The shared trust call selects the shared pin, keeps the eight preserved
+        # releases and the newest prior one (homelab's 0218), and removes the rest.
+        old_versions = [selected] + preserved
+        versions = old_versions + ["host-v0.2.18"]
         self.assertEqual(shared["chaldea_clock_host_version"], "host-v0.2.12")
         trust_tasks = yaml.safe_load((ROOT / "roles/chaldea_access_trust/tasks/main.yml").read_text())
         clock_vars = trust_tasks[1]["vars"]
@@ -573,15 +578,15 @@ class SnapshotTest(unittest.TestCase):
                          "/opt/chaldea-clock-host/releases")
         self.assertEqual(clock_vars["chaldea_host_artifact_cache"], "/var/cache/chaldea-clock-host")
         self.assertEqual(clock_vars["chaldea_host_artifact_preserve_versions"], [])
-        old_root = "/opt/chaldea-host/releases/host-v0.2.2/host"
+        old_root = "/opt/chaldea-host/releases/" + selected + "/host"
         new_root = "/opt/chaldea-akasha-host/releases/host-v0.2.22/host"
         checks = {
             "chaldea_node": [
-                "chaldea_host_version == 'host-v0.2.2'",
+                "chaldea_host_version == '" + selected + "'",
                 "chaldea_node_version == '26.10.0'",
                 "chaldea_node_sha256 == 'ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022'"],
             "chaldea_host_artifact": [
-                "chaldea_host_version == ('host-v0.2.2' if fixture_artifact_calls | default([]) | length else 'host-v0.2.22')",
+                "chaldea_host_version == ('" + selected + "' if fixture_artifact_calls | default([]) | length else 'host-v0.2.22')",
                 "chaldea_host_sha256 == (fixture_shared_sha if fixture_artifact_calls | default([]) | length else akasha_host_sha256)",
                 "chaldea_host_artifact_preserve_versions == (fixture_old_versions[1:] if fixture_artifact_calls | default([]) | length else ['host-v0.2.17', 'host-v0.2.18', 'host-v0.2.20', 'host-v0.2.21'])",
                 "chaldea_host_artifact_preserve_versions | length == (8 if fixture_artifact_calls | default([]) | length else 4)",
@@ -589,7 +594,7 @@ class SnapshotTest(unittest.TestCase):
                 "chaldea_host_artifact_cache == ('/var/cache/chaldea-host' if fixture_artifact_calls | default([]) | length else akasha_runtime_cache)",
                 "chaldea_host_artifact_root == chaldea_host_artifact_release_root ~ '/' ~ chaldea_host_version ~ '/host'"],
             "chaldea_access_trust": [
-                "chaldea_host_version == 'host-v0.2.2'",
+                "chaldea_host_version == '" + selected + "'",
                 "chaldea_host_sha256 == '" + shared["chaldea_host_sha256"] + "'",
                 "chaldea_host_artifact_root == '" + old_root + "'",
                 "chaldea_access_trust_runtime == '/opt/chaldea-clock-host/releases/" + shared["chaldea_clock_host_version"] + "/host/access-maintenance.mjs'"],
@@ -603,10 +608,11 @@ class SnapshotTest(unittest.TestCase):
             releases, cache = root / "releases", root / "cache"
             releases.mkdir()
             cache.mkdir()
-            # All nine actual old releases plus selected0215 must survive EACH call.
-            # The obsolete021 fixture proves GC runs. Controlled fixture mtimes make
-            # prior0214 then prior0215 explicit; live evidence remains an operator gate.
-            for index, version in enumerate(["host-v0.2.1"] + versions):
+            # The selected shared release, the eight preserved releases and the newest
+            # prior 0218 must survive. The obsolete 021 and 0215 fixtures prove GC runs.
+            # Controlled fixture mtimes make 0218 the newest prior explicitly; live
+            # evidence remains an operator gate.
+            for index, version in enumerate(["host-v0.2.1", "host-v0.2.15"] + versions):
                 release = releases / version
                 release.mkdir()
                 os.utime(release, (index + 1, index + 1))
@@ -692,8 +698,8 @@ class SnapshotTest(unittest.TestCase):
             play["vars_files"] = [str((ROOT / "playbooks" / path).resolve())
                                   for path in play["vars_files"]]
             play["post_tasks"] = [{"ansible.builtin.assert": {"that": [
-                "chaldea_host_version == 'host-v0.2.2'",
-                "fixture_artifact_calls == ['host-v0.2.22', 'host-v0.2.2']",
+                "chaldea_host_version == '" + selected + "'",
+                "fixture_artifact_calls == ['host-v0.2.22', '" + selected + "']",
                 "chaldea_host_artifact_root == '" + old_root + "'"], "quiet": True}}]
             path = root / "play.yml"
             path.write_text(yaml.safe_dump([play]))

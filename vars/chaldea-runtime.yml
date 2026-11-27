@@ -1,8 +1,22 @@
 ---
-# Published from Chaldea main 330926d; SHA-256 verified from the release asset.
-# Keep this version and digest identical in fleet-config and homelab-infra.
-chaldea_host_version: host-v0.2.2
-chaldea_host_sha256: "ebaf896b2b4552002f00ad9b83855ff2364abe02f57ec667d7c9fcafb308c357"
+# Shared consumer runtime: the Normandy and homelab trust fetcher come from it.
+# Published from Chaldea main 724afe3 (trust fetcher recovers from stale Git
+# locks); SHA-256 verified from the release asset.
+# Keep this version and digest identical in fleet-config and homelab-infra
+# (scripts/check-trust-pins.py compares them before every Normandy deploy).
+chaldea_host_version: &chaldea_host_version host-v0.2.24
+chaldea_host_sha256: "8a94042352c31905694f25800dfb7240b80e914ba0e7653e74e60bf650766ca5"
+# Normandy publisher runtime, pinned independently of the shared consumer
+# runtime above. Published from Chaldea main 330926d; SHA-256 verified from the
+# release asset. playbooks/chaldea-signer.yml installs it and the publisher
+# config points at its access-maintenance.mjs. Moving it is a separate,
+# reviewed publisher change; fleet-config keeps it in Normandy's
+# chaldea_host_artifact_preserve_versions so fleet release GC never removes it.
+chaldea_publisher_host_version: host-v0.2.2
+chaldea_publisher_host_sha256: "ebaf896b2b4552002f00ad9b83855ff2364abe02f57ec667d7c9fcafb308c357"
+# Both releases share /opt/chaldea-host/releases on Normandy. Each Normandy
+# play keeps the other runtime explicitly instead of relying on release mtimes.
+chaldea_publisher_preserve_versions: [*chaldea_host_version]
 # Clock repair is independent of Akasha, job and publisher runtime pins.
 chaldea_clock_host_version: host-v0.2.12
 chaldea_clock_host_sha256: "375af0c5f4e37955ae6a6b61e11cbbac6c581ea67b2875384eb7c4d3d44948ff"

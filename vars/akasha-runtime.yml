@@ -1,5 +1,5 @@
 ---
-# Homelab Akasha only; shared consumer trust stays022 and clock stays0212.
+# Homelab Akasha only; shared consumer trust follows chaldea_host_version and clock stays0212.
 # Official host-v0.2.22 at 57f3c38; manifest digest verified against the downloaded archive.
 # host-v0.2.22 adds the host/kind reader index; schema stays version 1, so 020 remains a valid rollback.
 # Independent root requires existing017/018 and matching cache pairs.
