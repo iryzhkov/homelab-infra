@@ -76,6 +76,13 @@ class RolloutTest(unittest.TestCase):
                 assert isinstance(rendered, list)
                 self.assertEqual(rendered[:len(base)], base)
                 self.assertEqual(len({r["source_id"] for r in rendered}), len(rendered))
+                sweep_sources = ("docker-update", "docker-update-agent")
+                self.assertEqual([r for r in rendered if r["source"] in sweep_sources], [
+                    dict(issuer="chaldea:" + host, source=source, host=host,
+                         source_id=host + "--" + source, profile="feed-writer",
+                         project="chaldea", mode="service", kinds=["feed_post"])
+                    for host in ("omarchy-pc", "omarchy-normandy") for source in sweep_sources
+                ])
                 # The interactive hosts' fleet-reader rows are fixed additions (approved
                 # 2026-11-12); only the PC rows remain optional.
                 fixed = [r for r in rendered if r.get("global_read") and r["host"] in INTERACTIVE_READERS]
