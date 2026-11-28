@@ -46,8 +46,10 @@ job: 400 MB of Home Assistant history with no copy anywhere.
 `influx backup` is used rather than copying the volume, because it is the only
 way to get a consistent picture out of a running InfluxDB. The archive was
 217 MB in September 2026 and had grown to 3.4 GB by late November. Three are
-kept, reduced from seven on 2026-11-28 because the seven archives filled the
-homelab root disk. `rclone sync` mirrors the same three to the bucket.
+kept, reduced from seven on 2026-11-28 because the seven archives used about
+22 GB when the homelab root disk reached 92%. `rclone sync` mirrors the same
+three to the bucket. Older archives become hidden versions there, which the
+bucket lifecycle rule keeps for 30 days.
 
 ## Normandy's daily Postgres dump
 
@@ -226,7 +228,7 @@ script, and the failure arrived in the feed as entry 21.
 
 `~/app/rclone_exclude.txt` is deployed by this role. The two new backup
 directories are excluded from the twice-weekly `rclone copy` of `~/app`;
-without that, every hourly snapshot and every 200 MB InfluxDB archive would get
+without that, every hourly snapshot and every multi-gigabyte InfluxDB archive would get
 a second, never-pruned copy in the bucket under a different path.
 
 ## What still has no backup
