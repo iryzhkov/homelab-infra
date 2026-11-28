@@ -62,7 +62,7 @@ case "$tier" in
         fi
         ;;
     daily)
-        "$HOME/.local/bin/homelab-influx-backup" "$root/influxdb" 7 >>"$output" 2>&1
+        "$HOME/.local/bin/homelab-influx-backup" "$root/influxdb" 3 >>"$output" 2>&1
         status=$?
         subject="influxdb"
         local_dir="$root/influxdb"

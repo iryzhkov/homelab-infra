@@ -44,8 +44,10 @@ outside `~/app` where the rclone jobs look, and unlike Postgres it had no dump
 job: 400 MB of Home Assistant history with no copy anywhere.
 
 `influx backup` is used rather than copying the volume, because it is the only
-way to get a consistent picture out of a running InfluxDB. The archive is
-217 MB, takes 43 seconds, and seven are kept.
+way to get a consistent picture out of a running InfluxDB. The archive was
+217 MB in September 2026 and had grown to 3.4 GB by late November. Three are
+kept, reduced from seven on 2026-11-28 because the seven archives filled the
+homelab root disk. `rclone sync` mirrors the same three to the bucket.
 
 ## Normandy's daily Postgres dump
 
