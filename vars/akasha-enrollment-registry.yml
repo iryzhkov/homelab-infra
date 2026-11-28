@@ -23,6 +23,8 @@ akasha_enrollment_registry_additions:
   - {"issuer":"chaldea:omarchy-pc","source":"feed","host":"omarchy-pc","source_id":"omarchy-pc--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:omarchy-pc","source":"omarchy-pc.fleet","host":"omarchy-pc","source_id":"omarchy-pc--omarchy-pc_fleet","profile":"fleet-timers","project":"chaldea","mode":"service","kinds":["job_finished"]}
   - {"issuer":"chaldea:omarchy-pc","source":"omarchy-pc.toolfeedback","host":"omarchy-pc","source_id":"omarchy-pc--omarchy-pc_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+  - {"issuer":"chaldea:omarchy-pc","source":"docker-update","host":"omarchy-pc","source_id":"omarchy-pc--docker-update","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:omarchy-pc","source":"docker-update-agent","host":"omarchy-pc","source_id":"omarchy-pc--docker-update-agent","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"feed","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--feed","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"omarchy-macbook-air-igor.fleet","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--omarchy-macbook-air-igor_fleet","profile":"fleet-timers","project":"chaldea","mode":"service","kinds":["job_finished"]}
   - {"issuer":"chaldea:omarchy-macbook-air-igor","source":"omarchy-macbook-air-igor.toolfeedback","host":"omarchy-macbook-air-igor","source_id":"omarchy-macbook-air-igor--omarchy-macbook-air-igor_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
@@ -34,6 +36,8 @@ akasha_enrollment_registry_additions:
   - {"issuer":"chaldea:omarchy-normandy","source":"backup","host":"omarchy-normandy","source_id":"omarchy-normandy--backup","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:omarchy-normandy","source":"drift-check","host":"omarchy-normandy","source_id":"omarchy-normandy--drift-check","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   - {"issuer":"chaldea:omarchy-normandy","source":"omarchy-normandy.toolfeedback","host":"omarchy-normandy","source_id":"omarchy-normandy--omarchy-normandy_toolfeedback","profile":"toolfeedback","project":"chaldea","mode":"service","kinds":["tool_call"]}
+  - {"issuer":"chaldea:omarchy-normandy","source":"docker-update","host":"omarchy-normandy","source_id":"omarchy-normandy--docker-update","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
+  - {"issuer":"chaldea:omarchy-normandy","source":"docker-update-agent","host":"omarchy-normandy","source_id":"omarchy-normandy--docker-update-agent","profile":"feed-writer","project":"chaldea","mode":"service","kinds":["feed_post"]}
   # Approved 2026-11-12: the interactive hosts read the fleet feed (fleet-config
   # access-trust/akasha-enrollment.json). homelab and Normandy stay producer-only.
   - {"issuer":"chaldea:agent-a","source":"fleet-reader","host":"agent-a","source_id":"agent-a--fleet-reader","profile":"fleet-reader","project":"chaldea","mode":"operator","kinds":["feed_post","tool_call"],"global_read":true}
